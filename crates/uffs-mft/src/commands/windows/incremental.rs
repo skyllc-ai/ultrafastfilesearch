@@ -43,7 +43,10 @@ use crate::display::format_number;
 
 /// Save index to disk for incremental updates.
 #[cfg(windows)]
-pub(crate) async fn cmd_index_save(drive: char, output: &Path) -> Result<()> {
+pub(crate) async fn cmd_index_save(
+    drive: uffs_mft::platform::DriveLetter,
+    output: &Path,
+) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::usn::query_usn_journal;
@@ -208,7 +211,11 @@ pub(crate) async fn cmd_cache_status(clean: bool, purge: bool) -> Result<()> {
 
 /// Get or refresh a cached index for a drive.
 #[cfg(windows)]
-pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) -> Result<()> {
+pub(crate) async fn cmd_cache_get(
+    drive: uffs_mft::platform::DriveLetter,
+    force: bool,
+    ttl: Option<u64>,
+) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::cache::{CacheStatus, INDEX_TTL_SECONDS, check_cache_status, save_to_cache};
@@ -302,7 +309,10 @@ pub(crate) async fn cmd_cache_get(drive: char, force: bool, ttl: Option<u64>) ->
 
 /// Clear cached indices.
 #[cfg(windows)]
-pub(crate) async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()> {
+pub(crate) async fn cmd_cache_clear(
+    drive: Option<uffs_mft::platform::DriveLetter>,
+    all: bool,
+) -> Result<()> {
     use uffs_mft::cache::{
         cache_dir, cache_file_path, list_cached_drives, remove_all_cached_indices,
         remove_cached_index,
@@ -341,7 +351,7 @@ pub(crate) async fn cmd_cache_clear(drive: Option<char>, all: bool) -> Result<()
 /// Incremental index update using USN Journal.
 #[cfg(windows)]
 pub(crate) async fn cmd_index_update(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     force_full: bool,
     ttl: Option<u64>,
 ) -> Result<()> {
@@ -544,7 +554,7 @@ pub(crate) async fn cmd_index_update(
 
 /// Helper function to do a full index build and cache it.
 #[cfg(windows)]
-async fn do_full_index_build(drive: char) -> Result<()> {
+async fn do_full_index_build(drive: uffs_mft::platform::DriveLetter) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::cache::save_to_cache;
@@ -603,7 +613,7 @@ async fn do_full_index_build(drive: char) -> Result<()> {
 /// Index ALL NTFS drives in parallel using the optimized lean index path.
 #[cfg(windows)]
 pub(crate) async fn cmd_index_all(
-    drives: Option<Vec<char>>,
+    drives: Option<Vec<uffs_mft::platform::DriveLetter>>,
     no_cache: bool,
     ttl: u64,
 ) -> Result<()> {
@@ -614,8 +624,8 @@ pub(crate) async fn cmd_index_all(
     let start = Instant::now();
 
     // Detect drives if not specified
-    let drive_list: Vec<char> = match drives {
-        Some(d) if !d.is_empty() => d.into_iter().map(|c| c.to_ascii_uppercase()).collect(),
+    let drive_list: Vec<uffs_mft::platform::DriveLetter> = match drives {
+        Some(d) if !d.is_empty() => d,
         _ => {
             println!("🔍 Detecting NTFS drives...");
             detect_ntfs_drives()

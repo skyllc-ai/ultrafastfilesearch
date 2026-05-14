@@ -35,7 +35,7 @@ async fn empty_tick_does_not_call_accept() {
 
     // Empty queue → poll() returns default (empty changes).
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -77,7 +77,7 @@ async fn non_empty_tick_invokes_accept_once() {
     source.enqueue_changes(vec![one_change(10), one_change(11)], 100);
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -99,7 +99,7 @@ async fn non_empty_tick_invokes_accept_once() {
     assert_eq!(calls.len(), 1, "exactly one accept() call expected");
     assert_eq!(
         calls.first().copied(),
-        Some(('C', 2_usize)),
+        Some((uffs_mft::platform::DriveLetter::C, 2_usize)),
         "letter + change-count must round-trip"
     );
 }
@@ -115,7 +115,7 @@ async fn cursor_advances_monotonically_across_ticks() {
     source.enqueue_changes(vec![one_change(12)], 300);
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -164,7 +164,7 @@ async fn source_error_does_not_abort_loop() {
     source.enqueue_changes(vec![one_change(10)], 100);
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -190,7 +190,7 @@ async fn cancel_exits_within_convergence_deadline() {
     let sink = Arc::new(RecordingSink::new());
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),

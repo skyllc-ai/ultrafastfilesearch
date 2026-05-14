@@ -62,7 +62,7 @@ fn extension_table_record_file() {
 
 #[test]
 fn intern_extension() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Test basic extension extraction
     assert_eq!(index.intern_extension("test.txt"), 1);
@@ -80,7 +80,7 @@ fn intern_extension() {
 )]
 fn extension_table_serialization() {
     // Create an index with some extensions
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add names and extensions first (before getting mutable references to records)
     let name1_offset = index.add_name("test.txt");
@@ -116,7 +116,7 @@ fn extension_table_serialization() {
         MftIndex::deserialize(&serialized).expect("Deserialization failed");
 
     // Verify header
-    assert_eq!(header.volume, 'C');
+    assert_eq!(header.volume, crate::platform::DriveLetter::C);
     assert_eq!(header.volume_serial, 12345);
     assert_eq!(header.usn_journal_id, 67890);
     assert_eq!(header.next_usn, 100);
@@ -154,7 +154,7 @@ fn extension_table_serialization() {
 
 #[test]
 fn extension_index_build() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add files with different extensions
     let name1 = "file1.txt";
@@ -234,7 +234,7 @@ fn extension_index_build() {
     reason = "test code with known valid indices"
 )]
 fn extension_index_with_hard_links() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a file with multiple hard links with different extensions
     let name1 = "file.txt";
@@ -287,7 +287,7 @@ fn extension_index_with_hard_links() {
 
 #[test]
 fn extension_index_empty() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Build on empty index
     index.build_extension_index();
@@ -344,7 +344,7 @@ fn size_bucket_assignment() {
     reason = "test code with known valid indices"
 )]
 fn extension_table_top_by_bytes() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add files with different extensions and sizes
     let files = [
@@ -399,7 +399,7 @@ fn extension_table_top_by_bytes() {
     reason = "test code with known valid indices"
 )]
 fn extension_table_top_by_count() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add files with different extensions
     let files = [
@@ -447,7 +447,7 @@ fn extension_table_top_by_count() {
 
 #[test]
 fn byte_tracking_accuracy() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add files with different sizes and attributes
     let files = [
@@ -537,7 +537,7 @@ fn byte_tracking_accuracy() {
 fn extension_index_performance() {
     use std::time::Instant;
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a large index with 10,000 files
     // 100 txt files, 9,900 other files

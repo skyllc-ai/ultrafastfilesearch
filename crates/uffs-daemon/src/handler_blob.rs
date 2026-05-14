@@ -278,9 +278,17 @@ impl RequestHandler {
             return;
         };
 
+        // `uffs-format` is char-typed at its public API; convert
+        // the typed slice at the boundary so the format crate keeps
+        // its narrow no-`uffs-mft` dep (issue #216).
+        let drive_chars: Vec<char> = params
+            .output_drive_targets
+            .iter()
+            .map(|dl| dl.as_char())
+            .collect();
         let footer_ctx =
             Self::wants_custom_footer(params).then(|| uffs_format::DriveFooterContext {
-                output_targets: &params.output_drive_targets,
+                output_targets: &drive_chars,
                 pattern: &params.pattern,
                 row_count: rows.len(),
             });

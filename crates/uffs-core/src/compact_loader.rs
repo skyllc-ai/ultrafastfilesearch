@@ -41,10 +41,10 @@ pub struct LoadTiming {
 pub enum MftSource {
     /// Offline MFT file (`.uffs`, `.raw`, `.iocp` capture).
     /// Second field is an optional drive-letter override.
-    File(PathBuf, Option<char>),
+    File(PathBuf, Option<uffs_mft::platform::DriveLetter>),
     /// Live Windows NTFS volume (e.g., `'C'`).
     #[cfg(windows)]
-    Live(char),
+    Live(uffs_mft::platform::DriveLetter),
 }
 
 impl MftSource {
@@ -87,8 +87,8 @@ pub fn load_drive(
                 .unwrap_or("X");
             stem.chars()
                 .next()
-                .filter(char::is_ascii_alphabetic)
-                .map_or('X', |ch| ch.to_ascii_uppercase())
+                .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+                .unwrap_or(uffs_mft::platform::DriveLetter::X)
         }),
         #[cfg(windows)]
         MftSource::Live(ch) => *ch,
@@ -200,7 +200,7 @@ pub struct RefreshTiming {
 /// and never propagates an error to the caller.
 #[cfg(windows)]
 pub fn load_drive_with_usn_refresh(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> anyhow::Result<(DriveCompactIndex, RefreshTiming)> {
     let total_start = Instant::now();
     let mft_start = Instant::now();
@@ -260,7 +260,7 @@ pub fn load_drive_with_usn_refresh(
 /// falling back to the bare compact-cache load.
 #[cfg(not(windows))]
 pub fn load_drive_with_usn_refresh(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> anyhow::Result<(DriveCompactIndex, RefreshTiming)> {
     anyhow::bail!(
         "USN refresh not supported on this platform (drive {drive_letter}); caller should fall back to load_compact_cache"
@@ -279,7 +279,7 @@ pub fn load_drive_with_usn_refresh(
 /// divergence that we avoid by picking the right parser up front.
 fn parse_mft_file_to_index(
     mft_path: &std::path::Path,
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> anyhow::Result<MftIndex> {
     // `?` performs the `MftError → anyhow::Error` conversion via
     // `From<MftError> for anyhow::Error`, matching the original
@@ -304,7 +304,7 @@ fn parse_mft_file_to_index(
 
 /// Kick off the post-parse background cache save and emit a matching
 /// tracing line for success or failure.
-fn spawn_mft_cache_save(index: &MftIndex, drive_letter: char) {
+fn spawn_mft_cache_save(index: &MftIndex, drive_letter: uffs_mft::platform::DriveLetter) {
     match uffs_mft::cache::save_to_cache_background(index, drive_letter, 0, 0, 0) {
         Ok(()) => {
             tracing::info!(drive = %drive_letter, "💾 MFT cache save started (background)");
@@ -322,7 +322,7 @@ fn spawn_mft_cache_save(index: &MftIndex, drive_letter: char) {
 /// Load `MftIndex` from an offline file (cache → cold parse).
 fn load_mft_index_from_file(
     mft_path: &std::path::Path,
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     no_cache: bool,
 ) -> anyhow::Result<MftIndex> {
     let cached = if no_cache {
@@ -355,7 +355,10 @@ fn load_mft_index_from_file(
 /// `clippy::single_call_fn` so this remains a one-call helper rather
 /// than being inlined.
 #[cfg(windows)]
-fn load_mft_index_live(drive_letter: char, no_cache: bool) -> anyhow::Result<MftIndex> {
+fn load_mft_index_live(
+    drive_letter: uffs_mft::platform::DriveLetter,
+    no_cache: bool,
+) -> anyhow::Result<MftIndex> {
     use anyhow::Context as _;
 
     let read_index = async {
@@ -439,7 +442,7 @@ pub fn refresh_drive(drive: &DriveCompactIndex) -> anyhow::Result<(DriveCompactI
 #[deprecated(note = "Use load_drive(MftSource::File(...)) instead")]
 pub fn load_mft_file(
     mft_path: &std::path::Path,
-    drive: Option<char>,
+    drive: Option<uffs_mft::platform::DriveLetter>,
     no_cache: bool,
 ) -> anyhow::Result<(DriveCompactIndex, LoadTiming)> {
     load_drive(&MftSource::File(mft_path.to_path_buf(), drive), no_cache)

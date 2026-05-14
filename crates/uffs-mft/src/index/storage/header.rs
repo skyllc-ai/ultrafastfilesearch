@@ -4,6 +4,7 @@
 //! Storage header and format version metadata.
 
 use crate::index::MftIndex;
+use crate::platform::DriveLetter;
 
 /// Magic bytes for index file format.
 const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
@@ -32,8 +33,8 @@ pub struct IndexHeader {
     pub magic: [u8; 8],
     /// Format version for compatibility
     pub version: u32,
-    /// Volume letter (e.g., 'C')
-    pub volume: char,
+    /// Volume letter (e.g., [`DriveLetter::C`]).
+    pub volume: DriveLetter,
     /// Volume serial number for validation
     pub volume_serial: u64,
     /// USN Journal ID at time of index creation

@@ -377,7 +377,7 @@ mod tests {
     fn file_row(path: &str, size: u64) -> DisplayRow {
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             path.to_owned(),
             size,
             false,
@@ -395,7 +395,7 @@ mod tests {
     fn dir_row(path: &str, treesize: u64, tree_alloc: u64) -> DisplayRow {
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             path.to_owned(),
             0,
             true,
@@ -595,7 +595,7 @@ mod tests {
     fn bulkiness_uses_file_metrics_for_files() {
         let row = DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\f.txt".to_owned(),
             1000,
             false,
@@ -651,7 +651,7 @@ mod tests {
         let rec = compact_record(false, 1_000, 4_096, 0, 0);
         let row = DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             String::new(),
             rec.size,
             rec.is_directory(),

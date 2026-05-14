@@ -322,7 +322,7 @@ mod windows_impl {
     const READ_USN_JOURNAL_DATA_V0_SIZE: u32 = u32_size_of::<ReadUsnJournalDataV0>();
 
     /// Open a `\\.\X:` volume handle with read access for USN-journal ioctls.
-    fn open_volume_handle(volume: char) -> Result<HANDLE, std::io::Error> {
+    fn open_volume_handle(volume: crate::platform::DriveLetter) -> Result<HANDLE, std::io::Error> {
         let path = format!("\\\\.\\{volume}:");
         let wide: Vec<u16> = OsStr::new(&path)
             .encode_wide()
@@ -373,7 +373,9 @@ mod windows_impl {
     /// `FSCTL_QUERY_USN_JOURNAL` fails — typically `ERROR_JOURNAL_NOT_ACTIVE`
     /// when the NTFS USN journal has not been enabled for the volume, or
     /// `ERROR_ACCESS_DENIED` when the caller is not elevated.
-    pub fn query_usn_journal(volume: char) -> Result<UsnJournalInfo, std::io::Error> {
+    pub fn query_usn_journal(
+        volume: crate::platform::DriveLetter,
+    ) -> Result<UsnJournalInfo, std::io::Error> {
         let handle = open_volume_handle(volume)?;
         let mut journal_data = UsnJournalDataV0::default();
         let mut bytes_returned: u32 = 0;
@@ -420,7 +422,7 @@ mod windows_impl {
     /// read-loop. `ERROR_JOURNAL_ENTRY_DELETED` is surfaced unchanged so
     /// callers can decide whether to rebuild their checkpoint.
     pub fn read_usn_journal(
-        volume: char,
+        volume: crate::platform::DriveLetter,
         journal_id: u64,
         start_usn: i64,
     ) -> Result<(Vec<UsnRecord>, i64), std::io::Error> {
@@ -733,7 +735,9 @@ mod windows_impl {
     reason = "core::io::Error is not yet stable — see rust-lang/rust#103765. \
               Remove this expect once `error_in_core` stabilises."
 )]
-pub fn query_usn_journal(_volume: char) -> Result<UsnJournalInfo, std::io::Error> {
+pub fn query_usn_journal(
+    _volume: crate::platform::DriveLetter,
+) -> Result<UsnJournalInfo, std::io::Error> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "USN Journal is only available on Windows",
@@ -752,7 +756,7 @@ pub fn query_usn_journal(_volume: char) -> Result<UsnJournalInfo, std::io::Error
               Remove this expect once `error_in_core` stabilises."
 )]
 pub fn read_usn_journal(
-    _volume: char,
+    _volume: crate::platform::DriveLetter,
     _journal_id: u64,
     _start_usn: i64,
 ) -> Result<(Vec<UsnRecord>, i64), std::io::Error> {

@@ -266,7 +266,7 @@ fn parity_compat_directory_formatting() {
 
     let file_row = DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Temp\\hello.txt".to_owned(),
         1024,
         false,
@@ -282,7 +282,7 @@ fn parity_compat_directory_formatting() {
 
     let dir_row = DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Temp".to_owned(),
         0,
         true,
@@ -375,7 +375,7 @@ fn parity_root_no_double_trailing_backslash() {
 
     let root_row = DisplayRow::new(
         0,
-        'G',
+        uffs_mft::platform::DriveLetter::G,
         "G:\\".to_owned(),
         0,
         true,
@@ -464,7 +464,7 @@ fn write_display_rows_emits_treesize_and_tree_allocated() {
 
     let dir_row = DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Big".to_owned(),
         0,
         true,
@@ -514,7 +514,7 @@ fn write_display_rows_emits_name_length_and_path_length() {
 
     let row = DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Very\\Long\\Path\\readme.txt".to_owned(),
         100,
         false,
@@ -619,7 +619,7 @@ fn write_display_rows_parallel_matches_sequential() {
         .map(|idx| {
             DisplayRow::new(
                 idx,
-                'C',
+                uffs_mft::platform::DriveLetter::C,
                 format!("C:\\tmp\\file_{idx:05}.dll"),
                 u64::from(idx) * 1024,
                 false,
@@ -717,7 +717,21 @@ fn extension_column_dot_gated_for_dotfiles_dotless_and_trailing_dot() {
     // Build one DisplayRow per case: dotfile, dotless, trailing-dot,
     // multi-dot directory name, and a normal file (positive control).
     fn row(path: &str) -> DisplayRow {
-        DisplayRow::new(0, 'C', path.to_owned(), 0, false, 0, 0, 0, 0, 0, 0, 0, 0)
+        DisplayRow::new(
+            0,
+            uffs_mft::platform::DriveLetter::C,
+            path.to_owned(),
+            0,
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
     let rows = [

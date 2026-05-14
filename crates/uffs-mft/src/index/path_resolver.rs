@@ -41,7 +41,7 @@ pub struct PathResolver {
     /// State for each record index (UNSEEN, VISITING, VALID, INVALID).
     state: Vec<u8>,
     /// Volume letter for path prefix.
-    volume: char,
+    volume: crate::platform::DriveLetter,
     /// Count of valid records.
     valid_count: u32,
     /// Count of invalid records.
@@ -171,7 +171,7 @@ impl PathResolver {
         }
 
         // No cache hit — build from scratch.
-        out.push(self.volume.to_ascii_uppercase());
+        out.push(self.volume.as_char());
         out.push(':');
         for &chain_idx in chain.iter().rev() {
             if let Some(record) = index.records.get(chain_idx) {
@@ -266,7 +266,7 @@ impl PathResolver {
             }
         }
         let mut path = String::with_capacity(total_len);
-        path.push(self.volume.to_ascii_uppercase());
+        path.push(self.volume.as_char());
         path.push(':');
         for &chain_idx in chain.iter().rev() {
             if let Some(record) = index.records.get(chain_idx) {
@@ -328,7 +328,7 @@ impl PathResolver {
 
         // Build path with single allocation
         let mut path = String::with_capacity(total_len);
-        path.push(self.volume.to_ascii_uppercase());
+        path.push(self.volume.as_char());
         path.push(':');
 
         for &chain_idx in chain.iter().rev() {
@@ -371,7 +371,7 @@ impl PathResolver {
             // Normalize root to "X:\\" (not "X:") so hardlink paths keep
             // standard absolute-drive semantics.
             let mut root_path = String::with_capacity(3);
-            root_path.push(self.volume.to_ascii_uppercase());
+            root_path.push(self.volume.as_char());
             root_path.push(':');
             root_path.push('\\');
             root_path

@@ -14,7 +14,7 @@ use crate::search::filters::SearchFilters;
 
 /// Build a test fixture with root + files + dir + system metafile.
 fn build_test_drive() -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -92,13 +92,13 @@ fn build_test_drive() -> DriveCompactIndex {
     };
     sys.stdinfo.flags = 0x06;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
 /// Build a fixture with `count` files under root (for limit tests).
 fn build_large_drive(count: usize) -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -123,7 +123,7 @@ fn build_large_drive(count: usize) -> DriveCompactIndex {
         };
         rec.stdinfo.flags = 0x20;
     }
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -149,7 +149,7 @@ fn display_row_fields_match_source_data() {
         .iter()
         .find(|row| row.name() == "readme.txt")
         .expect("not found");
-    assert_eq!(row.drive, 'C');
+    assert_eq!(row.drive, uffs_mft::platform::DriveLetter::C);
     assert_eq!(row.size, 400);
     assert_eq!(row.allocated, 512);
     assert_eq!(row.flags, 0x20);
@@ -363,7 +363,7 @@ fn build_ads_on_dir_drive() -> DriveCompactIndex {
         IndexNameRef, IndexStreamInfo, MftIndex, NO_ENTRY, ROOT_FRS, SizeInfo, StandardInfo,
     };
 
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -413,7 +413,7 @@ fn build_ads_on_dir_drive() -> DriveCompactIndex {
     dir_mut.stream_count = 2;
     dir_mut.total_stream_count = 2;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -501,7 +501,7 @@ fn build_flag_test_drive(
     flagged_name: &str,
     unflagged_name: &str,
 ) -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     // Root directory.
     let root_off = idx.add_name(".");
@@ -548,7 +548,7 @@ fn build_flag_test_drive(
     f2.stdinfo.modified = 5_000_000; // same as f1 — deliberate
     f2.stdinfo.created = 5_000_000;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -596,7 +596,7 @@ fn assert_boolean_sort(field: FieldId, flag_bit: u32) {
 #[test]
 fn top_n_sort_by_directory_flag() {
     // DirectoryFlag uses is_directory() (bit 0x0010).
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -627,7 +627,7 @@ fn top_n_sort_by_directory_flag() {
     };
     file_rec.stdinfo.modified = 5_000_000;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     let drives = vec![drive];
     let mut filters = SearchFilters::default();
 
@@ -727,7 +727,7 @@ fn top_n_sort_by_unpinned_flag() {
 /// ALL records share the same `modified` timestamp so any sort that
 /// falls back to `rec.modified` will produce arbitrary (wrong) order.
 fn build_mixed_drive(n_files: usize, n_dirs: usize) -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     // Root directory (FRS 5).
     let root_off = idx.add_name(".");
@@ -771,7 +771,7 @@ fn build_mixed_drive(n_files: usize, n_dirs: usize) -> DriveCompactIndex {
         rec.stdinfo.created = 5_000_000;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -832,7 +832,7 @@ fn heap_eviction_directory_asc_files_come_last() {
 /// Heap eviction with hidden flag: 20 normal + 10 hidden, limit 5, desc.
 #[test]
 fn heap_eviction_hidden_desc() {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -873,7 +873,7 @@ fn heap_eviction_hidden_desc() {
         rec.stdinfo.flags = 0x22; // archive + hidden
         rec.stdinfo.modified = 5_000_000;
     }
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     let drives = vec![drive];
     let mut filters = SearchFilters::default();
 
@@ -992,7 +992,7 @@ fn search_index_star_sort_hidden_desc() {
     use crate::search::backend::{DriveIndex, SearchRequest, search_index};
 
     // Reuse the hidden drive from heap_eviction_hidden_desc.
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -1030,7 +1030,7 @@ fn search_index_star_sort_hidden_desc() {
         rec.stdinfo.flags = 0x22; // archive + hidden
         rec.stdinfo.modified = 5_000_000;
     }
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     let index = DriveIndex {
         drives: vec![Arc::new(drive)],
     };
@@ -1079,7 +1079,7 @@ fn search_index_star_sort_hidden_desc() {
 /// are distinct and easy to rank: 1.0×, 2.0×, and 4.0× the logical
 /// size.  Returns (drive, expected descending order by name).
 fn build_bulkiness_test_drive() -> (DriveCompactIndex, [&'static str; 3]) {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -1119,7 +1119,7 @@ fn build_bulkiness_test_drive() -> (DriveCompactIndex, [&'static str; 3]) {
         rec.stdinfo.created = 7_000_000;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     // Expected order when sorted by bulkiness DESC.
     (drive, ["sparse.dat", "medium.dat", "dense.dat"])
 }
@@ -1214,7 +1214,11 @@ fn top_n_sort_by_bulkiness_asc_orders_by_ratio() {
 /// *unique* `modified` timestamp equal to its FRS so the top-N by
 /// Modified-DESC is fully determined by the fixture (the N largest
 /// FRS values).
-fn build_modified_gradient_drive(letter: char, base_frs: u64, count: usize) -> DriveCompactIndex {
+fn build_modified_gradient_drive(
+    letter: uffs_mft::platform::DriveLetter,
+    base_frs: u64,
+    count: usize,
+) -> DriveCompactIndex {
     let mut idx = MftIndex::new(letter);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -1264,9 +1268,9 @@ fn build_modified_gradient_drive(letter: char, base_frs: u64, count: usize) -> D
 fn parallel_drive_scan_merges_global_top_n_across_drives() {
     // Three drives, non-overlapping FRS ranges → deterministic
     // global top-10 = drive-C's highest 10 FRS values.
-    let drive_a = build_modified_gradient_drive('A', 100, 200);
-    let drive_b = build_modified_gradient_drive('B', 10_000, 200);
-    let drive_c = build_modified_gradient_drive('C', 1_000_000, 200);
+    let drive_a = build_modified_gradient_drive(uffs_mft::platform::DriveLetter::A, 100, 200);
+    let drive_b = build_modified_gradient_drive(uffs_mft::platform::DriveLetter::B, 10_000, 200);
+    let drive_c = build_modified_gradient_drive(uffs_mft::platform::DriveLetter::C, 1_000_000, 200);
     let drives = vec![drive_a, drive_b, drive_c];
     let mut filters = SearchFilters::default();
 
@@ -1283,7 +1287,7 @@ fn parallel_drive_scan_merges_global_top_n_across_drives() {
     for row in &rows {
         assert_eq!(
             row.drive,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "Modified-DESC top-10 must all come from drive C \
              (highest FRS range); got {}:{}",
             row.drive,
@@ -1315,8 +1319,8 @@ fn parallel_drive_scan_merges_global_top_n_across_drives() {
 /// intermediate memory.
 #[test]
 fn parallel_drive_scan_respects_limit_smaller_than_per_drive_count() {
-    let drive_a = build_modified_gradient_drive('A', 100, 500);
-    let drive_b = build_modified_gradient_drive('B', 10_000, 500);
+    let drive_a = build_modified_gradient_drive(uffs_mft::platform::DriveLetter::A, 100, 500);
+    let drive_b = build_modified_gradient_drive(uffs_mft::platform::DriveLetter::B, 10_000, 500);
     let drives = vec![drive_a, drive_b];
     let mut filters = SearchFilters::default();
 
@@ -1333,7 +1337,11 @@ fn parallel_drive_scan_respects_limit_smaller_than_per_drive_count() {
     // Top-5 Modified-DESC across both drives must all come from B
     // (B's FRS range is higher, so B has the 5 newest records).
     for row in &rows {
-        assert_eq!(row.drive, 'B', "top-5 must all be from drive B");
+        assert_eq!(
+            row.drive,
+            uffs_mft::platform::DriveLetter::B,
+            "top-5 must all be from drive B"
+        );
     }
 }
 
@@ -1342,7 +1350,10 @@ fn parallel_drive_scan_respects_limit_smaller_than_per_drive_count() {
 /// the `FieldId::Path` ext fast-path regression test to verify that
 /// the ext-only fast path returns exactly the `.dll` rows — no
 /// `.txt` leakage — and in lexicographic full-path order.
-fn build_two_extension_drive(letter: char, count: usize) -> DriveCompactIndex {
+fn build_two_extension_drive(
+    letter: uffs_mft::platform::DriveLetter,
+    count: usize,
+) -> DriveCompactIndex {
     let mut idx = MftIndex::new(letter);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -1384,7 +1395,7 @@ fn build_two_extension_drive(letter: char, count: usize) -> DriveCompactIndex {
 /// bypassed, this test fails.
 #[test]
 fn path_sort_ext_only_returns_matching_ext_in_path_order() {
-    let drive = build_two_extension_drive('C', 20);
+    let drive = build_two_extension_drive(uffs_mft::platform::DriveLetter::C, 20);
     let drives = vec![drive];
     let mut filters = SearchFilters {
         extensions: vec!["dll".into()],
@@ -1434,7 +1445,7 @@ fn path_sort_ext_only_returns_matching_ext_in_path_order() {
 /// FieldId::Path, sort_desc, ..)` inside the fast path.
 #[test]
 fn path_sort_ext_only_desc_returns_reverse_lex_order() {
-    let drive = build_two_extension_drive('C', 20);
+    let drive = build_two_extension_drive(uffs_mft::platform::DriveLetter::C, 20);
     let drives = vec![drive];
     let mut filters = SearchFilters {
         extensions: vec!["dll".into()],
@@ -1470,7 +1481,7 @@ fn path_sort_ext_only_desc_returns_reverse_lex_order() {
 /// disqualifies the fast path, so the tree walk runs instead.
 #[test]
 fn path_sort_non_ext_filter_uses_tree_walk() {
-    let drive = build_two_extension_drive('C', 20);
+    let drive = build_two_extension_drive(uffs_mft::platform::DriveLetter::C, 20);
     let drives = vec![drive];
     let mut filters = SearchFilters {
         // min_size disqualifies is_ext_only, forcing the tree walk.

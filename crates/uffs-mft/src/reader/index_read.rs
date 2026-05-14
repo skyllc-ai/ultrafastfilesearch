@@ -107,7 +107,7 @@ impl MftReader {
             let handle = VolumeHandle::open(volume)?;
             let reader = Self {
                 volume,
-                source: super::MftSource::LiveVolume(handle),
+                source: super::MftSource::LiveVolume(Box::new(handle)),
                 mode,
                 merge_extensions,
                 use_bitmap,
@@ -137,7 +137,7 @@ impl MftReader {
     /// Returns [`MftError`] if the file cannot be read or parsed.
     fn read_index_from_file(
         path: &std::path::Path,
-        volume: char,
+        volume: crate::platform::DriveLetter,
     ) -> Result<crate::index::MftIndex> {
         // Detect IOCP capture vs raw MFT format
         let is_iocp = crate::is_iocp_capture(path).unwrap_or(false);
@@ -249,7 +249,7 @@ impl MftReader {
             let handle = VolumeHandle::open(volume)?;
             let reader = Self {
                 volume,
-                source: super::MftSource::LiveVolume(handle),
+                source: super::MftSource::LiveVolume(Box::new(handle)),
                 mode,
                 merge_extensions,
                 use_bitmap,

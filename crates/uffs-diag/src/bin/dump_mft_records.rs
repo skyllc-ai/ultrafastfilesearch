@@ -349,7 +349,10 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
 
     // Now build the MftIndex and check the record
     println!("\n=== Building MftIndex from merged records ===");
-    let index = uffs_mft::index::MftIndex::from_parsed_records('D', merged_records);
+    let index = uffs_mft::index::MftIndex::from_parsed_records(
+        uffs_mft::platform::DriveLetter::D,
+        merged_records,
+    );
     println!("  records.len(): {}", index.records.len());
     println!("  children.len(): {}", index.children_count());
 

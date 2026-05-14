@@ -64,17 +64,25 @@ pub fn write_rows(rows: &[serde_json::Value], args: &[String]) -> Result<()> {
     let drive = arg_val(args, "--drive").or_else(|| arg_val(args, "-d"));
     let drives_str = arg_val(args, "--drives");
     let mft_str = arg_val(args, "--mft-file");
-    let mut targets: Vec<char> = Vec::new();
+    let mut targets: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
     if let Some(drive_val) = drive {
-        if let Some(letter) = drive_val.chars().next().filter(char::is_ascii_alphabetic) {
-            targets.push(letter.to_ascii_uppercase());
+        if let Some(letter) = drive_val
+            .chars()
+            .next()
+            .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+        {
+            targets.push(letter);
         }
     } else if let Some(drives_val) = drives_str {
         for part in drives_val.split(',') {
             let trimmed = part.trim();
             let stripped = trimmed.strip_suffix(':').unwrap_or(trimmed);
-            if let Some(letter) = stripped.chars().next().filter(char::is_ascii_alphabetic) {
-                targets.push(letter.to_ascii_uppercase());
+            if let Some(letter) = stripped
+                .chars()
+                .next()
+                .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+            {
+                targets.push(letter);
             }
         }
     } else if let Some(mft_val) = mft_str {

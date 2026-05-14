@@ -60,6 +60,10 @@ use rand as _;
 use rand_chacha as _;
 use rayon as _;
 use rustc_hash as _;
+// `serde` is used only by the library (DriveLetter Serialize/Deserialize);
+// the binary doesn't reference it directly.  Acknowledge to keep
+// `unused-crate-dependencies` quiet.
+use serde as _;
 #[cfg(test)]
 use sha2 as _;
 // SmallVec for path chain building (used in index.rs PathResolver)

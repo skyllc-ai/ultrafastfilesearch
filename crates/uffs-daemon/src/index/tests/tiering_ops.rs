@@ -57,7 +57,10 @@ async fn hibernate_demotes_all_loaded_drives_to_cold() {
 
     assert_eq!(
         outcome.warm_demoted,
-        vec!['C', 'D'],
+        vec![
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D
+        ],
         "both freshly-loaded Warm drives must be reported as warm-demoted"
     );
     assert!(outcome.hot_demoted.is_empty());
@@ -67,13 +70,16 @@ async fn hibernate_demotes_all_loaded_drives_to_cold() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Cold), ('D', ShardState::Cold)],
+        vec![
+            (uffs_mft::platform::DriveLetter::C, ShardState::Cold),
+            (uffs_mft::platform::DriveLetter::D, ShardState::Cold)
+        ],
         "every shard must be Cold post-hibernate"
     );
 }
 
-/// Phase 8-B — `hibernate_shards(&['C'])` only demotes the named
-/// drive; other loaded drives stay in their pre-call tier.
+/// Phase 8-B — `hibernate_shards(&[uffs_mft::platform::DriveLetter::C])` only
+/// demotes the named drive; other loaded drives stay in their pre-call tier.
 #[tokio::test]
 async fn hibernate_subset_only_demotes_specified_drives() {
     let (tx, _rx) = crate::events::event_channel();
@@ -82,9 +88,13 @@ async fn hibernate_subset_only_demotes_specified_drives() {
     mgr.add_drive(build_test_drive_d()).await;
     mgr.add_drive(build_test_drive_e()).await;
 
-    let outcome = mgr.hibernate_shards(&['C']).await;
+    let outcome = mgr
+        .hibernate_shards(&[uffs_mft::platform::DriveLetter::C])
+        .await;
 
-    assert_eq!(outcome.warm_demoted, vec!['C']);
+    assert_eq!(outcome.warm_demoted, vec![
+        uffs_mft::platform::DriveLetter::C
+    ]);
     assert!(
         outcome.already_cold.is_empty(),
         "non-targeted drives are filtered out before the tier check, not reported in already_cold"
@@ -94,9 +104,9 @@ async fn hibernate_subset_only_demotes_specified_drives() {
     assert_eq!(
         states,
         vec![
-            ('C', ShardState::Cold),
-            ('D', ShardState::Warm),
-            ('E', ShardState::Warm),
+            (uffs_mft::platform::DriveLetter::C, ShardState::Cold),
+            (uffs_mft::platform::DriveLetter::D, ShardState::Warm),
+            (uffs_mft::platform::DriveLetter::E, ShardState::Warm),
         ],
         "only C must be Cold; D and E must stay Warm"
     );
@@ -113,12 +123,19 @@ async fn hibernate_reports_already_cold_drives_separately() {
     mgr.add_drive(build_test_drive_d()).await;
 
     // Seed C as Cold via the pre-existing test escape hatch.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     let outcome = mgr.hibernate_shards(&[]).await;
 
-    assert_eq!(outcome.already_cold, vec!['C']);
-    assert_eq!(outcome.warm_demoted, vec!['D']);
+    assert_eq!(outcome.already_cold, vec![
+        uffs_mft::platform::DriveLetter::C
+    ]);
+    assert_eq!(outcome.warm_demoted, vec![
+        uffs_mft::platform::DriveLetter::D
+    ]);
     assert!(outcome.hot_demoted.is_empty());
     assert!(outcome.parked_demoted.is_empty());
 }
@@ -138,10 +155,15 @@ async fn preload_promotes_cold_to_hot_with_pin() {
     mgr.add_drive(build_test_drive()).await;
 
     // Seed C as Cold so preload exercises the body-load path.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     let before_ms = unix_now_ms();
-    let outcome = mgr.preload_drive('C', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
 
     let PreloadOutcome::Promoted {
         from_state,
@@ -159,7 +181,10 @@ async fn preload_promotes_cold_to_hot_with_pin() {
     );
 
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Hot)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Hot
+    )]);
 }
 
 /// Phase 8-C — `preload C:` against an already-`Hot` shard skips
@@ -174,12 +199,17 @@ async fn preload_already_hot_extends_pin_without_rebuild() {
     });
     let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     // First preload — Cold → Hot.  Use let-else so neither a
     // wildcard arm (clippy::wildcard_enum_match_arm) nor an
     // `unreachable!` (clippy::unreachable) is needed.
-    let first = mgr.preload_drive('C', 5).await;
+    let first = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+        .await;
     let PreloadOutcome::Promoted {
         pin_until_ms: pin1, ..
     } = first
@@ -188,7 +218,9 @@ async fn preload_already_hot_extends_pin_without_rebuild() {
     };
 
     // Second preload — Hot → Hot (pin extension only).
-    let second = mgr.preload_drive('C', 60).await;
+    let second = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 60)
+        .await;
     let PreloadOutcome::AlreadyHot { pin_until_ms: pin2 } = second else {
         panic!("expected AlreadyHot on the second preload call, got {second:?}");
     };
@@ -199,7 +231,10 @@ async fn preload_already_hot_extends_pin_without_rebuild() {
     );
 
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Hot)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Hot
+    )]);
 }
 
 /// Phase 8-C pin-contract — pinned shards skip the idle-demote
@@ -219,15 +254,20 @@ async fn preload_pin_blocks_idle_demote() {
     });
     let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
-    let outcome = mgr.preload_drive('C', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(matches!(outcome, PreloadOutcome::Promoted { .. }));
 
     // Backdate the idle clock so the policy would otherwise demote.
     let last_query_ms = 1_000_000_000_u64;
     assert!(
-        mgr.backdate_last_query_at_ms_for_test('C', last_query_ms)
+        mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::C, last_query_ms)
             .await
     );
 
@@ -238,7 +278,7 @@ async fn preload_pin_blocks_idle_demote() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Hot)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Hot)],
         "pinned shard must stay Hot even when the idle clock is past the TTL"
     );
 }
@@ -256,9 +296,14 @@ async fn preload_pin_blocks_cascade_demote() {
     });
     let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
-    let outcome = mgr.preload_drive('C', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(matches!(outcome, PreloadOutcome::Promoted { .. }));
 
     // The cascade picks Warm shards only, but the test fixture also
@@ -283,15 +328,15 @@ async fn preload_pin_blocks_cascade_demote() {
     // (unpinned).
     let pre_states = mgr.shard_states_for_test().await;
     assert_eq!(pre_states, vec![
-        ('C', ShardState::Hot),
-        ('D', ShardState::Warm)
+        (uffs_mft::platform::DriveLetter::C, ShardState::Hot),
+        (uffs_mft::platform::DriveLetter::D, ShardState::Warm)
     ]);
 
     // Cascade: must pick D (Warm, unpinned), not C (Hot, pinned).
     let picked = mgr.cascade_demote_one_step().await;
     assert_eq!(
         picked,
-        Some(('D', ShardState::Parked)),
+        Some((uffs_mft::platform::DriveLetter::D, ShardState::Parked)),
         "cascade must pick the unpinned Warm shard D, not the pinned Hot shard C"
     );
 
@@ -299,7 +344,10 @@ async fn preload_pin_blocks_cascade_demote() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Hot), ('D', ShardState::Parked)],
+        vec![
+            (uffs_mft::platform::DriveLetter::C, ShardState::Hot),
+            (uffs_mft::platform::DriveLetter::D, ShardState::Parked)
+        ],
         "pinned shard C must still be Hot; unpinned D must be Parked"
     );
 }
@@ -317,11 +365,15 @@ async fn hibernate_overrides_preload_pin() {
     });
     let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     // Pin C in Hot for 30 min.
     assert!(matches!(
-        mgr.preload_drive('C', 30).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+            .await,
         PreloadOutcome::Promoted { .. }
     ));
 
@@ -329,14 +381,14 @@ async fn hibernate_overrides_preload_pin() {
     let outcome = mgr.hibernate_shards(&[]).await;
     assert_eq!(
         outcome.hot_demoted,
-        vec!['C'],
+        vec![uffs_mft::platform::DriveLetter::C],
         "hibernate must report C as hot-demoted (pre-call tier)"
     );
 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Cold)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Cold)],
         "hibernate must override the pin and demote to Cold"
     );
 }
@@ -349,7 +401,9 @@ async fn preload_unknown_drive_returns_unknown() {
     let mgr = IndexManager::new(None, tx, Arc::new(crate::config::Config::default()));
     mgr.add_drive(build_test_drive()).await;
 
-    let outcome = mgr.preload_drive('Z', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::Z, 30)
+        .await;
     assert!(
         matches!(outcome, PreloadOutcome::UnknownDrive),
         "unknown drive Z must produce UnknownDrive; got {outcome:?}"
@@ -357,7 +411,10 @@ async fn preload_unknown_drive_returns_unknown() {
 
     // Loaded shard untouched.
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Warm)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
 }
 
 /// Phase 8-C — when the body loader returns `None` for the
@@ -369,9 +426,14 @@ async fn preload_load_failure_keeps_pre_call_state() {
     let (tx, _rx) = crate::events::event_channel();
     let mgr = IndexManager::with_body_loader_for_test(None, tx, Arc::new(MissingBodyLoader));
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
-    let outcome = mgr.preload_drive('C', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(
         matches!(outcome, PreloadOutcome::LoadFailed),
         "MissingBodyLoader must surface as LoadFailed; got {outcome:?}"
@@ -380,7 +442,7 @@ async fn preload_load_failure_keeps_pre_call_state() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Cold)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Cold)],
         "shard must stay in pre-call Cold after load failure"
     );
 }
@@ -400,7 +462,10 @@ async fn preload_warm_drive_skips_body_load() {
     struct PanicOnLoad;
 
     impl BodyLoaderTrait for PanicOnLoad {
-        fn load(&self, letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        fn load(
+            &self,
+            letter: uffs_mft::platform::DriveLetter,
+        ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
             panic!(
                 "PanicOnLoad::load — unexpected call for {letter}; Warm-source preload must reuse the live body"
             )
@@ -411,14 +476,19 @@ async fn preload_warm_drive_skips_body_load() {
     let mgr = IndexManager::with_body_loader_for_test(None, tx, Arc::new(PanicOnLoad));
     mgr.add_drive(build_test_drive()).await; // C lands in Warm.
 
-    let outcome = mgr.preload_drive('C', 30).await;
+    let outcome = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     let PreloadOutcome::Promoted { from_state, .. } = outcome else {
         panic!("expected Promoted; got {outcome:?}");
     };
     assert_eq!(from_state, ShardState::Warm);
 
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Hot)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Hot
+    )]);
 }
 
 // ── Phase 9 — `promotions_total` Cold→Hot counter contract ──────────
@@ -466,9 +536,13 @@ async fn preload_cold_to_hot_bumps_promotions_total_per_cycle() {
     );
 
     // ── Cycle 1: Cold → Hot ─────────────────────────────────────
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
     assert!(matches!(
-        mgr.preload_drive('C', 5).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+            .await,
         PreloadOutcome::Promoted { .. }
     ));
     assert_eq!(
@@ -479,7 +553,8 @@ async fn preload_cold_to_hot_bumps_promotions_total_per_cycle() {
 
     // ── AlreadyHot — must NOT bump ──────────────────────────────
     assert!(matches!(
-        mgr.preload_drive('C', 60).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 60)
+            .await,
         PreloadOutcome::AlreadyHot { .. }
     ));
     assert_eq!(
@@ -491,9 +566,13 @@ async fn preload_cold_to_hot_bumps_promotions_total_per_cycle() {
     // ── Cycle 2: Hot → Cold (via test escape) → Hot ─────────────
     // `demote_letter_for_test` overrides the pin; same effect as
     // an operator `hibernate` for counter-bump purposes.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
     assert!(matches!(
-        mgr.preload_drive('C', 5).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+            .await,
         PreloadOutcome::Promoted { .. }
     ));
     assert_eq!(
@@ -518,7 +597,10 @@ async fn preload_warm_to_hot_does_not_bump_promotions_total() {
 
     struct PanicOnLoad;
     impl BodyLoaderTrait for PanicOnLoad {
-        fn load(&self, letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+        fn load(
+            &self,
+            letter: uffs_mft::platform::DriveLetter,
+        ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
             panic!(
                 "PanicOnLoad::load — Warm→Hot source arm must not call the loader (letter={letter})"
             )
@@ -530,7 +612,8 @@ async fn preload_warm_to_hot_does_not_bump_promotions_total() {
     mgr.add_drive(build_test_drive()).await; // C lands in Warm.
 
     assert!(matches!(
-        mgr.preload_drive('C', 5).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+            .await,
         PreloadOutcome::Promoted {
             from_state: ShardState::Warm,
             ..
@@ -568,10 +651,14 @@ async fn preload_parked_to_hot_does_not_bump_promotions_total() {
     mgr.add_drive(build_test_drive()).await;
 
     // Seed C as Parked (legal demote target from Warm).
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     assert!(matches!(
-        mgr.preload_drive('C', 5).await,
+        mgr.preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+            .await,
         PreloadOutcome::Promoted {
             from_state: ShardState::Parked,
             ..

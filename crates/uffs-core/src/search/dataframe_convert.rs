@@ -85,7 +85,8 @@ pub fn dataframe_to_display_rows(data_frame: &uffs_polars::DataFrame) -> Vec<Dis
         let path = col_str(data_frame, "path", row_idx).unwrap_or_default();
         let drive = col_str(data_frame, "drive", row_idx)
             .and_then(|val| val.chars().next())
-            .unwrap_or('?');
+            .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+            .unwrap_or(uffs_mft::platform::DriveLetter::X);
         let size = col_u64(data_frame, "size", row_idx);
         let allocated = col_u64(data_frame, "allocated_size", row_idx);
         let flags = u32::try_from(col_u64(data_frame, "flags", row_idx)).unwrap_or(u32::MAX);

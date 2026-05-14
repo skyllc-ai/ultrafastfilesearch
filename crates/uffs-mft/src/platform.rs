@@ -16,6 +16,12 @@
 //! This module uses Windows FFI and requires careful handling of raw handles.
 
 mod bitmap;
+/// Drive-letter newtype — validated Windows drive identifier (`A..=Z`).
+///
+/// Phase 4 sub-phase 5b: replaces 117 raw `char` parameters across the
+/// workspace with a `#[repr(transparent)]` newtype that canonicalises
+/// case and rejects non-ASCII-letter input at the parse boundary.
+pub mod drive_letter;
 mod extents;
 mod system;
 /// `$UpCase` table reading from live NTFS volume.
@@ -24,6 +30,7 @@ pub mod upcase;
 mod volume;
 
 pub use bitmap::MftBitmap;
+pub use drive_letter::{DriveLetter, DriveLetterError};
 pub use extents::MftExtent;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
@@ -68,8 +75,10 @@ mod tests {
 
     #[test]
     fn volume_root_path_works() {
-        assert_eq!(volume_root_path('c'), PathBuf::from("C:\\"));
-        assert_eq!(volume_root_path('D'), PathBuf::from("D:\\"));
+        // [`DriveLetter`] canonicalises to uppercase at construction
+        // time, so a single mapping covers both former cases.
+        assert_eq!(volume_root_path(DriveLetter::C), PathBuf::from("C:\\"));
+        assert_eq!(volume_root_path(DriveLetter::D), PathBuf::from("D:\\"));
     }
 
     #[test]

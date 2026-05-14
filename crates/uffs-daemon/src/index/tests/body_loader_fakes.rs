@@ -41,7 +41,10 @@ use super::IndexManager;
 pub(super) struct MissingBodyLoader;
 
 impl crate::cache::body_loader::BodyLoader for MissingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+    fn load(
+        &self,
+        _letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         None
     }
 }
@@ -54,7 +57,10 @@ impl crate::cache::body_loader::BodyLoader for MissingBodyLoader {
 pub(super) struct PanickingBodyLoader;
 
 impl crate::cache::body_loader::BodyLoader for PanickingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+    fn load(
+        &self,
+        _letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         panic!("PanickingBodyLoader::load — synthetic panic for the JoinError arm");
     }
 }
@@ -91,7 +97,10 @@ impl SlowBodyLoader {
 }
 
 impl crate::cache::body_loader::BodyLoader for SlowBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+    fn load(
+        &self,
+        _letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         use core::sync::atomic::Ordering;
 
         let now = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
@@ -161,7 +170,10 @@ impl CountingBodyLoader {
 }
 
 impl crate::cache::body_loader::BodyLoader for CountingBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+    fn load(
+        &self,
+        _letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         self.calls
             .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
         std::thread::sleep(self.delay);

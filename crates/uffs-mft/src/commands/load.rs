@@ -47,7 +47,7 @@ pub(crate) fn cmd_load(
     info_only: bool,
     build_index: bool,
     debug_tree: bool,
-    drive_override: Option<char>,
+    drive_override: Option<uffs_mft::platform::DriveLetter>,
     forensic: bool,
 ) -> Result<()> {
     use std::time::Instant;
@@ -75,7 +75,7 @@ pub(crate) fn cmd_load(
     // Load header first (with volume letter override if provided)
     let load_options = LoadRawOptions {
         header_only: true,
-        volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+        volume_letter: drive_override,
         forensic,
     };
     let raw_data = load_raw_mft(input, &load_options)
@@ -152,7 +152,7 @@ pub(crate) fn cmd_load(
     // Create load options for data loading (not header-only)
     let data_load_options = LoadRawOptions {
         header_only: false,
-        volume_letter: drive_override.map(|c| c.to_ascii_uppercase()),
+        volume_letter: drive_override,
         forensic,
     };
 

@@ -11,7 +11,7 @@ use super::*;
 
 /// Create a minimal index with a file that has ADS streams.
 fn create_index_with_ads() -> MftIndex {
-    let mut index = MftIndex::new('M');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::M);
 
     // Create a file record (FRS 100)
     let name_ref = push_index_name(&mut index, "test.pdf");

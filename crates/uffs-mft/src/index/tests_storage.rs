@@ -10,7 +10,7 @@ const NAMES_SIZE_OFFSET: usize = 56;
 const LINKS_COUNT_OFFSET: usize = 64;
 
 fn empty_serialized_index() -> Vec<u8> {
-    MftIndex::new('C').serialize(123, 456, 789)
+    MftIndex::new(crate::platform::DriveLetter::C).serialize(123, 456, 789)
 }
 
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {

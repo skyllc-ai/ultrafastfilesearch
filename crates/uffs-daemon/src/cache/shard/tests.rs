@@ -47,16 +47,16 @@ use super::{
 /// `index/tests/mod.rs::build_test_drive` fixture (which builds a
 /// 7-record drive from a real `MftIndex` and is overkill for the
 /// patch-method shape tests below).
-fn make_test_body(letter: char) -> DriveCompactIndex {
+fn make_test_body(letter: uffs_mft::platform::DriveLetter) -> DriveCompactIndex {
     // Names blob: letter + "/" + "f.txt".
-    let names = vec![letter as u8, b'f', b'.', b't', b'x', b't'];
+    let names = vec![letter.as_byte(), b'f', b'.', b't', b'x', b't'];
     let records = vec![
         CompactRecord {
             name_offset: 0,
             flags: 0x10, // directory
             parent_idx: u32::MAX,
             name_len: 1,
-            name_first_byte: letter as u8,
+            name_first_byte: letter.as_byte(),
             ..CompactRecord::default()
         },
         CompactRecord {
@@ -107,7 +107,7 @@ fn make_test_body(letter: char) -> DriveCompactIndex {
 /// Sufficient to exercise `ShardEntry::new_parked` and the
 /// `parked_body()` accessor without pulling in fixture-builder
 /// machinery from `crate::index::tests`.
-fn make_test_parked_body(letter: char, source_epoch: u64) -> ParkedBody {
+fn make_test_parked_body(letter: uffs_mft::platform::DriveLetter, source_epoch: u64) -> ParkedBody {
     let bloom = Bloom::with_size_and_k(64, 7);
     let path_trie = PathTrie::build(&[], &[]);
     ParkedBody {
@@ -464,9 +464,16 @@ fn new_parked_has_no_body_and_shares_stats_and_parked_body() {
     stats.record_query();
     stats.record_query();
 
-    let parked_body = Arc::new(make_test_parked_body('C', 99));
-    let shard = ShardEntry::new_parked('C', Arc::clone(&stats), Arc::clone(&parked_body));
-    assert_eq!(shard.drive, 'C');
+    let parked_body = Arc::new(make_test_parked_body(
+        uffs_mft::platform::DriveLetter::C,
+        99,
+    ));
+    let shard = ShardEntry::new_parked(
+        uffs_mft::platform::DriveLetter::C,
+        Arc::clone(&stats),
+        Arc::clone(&parked_body),
+    );
+    assert_eq!(shard.drive, uffs_mft::platform::DriveLetter::C);
     assert_eq!(shard.state(), ShardState::Parked);
     assert!(shard.body().is_none());
 
@@ -481,7 +488,7 @@ fn new_parked_has_no_body_and_shares_stats_and_parked_body() {
     // same Arc, so the bloom / trie / epoch round-trip without copy.
     let from_shard = shard.parked_body().expect("parked shard has body");
     assert!(Arc::ptr_eq(&from_shard, &parked_body));
-    assert_eq!(from_shard.letter, 'C');
+    assert_eq!(from_shard.letter, uffs_mft::platform::DriveLetter::C);
     assert_eq!(from_shard.source_epoch, 99);
 }
 
@@ -490,8 +497,8 @@ fn new_parked_has_no_body_and_shares_stats_and_parked_body() {
 #[test]
 fn new_cold_has_no_body_and_shares_stats() {
     let stats = Arc::new(DriveStats::new());
-    let shard = ShardEntry::new_cold('D', Arc::clone(&stats));
-    assert_eq!(shard.drive, 'D');
+    let shard = ShardEntry::new_cold(uffs_mft::platform::DriveLetter::D, Arc::clone(&stats));
+    assert_eq!(shard.drive, uffs_mft::platform::DriveLetter::D);
     assert_eq!(shard.state(), ShardState::Cold);
     assert!(shard.body().is_none());
 
@@ -510,8 +517,8 @@ fn new_cold_has_no_body_and_shares_stats() {
 /// previous body.
 #[test]
 fn apply_usn_patch_to_body_returns_new_arc_on_warm() {
-    let body = Arc::new(make_test_body('C'));
-    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+    let body = Arc::new(make_test_body(uffs_mft::platform::DriveLetter::C));
+    let shard = ShardEntry::new_warm(uffs_mft::platform::DriveLetter::C, Arc::clone(&body));
 
     // Empty change batch — the method must still produce a fresh
     // Arc so the caller's swap path is exercised even on no-op ticks.
@@ -537,8 +544,8 @@ fn apply_usn_patch_to_body_returns_new_arc_on_warm() {
 #[test]
 fn apply_usn_patch_to_body_returns_none_on_parked() {
     let stats = Arc::new(DriveStats::new());
-    let parked_body = Arc::new(make_test_parked_body('C', 1));
-    let shard = ShardEntry::new_parked('C', stats, parked_body);
+    let parked_body = Arc::new(make_test_parked_body(uffs_mft::platform::DriveLetter::C, 1));
+    let shard = ShardEntry::new_parked(uffs_mft::platform::DriveLetter::C, stats, parked_body);
 
     let changes = vec![FileChange {
         frs: 10,
@@ -560,7 +567,7 @@ fn apply_usn_patch_to_body_returns_none_on_parked() {
 #[test]
 fn apply_usn_patch_to_body_returns_none_on_cold() {
     let stats = Arc::new(DriveStats::new());
-    let shard = ShardEntry::new_cold('C', stats);
+    let shard = ShardEntry::new_cold(uffs_mft::platform::DriveLetter::C, stats);
 
     let result = shard.apply_usn_patch_to_body(&[]);
     assert!(
@@ -577,8 +584,8 @@ fn apply_usn_patch_to_body_returns_none_on_cold() {
 /// `uffs_core::compact_loader::apply_usn_patch`.
 #[test]
 fn apply_usn_patch_to_body_lands_delete_on_new_arc() {
-    let body = Arc::new(make_test_body('C'));
-    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+    let body = Arc::new(make_test_body(uffs_mft::platform::DriveLetter::C));
+    let shard = ShardEntry::new_warm(uffs_mft::platform::DriveLetter::C, Arc::clone(&body));
 
     // FRS 10 → compact_idx 1 in the fixture's `frs_to_compact`
     // (populated by `make_test_body`); the test exercises the

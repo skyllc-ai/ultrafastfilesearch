@@ -39,7 +39,9 @@ impl IndexManager {
     /// Test-only escape hatch so integration tests in `crate::index::tests`
     /// can verify the [`Self::record_search_dispatch`] wiring without
     /// exposing the registry to production callers.
-    pub(crate) async fn shard_query_totals_for_test(&self) -> Vec<(char, u64)> {
+    pub(crate) async fn shard_query_totals_for_test(
+        &self,
+    ) -> Vec<(uffs_mft::platform::DriveLetter, u64)> {
         let guard = self.index.read().await;
         guard
             .iter()
@@ -59,7 +61,7 @@ impl IndexManager {
     /// legal), `false` otherwise (unknown letter or illegal target).
     pub(crate) async fn demote_letter_for_test(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         target: crate::cache::ShardState,
     ) -> bool {
         let mut guard = self.index.write().await;
@@ -88,13 +90,13 @@ impl IndexManager {
     /// epsilon` and asserting the demote happened.
     pub(crate) async fn backdate_last_query_at_ms_for_test(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         ts_ms: u64,
     ) -> bool {
         let guard = self.index.read().await;
         guard
             .iter()
-            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+            .find(|shard| shard.drive == letter)
             .is_some_and(|shard| {
                 shard.stats.mark_loaded_at(ts_ms);
                 true
@@ -107,7 +109,9 @@ impl IndexManager {
     /// only through [`Self::snapshot`] (which filters Warm/Hot).
     /// Commit C tests need to assert the *full* tier distribution
     /// (Parked/Cold) before and after `ensure_warm_for_dispatch`.
-    pub(crate) async fn shard_states_for_test(&self) -> Vec<(char, crate::cache::ShardState)> {
+    pub(crate) async fn shard_states_for_test(
+        &self,
+    ) -> Vec<(uffs_mft::platform::DriveLetter, crate::cache::ShardState)> {
         let guard = self.index.read().await;
         guard
             .iter()

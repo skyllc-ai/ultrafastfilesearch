@@ -70,7 +70,7 @@ fn extract_sort_key(rec: &CompactRecord, sort_column: FieldId, drive: &DriveComp
         FieldId::Drive => {
             let name = rec.name(&drive.names);
             let mut key = [0_u8; 8];
-            key[0] = u8::try_from(u32::from(drive.letter)).unwrap_or(b'?');
+            key[0] = u8::try_from(u32::from(drive.letter.as_byte())).unwrap_or(b'?');
             for (dst, ch) in key[1..].iter_mut().zip(name.chars()) {
                 let folded = drive_fold.fold_char(ch);
                 *dst = folded.to_be_bytes()[1];

@@ -91,7 +91,7 @@ pub struct VolumeHandle {
     /// The raw Windows handle.
     handle: HANDLE,
     /// The volume letter.
-    volume: char,
+    volume: super::DriveLetter,
     /// NTFS volume data from `FSCTL_GET_NTFS_VOLUME_DATA`.
     volume_data: NtfsVolumeData,
 }
@@ -179,20 +179,11 @@ impl VolumeHandle {
     /// elevated), or if `FSCTL_GET_NTFS_VOLUME_DATA` cannot read the volume
     /// descriptor for the opened handle.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
-    pub fn open(volume: char) -> Result<Self> {
-        let normalized_volume = volume.to_ascii_uppercase();
-
-        if !normalized_volume.is_ascii_alphabetic() {
-            return Err(MftError::VolumeOpen {
-                volume: normalized_volume,
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Invalid volume letter",
-                ),
-            });
-        }
-
-        let volume_path: Vec<u16> = format!("\\\\.\\{normalized_volume}:")
+    pub fn open(volume: super::DriveLetter) -> Result<Self> {
+        // `DriveLetter` is already validated (`A..=Z`), so no fallible
+        // pre-check is needed here.  The wire path uses the
+        // canonical uppercase ASCII byte directly.
+        let volume_path: Vec<u16> = format!("\\\\.\\{}:", volume.as_char())
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
@@ -224,24 +215,24 @@ impl VolumeHandle {
                     return Err(MftError::InsufficientPrivileges);
                 }
                 return Err(MftError::VolumeOpen {
-                    volume: normalized_volume,
+                    volume,
                     source: std::io::Error::from_raw_os_error(err.code().0),
                 });
             }
         };
 
-        let volume_data = Self::get_ntfs_volume_data(handle, normalized_volume)?;
+        let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
 
         Ok(Self {
             handle,
-            volume: normalized_volume,
+            volume,
             volume_data,
         })
     }
 
     /// Retrieves NTFS volume data using `FSCTL_GET_NTFS_VOLUME_DATA`.
     #[expect(unsafe_code, reason = "FFI: windows API (DeviceIoControl)")]
-    fn get_ntfs_volume_data(handle: HANDLE, volume: char) -> Result<NtfsVolumeData> {
+    fn get_ntfs_volume_data(handle: HANDLE, volume: super::DriveLetter) -> Result<NtfsVolumeData> {
         use windows::Win32::System::IO::DeviceIoControl;
 
         let mut buffer = NTFS_VOLUME_DATA_BUFFER::default();
@@ -306,7 +297,7 @@ impl VolumeHandle {
 
     /// Returns the volume letter.
     #[must_use]
-    pub const fn volume(&self) -> char {
+    pub const fn volume(&self) -> super::DriveLetter {
         self.volume
     }
 

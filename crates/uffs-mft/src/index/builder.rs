@@ -50,7 +50,10 @@ impl MftIndex {
         skip_all,
         fields(volume = %volume, input_records = records.len())
     )]
-    pub fn from_parsed_records(volume: char, records: Vec<crate::parse::ParsedRecord>) -> Self {
+    pub fn from_parsed_records(
+        volume: crate::platform::DriveLetter,
+        records: Vec<crate::parse::ParsedRecord>,
+    ) -> Self {
         /// System metafiles are FRS 0-15 (except root at FRS 5)
         const SYSTEM_METAFILE_MAX_FRS: u64 = 15;
         const ROOT_FRS_LOCAL: u64 = 5;
@@ -457,7 +460,7 @@ impl MftIndex {
         fields(volume = %volume, input_records = records.len())
     )]
     pub fn from_parsed_records_with_timing(
-        volume: char,
+        volume: crate::platform::DriveLetter,
         records: Vec<crate::parse::ParsedRecord>,
     ) -> (Self, IndexBuildTiming) {
         use std::time::Instant;

@@ -635,7 +635,10 @@ impl UffsClient {
     /// # Errors
     ///
     /// Returns a `ClientError` on connection, protocol, or timeout failure.
-    pub async fn refresh(&mut self, drives: &[char]) -> Result<(), crate::error::ClientError> {
+    pub async fn refresh(
+        &mut self,
+        drives: &[uffs_mft::platform::DriveLetter],
+    ) -> Result<(), crate::error::ClientError> {
         let params = serde_json::json!({"drives": drives});
         let _result = self.send_request("refresh", Some(params)).await?;
         Ok(())

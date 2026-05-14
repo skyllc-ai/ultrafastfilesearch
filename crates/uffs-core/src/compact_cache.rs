@@ -153,7 +153,7 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Returns the cache file path for a compact index.
 #[must_use]
-pub fn compact_cache_path(drive_letter: char) -> PathBuf {
+pub fn compact_cache_path(drive_letter: uffs_mft::platform::DriveLetter) -> PathBuf {
     uffs_mft::cache::cache_dir().join(format!("{drive_letter}_compact.uffs"))
 }
 
@@ -172,7 +172,7 @@ pub fn compact_cache_path(drive_letter: char) -> PathBuf {
 ///
 /// [`CursorStore`]: # "Trait defined in `uffs-daemon::cache::journal_loop`"
 #[must_use]
-pub fn usn_cursor_path(drive_letter: char) -> PathBuf {
+pub fn usn_cursor_path(drive_letter: uffs_mft::platform::DriveLetter) -> PathBuf {
     uffs_mft::cache::cache_dir().join(format!("{drive_letter}_usn.cursor"))
 }
 
@@ -216,7 +216,10 @@ pub fn usn_cursor_path(drive_letter: char) -> PathBuf {
 /// on every subsequent call.
 ///
 /// [`atomic_write`]: uffs_mft::cache::atomic_write
-fn purge_legacy_compact_cache_dir(path: &Path, drive: char) -> io::Result<()> {
+fn purge_legacy_compact_cache_dir(
+    path: &Path,
+    drive: uffs_mft::platform::DriveLetter,
+) -> io::Result<()> {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         // Path doesn't exist — nothing to purge.  `symlink_metadata`
         // (not `metadata`) so we don't follow a symlink and accidentally
@@ -296,7 +299,9 @@ pub fn compact_runtime_root() -> PathBuf {
 /// Returns an [`io::Error`] if the parent directory cannot be created
 /// or if the owner-only permissions cannot be applied (Unix `0o700`,
 /// Windows owner-only DACL).
-fn compact_runtime_tempfile_path(drive_letter: char) -> io::Result<PathBuf> {
+fn compact_runtime_tempfile_path(
+    drive_letter: uffs_mft::platform::DriveLetter,
+) -> io::Result<PathBuf> {
     let pid = std::process::id();
     let seq = RUNTIME_TEMPFILE_SEQ.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let parent = compact_runtime_root().join(pid.to_string());
@@ -503,7 +508,7 @@ fn write_u32<W: io::Write>(writer: &mut W, val: usize) -> io::Result<()> {
 /// Returns an error string if the data is truncated, wrong magic, or v1.
 pub fn deserialize_compact(
     data: &[u8],
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> Result<(DriveCompactIndex, u128), &'static str> {
     let parsed = parse_compact_body(data, drive_letter)?;
     assemble_compact_index(parsed, |records_bytes, names_bytes| {
@@ -544,7 +549,7 @@ pub fn deserialize_compact(
 ///   checks (would indicate a `write_runtime_layout` bug).
 pub fn deserialize_compact_into_runtime(
     data: &[u8],
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     runtime_dir: &dyn RuntimeDir,
     runtime_path: &Path,
 ) -> io::Result<(DriveCompactIndex, u128)> {
@@ -570,7 +575,7 @@ pub fn deserialize_compact_into_runtime(
 /// enough to stay heap-resident.
 struct ParsedCompactBody<'data> {
     /// Drive letter the cache was built for.
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     /// Source epoch (u64) parsed from the header.
     source_epoch: u64,
     /// Records column as raw bytes — exact multiple of
@@ -616,7 +621,7 @@ struct ParsedCompactBody<'data> {
 /// instead of being eagerly copied into [`Vec`]s.
 fn parse_compact_body(
     data: &[u8],
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> Result<ParsedCompactBody<'_>, &'static str> {
     let (source_epoch, body_offset, version) = parse_compact_header(data)?;
 
@@ -993,7 +998,7 @@ pub fn save_compact_cache_background(index: &DriveCompactIndex) -> io::Result<()
 /// Extracted from the `save_compact_cache_background` closure to keep
 /// cognitive complexity low.
 fn encrypt_and_write(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     compressed: Vec<u8>,
     path: &Path,
     profile: bool,
@@ -1037,7 +1042,7 @@ fn encrypt_and_write(
 /// "stale vs MFT" without re-reading the metadata.
 fn check_compact_cache_freshness(
     path: &Path,
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     ttl_seconds: u64,
     trust_ttl_only: bool,
 ) -> LoadCacheResult<()> {
@@ -1095,7 +1100,7 @@ fn check_compact_cache_freshness(
 /// (cold-boot rebuild) from "decryption failed" (key rotated;
 /// rebuild + alert) from "stale by epoch" (incremental refresh).
 pub fn load_compact_cache(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     ttl_seconds: u64,
     mft_build_epoch: u64,
     trust_ttl_only: bool,
@@ -1233,7 +1238,10 @@ fn log_compact_load_profile(index: &DriveCompactIndex, profile: &CompactLoadProf
 /// Extracted from [`ensure_compact_cached`] to keep that function's
 /// cognitive complexity below clippy's strict-gate ceiling (Phase 5
 /// added an extra match arm for #96 structured errors).
-fn try_load_for_ensure(drive_letter: char, build_epoch: u64) -> Option<DriveCompactIndex> {
+fn try_load_for_ensure(
+    drive_letter: uffs_mft::platform::DriveLetter,
+    build_epoch: u64,
+) -> Option<DriveCompactIndex> {
     match load_compact_cache(
         drive_letter,
         super::compact::INDEX_TTL_SECONDS,
@@ -1268,7 +1276,7 @@ fn try_load_for_ensure(drive_letter: char, build_epoch: u64) -> Option<DriveComp
 /// Emits `cache_profile` tracing events at `debug` level.
 /// The caller may discard the returned index if only the `MftIndex` is needed.
 pub fn ensure_compact_cached(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     mft_index: &uffs_mft::MftIndex,
 ) -> DriveCompactIndex {
     // Try loading existing compact cache (epoch check catches stale caches).
@@ -1302,7 +1310,7 @@ pub fn ensure_compact_cached(
 }
 
 /// Log on-disk sizes of both MFT and compact caches for a drive.
-fn log_disk_summary(drive_letter: char) {
+fn log_disk_summary(drive_letter: uffs_mft::platform::DriveLetter) {
     let compact_path = compact_cache_path(drive_letter);
     let mft_path = uffs_mft::cache::cache_file_path(drive_letter);
     let compact_disk = std::fs::metadata(&compact_path).map_or(0, |meta| meta.len());

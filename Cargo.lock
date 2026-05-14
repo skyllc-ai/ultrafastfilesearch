@@ -4377,6 +4377,7 @@ dependencies = [
  "serde_json",
  "uffs-client",
  "uffs-format",
+ "uffs-mft",
  "uffs-time",
  "which",
  "winresource",
@@ -4396,6 +4397,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uffs-format",
+ "uffs-mft",
  "uffs-security",
  "windows 0.62.2",
 ]
@@ -4537,6 +4539,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uffs-client",
+ "uffs-mft",
 ]
 
 [[package]]
@@ -4559,6 +4562,7 @@ dependencies = [
  "rand_chacha 0.10.0",
  "rayon",
  "rustc-hash",
+ "serde",
  "sha2 0.11.0",
  "smallvec",
  "tempfile",

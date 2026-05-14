@@ -56,16 +56,19 @@ async fn ensure_warm_for_dispatch_no_op_when_all_warm() {
 
     let states_before = mgr.shard_states_for_test().await;
     assert_eq!(states_before, vec![
-        ('C', ShardState::Warm),
-        ('D', ShardState::Warm)
+        (uffs_mft::platform::DriveLetter::C, ShardState::Warm),
+        (uffs_mft::platform::DriveLetter::D, ShardState::Warm)
     ]);
 
     // Empty filter → all touched.  Non-empty filter → subset.
     // Either way, no shard is Parked/Cold so this is a no-op.
     mgr.ensure_warm_for_dispatch(&[], &[]).await;
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
-    mgr.ensure_warm_for_dispatch(&['c'], &[]).await; // case-insensitive
-    mgr.ensure_warm_for_dispatch(&['Z'], &[]).await; // unknown letter
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await; // case-insensitive
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::Z], &[])
+        .await; // unknown letter
 
     let states_after = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -87,13 +90,17 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
     mgr.add_drive(build_test_drive_d()).await;
 
     // Demote C to Parked (test escape hatch).
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
     let states_pre = mgr.shard_states_for_test().await;
-    assert!(states_pre.contains(&('C', ShardState::Parked)));
+    assert!(states_pre.contains(&(uffs_mft::platform::DriveLetter::C, ShardState::Parked)));
 
     // Search targets only D — C must stay Parked.  The on-disk
     // cache lookup for D would no-op because D is already Warm.
-    mgr.ensure_warm_for_dispatch(&['D'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::D], &[])
+        .await;
 
     let states_post = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -108,7 +115,7 @@ async fn ensure_warm_for_dispatch_skips_parked_shard_outside_filter() {
 ///    registry).
 /// 2. Configure the manager with a `FixedBodyLoader` carrying a fresh body for
 ///    C.
-/// 3. Call `ensure_warm_for_dispatch(&['C'])`.
+/// 3. Call `ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C])`.
 /// 4. Assert C is now Warm AND the registry's view sees the body again (via
 ///    `total_index_heap_bytes` — the Parked shard has `body == None` so its
 ///    `heap_size_bytes()` is 0; the promoted shard reports the test-drive's
@@ -129,16 +136,23 @@ async fn ensure_warm_for_dispatch_promotes_with_fixed_body_loader() {
     assert!(warm_heap > 0, "Warm shard must report nonzero heap_bytes");
 
     // Demote — the body Arc inside the registry is now None.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     // Promote via ensure_warm_for_dispatch.
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
 
     // Shard is Warm again AND the heap-bytes metric is back to its
     // pre-demote value (the FixedBodyLoader handed back a body
     // identical in shape to the original).
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Warm)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
     let promoted_heap = mgr.total_index_heap_bytes().await;
     assert_eq!(
         promoted_heap, warm_heap,
@@ -160,12 +174,19 @@ async fn ensure_warm_for_dispatch_handles_missing_cache_gracefully() {
     let mgr = IndexManager::with_body_loader_for_test(None, tx, Arc::new(MissingBodyLoader));
     mgr.add_drive(build_test_drive()).await;
 
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
     let states_pre = mgr.shard_states_for_test().await;
-    assert_eq!(states_pre, vec![('C', ShardState::Parked)]);
+    assert_eq!(states_pre, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Parked
+    )]);
 
     // Loader returns None → graceful failure path.
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
 
     let states_post = mgr.shard_states_for_test().await;
     assert_eq!(
@@ -186,25 +207,30 @@ async fn ensure_warm_for_dispatch_handles_panicking_body_loader_gracefully() {
     let mgr = IndexManager::with_body_loader_for_test(None, tx, Arc::new(PanickingBodyLoader));
     mgr.add_drive(build_test_drive()).await;
 
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     // Loader panics → JoinError arm runs → shard stays Parked.
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Parked)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Parked)],
         "panicking loader → JoinError → shard stays Parked, no daemon crash"
     );
 
     // Subsequent ensure_warm_for_dispatch on the same manager
     // still works (no global daemon state corruption).
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
     let states_again = mgr.shard_states_for_test().await;
     assert_eq!(
         states_again,
-        vec![('C', ShardState::Parked)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Parked)],
         "second call after a panicking-loader call must also be graceful"
     );
 }
@@ -249,12 +275,29 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
     mgr.add_drive(build_test_drive_e()).await;
 
     // Demote all three to Parked so they all need the loader.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
-    assert!(mgr.demote_letter_for_test('D', ShardState::Parked).await);
-    assert!(mgr.demote_letter_for_test('E', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::D, ShardState::Parked)
+            .await
+    );
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::E, ShardState::Parked)
+            .await
+    );
 
     let start = std::time::Instant::now();
-    mgr.ensure_warm_for_dispatch(&['C', 'D', 'E'], &[]).await;
+    mgr.ensure_warm_for_dispatch(
+        &[
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E,
+        ],
+        &[],
+    )
+    .await;
     let elapsed = start.elapsed();
 
     // All three shards promoted.
@@ -262,9 +305,9 @@ async fn ensure_warm_for_dispatch_promotes_in_parallel() {
     assert_eq!(
         states,
         vec![
-            ('C', ShardState::Warm),
-            ('D', ShardState::Warm),
-            ('E', ShardState::Warm),
+            (uffs_mft::platform::DriveLetter::C, ShardState::Warm),
+            (uffs_mft::platform::DriveLetter::D, ShardState::Warm),
+            (uffs_mft::platform::DriveLetter::E, ShardState::Warm),
         ],
         "all three Parked shards must be Warm after ensure_warm_for_dispatch"
     );
@@ -376,9 +419,15 @@ async fn ensure_warm_for_dispatch_keeps_parked_when_bloom_misses() {
     // Demote C → Parked.  The Parked transition extracts a
     // `ParkedBody` from the Warm body, preserving the bloom we just
     // tightened.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
     let states_pre = mgr.shard_states_for_test().await;
-    assert_eq!(states_pre, vec![('C', ShardState::Parked)]);
+    assert_eq!(states_pre, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Parked
+    )]);
 
     // The drive's actual extensions are `md`, `rs`, `toml`, `bin`.
     // `csv` is novel; the 0.001-FPR bloom misses it with probability
@@ -398,7 +447,7 @@ async fn ensure_warm_for_dispatch_keeps_parked_when_bloom_misses() {
     // existing `ensure_warm_for_dispatch_keeps_parked_on_panicking_loader`
     // test which establishes the catch_unwind contract; here we rely
     // on it as a known-good infrastructure.
-    mgr.ensure_warm_for_dispatch(&['C'], &["csv".to_owned()])
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &["csv".to_owned()])
         .await;
 
     let states_post = mgr.shard_states_for_test().await;
@@ -430,20 +479,26 @@ async fn ensure_warm_for_dispatch_promotes_parked_when_bloom_hits() {
     let mgr = IndexManager::with_body_loader_for_test(None, tx, loader);
     mgr.add_drive(build_test_drive_with_tight_bloom()).await;
 
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
     let states_pre = mgr.shard_states_for_test().await;
-    assert_eq!(states_pre, vec![('C', ShardState::Parked)]);
+    assert_eq!(states_pre, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Parked
+    )]);
 
     // `rs` IS in the drive (`main.rs`, `lib.rs`).  Bloom hits →
     // bloom-pre-check returns true → loader is called → returns the
     // fresh body → shard transitions to Warm.
-    mgr.ensure_warm_for_dispatch(&['C'], &["rs".to_owned()])
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &["rs".to_owned()])
         .await;
 
     let states_post = mgr.shard_states_for_test().await;
     assert_eq!(
         states_post,
-        vec![('C', ShardState::Warm)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Warm)],
         "bloom hit must promote the shard back to Warm via the loader"
     );
 }
@@ -507,7 +562,10 @@ async fn ensure_warm_for_dispatch_dedupes_concurrent_promotes_for_same_letter() 
     mgr.add_drive(build_test_drive()).await;
 
     // Demote C → Parked; the body Arc is dropped from the registry.
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     // Spawn 10 concurrent ensure_warm_for_dispatch calls — each
     // independently observes C as Parked.  Without the dedup, each
@@ -517,7 +575,9 @@ async fn ensure_warm_for_dispatch_dedupes_concurrent_promotes_for_same_letter() 
     for _ in 0_u32..10_u32 {
         let mgr_clone = Arc::clone(&mgr);
         handles.push(tokio::spawn(async move {
-            mgr_clone.ensure_warm_for_dispatch(&['C'], &[]).await;
+            mgr_clone
+                .ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+                .await;
         }));
     }
     for handle in handles {
@@ -530,7 +590,7 @@ async fn ensure_warm_for_dispatch_dedupes_concurrent_promotes_for_same_letter() 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Warm)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Warm)],
         "all 10 concurrent ensure_warm_for_dispatch callers must observe C as Warm",
     );
 
@@ -576,23 +636,34 @@ async fn ensure_warm_for_dispatch_slot_clears_so_re_promote_after_demote_loads_f
     mgr.add_drive(build_test_drive()).await;
 
     // ── First Parked → Warm cycle ──────────────────────────────
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
     assert_eq!(
         loader.call_count(),
         1,
         "first promote must trigger exactly one load",
     );
     let states_after_first = mgr.shard_states_for_test().await;
-    assert_eq!(states_after_first, vec![('C', ShardState::Warm)]);
+    assert_eq!(states_after_first, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
 
     // Wait for the cleanup task to drain the slot.  Polling via
     // the accessor avoids real-time-sleep flakiness on slow CI.
     wait_for_in_flight_clear(&mgr).await;
 
     // ── Second Parked → Warm cycle ─────────────────────────────
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
 
     // The fresh load contract: re-promote after the cleanup task
     // ran must call `BodyLoader::load` again — not reuse the
@@ -634,14 +705,19 @@ async fn ensure_warm_for_dispatch_dedupes_concurrent_failures_for_same_letter() 
         None, tx, loader_dyn,
     ));
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     // 5 concurrent callers, all of which will see the loader return None.
     let mut handles = Vec::with_capacity(5);
     for _ in 0_u32..5_u32 {
         let mgr_clone = Arc::clone(&mgr);
         handles.push(tokio::spawn(async move {
-            mgr_clone.ensure_warm_for_dispatch(&['C'], &[]).await;
+            mgr_clone
+                .ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+                .await;
         }));
     }
     for handle in handles {
@@ -654,7 +730,7 @@ async fn ensure_warm_for_dispatch_dedupes_concurrent_failures_for_same_letter() 
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Parked)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Parked)],
         "5 concurrent failed promotes must all leave C Parked (no half-promoted state)",
     );
 

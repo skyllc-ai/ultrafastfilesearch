@@ -96,7 +96,10 @@ fn write_native_csv_uses_columns_without_legacy_footer() -> TestResult {
         "1",
         "0",
         None,
-        &['C', 'D'],
+        &[
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+        ],
         Duration::from_secs(2),
         "*.txt",
     )?;
@@ -124,7 +127,10 @@ fn write_native_custom_file_appends_legacy_drive_footer() -> TestResult {
         "1",
         "0",
         None,
-        &['C', 'D'],
+        &[
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+        ],
         Duration::from_secs(2),
         "*.txt",
     )?;
@@ -162,7 +168,10 @@ fn write_native_json_file_has_no_footer() -> TestResult {
         "1",
         "0",
         None,
-        &['C', 'D'],
+        &[
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+        ],
         Duration::from_secs(2),
         "*.txt",
     )?;
@@ -195,7 +204,7 @@ fn legacy_footer_includes_fast_scan_message_for_full_scan_pattern() -> TestResul
         "1",
         "0",
         None,
-        &['G'],
+        &[uffs_mft::platform::DriveLetter::G],
         Duration::from_millis(999),
         "*",
     )?;
@@ -224,7 +233,7 @@ fn legacy_footer_includes_fast_scan_for_transformed_pattern() -> TestResult {
         "1",
         "0",
         None,
-        &['G'],
+        &[uffs_mft::platform::DriveLetter::G],
         Duration::from_millis(999),
         ">G:.*",
     )?;
@@ -253,7 +262,7 @@ fn legacy_footer_omits_fast_scan_for_real_regex_pattern() -> TestResult {
         "1",
         "0",
         None,
-        &['G'],
+        &[uffs_mft::platform::DriveLetter::G],
         Duration::from_millis(999),
         r">G:.*\.(jpg|png)",
     )?;
@@ -282,7 +291,7 @@ fn legacy_footer_omits_fast_scan_message_when_many_results() -> TestResult {
         "1",
         "0",
         None,
-        &['G'],
+        &[uffs_mft::platform::DriveLetter::G],
         Duration::from_secs(2),
         ">G:.*",
     )?;
@@ -424,7 +433,7 @@ fn parity_row(
     modified_filetime: i64,
 ) -> uffs_client::protocol::response::SearchRow {
     uffs_client::protocol::response::SearchRow {
-        drive: 'C',
+        drive: uffs_mft::platform::DriveLetter::C,
         path: path.to_owned(),
         name: name.to_owned(),
         size: 4321,
@@ -534,7 +543,7 @@ fn parity_byte_parity_directory_rewrite() {
         0x0010,                      // DIRECTORY
         133_485_408_000_000_000_i64, // 2024-01-01 UTC
     );
-    row.drive = 'D';
+    row.drive = uffs_mft::platform::DriveLetter::D;
     row.size = 0;
     row.allocated = 0;
     row.treesize = 65_536;

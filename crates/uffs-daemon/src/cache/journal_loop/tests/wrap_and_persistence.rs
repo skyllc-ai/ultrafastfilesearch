@@ -32,12 +32,12 @@ async fn cursor_loaded_from_store_at_spawn() {
     let source = Arc::new(FakeJournalSource::new());
     let sink = Arc::new(RecordingSink::new());
     let cursor_store = Arc::new(FakeCursorStore::new());
-    cursor_store.set_cursor('C', 42);
+    cursor_store.set_cursor(uffs_mft::platform::DriveLetter::C, 42);
 
     // No batches enqueued; the loop will tick on empty results.
     // We're asserting the FIRST poll's cursor argument.
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         Arc::clone(&cursor_store) as Arc<dyn CursorStore>,
@@ -88,7 +88,7 @@ async fn cursor_persisted_on_save_trigger() {
         save_threshold_age: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         Arc::clone(&cursor_store) as Arc<dyn CursorStore>,
@@ -108,7 +108,7 @@ async fn cursor_persisted_on_save_trigger() {
     let log = cursor_store.store_log();
     assert!(
         log.iter()
-            .any(|&(letter, cursor)| letter == 'C' && cursor == 100),
+            .any(|&(letter, cursor)| letter == uffs_mft::platform::DriveLetter::C && cursor == 100),
         "cursor 100 must be persisted alongside the save trigger; log = {log:?}"
     );
 }
@@ -126,7 +126,7 @@ async fn journal_wrap_fires_journal_wrapped_and_skips_patch() {
     source.enqueue_changes_with_journal_id(vec![one_change(11)], 200, 2);
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         Arc::clone(&cursor_store) as Arc<dyn CursorStore>,
@@ -149,7 +149,10 @@ async fn journal_wrap_fires_journal_wrapped_and_skips_patch() {
         1,
         "exactly one journal_wrapped call expected; got {wraps:?}"
     );
-    assert_eq!(wraps.first().copied(), Some('C'));
+    assert_eq!(
+        wraps.first().copied(),
+        Some(uffs_mft::platform::DriveLetter::C)
+    );
 
     // The first batch (journal_id=1) MUST have been accepted; the
     // second (journal_id=2 wrap-tick) must NOT have produced an
@@ -160,7 +163,10 @@ async fn journal_wrap_fires_journal_wrapped_and_skips_patch() {
         1,
         "only the pre-wrap batch must be accepted; got {calls:?}"
     );
-    assert_eq!(calls.first().copied(), Some(('C', 1_usize)));
+    assert_eq!(
+        calls.first().copied(),
+        Some((uffs_mft::platform::DriveLetter::C, 1_usize))
+    );
 }
 
 #[tokio::test]
@@ -179,7 +185,7 @@ async fn journal_wrap_resets_cursor_to_zero() {
     source.enqueue_changes_with_journal_id(vec![one_change(12)], 300, 2);
 
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         Arc::clone(&cursor_store) as Arc<dyn CursorStore>,

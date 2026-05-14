@@ -237,11 +237,7 @@ impl MftIndex {
 
         // Reverse and join with a standard drive-qualified backslash path.
         components.reverse();
-        format!(
-            "{}:\\{}",
-            self.volume.to_ascii_uppercase(),
-            components.join("\\")
-        )
+        format!("{}:\\{}", self.volume.as_char(), components.join("\\"))
     }
 
     /// Build the full path including stream name for ADS.
@@ -299,10 +295,6 @@ impl MftIndex {
 
         // Reverse and join with a standard drive-qualified backslash path.
         components.reverse();
-        format!(
-            "{}:\\{}",
-            self.volume.to_ascii_uppercase(),
-            components.join("\\")
-        )
+        format!("{}:\\{}", self.volume.as_char(), components.join("\\"))
     }
 }

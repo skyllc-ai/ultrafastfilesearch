@@ -28,7 +28,7 @@ pub(crate) enum Commands {
     Read {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Output file path (Parquet format)
         #[arg(short, long)]
@@ -66,7 +66,7 @@ pub(crate) enum Commands {
     Info {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Perform deep scan (reads all MFT records for detailed statistics)
         #[arg(long)]
@@ -93,7 +93,7 @@ pub(crate) enum Commands {
     Bench {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Output results as JSON (for scripting)
         #[arg(long)]
@@ -144,7 +144,7 @@ pub(crate) enum Commands {
     BitmapDiag {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Show sample of individual record states
         #[arg(long)]
@@ -166,7 +166,7 @@ pub(crate) enum Commands {
         /// Drive letter to read MFT from (e.g., C, D, E).
         /// Required for MFT save; defaults to boot drive for --upcase.
         #[arg(short, long, value_name = "LETTER")]
-        drive: Option<char>,
+        drive: Option<uffs_mft::platform::DriveLetter>,
 
         /// Output file path.
         /// Required for MFT save; defaults to `upcase.bin` for --upcase.
@@ -250,7 +250,7 @@ pub(crate) enum Commands {
         /// Required for raw NTFS files that don't have this info in header.
         /// For UFFS-MFT format files, this overrides the stored volume letter.
         #[arg(short, long, value_name = "LETTER")]
-        drive: Option<char>,
+        drive: Option<uffs_mft::platform::DriveLetter>,
 
         /// Include forensic records (deleted, corrupt, extension records).
         /// Adds `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` columns.
@@ -275,7 +275,7 @@ pub(crate) enum Commands {
     BenchmarkMft {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
     },
 
     /// Full index build benchmark (aligned with the reference
@@ -293,7 +293,7 @@ pub(crate) enum Commands {
     BenchmarkIndex {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
     },
 
     /// Lean index build benchmark (no `DataFrame` overhead)
@@ -312,7 +312,7 @@ pub(crate) enum Commands {
     BenchmarkIndexLean {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Read mode: auto, parallel, streaming, prefetch, pipelined,
         /// pipelined-parallel
@@ -384,7 +384,7 @@ pub(crate) enum Commands {
     BenchmarkTree {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Number of iterations to run (for averaging).
         /// Default: 3
@@ -412,7 +412,7 @@ pub(crate) enum Commands {
     BenchmarkMultiVolume {
         /// Comma-separated list of drive letters (e.g., C,D,S)
         #[arg(short, long, value_delimiter = ',')]
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
     },
 
     /// Query USN Journal information for a drive (M5 optimization).
@@ -428,7 +428,7 @@ pub(crate) enum Commands {
     UsnInfo {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
     },
 
     /// Read recent USN Journal changes for a drive (M5 optimization).
@@ -446,7 +446,7 @@ pub(crate) enum Commands {
     UsnRead {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Starting USN (default: read from journal start)
         #[arg(long)]
@@ -470,7 +470,7 @@ pub(crate) enum Commands {
     IndexSave {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Output file path
         #[arg(short, long)]
@@ -528,7 +528,7 @@ pub(crate) enum Commands {
     CacheGet {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Force rebuild even if cache is fresh
         #[arg(long)]
@@ -553,7 +553,7 @@ pub(crate) enum Commands {
     CacheClear {
         /// Drive letter to clear (e.g., C, D, E)
         #[arg(short, long)]
-        drive: Option<char>,
+        drive: Option<uffs_mft::platform::DriveLetter>,
 
         /// Clear ALL cached indices
         #[arg(long)]
@@ -574,7 +574,7 @@ pub(crate) enum Commands {
     IndexUpdate {
         /// Drive letter (e.g., C, D, E)
         #[arg(short, long)]
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
 
         /// Force full MFT scan instead of incremental update
         #[arg(long)]
@@ -605,7 +605,7 @@ pub(crate) enum Commands {
     IndexAll {
         /// Comma-separated list of drive letters (default: all NTFS drives)
         #[arg(short, long, value_delimiter = ',')]
-        drives: Option<Vec<char>>,
+        drives: Option<Vec<uffs_mft::platform::DriveLetter>>,
 
         /// Skip cache (always read fresh from disk, still saves to cache)
         #[arg(long)]

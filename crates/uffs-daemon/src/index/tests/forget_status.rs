@@ -70,21 +70,26 @@ async fn forget_cold_drive_evicts_and_unlinks() {
     let cleaner = Arc::new(CountingCacheCleaner::new(1_024));
     let mgr = make_manager(Arc::clone(&cleaner), None);
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
-    let outcome = mgr.forget_drives(&['C'], false).await;
+    let outcome = mgr
+        .forget_drives(&[uffs_mft::platform::DriveLetter::C], false)
+        .await;
 
     let ForgetOutcomeOrBusy::Ok(out) = outcome else {
         panic!("expected Ok outcome on Cold-drive forget; got {outcome:?}");
     };
-    assert_eq!(out.forgotten, vec!['C']);
+    assert_eq!(out.forgotten, vec![uffs_mft::platform::DriveLetter::C]);
     assert!(out.already_absent.is_empty());
     assert_eq!(out.freed_bytes, 1_024);
     assert!(out.errors.is_empty());
 
     assert_eq!(
         cleaner.calls(),
-        vec!['C'],
+        vec![uffs_mft::platform::DriveLetter::C],
         "cache cleaner must have been invoked exactly once for C"
     );
     let states = mgr.shard_states_for_test().await;
@@ -103,12 +108,17 @@ async fn forget_warm_without_force_refuses_with_busy_listing() {
     let mgr = make_manager(Arc::clone(&cleaner), None);
     mgr.add_drive(build_test_drive()).await; // C lands in Warm.
 
-    let outcome = mgr.forget_drives(&['C'], false).await;
+    let outcome = mgr
+        .forget_drives(&[uffs_mft::platform::DriveLetter::C], false)
+        .await;
 
     let ForgetOutcomeOrBusy::Busy(busy) = outcome else {
         panic!("expected Busy refusal for Warm drive without force; got {outcome:?}");
     };
-    assert_eq!(busy, vec![('C', ShardState::Warm)]);
+    assert_eq!(busy, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
     assert!(
         cleaner.calls().is_empty(),
         "cache cleaner must NOT have been invoked on the refused path"
@@ -116,7 +126,7 @@ async fn forget_warm_without_force_refuses_with_busy_listing() {
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Warm)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Warm)],
         "registry must be untouched on refusal"
     );
 }
@@ -131,19 +141,33 @@ async fn forget_warm_with_force_auto_hibernates_then_evicts() {
     mgr.add_drive(build_test_drive()).await;
     mgr.add_drive(build_test_drive_d()).await;
 
-    let outcome = mgr.forget_drives(&['C', 'D'], true).await;
+    let outcome = mgr
+        .forget_drives(
+            &[
+                uffs_mft::platform::DriveLetter::C,
+                uffs_mft::platform::DriveLetter::D,
+            ],
+            true,
+        )
+        .await;
 
     let ForgetOutcomeOrBusy::Ok(out) = outcome else {
         panic!("expected Ok outcome with force; got {outcome:?}");
     };
-    assert_eq!(out.forgotten, vec!['C', 'D']);
+    assert_eq!(out.forgotten, vec![
+        uffs_mft::platform::DriveLetter::C,
+        uffs_mft::platform::DriveLetter::D
+    ]);
     assert_eq!(out.freed_bytes, 4_096, "2 drives × 2_048 bytes each");
     assert!(out.already_absent.is_empty());
     assert!(out.errors.is_empty());
 
     assert_eq!(
         cleaner.calls(),
-        vec!['C', 'D'],
+        vec![
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D
+        ],
         "cache cleaner invoked once per drive in input order"
     );
     let states = mgr.shard_states_for_test().await;
@@ -160,25 +184,27 @@ async fn forget_unknown_drive_is_idempotent_already_absent() {
     let mgr = make_manager(Arc::clone(&cleaner), None);
     mgr.add_drive(build_test_drive()).await; // C only.
 
-    let outcome = mgr.forget_drives(&['Z'], false).await;
+    let outcome = mgr
+        .forget_drives(&[uffs_mft::platform::DriveLetter::Z], false)
+        .await;
 
     let ForgetOutcomeOrBusy::Ok(out) = outcome else {
         panic!("expected Ok for unknown drive; got {outcome:?}");
     };
     assert!(out.forgotten.is_empty());
-    assert_eq!(out.already_absent, vec!['Z']);
+    assert_eq!(out.already_absent, vec![uffs_mft::platform::DriveLetter::Z]);
     assert_eq!(out.freed_bytes, 0);
     assert!(out.errors.is_empty());
 
     assert_eq!(
         cleaner.calls(),
-        vec!['Z'],
+        vec![uffs_mft::platform::DriveLetter::Z],
         "cleaner still runs for unknown drives so stale on-disk files are purged"
     );
     let states = mgr.shard_states_for_test().await;
     assert_eq!(
         states,
-        vec![('C', ShardState::Warm)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Warm)],
         "C must remain Warm — the unknown-drive forget call must not touch other drives"
     );
 }
@@ -202,22 +228,32 @@ async fn forget_pinned_hot_drive_with_force_clears_pin() {
         Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
     );
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     // Preload C → Hot + pin.
-    let preload = mgr.preload_drive('C', 30).await;
+    let preload = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(matches!(preload, PreloadOutcome::Promoted { .. }));
 
     // Pre-condition assertion: C is Hot and pinned.
     let pre_states = mgr.shard_states_for_test().await;
-    assert_eq!(pre_states, vec![('C', ShardState::Hot)]);
+    assert_eq!(pre_states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Hot
+    )]);
 
     // Force-forget must succeed despite the pin.
-    let outcome = mgr.forget_drives(&['C'], true).await;
+    let outcome = mgr
+        .forget_drives(&[uffs_mft::platform::DriveLetter::C], true)
+        .await;
     let ForgetOutcomeOrBusy::Ok(out) = outcome else {
         panic!("expected Ok with force; got {outcome:?}");
     };
-    assert_eq!(out.forgotten, vec!['C']);
+    assert_eq!(out.forgotten, vec![uffs_mft::platform::DriveLetter::C]);
     assert_eq!(out.freed_bytes, 512);
 
     let post_states = mgr.shard_states_for_test().await;
@@ -233,17 +269,28 @@ async fn forget_mixed_request_refuses_when_any_drive_busy_without_force() {
     let mgr = make_manager(Arc::clone(&cleaner), None);
     mgr.add_drive(build_test_drive()).await; // C: Warm
     mgr.add_drive(build_test_drive_d()).await; // D: Warm
-    assert!(mgr.demote_letter_for_test('D', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::D, ShardState::Cold)
+            .await
+    );
     // Now: C is Warm, D is Cold.
 
-    let outcome = mgr.forget_drives(&['C', 'D'], false).await;
+    let outcome = mgr
+        .forget_drives(
+            &[
+                uffs_mft::platform::DriveLetter::C,
+                uffs_mft::platform::DriveLetter::D,
+            ],
+            false,
+        )
+        .await;
 
     let ForgetOutcomeOrBusy::Busy(busy) = outcome else {
         panic!("expected all-or-nothing Busy refusal; got {outcome:?}");
     };
     assert_eq!(
         busy,
-        vec![('C', ShardState::Warm)],
+        vec![(uffs_mft::platform::DriveLetter::C, ShardState::Warm)],
         "only C should be reported as busy; D is Cold and would be safe"
     );
     assert!(
@@ -254,8 +301,8 @@ async fn forget_mixed_request_refuses_when_any_drive_busy_without_force() {
     // Both shards must still be present.
     let states = mgr.shard_states_for_test().await;
     assert_eq!(states, vec![
-        ('C', ShardState::Warm),
-        ('D', ShardState::Cold)
+        (uffs_mft::platform::DriveLetter::C, ShardState::Warm),
+        (uffs_mft::platform::DriveLetter::D, ShardState::Cold)
     ]);
 }
 
@@ -290,7 +337,7 @@ async fn status_drives_single_warm_shard_full_snapshot() {
             response.drives.len()
         );
     };
-    assert_eq!(row.letter, 'C');
+    assert_eq!(row.letter, uffs_mft::platform::DriveLetter::C);
     assert_eq!(row.tier, "warm");
     assert!(
         row.resident_bytes > 0,
@@ -321,8 +368,14 @@ async fn status_drives_mixed_tier_distribution_one_row_per_shard() {
     mgr.add_drive(build_test_drive_e()).await;
 
     // C stays Warm; D demotes to Parked; E demotes to Cold.
-    assert!(mgr.demote_letter_for_test('D', ShardState::Parked).await);
-    assert!(mgr.demote_letter_for_test('E', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::D, ShardState::Parked)
+            .await
+    );
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::E, ShardState::Cold)
+            .await
+    );
 
     let response = mgr.status_drives().await;
 
@@ -334,14 +387,14 @@ async fn status_drives_mixed_tier_distribution_one_row_per_shard() {
     };
 
     // Sorted ascending by letter.
-    assert_eq!(c_row.letter, 'C');
+    assert_eq!(c_row.letter, uffs_mft::platform::DriveLetter::C);
     assert_eq!(c_row.tier, "warm");
     assert!(
         c_row.resident_bytes > 0,
         "Warm shard reports nonzero resident_bytes (body heap)"
     );
 
-    assert_eq!(d_row.letter, 'D');
+    assert_eq!(d_row.letter, uffs_mft::platform::DriveLetter::D);
     assert_eq!(d_row.tier, "parked");
     // Parked shards report parked_body.size_bytes() (bloom + trie).
     // The tiny synthetic test fixture builds a non-empty trie + bloom,
@@ -352,7 +405,7 @@ async fn status_drives_mixed_tier_distribution_one_row_per_shard() {
         d_row.resident_bytes
     );
 
-    assert_eq!(e_row.letter, 'E');
+    assert_eq!(e_row.letter, uffs_mft::platform::DriveLetter::E);
     assert_eq!(e_row.tier, "cold");
     assert_eq!(
         e_row.resident_bytes, 0,
@@ -377,9 +430,14 @@ async fn status_drives_preloaded_hot_drive_surfaces_pin_expiry() {
         Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
     );
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
-    let preload = mgr.preload_drive('C', 30).await;
+    let preload = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(matches!(preload, PreloadOutcome::Promoted { .. }));
 
     let response = mgr.status_drives().await;
@@ -413,10 +471,15 @@ async fn status_drives_sorts_rows_by_letter_ascending() {
 
     let response = mgr.status_drives().await;
 
-    let letters: Vec<char> = response.drives.iter().map(|drive| drive.letter).collect();
+    let letters: Vec<uffs_mft::platform::DriveLetter> =
+        response.drives.iter().map(|drive| drive.letter).collect();
     assert_eq!(
         letters,
-        vec!['C', 'D', 'E'],
+        vec![
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E
+        ],
         "rows must be sorted by drive letter ascending regardless of load order"
     );
 }
@@ -441,7 +504,10 @@ async fn status_drives_surfaces_promotions_total_after_cold_to_hot_preload() {
         Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
     );
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     // Pre-condition: status_drives reports promotions_total = 0.
     let pre = mgr.status_drives().await;
@@ -457,7 +523,9 @@ async fn status_drives_surfaces_promotions_total_after_cold_to_hot_preload() {
     );
 
     // Drive: preload C from Cold (the canonical Phase 9 bump path).
-    let preload = mgr.preload_drive('C', 30).await;
+    let preload = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 30)
+        .await;
     assert!(matches!(preload, PreloadOutcome::Promoted { .. }));
 
     // Post-condition: status_drives reports promotions_total = 1.
@@ -494,15 +562,22 @@ async fn status_drives_promotions_total_does_not_double_count_already_hot_preloa
         Some(loader as Arc<dyn crate::cache::body_loader::BodyLoader>),
     );
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .await
+    );
 
     // First preload: Cold → Hot, bumps counter to 1.
-    let first = mgr.preload_drive('C', 5).await;
+    let first = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 5)
+        .await;
     assert!(matches!(first, PreloadOutcome::Promoted { .. }));
 
     // Second preload: AlreadyHot path — extends pin only, must
     // NOT bump the counter.
-    let second = mgr.preload_drive('C', 60).await;
+    let second = mgr
+        .preload_drive(uffs_mft::platform::DriveLetter::C, 60)
+        .await;
     assert!(
         matches!(second, PreloadOutcome::AlreadyHot { .. }),
         "second preload must hit the AlreadyHot arm (no rebuild); got {second:?}",

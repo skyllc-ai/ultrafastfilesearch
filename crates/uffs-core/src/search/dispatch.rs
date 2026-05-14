@@ -153,7 +153,7 @@ fn extract_extensions_from_regex(pattern: &str) -> Option<Vec<String>> {
 /// Mirror of `uffs_client::protocol::cli_args::parse_bare_drive_prefix` —
 /// keep the two in sync.  See that function's doc for the full
 /// acceptance matrix.
-fn parse_bare_drive_prefix(pattern: &str) -> Option<(char, &str)> {
+fn parse_bare_drive_prefix(pattern: &str) -> Option<(uffs_mft::platform::DriveLetter, &str)> {
     let bytes = pattern.as_bytes();
     let letter = *bytes.first()?;
     if !letter.is_ascii_alphabetic() {
@@ -166,7 +166,8 @@ fn parse_bare_drive_prefix(pattern: &str) -> Option<(char, &str)> {
     if rest.is_empty() || rest.starts_with(['\\', '/']) {
         return None;
     }
-    Some((letter.to_ascii_uppercase() as char, rest))
+    let dl = uffs_mft::platform::DriveLetter::parse(letter as char).ok()?;
+    Some((dl, rest))
 }
 
 /// Apply dispatch-time pattern-rewrite safety nets, in canonical order.
@@ -184,8 +185,8 @@ fn parse_bare_drive_prefix(pattern: &str) -> Option<(char, &str)> {
 ///    Only fires when the caller's `drives_filter_empty` and not `match_path`.
 ///    Path-anchored forms (`C:\*.dll`) are excluded by
 ///    `parse_bare_drive_prefix`.  The promoted letter is pushed into
-///    `drive_buf` (which the caller uses as backing storage for a `&[char]`
-///    slice that lives for the rest of the dispatch).
+///    `drive_buf` (which the caller uses as backing storage for a
+///    `&[DriveLetter]` slice that lives for the rest of the dispatch).
 ///
 /// 2. `*.<ext>` → `pattern = "*"`, `extensions += [<ext_lower>]`. Only fires
 ///    when not `match_path`, not `case_sensitive`, and
@@ -217,7 +218,7 @@ pub(super) fn apply_dispatch_safety_nets(
     case_sensitive: bool,
     drives_filter_empty: bool,
     search_filters: &mut SearchFilters,
-    drive_buf: &mut Vec<char>,
+    drive_buf: &mut Vec<uffs_mft::platform::DriveLetter>,
 ) {
     if drives_filter_empty
         && !match_path
@@ -535,9 +536,12 @@ mod tests {
 
     // ── apply_dispatch_safety_nets (regex branch) ──────────────────
 
-    fn run_safety_nets<'a>(pattern: &'a str, filters: &mut SearchFilters) -> (&'a str, Vec<char>) {
+    fn run_safety_nets<'a>(
+        pattern: &'a str,
+        filters: &mut SearchFilters,
+    ) -> (&'a str, Vec<uffs_mft::platform::DriveLetter>) {
         let mut pat: &str = pattern;
-        let mut drive_buf: Vec<char> = Vec::new();
+        let mut drive_buf: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
         apply_dispatch_safety_nets(
             &mut pat,
             false, // match_path

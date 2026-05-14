@@ -36,7 +36,7 @@ impl IndexManager {
         &self,
         mft_path: &std::path::Path,
         no_cache: bool,
-    ) -> anyhow::Result<Option<char>> {
+    ) -> anyhow::Result<Option<uffs_mft::platform::DriveLetter>> {
         let letter = Self::infer_drive_letter(mft_path);
 
         // Skip if already loaded.
@@ -69,15 +69,17 @@ impl IndexManager {
     /// Derive the drive letter from a `.mft` / `.iocp` snapshot path.
     ///
     /// Convention: the first ASCII-alphabetic character of the file
-    /// stem (e.g. `G_mft.iocp` → `'G'`).  Falls back to `'X'` for
-    /// non-conforming names so the caller still gets a stable handle
-    /// to log against rather than an `Option`.
-    pub(super) fn infer_drive_letter(mft_path: &std::path::Path) -> char {
+    /// stem (e.g. `G_mft.iocp` → `DriveLetter::G`).  Falls back to
+    /// `DriveLetter::X` for non-conforming names so the caller still
+    /// gets a stable handle to log against rather than an `Option`.
+    pub(super) fn infer_drive_letter(
+        mft_path: &std::path::Path,
+    ) -> uffs_mft::platform::DriveLetter {
         let stem = mft_path.file_name().and_then(|n| n.to_str()).unwrap_or("X");
         stem.chars()
             .next()
-            .filter(char::is_ascii_alphabetic)
-            .map_or('X', |ch| ch.to_ascii_uppercase())
+            .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+            .unwrap_or(uffs_mft::platform::DriveLetter::X)
     }
 
     /// Fold the `JoinError`/`anyhow::Error` ladder of a hot-load
@@ -89,7 +91,7 @@ impl IndexManager {
     /// caller can surface it to the RPC layer.
     async fn apply_hot_load_result(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         mft_path: &std::path::Path,
         result: Result<
             anyhow::Result<(
@@ -98,7 +100,7 @@ impl IndexManager {
             )>,
             tokio::task::JoinError,
         >,
-    ) -> anyhow::Result<Option<char>> {
+    ) -> anyhow::Result<Option<uffs_mft::platform::DriveLetter>> {
         match result {
             Ok(Ok((drive_index, timing))) => {
                 let records = drive_index.records.len();
@@ -153,10 +155,10 @@ impl IndexManager {
     /// Returns `Ok(records)` on success.
     pub(crate) async fn hot_load_drive(
         &self,
-        drive_letter: char,
+        drive_letter: uffs_mft::platform::DriveLetter,
         no_cache: bool,
     ) -> anyhow::Result<usize> {
-        let letter = drive_letter.to_ascii_uppercase();
+        let letter = drive_letter;
 
         if self.is_drive_loaded(letter).await {
             tracing::info!(drive = %letter, "Drive already loaded — will hot-swap after re-read");
@@ -179,7 +181,7 @@ impl IndexManager {
     }
 
     /// Check whether a drive letter is already in the index.
-    async fn is_drive_loaded(&self, letter: char) -> bool {
+    async fn is_drive_loaded(&self, letter: uffs_mft::platform::DriveLetter) -> bool {
         let guard = self.index.read().await;
         guard.contains(letter)
     }
@@ -208,7 +210,10 @@ impl IndexManager {
                       non-Windows path needs &self.data_dir and propagates Result"
         )
     )]
-    fn resolve_drive_source(&self, letter: char) -> anyhow::Result<uffs_core::compact::MftSource> {
+    fn resolve_drive_source(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+    ) -> anyhow::Result<uffs_core::compact::MftSource> {
         #[cfg(windows)]
         {
             Ok(uffs_core::compact::MftSource::Live(letter))
@@ -220,7 +225,9 @@ impl IndexManager {
                     "No data_dir configured — cannot load drive {letter}: on non-Windows"
                 )
             })?;
-            let drive_subdir = data_dir.join(format!("drive_{}", letter.to_ascii_lowercase()));
+            // Path convention: lowercase `drive_<x>` subdir.
+            let drive_lower = letter.as_char().to_ascii_lowercase();
+            let drive_subdir = data_dir.join(format!("drive_{drive_lower}"));
             let mft_path =
                 uffs_mft::discovery::find_best_mft_file(&drive_subdir).ok_or_else(|| {
                     anyhow::anyhow!("No MFT file found in {}", drive_subdir.display())
@@ -254,7 +261,7 @@ impl IndexManager {
     /// Emit a `DriveLoaded` event for a single hot-loaded drive.
     fn emit_drive_loaded(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         records: usize,
         timing: &uffs_core::compact::LoadTiming,
     ) {
@@ -275,7 +282,11 @@ impl IndexManager {
     }
 
     /// Persist per-drive load timing for `--profile` reporting.
-    async fn store_drive_timing(&self, letter: char, timing: &uffs_core::compact::LoadTiming) {
+    async fn store_drive_timing(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        timing: &uffs_core::compact::LoadTiming,
+    ) {
         self.drive_timings
             .write()
             .await
@@ -293,14 +304,16 @@ impl IndexManager {
     /// `Ok(false)` if no MFT file was found for it, or an error.
     pub(crate) async fn discover_and_load_drive(
         &self,
-        drive_letter: char,
+        drive_letter: uffs_mft::platform::DriveLetter,
         no_cache: bool,
     ) -> anyhow::Result<bool> {
         let Some(data_dir) = &self.data_dir else {
             return Ok(false);
         };
 
-        let drive_lower = drive_letter.to_ascii_lowercase();
+        // Path convention: lowercase `drive_<x>` subdir.  `DriveLetter`
+        // is canonical uppercase, so convert at the path boundary.
+        let drive_lower = drive_letter.as_char().to_ascii_lowercase();
         let drive_subdir = data_dir.join(format!("drive_{drive_lower}"));
 
         if !drive_subdir.is_dir() {
@@ -332,16 +345,20 @@ impl IndexManager {
     ///
     /// Returns a list of drive letters that could NOT be loaded (no data
     /// source found).
-    pub(crate) async fn ensure_drives_loaded(&self, drives: &[char], no_cache: bool) -> Vec<char> {
+    pub(crate) async fn ensure_drives_loaded(
+        &self,
+        drives: &[uffs_mft::platform::DriveLetter],
+        no_cache: bool,
+    ) -> Vec<uffs_mft::platform::DriveLetter> {
         if drives.is_empty() {
             return Vec::new();
         }
 
         let loaded = self.loaded_drive_letters().await;
-        let mut missing: Vec<char> = Vec::new();
+        let mut missing: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
 
         for &letter in drives {
-            let upper = letter.to_ascii_uppercase();
+            let upper = letter;
             if loaded.contains(&upper) {
                 continue;
             }
@@ -359,7 +376,11 @@ impl IndexManager {
     /// fresh discovery), `false` when no data source was found or the
     /// load failed.  Each branch is traced at its appropriate level so
     /// callers can stay flat.
-    async fn try_auto_discover_drive(&self, letter: char, no_cache: bool) -> bool {
+    async fn try_auto_discover_drive(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        no_cache: bool,
+    ) -> bool {
         match self.discover_and_load_drive(letter, no_cache).await {
             Ok(true) => {
                 tracing::info!(drive = %letter, "Auto-discovered and loaded missing drive");

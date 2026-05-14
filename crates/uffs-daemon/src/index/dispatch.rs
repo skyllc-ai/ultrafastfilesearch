@@ -95,7 +95,7 @@ impl IndexManager {
     /// case, single read-lock acquisition only.
     pub(super) async fn ensure_warm_for_dispatch(
         &self,
-        params_drives: &[char],
+        params_drives: &[uffs_mft::platform::DriveLetter],
         ext_terms: &[String],
     ) {
         // ── Phase 1: read-lock detection (fast path) ───────────
@@ -110,16 +110,11 @@ impl IndexManager {
         // contract).  Cold shards drop their bloom on demote, so
         // they always promote.  Empty `ext_terms` short-circuits
         // to the Phase-3 always-promote behaviour.
-        let needs_promote: Vec<char> = {
+        let needs_promote: Vec<uffs_mft::platform::DriveLetter> = {
             let guard = self.index.read().await;
             guard
                 .iter()
-                .filter(|shard| {
-                    params_drives.is_empty()
-                        || params_drives
-                            .iter()
-                            .any(|filter| filter.eq_ignore_ascii_case(&shard.drive))
-                })
+                .filter(|shard| params_drives.is_empty() || params_drives.contains(&shard.drive))
                 .filter(|shard| {
                     matches!(
                         shard.state(),
@@ -225,10 +220,7 @@ impl IndexManager {
                 // (single-store, no queries_total bump) so the
                 // per-drive query count stays accurate.
                 let now_ms = unix_now_ms();
-                if let Some(shard) = new_registry
-                    .iter()
-                    .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
-                {
+                if let Some(shard) = new_registry.iter().find(|shard| shard.drive == letter) {
                     shard.stats.mark_loaded_at(now_ms);
                 }
                 *guard = Arc::new(new_registry);
@@ -280,7 +272,7 @@ impl IndexManager {
         in_flight: InFlightPromotes,
         loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
         prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         // The synchronous slot lookup + install lives in its own
         // helper so the `MutexGuard` it acquires is naturally scoped
@@ -309,7 +301,7 @@ impl IndexManager {
         in_flight: &InFlightPromotes,
         loader: &Arc<dyn crate::cache::body_loader::BodyLoader>,
         prefetch: &Arc<dyn crate::cache::prefetch::Prefetch>,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     ) -> InFlightLoad {
         use std::collections::hash_map::Entry;
 
@@ -385,7 +377,7 @@ impl IndexManager {
     async fn build_load_future(
         loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
         prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         // `catch_unwind` lives in `std` (needs the unwinding
         // runtime); `AssertUnwindSafe` lives in `core` (the

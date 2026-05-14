@@ -230,7 +230,7 @@ pub(crate) struct AggregationRequest<'a> {
     /// disables name matching.
     pub pattern: Option<&'a str>,
     /// Subset of drive letters to include; empty = all drives.
-    pub drives_filter: &'a [char],
+    pub drives_filter: &'a [uffs_mft::platform::DriveLetter],
     /// O(1)-per-record predicates: extension IDs, directory flag,
     /// size bounds.  Defaults to "no filter" via
     /// [`AggregateFilter::default`].
@@ -287,12 +287,7 @@ impl IndexManager {
         let drive_refs: Vec<&uffs_core::compact::DriveCompactIndex> = snapshot
             .drives
             .iter()
-            .filter(|arc| {
-                drives_filter.is_empty()
-                    || drives_filter
-                        .iter()
-                        .any(|f| f.eq_ignore_ascii_case(&arc.letter))
-            })
+            .filter(|arc| drives_filter.is_empty() || drives_filter.contains(&arc.letter))
             .map(|arc| arc.as_ref())
             .collect();
         // ── Cache lookup ────────────────────────────────────────────
@@ -444,7 +439,7 @@ impl IndexManager {
     fn build_agg_cache_key(
         specs: &[uffs_core::aggregate::spec::AggregateSpec],
         pattern: Option<&str>,
-        drives_filter: &[char],
+        drives_filter: &[uffs_mft::platform::DriveLetter],
         record_filter: &uffs_core::aggregate::AggregateFilter,
         query_predicates: &[DrilldownPredicate],
     ) -> u64 {

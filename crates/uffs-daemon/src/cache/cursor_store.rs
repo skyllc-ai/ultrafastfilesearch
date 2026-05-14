@@ -56,7 +56,7 @@ impl DiskCursorStore {
     }
 
     /// Path to the cursor file for `letter`.
-    fn cursor_path(&self, letter: char) -> PathBuf {
+    fn cursor_path(&self, letter: uffs_mft::platform::DriveLetter) -> PathBuf {
         self.cache_root.join(format!("{letter}_usn.cursor"))
     }
 }
@@ -76,7 +76,7 @@ impl super::journal_loop::CursorStore for DiskCursorStore {
                   used in `crate::config::Config::load_from_path`.  \
                   Remove this expect once `error_in_core` stabilises."
     )]
-    fn load(&self, letter: char) -> u64 {
+    fn load(&self, letter: uffs_mft::platform::DriveLetter) -> u64 {
         let path = self.cursor_path(letter);
         match std::fs::read(&path) {
             Ok(bytes) => <[u8; 8]>::try_from(bytes.as_slice()).map_or_else(
@@ -112,7 +112,7 @@ impl super::journal_loop::CursorStore for DiskCursorStore {
     /// must remain resilient to a transient disk-full / permission
     /// glitch (the next save tick will retry, and an unsaved
     /// cursor is recoverable via journal-head re-replay).
-    fn store(&self, letter: char, cursor: u64) {
+    fn store(&self, letter: uffs_mft::platform::DriveLetter, cursor: u64) {
         let path = self.cursor_path(letter);
         // Ensure the cache directory exists with owner-only DACL —
         // matches the existing compact-cache writer's pattern.
@@ -153,8 +153,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = DiskCursorStore::new(tmp.path().to_path_buf());
 
-        store.store('C', 0x1234_5678_9ABC_DEF0);
-        let loaded = store.load('C');
+        store.store(uffs_mft::platform::DriveLetter::C, 0x1234_5678_9ABC_DEF0);
+        let loaded = store.load(uffs_mft::platform::DriveLetter::C);
 
         assert_eq!(loaded, 0x1234_5678_9ABC_DEF0);
     }
@@ -167,7 +167,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = DiskCursorStore::new(tmp.path().to_path_buf());
 
-        assert_eq!(store.load('C'), 0);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), 0);
     }
 
     /// Corrupt cursor file (wrong byte count) → `load` returns `0`
@@ -182,7 +182,7 @@ mod tests {
         std::fs::write(&path, [0x01, 0x02, 0x03, 0x04]).expect("write corrupt cursor");
 
         let store = DiskCursorStore::new(tmp.path().to_path_buf());
-        assert_eq!(store.load('C'), 0);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), 0);
     }
 
     /// `store` must create the cache directory if it doesn't yet
@@ -197,10 +197,10 @@ mod tests {
         assert!(!nested.exists(), "precondition: nested dir doesn't exist");
         let store = DiskCursorStore::new(nested.clone());
 
-        store.store('C', 42);
+        store.store(uffs_mft::platform::DriveLetter::C, 42);
 
         assert!(nested.exists(), "cache dir must be created on first store");
-        let loaded = store.load('C');
+        let loaded = store.load(uffs_mft::platform::DriveLetter::C);
         assert_eq!(loaded, 42);
     }
 
@@ -212,13 +212,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = DiskCursorStore::new(tmp.path().to_path_buf());
 
-        store.store('C', 100);
-        store.store('D', 200);
-        store.store('E', 300);
+        store.store(uffs_mft::platform::DriveLetter::C, 100);
+        store.store(uffs_mft::platform::DriveLetter::D, 200);
+        store.store(uffs_mft::platform::DriveLetter::E, 300);
 
-        assert_eq!(store.load('C'), 100);
-        assert_eq!(store.load('D'), 200);
-        assert_eq!(store.load('E'), 300);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), 100);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::D), 200);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::E), 300);
     }
 
     /// Overwriting an existing cursor must succeed atomically and
@@ -231,11 +231,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = DiskCursorStore::new(tmp.path().to_path_buf());
 
-        store.store('C', 100);
-        assert_eq!(store.load('C'), 100);
-        store.store('C', 200);
-        assert_eq!(store.load('C'), 200);
-        store.store('C', u64::MAX);
-        assert_eq!(store.load('C'), u64::MAX);
+        store.store(uffs_mft::platform::DriveLetter::C, 100);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), 100);
+        store.store(uffs_mft::platform::DriveLetter::C, 200);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), 200);
+        store.store(uffs_mft::platform::DriveLetter::C, u64::MAX);
+        assert_eq!(store.load(uffs_mft::platform::DriveLetter::C), u64::MAX);
     }
 }

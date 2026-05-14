@@ -43,6 +43,8 @@ use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::core::PCWSTR;
 
 #[cfg(windows)]
+use super::drive_letter::DriveLetter;
+#[cfg(windows)]
 use super::volume::HandleGuard;
 
 /// Checks if the current process has Administrator privileges.
@@ -93,27 +95,34 @@ pub fn is_elevated() -> bool {
 /// Returns the path to the volume root (e.g., "C:\").
 #[cfg(windows)]
 #[must_use]
-pub fn volume_root_path(volume: char) -> PathBuf {
-    PathBuf::from(format!("{}:\\", volume.to_ascii_uppercase()))
+pub fn volume_root_path(volume: DriveLetter) -> PathBuf {
+    PathBuf::from(format!("{}:\\", volume.as_char()))
 }
 
 /// Infer drive letter from a file path.
+///
+/// Returns `None` for paths without a drive-letter prefix (UNC paths,
+/// relative paths when the CWD lookup also fails).  The drive byte
+/// from the OS prefix is always an ASCII letter, so the
+/// [`DriveLetter::parse`] conversion never fails in practice; `.ok()`
+/// discards the theoretical error rather than introducing a fallible
+/// API at this call site.
 #[cfg(windows)]
 #[must_use]
-pub fn infer_drive_from_path(path: &Path) -> Option<char> {
+pub fn infer_drive_from_path(path: &Path) -> Option<DriveLetter> {
     use std::path::{Component, Prefix};
 
     if let Some(Component::Prefix(prefix)) = path.components().next()
         && let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind()
     {
-        return Some((drive_byte as char).to_ascii_uppercase());
+        return DriveLetter::parse(drive_byte as char).ok();
     }
 
     std::env::current_dir().ok().and_then(|cwd| {
         if let Some(Component::Prefix(prefix)) = cwd.components().next()
             && let Prefix::Disk(drive_byte) | Prefix::VerbatimDisk(drive_byte) = prefix.kind()
         {
-            Some((drive_byte as char).to_ascii_uppercase())
+            DriveLetter::parse(drive_byte as char).ok()
         } else {
             None
         }
@@ -122,30 +131,30 @@ pub fn infer_drive_from_path(path: &Path) -> Option<char> {
 
 /// Returns the boot/system drive letter (from `%SystemDrive%`, typically `C`).
 ///
-/// Falls back to `'C'` if the environment variable is missing or malformed.
+/// Falls back to [`DriveLetter::C`] if the environment variable is
+/// missing or malformed.
 #[cfg(windows)]
 #[must_use]
-pub fn detect_boot_drive() -> char {
+pub fn detect_boot_drive() -> DriveLetter {
     std::env::var("SystemDrive")
         .ok()
         .and_then(|drive| drive.chars().next())
-        .map(|ch| ch.to_ascii_uppercase())
-        .filter(char::is_ascii_uppercase)
-        .unwrap_or('C')
+        .and_then(|ch| DriveLetter::parse(ch).ok())
+        .unwrap_or(DriveLetter::C)
 }
 
 /// Returns `true` if the given drive letter is the boot/system drive.
 #[cfg(windows)]
 #[must_use]
-pub fn is_boot_drive(drive_letter: char) -> bool {
-    drive_letter.to_ascii_uppercase() == detect_boot_drive()
+pub fn is_boot_drive(drive_letter: DriveLetter) -> bool {
+    drive_letter == detect_boot_drive()
 }
 
 /// Detects all available NTFS drives on the system.
 #[cfg(windows)]
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: windows API (GetLogicalDrives)")]
-pub fn detect_ntfs_drives() -> Vec<char> {
+pub fn detect_ntfs_drives() -> Vec<DriveLetter> {
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
     let mut ntfs_drives = Vec::new();
@@ -160,7 +169,9 @@ pub fn detect_ntfs_drives() -> Vec<char> {
 
     for i in 0_u8..26 {
         if (drive_mask & (1_u32 << i)) != 0 {
-            let drive_letter = char::from(b'A' + i);
+            // `b'A' + i` for `i in 0..26` is always in `b'A'..=b'Z'`, so
+            // the invariant of `DriveLetter::from_byte_unchecked` holds.
+            let drive_letter = DriveLetter::from_byte_unchecked(b'A' + i);
 
             if is_ntfs_volume(drive_letter) {
                 ntfs_drives.push(drive_letter);
@@ -177,10 +188,10 @@ pub fn detect_ntfs_drives() -> Vec<char> {
     unsafe_code,
     reason = "FFI: windows API (GetDriveTypeW, GetVolumeInformationW)"
 )]
-fn is_ntfs_volume(drive_letter: char) -> bool {
+fn is_ntfs_volume(drive_letter: DriveLetter) -> bool {
     use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumeInformationW};
 
-    let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
+    let root_path: Vec<u16> = format!("{}:\\", drive_letter.as_char())
         .encode_utf16()
         .chain(core::iter::once(0))
         .collect();
@@ -222,12 +233,12 @@ fn is_ntfs_volume(drive_letter: char) -> bool {
 #[cfg(windows)]
 #[must_use]
 #[expect(unsafe_code, reason = "FFI: windows API (GetVolumeInformationW)")]
-pub fn is_volume_read_only(drive_letter: char) -> bool {
+pub fn is_volume_read_only(drive_letter: DriveLetter) -> bool {
     use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
 
     const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 
-    let root_path: Vec<u16> = format!("{}:\\", drive_letter.to_ascii_uppercase())
+    let root_path: Vec<u16> = format!("{}:\\", drive_letter.as_char())
         .encode_utf16()
         .chain(core::iter::once(0))
         .collect();
@@ -341,7 +352,7 @@ impl DriveType {
     clippy::too_many_lines,
     reason = "drive-type detection ladder: opens a single physical-drive handle then runs a fall-through sequence of IOCTL probes (storage descriptor for NVMe → seek-penalty for SSD/HDD → TRIM-support fallback). Splitting would either replicate the FFI handle/struct setup per-probe or hide the ordered fall-through behind helper indirection"
 )]
-pub fn detect_drive_type(drive_letter: char) -> DriveType {
+pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
@@ -370,7 +381,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
         incurs_seek_penalty: u8,
     }
 
-    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
+    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.as_char())
         .encode_utf16()
         .chain(core::iter::once(0))
         .collect();
@@ -505,7 +516,7 @@ pub fn detect_drive_type(drive_letter: char) -> DriveType {
     unsafe_code,
     reason = "FFI: windows API (CreateFileW, DeviceIoControl) for trim detection"
 )]
-fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
+fn detect_drive_type_via_trim(drive_letter: DriveLetter) -> DriveType {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
@@ -529,7 +540,7 @@ fn detect_drive_type_via_trim(drive_letter: char) -> DriveType {
         trim_enabled: u8,
     }
 
-    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.to_ascii_uppercase())
+    let drive_path: Vec<u16> = format!("\\\\.\\{}:", drive_letter.as_char())
         .encode_utf16()
         .chain(core::iter::once(0))
         .collect();

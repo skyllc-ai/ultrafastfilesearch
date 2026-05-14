@@ -29,7 +29,7 @@ use super::{
 pub struct RefreshParams {
     /// Specific drives to refresh (empty = all loaded).
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
 }
 
 /// Parameters for the `load_drive` method.
@@ -46,7 +46,7 @@ pub struct LoadDriveParams {
     /// On Windows, reads the live NTFS MFT.
     /// On non-Windows, discovers from the daemon's `data_dir`.
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// Skip cache when loading.
     #[serde(default)]
     pub no_cache: bool,
@@ -56,9 +56,9 @@ pub struct LoadDriveParams {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoadDriveResponse {
     /// Drives that were successfully loaded.
-    pub loaded: Vec<char>,
+    pub loaded: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that were already present (skipped).
-    pub already_loaded: Vec<char>,
+    pub already_loaded: Vec<uffs_mft::platform::DriveLetter>,
     /// Errors encountered (drive letter → message).
     pub errors: Vec<String>,
 }
@@ -449,7 +449,7 @@ const fn is_zero_u64(value: &u64) -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DriveProfile {
     /// Drive letter.
-    pub drive: char,
+    pub drive: uffs_mft::platform::DriveLetter,
     /// Records in this drive's index.
     pub records: usize,
     /// Matching rows found in this search.
@@ -473,7 +473,7 @@ pub struct DriveProfile {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchRow {
     /// Drive letter.
-    pub drive: char,
+    pub drive: uffs_mft::platform::DriveLetter,
     /// Full resolved path.
     pub path: String,
     /// Filename.
@@ -517,7 +517,11 @@ pub struct SearchRow {
 impl uffs_format::FormatRow for SearchRow {
     #[inline]
     fn drive(&self) -> char {
-        self.drive
+        // `uffs-format` is a foundation crate that intentionally
+        // doesn't depend on `uffs-mft`, so the trait surface stays
+        // `char`-typed.  We translate at this boundary; the cost is
+        // one byte read.
+        self.drive.as_char()
     }
     #[inline]
     fn path(&self) -> &str {

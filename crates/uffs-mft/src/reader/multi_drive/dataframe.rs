@@ -23,7 +23,8 @@ impl MultiDriveMftReader {
     ///
     /// Returns an error if all drives fail to read.
     pub async fn read_all(&self) -> Result<DataFrame> {
-        self.read_all_internal(None::<fn(char, MftProgress)>).await
+        self.read_all_internal(None::<fn(crate::platform::DriveLetter, MftProgress)>)
+            .await
     }
 
     /// Read MFTs from all drives with per-drive progress callbacks.
@@ -39,7 +40,7 @@ impl MultiDriveMftReader {
     /// Returns an error if all drives fail to read.
     pub async fn read_with_progress<F>(&self, callback: F) -> Result<DataFrame>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         self.read_all_internal(Some(callback)).await
     }
@@ -47,7 +48,7 @@ impl MultiDriveMftReader {
     /// Internal implementation for concurrent drive reading.
     async fn read_all_internal<F>(&self, callback: Option<F>) -> Result<DataFrame>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));
@@ -74,7 +75,7 @@ impl MultiDriveMftReader {
         }
 
         let mut dataframes: Vec<DataFrame> = Vec::new();
-        let mut errors: Vec<(char, MftError)> = Vec::new();
+        let mut errors: Vec<(crate::platform::DriveLetter, MftError)> = Vec::new();
 
         while let Some(result) = join_set.join_next().await {
             match result {
@@ -93,7 +94,7 @@ impl MultiDriveMftReader {
                 }
                 Err(join_err) => {
                     errors.push((
-                        '?',
+                        crate::platform::DriveLetter::X,
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
@@ -147,9 +148,12 @@ impl MultiDriveMftReader {
     ///
     /// Uses `spawn_blocking` because `MftReader` contains Windows HANDLEs
     /// which are not `Send`, and the MFT reading is blocking I/O.
-    async fn read_single_drive<F>(drive: char, callback: Option<Arc<F>>) -> Result<DataFrame>
+    async fn read_single_drive<F>(
+        drive: crate::platform::DriveLetter,
+        callback: Option<Arc<F>>,
+    ) -> Result<DataFrame>
     where
-        F: Fn(char, MftProgress) + Send + Sync + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + 'static,
     {
         tokio::task::spawn_blocking(move || {
             let reader = MftReader::open(drive)?;
@@ -189,8 +193,10 @@ impl MultiDriveMftReader {
         for _ in 0..budget {
             if let Some(drive) = pending_drives.next() {
                 join_set.spawn(async move {
-                    let read_result =
-                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    let read_result = Self::read_single_drive::<
+                        fn(crate::platform::DriveLetter, MftProgress),
+                    >(drive, None)
+                    .await;
                     DriveReadResult {
                         drive,
                         dataframe: read_result.as_ref().ok().cloned(),
@@ -206,7 +212,7 @@ impl MultiDriveMftReader {
                 Ok(drive_result) => results.push(drive_result),
                 Err(join_err) => {
                     results.push(DriveReadResult {
-                        drive: '?',
+                        drive: crate::platform::DriveLetter::X,
                         dataframe: None,
                         error: Some(MftError::InvalidInput(format!("Task failed: {join_err}"))),
                     });
@@ -215,8 +221,10 @@ impl MultiDriveMftReader {
 
             if let Some(drive) = pending_drives.next() {
                 join_set.spawn(async move {
-                    let read_result =
-                        Self::read_single_drive::<fn(char, MftProgress)>(drive, None).await;
+                    let read_result = Self::read_single_drive::<
+                        fn(crate::platform::DriveLetter, MftProgress),
+                    >(drive, None)
+                    .await;
                     DriveReadResult {
                         drive,
                         dataframe: read_result.as_ref().ok().cloned(),

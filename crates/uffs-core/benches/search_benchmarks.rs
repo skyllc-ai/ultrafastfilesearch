@@ -333,14 +333,17 @@ fn bench_path_resolution(c: &mut Criterion) {
 
         // Benchmark building the resolver
         group.bench_with_input(BenchmarkId::new("build", size), &df, |b, df| {
-            b.iter(|| PathResolver::build(std::hint::black_box(df), 'C'))
+            b.iter(|| {
+                PathResolver::build(std::hint::black_box(df), uffs_mft::platform::DriveLetter::C)
+            })
         });
 
         // Benchmark resolving paths (with caching)
         group.bench_with_input(BenchmarkId::new("resolve_cached", size), &df, |b, df| {
             b.iter_batched(
                 || {
-                    let resolver = PathResolver::build(df, 'C').expect("valid resolver");
+                    let resolver = PathResolver::build(df, uffs_mft::platform::DriveLetter::C)
+                        .expect("valid resolver");
                     // Get some FRS values to resolve
                     let frs_col = df.column("frs").unwrap().u64().unwrap();
                     let frs_values: Vec<u64> = (0..std::cmp::min(100, df.height()))
@@ -375,14 +378,20 @@ fn bench_fast_path_resolution(c: &mut Criterion) {
 
         // Benchmark building the fast resolver
         group.bench_with_input(BenchmarkId::new("build", size), &df, |b, df| {
-            b.iter(|| FastPathResolver::build(std::hint::black_box(df), 'C'))
+            b.iter(|| {
+                FastPathResolver::build(
+                    std::hint::black_box(df),
+                    uffs_mft::platform::DriveLetter::C,
+                )
+            })
         });
 
         // Benchmark resolving paths (with caching)
         group.bench_with_input(BenchmarkId::new("resolve_cached", size), &df, |b, df| {
             b.iter_batched(
                 || {
-                    let resolver = FastPathResolver::build(df, 'C').expect("valid resolver");
+                    let resolver = FastPathResolver::build(df, uffs_mft::platform::DriveLetter::C)
+                        .expect("valid resolver");
                     // Get some FRS values to resolve
                     let frs_col = df.column("frs").unwrap().u64().unwrap();
                     let frs_values: Vec<u64> = (0..std::cmp::min(100, df.height()))
@@ -407,7 +416,8 @@ fn bench_fast_path_resolution(c: &mut Criterion) {
 
             b.iter_batched(
                 || {
-                    let resolver = FastPathResolver::build(df, 'C').expect("valid resolver");
+                    let resolver = FastPathResolver::build(df, uffs_mft::platform::DriveLetter::C)
+                        .expect("valid resolver");
                     (resolver, filtered_df.clone())
                 },
                 |(mut resolver, filtered): (FastPathResolver, DataFrame)| {
@@ -437,11 +447,21 @@ fn bench_resolver_comparison(c: &mut Criterion) {
 
     // Compare build times
     group.bench_function("hashmap_build", |b| {
-        b.iter(|| PathResolver::build(std::hint::black_box(&df), 'C'))
+        b.iter(|| {
+            PathResolver::build(
+                std::hint::black_box(&df),
+                uffs_mft::platform::DriveLetter::C,
+            )
+        })
     });
 
     group.bench_function("vec_build", |b| {
-        b.iter(|| FastPathResolver::build(std::hint::black_box(&df), 'C'))
+        b.iter(|| {
+            FastPathResolver::build(
+                std::hint::black_box(&df),
+                uffs_mft::platform::DriveLetter::C,
+            )
+        })
     });
 
     // Compare resolve times (100 paths each)
@@ -450,7 +470,10 @@ fn bench_resolver_comparison(c: &mut Criterion) {
 
     group.bench_function("hashmap_resolve_100", |b| {
         b.iter_batched(
-            || PathResolver::build(&df, 'C').expect("valid resolver"),
+            || {
+                PathResolver::build(&df, uffs_mft::platform::DriveLetter::C)
+                    .expect("valid resolver")
+            },
             |mut resolver| {
                 for &frs in &frs_values {
                     let _ = resolver.resolve(frs);
@@ -462,7 +485,10 @@ fn bench_resolver_comparison(c: &mut Criterion) {
 
     group.bench_function("vec_resolve_100", |b| {
         b.iter_batched(
-            || FastPathResolver::build(&df, 'C').expect("valid resolver"),
+            || {
+                FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)
+                    .expect("valid resolver")
+            },
             |resolver| {
                 for &frs in &frs_values {
                     let _ = resolver.resolve(frs);
@@ -490,7 +516,8 @@ fn bench_parallel_path_resolution(c: &mut Criterion) {
     group.bench_function("sequential_50k", |b| {
         b.iter_batched(
             || {
-                let resolver = FastPathResolver::build(&df, 'C').expect("valid resolver");
+                let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)
+                    .expect("valid resolver");
                 (resolver, df.clone())
             },
             |(mut resolver, df)| resolver.add_path_column(&df),
@@ -502,7 +529,8 @@ fn bench_parallel_path_resolution(c: &mut Criterion) {
     group.bench_function("parallel_50k", |b| {
         b.iter_batched(
             || {
-                let resolver = FastPathResolver::build(&df, 'C').expect("valid resolver");
+                let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)
+                    .expect("valid resolver");
                 (resolver, df.clone())
             },
             |(resolver, df)| resolver.add_path_column_parallel(&df),

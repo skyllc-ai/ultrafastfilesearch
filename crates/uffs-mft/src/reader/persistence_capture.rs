@@ -311,7 +311,7 @@ unsafe fn prime_in_flight_reads(
 #[cfg(windows)]
 fn plan_iocp_capture_chunks(
     vol_handle: &crate::platform::VolumeHandle,
-    volume: char,
+    volume: crate::platform::DriveLetter,
     record_size: u32,
 ) -> (Vec<crate::io::ReadChunk>, usize) {
     use crate::io::{MftExtentMap, generate_read_chunks};

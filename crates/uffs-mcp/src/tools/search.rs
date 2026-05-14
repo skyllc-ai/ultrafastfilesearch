@@ -284,11 +284,16 @@ pub(crate) async fn run(
     // Resolve cursor offset.
     let offset = args.cursor.as_deref().map_or(0, decode_cursor);
 
-    // Convert explicit drive strings to chars.
-    let explicit_drives: Vec<char> = args
+    // Convert explicit drive strings to typed `DriveLetter` values.
+    // Malformed entries (non-ASCII, multi-char) are silently dropped
+    // — the prior `char` path took only the first character and
+    // forwarded it as-is, so this is a stricter version of the same
+    // observable behaviour.
+    let explicit_drives: Vec<uffs_mft::platform::DriveLetter> = args
         .drives
         .iter()
         .filter_map(|drv| drv.chars().next())
+        .filter_map(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
         .collect();
 
     // Ask the daemon for offset + limit rows so we can skip the first `offset`.

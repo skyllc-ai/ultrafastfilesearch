@@ -25,8 +25,8 @@
 //!    `Option<Value>` in [`InfoResponse`].
 //! 2. [`Self::info_tree_lookup`] — the synchronous walker.  Drives the parse +
 //!    segment-by-segment match.
-//! 3. [`Self::parse_drive_prefix`] — helper that splits `"C:\\foo"` into `('C',
-//!    "foo")`.
+//! 3. [`Self::parse_drive_prefix`] — helper that splits `"C:\\foo"` into
+//!    `(uffs_mft::platform::DriveLetter::C, "foo")`.
 //! 4. [`Self::build_info_json`] — turns a matching
 //!    [`uffs_core::compact::CompactRecord`] into the JSON payload the response
 //!    carries.
@@ -61,7 +61,8 @@ impl IndexManager {
     /// Fast tree-walk lookup: parse path → drive letter + segments, then
     /// walk `children` index matching each segment case-insensitively.
     fn info_tree_lookup(snap: &DriveIndex, file_path: &str) -> Option<serde_json::Value> {
-        // Parse "C:\Windows\System32\notepad.exe" → ('C', ["Windows", "System32",
+        // Parse "C:\Windows\System32\notepad.exe" →
+        // (uffs_mft::platform::DriveLetter::C, ["Windows", "System32",
         // "notepad.exe"])
         let normalized = file_path.replace('/', "\\");
         let (drive_letter, remainder) = Self::parse_drive_prefix(&normalized)?;
@@ -75,10 +76,7 @@ impl IndexManager {
         }
 
         // Find the matching drive.
-        let drive = snap
-            .drives
-            .iter()
-            .find(|dr| dr.letter.eq_ignore_ascii_case(&drive_letter))?;
+        let drive = snap.drives.iter().find(|dr| dr.letter == drive_letter)?;
 
         // Find root entries (parent_idx == u32::MAX) as starting candidates.
         let mut candidates: Vec<u32> = Vec::new();
@@ -150,12 +148,10 @@ impl IndexManager {
     }
 
     /// Parse `C:\...` or `c:/...` into `(drive_letter, remainder)`.
-    fn parse_drive_prefix(path: &str) -> Option<(char, &str)> {
+    fn parse_drive_prefix(path: &str) -> Option<(uffs_mft::platform::DriveLetter, &str)> {
         let mut chars = path.chars();
-        let letter = chars.next()?;
-        if !letter.is_ascii_alphabetic() {
-            return None;
-        }
+        let letter_ch = chars.next()?;
+        let letter = uffs_mft::platform::DriveLetter::parse(letter_ch).ok()?;
         if chars.next()? != ':' {
             return None;
         }

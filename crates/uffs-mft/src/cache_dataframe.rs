@@ -39,7 +39,7 @@ use super::{load_cached_index, save_to_cache_background};
 /// on a dedicated blocking thread, we avoid this issue.
 #[cfg(windows)]
 pub async fn load_or_build_dataframe_cached(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
     tracing::debug!(drive = %drive, ttl_seconds, "Entering cached DataFrame load/build");
@@ -68,7 +68,7 @@ pub async fn load_or_build_dataframe_cached(
 /// It performs all MFT reading and polars operations synchronously.
 #[cfg(windows)]
 fn load_or_build_dataframe_cached_sync(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     ttl_seconds: u64,
 ) -> crate::Result<uffs_polars::DataFrame> {
     tracing::debug!(
@@ -89,7 +89,7 @@ fn load_or_build_dataframe_cached_sync(
 /// any conversion failure); returns `None` only on cache miss.
 #[cfg(windows)]
 fn load_cached_dataframe(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     ttl_seconds: u64,
 ) -> Option<crate::Result<uffs_polars::DataFrame>> {
     let (index, _header) = load_cached_index(drive, ttl_seconds)?;
@@ -106,7 +106,9 @@ fn load_cached_dataframe(
 /// Read the MFT fresh, kick off a background cache save, and convert the
 /// resulting index into a [`DataFrame`].  Used after a cache miss.
 #[cfg(windows)]
-fn build_fresh_dataframe(drive: char) -> crate::Result<uffs_polars::DataFrame> {
+fn build_fresh_dataframe(
+    drive: crate::platform::DriveLetter,
+) -> crate::Result<uffs_polars::DataFrame> {
     let index = read_fresh_index(drive)?;
     spawn_cache_save(drive, &index)?;
 
@@ -123,7 +125,7 @@ fn build_fresh_dataframe(drive: char) -> crate::Result<uffs_polars::DataFrame> {
 /// Open the MFT reader for `drive` and synchronously read every record
 /// into an [`MftIndex`].  Wraps the tracing pair around the slow read.
 #[cfg(windows)]
-fn read_fresh_index(drive: char) -> crate::Result<crate::index::MftIndex> {
+fn read_fresh_index(drive: crate::platform::DriveLetter) -> crate::Result<crate::index::MftIndex> {
     use crate::reader::MftReader;
 
     tracing::info!(drive = %drive, "📖 Cache miss - reading MFT fresh");
@@ -144,7 +146,10 @@ fn read_fresh_index(drive: char) -> crate::Result<crate::index::MftIndex> {
 /// logged at warn so the surrounding [`build_fresh_dataframe`] flow can
 /// still hand the freshly-built [`DataFrame`] back to the user.
 #[cfg(windows)]
-fn spawn_cache_save(drive: char, index: &crate::index::MftIndex) -> crate::Result<()> {
+fn spawn_cache_save(
+    drive: crate::platform::DriveLetter,
+    index: &crate::index::MftIndex,
+) -> crate::Result<()> {
     use crate::VolumeHandle;
     use crate::usn::query_usn_journal;
 
@@ -165,7 +170,7 @@ fn spawn_cache_save(drive: char, index: &crate::index::MftIndex) -> crate::Resul
 /// the index came from the cache or a fresh MFT read.
 #[cfg(windows)]
 fn log_conversion_result(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     df: &crate::Result<uffs_polars::DataFrame>,
     source: &'static str,
 ) {

@@ -11,7 +11,13 @@ use super::*;
 // ── Helpers ──────────────────────────────────────────────────────────
 
 /// Build a minimal `DisplayRow` for sort / aggregation tests.
-fn row(name: &str, drive: char, size: u64, modified: i64, created: i64) -> DisplayRow {
+fn row(
+    name: &str,
+    drive: uffs_mft::platform::DriveLetter,
+    size: u64,
+    modified: i64,
+    created: i64,
+) -> DisplayRow {
     DisplayRow::new(
         0,
         drive,
@@ -29,7 +35,12 @@ fn row(name: &str, drive: char, size: u64, modified: i64, created: i64) -> Displ
     )
 }
 
-fn dir_row(name: &str, drive: char, descendants: u32, treesize: u64) -> DisplayRow {
+fn dir_row(
+    name: &str,
+    drive: uffs_mft::platform::DriveLetter,
+    descendants: u32,
+    treesize: u64,
+) -> DisplayRow {
     DisplayRow::new(
         0,
         drive,
@@ -195,8 +206,8 @@ fn format_sort_spec_with_extra_tiers() {
 #[test]
 fn sort_by_name_ascending() {
     let mut rows = vec![
-        row("zebra.txt", 'C', 100, 0, 0),
-        row("alpha.txt", 'C', 200, 0, 0),
+        row("zebra.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("alpha.txt", uffs_mft::platform::DriveLetter::C, 200, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Name, false, &[]);
     assert_eq!(rows.first().expect("first").name(), "alpha.txt");
@@ -205,8 +216,8 @@ fn sort_by_name_ascending() {
 #[test]
 fn sort_by_modified_descending() {
     let mut rows = vec![
-        row("old.txt", 'C', 100, 1000, 0),
-        row("new.txt", 'C', 100, 9000, 0),
+        row("old.txt", uffs_mft::platform::DriveLetter::C, 100, 1000, 0),
+        row("new.txt", uffs_mft::platform::DriveLetter::C, 100, 9000, 0),
     ];
     sort_rows(&mut rows, SortColumn::Modified, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "new.txt");
@@ -215,8 +226,8 @@ fn sort_by_modified_descending() {
 #[test]
 fn sort_by_created_descending() {
     let mut rows = vec![
-        row("old.txt", 'C', 100, 0, 1000),
-        row("new.txt", 'C', 100, 0, 9000),
+        row("old.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 1000),
+        row("new.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 9000),
     ];
     sort_rows(&mut rows, SortColumn::Created, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "new.txt");
@@ -224,7 +235,10 @@ fn sort_by_created_descending() {
 
 #[test]
 fn sort_by_path_ascending() {
-    let mut rows = vec![row("z.txt", 'D', 100, 0, 0), row("a.txt", 'C', 100, 0, 0)];
+    let mut rows = vec![
+        row("z.txt", uffs_mft::platform::DriveLetter::D, 100, 0, 0),
+        row("a.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+    ];
     sort_rows(&mut rows, SortColumn::Path, false, &[]);
     assert_eq!(rows.first().expect("first").name(), "a.txt");
 }
@@ -232,8 +246,8 @@ fn sort_by_path_ascending() {
 #[test]
 fn sort_by_extension_ascending() {
     let mut rows = vec![
-        row("file.zip", 'C', 100, 0, 0),
-        row("file.abc", 'C', 100, 0, 0),
+        row("file.zip", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("file.abc", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Extension, false, &[]);
     assert_eq!(rows.first().expect("first").name(), "file.abc");
@@ -242,8 +256,8 @@ fn sort_by_extension_ascending() {
 #[test]
 fn sort_by_descendants_descending() {
     let mut rows = vec![
-        dir_row("small", 'C', 5, 1000),
-        dir_row("big", 'C', 500, 50_000),
+        dir_row("small", uffs_mft::platform::DriveLetter::C, 5, 1000),
+        dir_row("big", uffs_mft::platform::DriveLetter::C, 500, 50_000),
     ];
     sort_rows(&mut rows, SortColumn::Descendants, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "big");
@@ -252,18 +266,21 @@ fn sort_by_descendants_descending() {
 #[test]
 fn sort_by_drive_ascending() {
     let mut rows = vec![
-        row("file.txt", 'D', 100, 0, 0),
-        row("file.txt", 'C', 100, 0, 0),
+        row("file.txt", uffs_mft::platform::DriveLetter::D, 100, 0, 0),
+        row("file.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Drive, false, &[]);
-    assert_eq!(rows.first().expect("first").drive, 'C');
+    assert_eq!(
+        rows.first().expect("first").drive,
+        uffs_mft::platform::DriveLetter::C
+    );
 }
 
 #[test]
 fn sort_by_size_on_disk_descending() {
     let mut rows = vec![
-        row("small.txt", 'C', 100, 0, 0),
-        row("big.txt", 'C', 5000, 0, 0),
+        row("small.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("big.txt", uffs_mft::platform::DriveLetter::C, 5000, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::SizeOnDisk, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "big.txt");
@@ -272,9 +289,9 @@ fn sort_by_size_on_disk_descending() {
 #[test]
 fn sort_multi_tier_size_then_name() {
     let mut rows = vec![
-        row("beta.txt", 'C', 100, 0, 0),
-        row("alpha.txt", 'C', 100, 0, 0),
-        row("gamma.txt", 'C', 200, 0, 0),
+        row("beta.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("alpha.txt", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("gamma.txt", uffs_mft::platform::DriveLetter::C, 200, 0, 0),
     ];
     let tiers = vec![SortSpec {
         column: SortColumn::Name,
@@ -292,9 +309,9 @@ fn sort_by_type_groups_by_semantic_category() {
     // .rs → code, .zip → archive, .jpg → picture
     // ascending: archive < code < picture
     let mut rows = vec![
-        row("photo.jpg", 'C', 100, 0, 0),
-        row("main.rs", 'C', 200, 0, 0),
-        row("backup.zip", 'C', 50, 0, 0),
+        row("photo.jpg", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("main.rs", uffs_mft::platform::DriveLetter::C, 200, 0, 0),
+        row("backup.zip", uffs_mft::platform::DriveLetter::C, 50, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Type, false, &[]);
     assert_eq!(rows.first().expect("first").name(), "backup.zip"); // archive
@@ -305,9 +322,9 @@ fn sort_by_type_groups_by_semantic_category() {
 #[test]
 fn sort_by_type_descending() {
     let mut rows = vec![
-        row("photo.jpg", 'C', 100, 0, 0),
-        row("main.rs", 'C', 200, 0, 0),
-        row("backup.zip", 'C', 50, 0, 0),
+        row("photo.jpg", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("main.rs", uffs_mft::platform::DriveLetter::C, 200, 0, 0),
+        row("backup.zip", uffs_mft::platform::DriveLetter::C, 50, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Type, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "photo.jpg"); // picture
@@ -319,9 +336,9 @@ fn sort_by_type_descending() {
 fn sort_by_type_then_size() {
     // Two code files with different sizes
     let mut rows = vec![
-        row("big.rs", 'C', 5000, 0, 0),
-        row("small.rs", 'C', 100, 0, 0),
-        row("photo.jpg", 'C', 300, 0, 0),
+        row("big.rs", uffs_mft::platform::DriveLetter::C, 5000, 0, 0),
+        row("small.rs", uffs_mft::platform::DriveLetter::C, 100, 0, 0),
+        row("photo.jpg", uffs_mft::platform::DriveLetter::C, 300, 0, 0),
     ];
     let tiers = vec![SortSpec {
         column: SortColumn::Size,
@@ -337,9 +354,9 @@ fn sort_by_type_then_size() {
 #[test]
 fn sort_by_descendants_in_dir() {
     let mut rows = vec![
-        dir_row("few", 'C', 5, 100),
-        dir_row("many", 'C', 50, 500),
-        dir_row("empty", 'C', 0, 0),
+        dir_row("few", uffs_mft::platform::DriveLetter::C, 5, 100),
+        dir_row("many", uffs_mft::platform::DriveLetter::C, 50, 500),
+        dir_row("empty", uffs_mft::platform::DriveLetter::C, 0, 0),
     ];
     sort_rows(&mut rows, SortColumn::Descendants, true, &[]);
     assert_eq!(rows.first().expect("first").name(), "many");
@@ -359,7 +376,10 @@ fn build_two_drive_backend() -> MultiDriveBackend {
 
     let mut backend = MultiDriveBackend::new();
 
-    for (letter, file_name, file_size) in [('C', "report.txt", 400_u64), ('D', "data.csv", 800)] {
+    for (letter, file_name, file_size) in [
+        (uffs_mft::platform::DriveLetter::C, "report.txt", 400_u64),
+        (uffs_mft::platform::DriveLetter::D, "data.csv", 800),
+    ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
         let root = idx.get_or_create(ROOT_FRS);
@@ -394,9 +414,16 @@ fn multi_drive_merges_results_from_both_drives() {
     let mut backend = build_two_drive_backend();
     let mut filters = super::super::filters::SearchFilters::default();
     let result = backend.search(SearchRequest::new("*", &mut filters));
-    let drives: std::collections::HashSet<char> = result.rows.iter().map(|row| row.drive).collect();
-    assert!(drives.contains(&'C'), "must include drive C results");
-    assert!(drives.contains(&'D'), "must include drive D results");
+    let drives: std::collections::HashSet<uffs_mft::platform::DriveLetter> =
+        result.rows.iter().map(|row| row.drive).collect();
+    assert!(
+        drives.contains(&uffs_mft::platform::DriveLetter::C),
+        "must include drive C results"
+    );
+    assert!(
+        drives.contains(&uffs_mft::platform::DriveLetter::D),
+        "must include drive D results"
+    );
 }
 
 #[test]
@@ -416,7 +443,7 @@ fn multi_drive_sort_across_drives() {
         "data.csv",
         "largest file across drives must be first"
     );
-    assert_eq!(first.drive, 'D');
+    assert_eq!(first.drive, uffs_mft::platform::DriveLetter::D);
 }
 
 #[test]
@@ -441,8 +468,20 @@ fn multi_drive_limit_caps_total() {
 #[test]
 fn display_rows_to_dataframe_column_count_and_height() {
     let rows = vec![
-        row("file.txt", 'C', 1024, 5_000_000, 1_000_000),
-        row("data.csv", 'D', 2048, 3_000_000, 2_000_000),
+        row(
+            "file.txt",
+            uffs_mft::platform::DriveLetter::C,
+            1024,
+            5_000_000,
+            1_000_000,
+        ),
+        row(
+            "data.csv",
+            uffs_mft::platform::DriveLetter::D,
+            2048,
+            3_000_000,
+            2_000_000,
+        ),
     ];
     let df = display_rows_to_dataframe(&rows).expect("DataFrame creation must not fail");
     assert_eq!(df.height(), 2, "row count");
@@ -451,7 +490,13 @@ fn display_rows_to_dataframe_column_count_and_height() {
 
 #[test]
 fn display_rows_to_dataframe_values_correct() {
-    let rows = vec![row("test.rs", 'C', 4096, 9_000_000, 1_000_000)];
+    let rows = vec![row(
+        "test.rs",
+        uffs_mft::platform::DriveLetter::C,
+        4096,
+        9_000_000,
+        1_000_000,
+    )];
     let df = display_rows_to_dataframe(&rows).expect("DataFrame creation must not fail");
 
     // Check name column
@@ -486,7 +531,7 @@ fn display_rows_to_dataframe_values_correct() {
 fn display_rows_to_dataframe_path_only_extracts_directory() {
     let rows = vec![DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Users\\john\\file.txt".to_owned(),
         100,
         false,
@@ -535,9 +580,9 @@ fn search_empty_pattern_returns_empty() {
 #[test]
 fn sort_by_treesize_uses_treesize_not_modified() {
     let mut rows = vec![
-        dir_row("small", 'C', 5, 1_000),
-        dir_row("large", 'C', 10, 1_000_000),
-        dir_row("medium", 'C', 7, 100_000),
+        dir_row("small", uffs_mft::platform::DriveLetter::C, 5, 1_000),
+        dir_row("large", uffs_mft::platform::DriveLetter::C, 10, 1_000_000),
+        dir_row("medium", uffs_mft::platform::DriveLetter::C, 7, 100_000),
     ];
     sort_rows(&mut rows, FieldId::TreeSize, true, &[]);
     let sizes: Vec<u64> = rows.iter().map(|row| row.treesize).collect();
@@ -551,9 +596,9 @@ fn sort_by_treesize_uses_treesize_not_modified() {
 #[test]
 fn sort_by_treesize_ascending() {
     let mut rows = vec![
-        dir_row("large", 'C', 10, 1_000_000),
-        dir_row("small", 'C', 5, 1_000),
-        dir_row("medium", 'C', 7, 100_000),
+        dir_row("large", uffs_mft::platform::DriveLetter::C, 10, 1_000_000),
+        dir_row("small", uffs_mft::platform::DriveLetter::C, 5, 1_000),
+        dir_row("medium", uffs_mft::platform::DriveLetter::C, 7, 100_000),
     ];
     sort_rows(&mut rows, FieldId::TreeSize, false, &[]);
     let sizes: Vec<u64> = rows.iter().map(|row| row.treesize).collect();
@@ -584,7 +629,7 @@ fn build_siblings_fixture() -> DriveIndex {
 
     use crate::compact::build_compact_index;
 
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -614,7 +659,7 @@ fn build_siblings_fixture() -> DriveIndex {
         rec.stdinfo.flags = 0x20;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     DriveIndex {
         drives: vec![Arc::new(drive)],
     }
@@ -629,7 +674,10 @@ fn build_two_drive_index() -> DriveIndex {
     use crate::compact::build_compact_index;
 
     let mut drives = Vec::new();
-    for (letter, file_name, file_size) in [('C', "report.txt", 400_u64), ('D', "data.csv", 800)] {
+    for (letter, file_name, file_size) in [
+        (uffs_mft::platform::DriveLetter::C, "report.txt", 400_u64),
+        (uffs_mft::platform::DriveLetter::D, "data.csv", 800),
+    ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
         let root = idx.get_or_create(ROOT_FRS);
@@ -670,9 +718,16 @@ fn search_index_returns_results_from_both_drives() {
         true,
         &[],
     );
-    let drives: std::collections::HashSet<char> = result.rows.iter().map(|row| row.drive).collect();
-    assert!(drives.contains(&'C'), "must include C: results");
-    assert!(drives.contains(&'D'), "must include D: results");
+    let drives: std::collections::HashSet<uffs_mft::platform::DriveLetter> =
+        result.rows.iter().map(|row| row.drive).collect();
+    assert!(
+        drives.contains(&uffs_mft::platform::DriveLetter::C),
+        "must include C: results"
+    );
+    assert!(
+        drives.contains(&uffs_mft::platform::DriveLetter::D),
+        "must include D: results"
+    );
 }
 
 #[test]
@@ -682,7 +737,7 @@ fn search_index_drives_filter_excludes_non_matching() {
     let result = search_index(
         &index,
         SearchRequest {
-            drives_filter: &['C'],
+            drives_filter: &[uffs_mft::platform::DriveLetter::C],
             ..SearchRequest::new("*", &mut filters)
         },
         FieldId::Modified,
@@ -690,7 +745,10 @@ fn search_index_drives_filter_excludes_non_matching() {
         &[],
     );
     assert!(
-        result.rows.iter().all(|row| row.drive == 'C'),
+        result
+            .rows
+            .iter()
+            .all(|row| row.drive == uffs_mft::platform::DriveLetter::C),
         "drive filter must exclude D: results"
     );
     assert!(!result.rows.is_empty(), "must have at least one C: result");
@@ -876,7 +934,7 @@ fn build_dbt_triple_fixture() -> DriveIndex {
 
     use crate::compact::build_compact_index;
 
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -914,7 +972,7 @@ fn build_dbt_triple_fixture() -> DriveIndex {
         rec.stdinfo.flags = 0x20;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     DriveIndex {
         drives: vec![Arc::new(drive)],
     }
@@ -1094,7 +1152,7 @@ fn build_no_dbt_fixture() -> DriveIndex {
 
     use crate::compact::build_compact_index;
 
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -1136,7 +1194,7 @@ fn build_no_dbt_fixture() -> DriveIndex {
     txt_rec.first_name.parent_frs = ROOT_FRS;
     txt_rec.stdinfo.flags = 0x20;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     DriveIndex {
         drives: vec![Arc::new(drive)],
     }
@@ -1247,7 +1305,11 @@ fn search_index_promotes_drive_prefix_with_ext_glob() {
         "drive-prefix + ext promotion must find exactly report.txt on C"
     );
     let first = result.rows.first().expect("asserted non-empty above");
-    assert_eq!(first.drive, 'C', "result must be from drive C only");
+    assert_eq!(
+        first.drive,
+        uffs_mft::platform::DriveLetter::C,
+        "result must be from drive C only"
+    );
     assert!(
         first.path.ends_with("report.txt"),
         "expected report.txt, got: {}",
@@ -1307,7 +1369,7 @@ fn search_index_drive_prefix_case_insensitive_letter() {
     );
     assert_eq!(
         result.rows.first().expect("one row").drive,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "result must be from drive C"
     );
 }
@@ -1324,7 +1386,7 @@ fn search_index_drive_prefix_explicit_filter_not_clobbered() {
     let result = search_index(
         &index,
         SearchRequest {
-            drives_filter: &['D'],
+            drives_filter: &[uffs_mft::platform::DriveLetter::D],
             ..SearchRequest::new("C:*.txt", &mut filters)
         },
         FieldId::Modified,
@@ -1635,7 +1697,7 @@ fn build_nested_fixture() -> DriveIndex {
         rec.stdinfo.set_directory(true);
     }
 
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -1655,7 +1717,7 @@ fn build_nested_fixture() -> DriveIndex {
     // `beta/c` contents.
     make_file(&mut idx, 220, "x.txt", 212);
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     DriveIndex {
         drives: vec![Arc::new(drive)],
     }
@@ -1860,7 +1922,7 @@ fn search_index_concurrent_calls_do_not_interfere() {
 fn flagged_row(name: &str, flags: u32) -> DisplayRow {
     DisplayRow::new(
         0,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         format!("C:\\{name}"),
         100,
         flags & 0x0010 != 0,
@@ -2146,9 +2208,9 @@ fn sort_rows_numeric_fast_path_tiebreaker_is_raw_slice_cmp() {
     // tiebreaker fires.  Raw codepoint order puts 'B' (0x42) before 'a'
     // (0x61) before 'z' (0x7A): Beta.dll < alpha.dll < zeta.dll.
     let mut rows = vec![
-        row("zeta.dll", 'C', 100, 42, 0),
-        row("Beta.dll", 'C', 100, 42, 0),
-        row("alpha.dll", 'C', 100, 42, 0),
+        row("zeta.dll", uffs_mft::platform::DriveLetter::C, 100, 42, 0),
+        row("Beta.dll", uffs_mft::platform::DriveLetter::C, 100, 42, 0),
+        row("alpha.dll", uffs_mft::platform::DriveLetter::C, 100, 42, 0),
     ];
 
     sort_rows(&mut rows, SortColumn::Modified, true, &[]);
@@ -2168,9 +2230,9 @@ fn sort_rows_numeric_fast_path_tiebreaker_is_raw_slice_cmp() {
 #[test]
 fn sort_rows_mixed_tier_falls_back_to_schwartzian() {
     let mut rows = vec![
-        row("FILE.TXT", 'C', 100, 42, 0), // size=100, ext=TXT
-        row("file.log", 'C', 100, 42, 0), // size=100, ext=log
-        row("file.bin", 'C', 100, 42, 0), // size=100, ext=bin
+        row("FILE.TXT", uffs_mft::platform::DriveLetter::C, 100, 42, 0), // size=100, ext=TXT
+        row("file.log", uffs_mft::platform::DriveLetter::C, 100, 42, 0), // size=100, ext=log
+        row("file.bin", uffs_mft::platform::DriveLetter::C, 100, 42, 0), // size=100, ext=bin
     ];
 
     // Primary: Size (numeric, all tied at 100).
@@ -2197,9 +2259,9 @@ fn sort_rows_mixed_tier_falls_back_to_schwartzian() {
 #[test]
 fn sort_rows_extension_column_still_folds_ext_key() {
     let mut rows = vec![
-        row("file.TXT", 'C', 1, 0, 0),
-        row("file.log", 'C', 1, 0, 0),
-        row("file.Bin", 'C', 1, 0, 0),
+        row("file.TXT", uffs_mft::platform::DriveLetter::C, 1, 0, 0),
+        row("file.log", uffs_mft::platform::DriveLetter::C, 1, 0, 0),
+        row("file.Bin", uffs_mft::platform::DriveLetter::C, 1, 0, 0),
     ];
 
     // Sort by extension ascending: folded order is "bin" < "log" < "txt".
@@ -2233,7 +2295,7 @@ fn sort_rows_numeric_fast_parallel_branch_preserves_order() {
             let modified = if idx % 2 == 0 { 2000 } else { 1000 };
             row(
                 &format!("file_{idx:05}.dll"),
-                'C',
+                uffs_mft::platform::DriveLetter::C,
                 u64::from(idx),
                 modified,
                 0,
@@ -2318,7 +2380,10 @@ fn build_bloom_skip_fixture() -> DriveIndex {
     const TEST_FPR: f64 = 0.001;
 
     let mut drives = Vec::new();
-    for (letter, ext) in [('C', "txt"), ('D', "csv")] {
+    for (letter, ext) in [
+        (uffs_mft::platform::DriveLetter::C, "txt"),
+        (uffs_mft::platform::DriveLetter::D, "csv"),
+    ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
         let root = idx.get_or_create(ROOT_FRS);

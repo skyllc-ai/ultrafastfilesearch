@@ -16,7 +16,7 @@ use std::path::PathBuf;
 /// # Errors
 ///
 /// Returns an error if the input is not a valid drive letter.
-pub(crate) fn parse_drive_letter(input: &str) -> Result<char, String> {
+pub(crate) fn parse_drive_letter(input: &str) -> Result<uffs_mft::platform::DriveLetter, String> {
     let trimmed = input.trim();
     let letter_str = trimmed.strip_suffix(':').unwrap_or(trimmed);
 
@@ -31,11 +31,8 @@ pub(crate) fn parse_drive_letter(input: &str) -> Result<char, String> {
         .next()
         .ok_or_else(|| format!("Invalid drive letter '{input}'"))?;
 
-    if !ch.is_ascii_alphabetic() {
-        return Err(format!("Invalid drive letter '{input}': must be A-Z"));
-    }
-
-    Ok(ch.to_ascii_uppercase())
+    uffs_mft::platform::DriveLetter::parse(ch)
+        .map_err(|err| format!("Invalid drive letter '{input}': {err}"))
 }
 
 // ── Subcommand types ───────────────────────────────────────────────────
@@ -63,7 +60,7 @@ pub(crate) enum DaemonAction {
         /// Data directory.
         data_dir: Option<PathBuf>,
         /// Drive letter(s) to load (filters `--data-dir` discovery).
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
         /// Skip file cache.
         no_cache: bool,
         /// Log level.
@@ -98,7 +95,7 @@ pub(crate) enum DaemonAction {
         /// Data directory — discover and load a specific drive from it.
         data_dir: Option<PathBuf>,
         /// Drive letter(s) to load (Windows live only).
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
         /// Skip cache when loading.
         no_cache: bool,
     },
@@ -108,7 +105,7 @@ pub(crate) enum DaemonAction {
     /// hibernate --help`.
     Hibernate {
         /// Drive letter(s) to hibernate; empty = all loaded drives.
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
     },
     /// Promote drive(s) to `Hot` and pin the tier (Phase 8-C).
     ///
@@ -116,7 +113,7 @@ pub(crate) enum DaemonAction {
     /// (matches the daemon's `DEFAULT_PRELOAD_PIN_MINUTES`).
     Preload {
         /// Drive letter(s) to preload (must be non-empty).
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
         /// Override the default 30-min pin window.
         pin_minutes: Option<u32>,
     },
@@ -128,7 +125,7 @@ pub(crate) enum DaemonAction {
     /// (clearing pins) before unlinking the cache files.
     Forget {
         /// Drive letter(s) to forget (must be non-empty).
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
         /// Force-forget non-`Cold` drives by auto-hibernating first.
         force: bool,
     },
@@ -197,8 +194,8 @@ fn parse_daemon_start(rest: &[String]) -> DaemonAction {
             "--drive" => {
                 if let Some(val) = iter.next() {
                     for ch in val.chars() {
-                        if ch.is_ascii_alphabetic() {
-                            drives.push(ch.to_ascii_uppercase());
+                        if let Ok(letter) = uffs_mft::platform::DriveLetter::parse(ch) {
+                            drives.push(letter);
                         }
                     }
                 }
@@ -387,7 +384,7 @@ fn parse_daemon_forget(rest: &[String]) -> Result<DaemonAction, anyhow::Error> {
 /// values, and whitespace.  Silently skips entries that don't parse
 /// as ASCII letters - mirrors the lenient parsing already used by
 /// `parse_daemon_load`.
-fn extend_drives_from_csv(drives: &mut Vec<char>, value: &str) {
+fn extend_drives_from_csv(drives: &mut Vec<uffs_mft::platform::DriveLetter>, value: &str) {
     for part in value.split(',') {
         if let Ok(letter) = parse_drive_letter(part) {
             drives.push(letter);

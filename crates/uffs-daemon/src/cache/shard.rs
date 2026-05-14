@@ -200,7 +200,7 @@ impl StdError for IllegalTransition {}
 pub(crate) struct ShardEntry {
     /// Drive letter (`'C'`, `'D'`, …). Capital ASCII per existing
     /// daemon convention.
-    pub(crate) drive: char,
+    pub(crate) drive: uffs_mft::platform::DriveLetter,
     /// Tier state. Read on every search via [`Self::state`]; mutated
     /// only by [`Self::try_transition`] (test-only) or by the
     /// registry's tier-transition rebuilds (production path).
@@ -252,7 +252,10 @@ impl ShardEntry {
     /// constructor.  Phase 3 adds [`Self::new_parked`] /
     /// [`Self::new_cold`] for tier-transition rebuilds.
     #[must_use]
-    pub(crate) fn new_warm(drive: char, body: Arc<DriveCompactIndex>) -> Self {
+    pub(crate) fn new_warm(
+        drive: uffs_mft::platform::DriveLetter,
+        body: Arc<DriveCompactIndex>,
+    ) -> Self {
         Self {
             drive,
             state: AtomicU8::new(ShardState::Warm as u8),
@@ -270,7 +273,7 @@ impl ShardEntry {
     /// query counters survive the round-trip through demote-and-back.
     #[must_use]
     pub(crate) const fn new_warm_with_stats(
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         body: Arc<DriveCompactIndex>,
         stats: Arc<DriveStats>,
     ) -> Self {
@@ -299,7 +302,7 @@ impl ShardEntry {
     /// through Cold/Parked → Warm → Hot.
     #[must_use]
     pub(crate) const fn new_hot_with_stats(
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         body: Arc<DriveCompactIndex>,
         stats: Arc<DriveStats>,
     ) -> Self {
@@ -327,7 +330,7 @@ impl ShardEntry {
     /// Commit D, extended in Phase 4 Commit F).
     #[must_use]
     pub(crate) const fn new_parked(
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         stats: Arc<DriveStats>,
         parked_body: Arc<ParkedBody>,
     ) -> Self {
@@ -352,7 +355,10 @@ impl ShardEntry {
     /// Commit D, when a `Parked` shard's idle time exceeds
     /// `PARKED_TO_COLD_IDLE_SECS`).
     #[must_use]
-    pub(crate) const fn new_cold(drive: char, stats: Arc<DriveStats>) -> Self {
+    pub(crate) const fn new_cold(
+        drive: uffs_mft::platform::DriveLetter,
+        stats: Arc<DriveStats>,
+    ) -> Self {
         Self {
             drive,
             state: AtomicU8::new(ShardState::Cold as u8),

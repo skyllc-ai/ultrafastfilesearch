@@ -102,7 +102,7 @@ impl IndexManager {
         // adaptive-TTL telemetry is meant to surface tuning
         // signals, not pin-window noise.
         let config = Arc::clone(&self.config);
-        let demotes: Vec<(char, ShardState)> = {
+        let demotes: Vec<(uffs_mft::platform::DriveLetter, ShardState)> = {
             let guard = self.index.read().await;
             guard
                 .iter()
@@ -191,7 +191,9 @@ impl IndexManager {
     /// the cascade promptly), so there's no batch to coalesce.
     ///
     /// [`WorkingSetTrim::trim`]: crate::cache::working_set::WorkingSetTrim::trim
-    pub(crate) async fn cascade_demote_one_step(&self) -> Option<(char, ShardState)> {
+    pub(crate) async fn cascade_demote_one_step(
+        &self,
+    ) -> Option<(uffs_mft::platform::DriveLetter, ShardState)> {
         // ── Phase 1: read-lock detect (LRU pick) ────────────────────
         // Enumerate Warm shards and keep the one with the oldest
         // `last_query_at_ms`.  `min_by_key` returns `None` when no
@@ -205,7 +207,7 @@ impl IndexManager {
         // and waking on the next pressure transition.  Operators
         // who explicitly pinned a shard accepted that trade-off.
         let now_ms = crate::cache::unix_now_ms();
-        let pick: Option<(char, u64)> = {
+        let pick: Option<(uffs_mft::platform::DriveLetter, u64)> = {
             let guard = self.index.read().await;
             guard
                 .iter()
@@ -296,8 +298,10 @@ fn build_thresholds(rate_qpm: f64, tiers: &TiersConfig) -> TierThresholds {
 /// (the plan §11 example uses `"C:"`; the env-var-style convention
 /// just uses `"C"`), and forcing one form would silently swallow
 /// the user's intent.
-fn min_tier_for_drive(letter: char, config: &Config) -> Option<ShardState> {
-    let letter_upper = letter.to_ascii_uppercase();
+fn min_tier_for_drive(
+    letter: uffs_mft::platform::DriveLetter,
+    config: &Config,
+) -> Option<ShardState> {
     config
         .shards
         .per_drive
@@ -308,7 +312,7 @@ fn min_tier_for_drive(letter: char, config: &Config) -> Option<ShardState> {
                 && trimmed
                     .chars()
                     .next()
-                    .is_some_and(|ch| ch.eq_ignore_ascii_case(&letter_upper))
+                    .is_some_and(|ch| letter.eq_ignore_ascii_case(ch))
         })
         .and_then(|(_, per_drive)| per_drive.min_tier)
         .map(crate::config::TierLevel::to_state)
@@ -481,7 +485,8 @@ mod commit_c_tests {
 
         // C: has min_tier = Warm.  The Warm → Parked proposal is
         // below the floor and must be suppressed.
-        let floor = min_tier_for_drive('C', &config).expect("min_tier resolved for C");
+        let floor = min_tier_for_drive(uffs_mft::platform::DriveLetter::C, &config)
+            .expect("min_tier resolved for C");
         assert_eq!(floor, ShardState::Warm);
         assert!(tier_rank(ShardState::Parked) < tier_rank(floor));
         // The Hot → Warm proposal is at the floor and is allowed.
@@ -511,12 +516,27 @@ mod commit_c_tests {
             ..Config::default()
         };
 
-        assert_eq!(min_tier_for_drive('C', &config), Some(ShardState::Warm));
-        assert_eq!(min_tier_for_drive('c', &config), Some(ShardState::Warm));
-        assert_eq!(min_tier_for_drive('D', &config), Some(ShardState::Hot));
-        assert_eq!(min_tier_for_drive('d', &config), Some(ShardState::Hot));
+        assert_eq!(
+            min_tier_for_drive(uffs_mft::platform::DriveLetter::C, &config),
+            Some(ShardState::Warm)
+        );
+        assert_eq!(
+            min_tier_for_drive(uffs_mft::platform::DriveLetter::C, &config),
+            Some(ShardState::Warm)
+        );
+        assert_eq!(
+            min_tier_for_drive(uffs_mft::platform::DriveLetter::D, &config),
+            Some(ShardState::Hot)
+        );
+        assert_eq!(
+            min_tier_for_drive(uffs_mft::platform::DriveLetter::D, &config),
+            Some(ShardState::Hot)
+        );
         // Untouched letter falls through to the static-Cold ladder.
-        assert_eq!(min_tier_for_drive('E', &config), None);
+        assert_eq!(
+            min_tier_for_drive(uffs_mft::platform::DriveLetter::E, &config),
+            None
+        );
     }
 
     /// Plan task 6.4 — at `rate_qpm = 0` the adaptive thresholds

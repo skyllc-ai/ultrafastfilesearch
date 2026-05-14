@@ -38,7 +38,7 @@ fn test_record(name: &str, names: &mut Vec<u8>) -> CompactRecord {
 
 /// Helper: build a compact drive with a single `readme.rs` file.
 fn test_drive_with_rs_file() -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
@@ -59,7 +59,7 @@ fn test_drive_with_rs_file() -> DriveCompactIndex {
     rec.first_name.parent_frs = ROOT_FRS;
     rec.stdinfo.flags = 0x20;
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -493,7 +493,7 @@ fn apply_search_filters_matches_compact_behavior() {
     let mut rows = vec![
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\file.txt".to_owned(),
             1000,
             false,
@@ -508,7 +508,7 @@ fn apply_search_filters_matches_compact_behavior() {
         ),
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\$MFT".to_owned(),
             500_000,
             false,

@@ -40,16 +40,20 @@ use crate::display::{format_bytes, format_duration, format_number_commas, trunca
 /// disables the `$Bitmap`-driven skip optimisation, and `unique` reports
 /// unique-FRS counts in addition to total parse counts.
 #[cfg(windows)]
-pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: bool) -> Result<()> {
+pub(crate) async fn cmd_info(
+    drive: uffs_mft::platform::DriveLetter,
+    deep: bool,
+    no_bitmap: bool,
+    unique: bool,
+) -> Result<()> {
     use std::time::Instant;
 
     use tracing::debug;
     use uffs_mft::platform::{VolumeHandle, detect_drive_type};
 
     let start_time = Instant::now();
-    let drive_upper = drive.to_ascii_uppercase();
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         deep,
         no_bitmap,
         unique,
@@ -59,13 +63,13 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         if unique { " (unique FRS mode)" } else { "" }
     );
 
-    debug!(drive = %drive_upper, "🔓 Opening volume handle");
+    debug!(drive = %drive, "🔓 Opening volume handle");
     let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
 
     // Detect drive type for display
-    let drive_type = detect_drive_type(drive_upper);
+    let drive_type = detect_drive_type(drive);
     let drive_type_str = drive_type_label(drive_type, "Unknown");
-    debug!(drive = %drive_upper, drive_type = drive_type_str, "🚀 Drive type detected");
+    debug!(drive = %drive, drive_type = drive_type_str, "🚀 Drive type detected");
 
     let vol_data = handle.volume_data();
 
@@ -87,7 +91,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 
     // Log detailed metrics
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         bytes_per_sector = vol_data.bytes_per_sector,
         bytes_per_cluster = vol_data.bytes_per_cluster,
         bytes_per_record = vol_data.bytes_per_file_record_segment,
@@ -95,14 +99,14 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     );
 
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         total_clusters = vol_data.total_clusters,
         volume_size_gb = format!("{:.2}", volume_size_gb),
         "💾 Volume capacity"
     );
 
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         mft_start_lcn = vol_data.mft_start_lcn,
         mft_valid_length = vol_data.mft_valid_data_length,
         mft_size_mb = format!("{:.2}", mft_size_mb),
@@ -120,7 +124,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 
         if is_fragmented {
             info!(
-                drive = %drive_upper,
+                drive = %drive,
                 extent_count,
                 "⚠️  MFT is fragmented across multiple extents"
             );
@@ -140,7 +144,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
             }
         } else {
             info!(
-                drive = %drive_upper,
+                drive = %drive,
                 "✅ MFT is contiguous (single extent)"
             );
         }
@@ -156,7 +160,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
         utilization = (u64_to_f64(in_use_records) / u64_to_f64(record_count)) * 100.0;
 
         info!(
-            drive = %drive_upper,
+            drive = %drive,
             in_use_records,
             free_records,
             utilization = format!("{:.1}%", utilization),
@@ -184,7 +188,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
     } else {
         println!("                    MFT INFO (Lightweight)");
     }
-    println!("                    Drive: {drive_upper}: ({drive_type_str})");
+    println!("                    Drive: {drive}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📐 VOLUME GEOMETRY");
@@ -537,7 +541,7 @@ pub(crate) async fn cmd_info(drive: char, deep: bool, no_bitmap: bool, unique: b
 #[cfg(windows)]
 struct DriveInfo {
     /// Drive letter (e.g. `C`, `D`).
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     /// `true` when this drive hosts the running OS.
     is_boot: bool,
     /// Volume label as reported by `GetVolumeInformationW`.
@@ -712,7 +716,7 @@ pub(crate) async fn cmd_drives() -> Result<()> {
     unsafe_code,
     reason = "required for windows ffi call to GetVolumeInformationW"
 )]
-fn get_volume_label(drive: char) -> Option<String> {
+fn get_volume_label(drive: uffs_mft::platform::DriveLetter) -> Option<String> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt as _;
 

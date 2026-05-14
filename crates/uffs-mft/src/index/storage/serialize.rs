@@ -47,7 +47,10 @@ impl MftIndex {
         // Write header
         buffer.extend_from_slice(&header.magic);
         buffer.extend_from_slice(&header.version.to_le_bytes());
-        buffer.extend_from_slice(&(header.volume as u32).to_le_bytes());
+        // Wire format unchanged: header.volume is a DriveLetter (u8
+        // ASCII byte), widened to u32-LE so older readers that did
+        // `char::from_u32(...)` keep parsing the same 4 bytes.
+        buffer.extend_from_slice(&u32::from(header.volume.as_byte()).to_le_bytes());
         buffer.extend_from_slice(&header.volume_serial.to_le_bytes());
         buffer.extend_from_slice(&header.usn_journal_id.to_le_bytes());
         buffer.extend_from_slice(&header.next_usn.to_le_bytes());

@@ -65,7 +65,7 @@ fn lock_shmem_dir() -> MutexGuard<'static, ()> {
 /// Helper: build a minimal `SearchRow` for testing.
 fn sample_row(name: &str) -> SearchRow {
     SearchRow {
-        drive: 'C',
+        drive: uffs_mft::platform::DriveLetter::C,
         path: format!("C:\\test\\{name}"),
         name: name.to_owned(),
         size: 1024,

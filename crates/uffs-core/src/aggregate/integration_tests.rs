@@ -37,7 +37,7 @@ const TS_JUN_2024: i64 = 133_633_536_000_000_000;
 ///
 /// Totals (files only): 7 files, 17400 bytes logical, 30628 bytes alloc.
 fn build_agg_test_drive() -> DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     // Root directory.
     let root_off = idx.add_name(".");
@@ -82,7 +82,7 @@ fn build_agg_test_drive() -> DriveCompactIndex {
         rec.stdinfo.modified = modified;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -779,7 +779,9 @@ fn s3f3_terms_extension_prefix_filter() {
     assert!(keys.contains(&"rs"), "should have rs: {keys:?}");
     assert!(keys.contains(&"md"), "should have md: {keys:?}");
 
-    // Prefix filter: only extensions starting with "r".
+    // Prefix filter: only extensions starting with "r".  Extension
+    // keys are lowercase strings — unrelated to `DriveLetter`, which
+    // is canonical uppercase.
     let filtered: Vec<_> = rows.iter().filter(|r| r.key.starts_with('r')).collect();
     assert_eq!(filtered.len(), 1, "only 'rs' starts with 'r'");
     assert_eq!(filtered[0].key, "rs");

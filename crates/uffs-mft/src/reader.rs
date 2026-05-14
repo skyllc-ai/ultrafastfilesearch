@@ -39,11 +39,18 @@ pub use self::stats::{MftProgress, MftStats};
 /// from a previously captured `.mft` file (cross-platform). This enum lets
 /// `MftReader` dispatch to the correct pipeline without `#[cfg]` gates on
 /// every public method.
+///
+/// The `LiveVolume` variant boxes its [`VolumeHandle`] so the enum stays
+/// compact (one pointer per variant) instead of allocating the
+/// `VolumeHandle`-sized inline payload (~120 bytes including the NTFS
+/// volume-data block) on every `MftReader` instance — also silences the
+/// rustc `variant_size_differences` lint comparing against the
+/// pointer-sized `File(PathBuf)` arm.
 #[derive(Debug)]
 pub(crate) enum MftSource {
     /// Live NTFS volume accessed via Windows IOCP.
     #[cfg(windows)]
-    LiveVolume(VolumeHandle),
+    LiveVolume(Box<VolumeHandle>),
     /// Pre-captured `.mft` file (cross-platform).
     File(PathBuf),
 }
@@ -69,7 +76,7 @@ pub(crate) enum MftSource {
 /// use uffs_mft::MftReader;
 ///
 /// fn main() -> Result<(), Box<dyn core::error::Error>> {
-///     let reader = MftReader::open('C')?;
+///     let reader = MftReader::open(crate::platform::DriveLetter::C)?;
 ///     let df = reader.read_all()?;
 ///     println!("Found {} files", df.height());
 ///     Ok(())
@@ -81,8 +88,8 @@ pub(crate) enum MftSource {
     reason = "builder pattern with boolean options"
 )]
 pub struct MftReader {
-    /// The volume letter (e.g., 'C').
-    volume: char,
+    /// The volume letter (e.g., [`crate::platform::DriveLetter::C`]).
+    volume: crate::platform::DriveLetter,
     /// Data source: live NTFS volume or pre-captured `.mft` file.
     source: MftSource,
     /// Read mode selection.
@@ -161,7 +168,8 @@ impl MftReader {
     ///
     /// # Arguments
     ///
-    /// * `volume` - The drive letter (e.g., 'C', 'D')
+    /// * `volume` - The drive letter (e.g.,
+    ///   [`crate::platform::DriveLetter::C`])
     ///
     /// # Errors
     ///
@@ -174,12 +182,12 @@ impl MftReader {
     ///
     /// This function is only available on Windows.
     #[cfg(windows)]
-    pub fn open(volume: char) -> Result<Self> {
+    pub fn open(volume: crate::platform::DriveLetter) -> Result<Self> {
         let handle = VolumeHandle::open(volume)?;
 
         Ok(Self {
-            volume: volume.to_ascii_uppercase(),
-            source: MftSource::LiveVolume(handle),
+            volume,
+            source: MftSource::LiveVolume(Box::new(handle)),
             mode: MftReadMode::Auto,
             merge_extensions: true,
             use_bitmap: true,
@@ -200,7 +208,7 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    pub const fn open(_volume: char) -> Result<Self> {
+    pub const fn open(_volume: crate::platform::DriveLetter) -> Result<Self> {
         Err(MftError::PlatformNotSupported)
     }
 
@@ -212,11 +220,12 @@ impl MftReader {
     /// # Arguments
     ///
     /// * `path` - Path to the `.mft` capture file
-    /// * `volume` - The volume letter to associate (e.g., 'C')
+    /// * `volume` - The volume letter to associate (e.g.,
+    ///   [`crate::platform::DriveLetter::C`])
     #[must_use]
-    pub fn from_file<P: Into<PathBuf>>(path: P, volume: char) -> Self {
+    pub fn from_file<P: Into<PathBuf>>(path: P, volume: crate::platform::DriveLetter) -> Self {
         Self {
-            volume: volume.to_ascii_uppercase(),
+            volume,
             source: MftSource::File(path.into()),
             mode: MftReadMode::Auto,
             merge_extensions: true,
@@ -512,7 +521,7 @@ impl MftReader {
 
     /// Get the volume letter this reader is attached to.
     #[must_use]
-    pub const fn volume(&self) -> char {
+    pub const fn volume(&self) -> crate::platform::DriveLetter {
         self.volume
     }
 }
@@ -527,7 +536,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn open_valid_volume() {
-        let result = MftReader::open('C');
+        let result = MftReader::open(crate::platform::DriveLetter::C);
         // This will fail without admin privileges, but should not panic
         assert!(result.is_ok() || matches!(result, Err(MftError::InsufficientPrivileges)));
     }
@@ -535,7 +544,7 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn platform_not_supported() {
-        let result = MftReader::open('C');
+        let result = MftReader::open(crate::platform::DriveLetter::C);
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
 
@@ -563,8 +572,16 @@ mod tests {
 
     #[test]
     fn multi_drive_reader_new() {
-        let reader = MultiDriveMftReader::new(vec!['c', 'd', 'e']);
-        assert_eq!(reader.drives(), &['C', 'D', 'E']);
+        // [`DriveLetter`] canonicalises to uppercase at construction,
+        // so the input list is already normalised.  The accessor
+        // returns the same letters in order.
+        use crate::platform::DriveLetter;
+        let reader = MultiDriveMftReader::new(vec![DriveLetter::C, DriveLetter::D, DriveLetter::E]);
+        assert_eq!(reader.drives(), &[
+            DriveLetter::C,
+            DriveLetter::D,
+            DriveLetter::E
+        ]);
     }
 
     #[test]
@@ -576,7 +593,10 @@ mod tests {
     #[tokio::test]
     #[cfg(not(windows))]
     async fn multi_drive_platform_not_supported() {
-        let reader = MultiDriveMftReader::new(vec!['C', 'D']);
+        let reader = MultiDriveMftReader::new(vec![
+            crate::platform::DriveLetter::C,
+            crate::platform::DriveLetter::D,
+        ]);
         let result = reader.read_all().await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
@@ -584,7 +604,10 @@ mod tests {
     #[tokio::test]
     #[cfg(not(windows))]
     async fn multi_drive_index_platform_not_supported() {
-        let reader = MultiDriveMftReader::new(vec!['C', 'D']);
+        let reader = MultiDriveMftReader::new(vec![
+            crate::platform::DriveLetter::C,
+            crate::platform::DriveLetter::D,
+        ]);
         let result = reader.read_all_index().await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
@@ -592,7 +615,10 @@ mod tests {
     #[tokio::test]
     #[cfg(not(windows))]
     async fn multi_drive_index_cached_platform_not_supported() {
-        let reader = MultiDriveMftReader::new(vec!['C', 'D']);
+        let reader = MultiDriveMftReader::new(vec![
+            crate::platform::DriveLetter::C,
+            crate::platform::DriveLetter::D,
+        ]);
         let result = reader.read_all_index_cached(3600).await;
         assert!(matches!(result, Err(MftError::PlatformNotSupported)));
     }
@@ -607,7 +633,7 @@ mod tests {
     #[cfg(windows)]
     fn mft_reader_uses_none_defaults() {
         // This test requires admin privileges, so we check if we can open
-        let reader = match MftReader::open('C') {
+        let reader = match MftReader::open(crate::platform::DriveLetter::C) {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => {
                 // Skip test if not running as admin
@@ -639,7 +665,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn mft_reader_builder_overrides() {
-        let reader = match MftReader::open('C') {
+        let reader = match MftReader::open(crate::platform::DriveLetter::C) {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
             Err(err) => panic!("Unexpected error: {err:?}"),
@@ -663,7 +689,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn mft_reader_default_mode_is_auto() {
-        let reader = match MftReader::open('C') {
+        let reader = match MftReader::open(crate::platform::DriveLetter::C) {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
             Err(err) => panic!("Unexpected error: {err:?}"),
@@ -680,7 +706,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn mft_reader_boolean_defaults() {
-        let reader = match MftReader::open('C') {
+        let reader = match MftReader::open(crate::platform::DriveLetter::C) {
             Ok(opened) => opened,
             Err(MftError::InsufficientPrivileges) => return,
             Err(err) => panic!("Unexpected error: {err:?}"),

@@ -80,7 +80,7 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
     let changes = [one_change(10), one_change(11), one_change(12)];
     let saved = process_tick(
         &sink as &dyn PatchSink,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         100, // cursor
         &changes,
         &mut trigger,
@@ -98,7 +98,10 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
     let save_calls = sink.save_calls();
     assert_eq!(
         save_calls.as_slice(),
-        &[('C', SaveReason::EventsExceeded)],
+        &[(
+            uffs_mft::platform::DriveLetter::C,
+            SaveReason::EventsExceeded
+        )],
         "trigger_save must fire exactly once with EventsExceeded reason; got {save_calls:?}",
     );
 

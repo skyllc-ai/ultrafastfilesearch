@@ -37,7 +37,7 @@ fn file_record_size() {
 
 #[test]
 fn index_basic_operations() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add a record
     let record = index.get_or_create(100);
@@ -77,7 +77,7 @@ fn index_name_ref_bit_packing() {
 
 #[test]
 fn names_buffer() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let offset1 = index.add_name("test.txt");
     let offset2 = index.add_name("hello.rs");

@@ -41,7 +41,7 @@ pub(super) fn flag_val(
 }
 
 /// Parse comma-separated drive letters.
-pub(super) fn drives_csv(input: &str) -> Result<Vec<char>, String> {
+pub(super) fn drives_csv(input: &str) -> Result<Vec<uffs_mft::platform::DriveLetter>, String> {
     input
         .split(',')
         .map(|part| {
@@ -54,7 +54,12 @@ pub(super) fn drives_csv(input: &str) -> Result<Vec<char>, String> {
             if trimmed.len() != 1 || !ch.is_ascii_alphabetic() {
                 return Err(format!("Bad drive: '{part}'"));
             }
-            Ok(ch.to_ascii_uppercase())
+            // `is_ascii_alphabetic` proves the parse succeeds; we
+            // forward the `DriveLetterError` text for the (impossible)
+            // failure case so the error path is still readable if the
+            // invariant ever changes.
+            uffs_mft::platform::DriveLetter::parse(ch)
+                .map_err(|err| format!("Bad drive: '{part}' ({err})"))
         })
         .collect()
 }
@@ -201,7 +206,9 @@ pub(super) fn extract_extensions_from_regex(pattern: &str) -> Option<Vec<String>
 /// Mirrored by `uffs_core::search::backend::parse_bare_drive_prefix`
 /// (the daemon's belt-and-suspenders safety net at dispatch time).
 /// Keep the two definitions in sync.
-pub(super) fn parse_bare_drive_prefix(pattern: &str) -> Option<(char, &str)> {
+pub(super) fn parse_bare_drive_prefix(
+    pattern: &str,
+) -> Option<(uffs_mft::platform::DriveLetter, &str)> {
     let bytes = pattern.as_bytes();
     let letter = *bytes.first()?;
     if !letter.is_ascii_alphabetic() {
@@ -215,5 +222,9 @@ pub(super) fn parse_bare_drive_prefix(pattern: &str) -> Option<(char, &str)> {
     if rest.is_empty() || rest.starts_with(['\\', '/']) {
         return None;
     }
-    Some((letter.to_ascii_uppercase() as char, rest))
+    // The `is_ascii_alphabetic` guard above proves the `try_from`
+    // cannot fail; using `?` keeps the API a `Option` and avoids an
+    // unwrap.
+    let drive_letter = uffs_mft::platform::DriveLetter::try_from(letter).ok()?;
+    Some((drive_letter, rest))
 }

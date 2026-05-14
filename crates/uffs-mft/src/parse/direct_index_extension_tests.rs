@@ -58,7 +58,7 @@ fn dir_index_extension_before_base_snapshot_restore() {
     // Extension has dir_index_size=4096, base has dir_index_size=8192
     // Result should be cumulative: 4096 + 8192 = 12288
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 
@@ -99,7 +99,7 @@ fn dir_index_base_before_extension_snapshot_restore() {
     // Base has dir_index_size=8192, extension has dir_index_size=4096
     // Result should be cumulative: 8192 + 4096 = 12288
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 
@@ -125,7 +125,7 @@ fn dir_index_multiple_extensions_snapshot_restore() {
     // Scenario: Multiple extension records all arrive before base
     // All should accumulate properly using saturating_add
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 
@@ -158,7 +158,7 @@ fn dir_index_zero_extension_values() {
     // Scenario: Extension has zero dir_index (branch not taken in actual code,
     // but verify the logic handles it correctly)
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 
@@ -181,7 +181,7 @@ fn dir_index_zero_extension_values() {
 fn dir_index_saturating_add_no_overflow() {
     // Verify saturating_add prevents overflow
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 
@@ -209,7 +209,7 @@ fn dir_index_regression_old_unconditional_add_bug() {
     // OLD CODE (buggy): Always used += , losing data when extension arrives first
     // NEW CODE (correct): Uses snapshot/restore pattern
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     index.frs_to_idx.resize(101, NO_ENTRY);
     index.frs_to_idx[100] = 0;
 

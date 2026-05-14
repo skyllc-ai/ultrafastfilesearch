@@ -22,17 +22,21 @@ fn drive_letter_matches_accepts_canonical_prefix() {
     // Standard discovery layout: `<data_dir>/drive_<letter>/<letter>_mft.iocp`.
     assert!(drive_letter_matches(
         Path::new("/data/drive_c/C_mft.iocp"),
-        &['C']
+        &[uffs_mft::platform::DriveLetter::C]
     ));
     // Case-insensitive match: filter is uppercase, dir is lowercase.
     assert!(drive_letter_matches(
         Path::new("/data/drive_d/D_mft.iocp"),
-        &['d']
+        &[uffs_mft::platform::DriveLetter::D]
     ));
     // Multi-letter filter: any match in `wanted` succeeds.
     assert!(drive_letter_matches(
         Path::new("/data/drive_e/E_mft.iocp"),
-        &['C', 'D', 'E']
+        &[
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E
+        ]
     ));
 }
 
@@ -41,7 +45,7 @@ fn drive_letter_matches_rejects_non_matching_prefix() {
     // Different drive letter.
     assert!(!drive_letter_matches(
         Path::new("/data/drive_c/C_mft.iocp"),
-        &['D']
+        &[uffs_mft::platform::DriveLetter::D]
     ));
     // Empty `wanted` slice rejects everything (caller must
     // gate on `is_empty()` for the "all drives" case).
@@ -56,13 +60,15 @@ fn drive_letter_matches_rejects_unknown_layout() {
     // Parent dir doesn't carry the `drive_` prefix.
     assert!(!drive_letter_matches(
         Path::new("/data/snapshot/C_mft.iocp"),
-        &['C']
+        &[uffs_mft::platform::DriveLetter::C]
     ));
     // No parent at all — root file.
-    assert!(!drive_letter_matches(Path::new("C_mft.iocp"), &['C']));
+    assert!(!drive_letter_matches(Path::new("C_mft.iocp"), &[
+        uffs_mft::platform::DriveLetter::C
+    ]));
     // `drive_` prefix with no letter after (suffix.chars().next() = None).
     assert!(!drive_letter_matches(
         Path::new("/data/drive_/C_mft.iocp"),
-        &['C']
+        &[uffs_mft::platform::DriveLetter::C]
     ));
 }

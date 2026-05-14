@@ -41,24 +41,22 @@ use uffs_mft::{MftReader, bytes_to_mb_f64, f64_to_u64, millis_to_u64, u64_to_f64
 
 /// Converts a byte to a printable ASCII character or '.' for non-printable.
 #[cfg(windows)]
-pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
+pub(crate) async fn cmd_benchmark_index(drive: uffs_mft::platform::DriveLetter) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
     use uffs_mft::{MftReadMode, MftReader};
 
-    let drive_upper = drive.to_ascii_uppercase();
-
     println!("=== Index Build Benchmark Tool ===");
-    println!("Drive: {drive_upper}:");
+    println!("Drive: {drive}:");
     println!(
         "This measures the full UFFS indexing pipeline (async I/O + parsing + DataFrame building)"
     );
     println!();
 
     // Get volume info via VolumeHandle
-    let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
+    let handle =
+        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
     let vol_data = handle.volume_data();
     let mft_size = vol_data.mft_valid_data_length;
     let record_size = vol_data.bytes_per_file_record_segment;
@@ -75,7 +73,7 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     println!("MFT Total Size: {mft_size} bytes ({mft_size_mb} MB)");
     println!();
 
-    println!("Creating index for {drive_upper}:\\ ...");
+    println!("Creating index for {drive}:\\ ...");
     println!("Indexing in progress...");
     println!();
 
@@ -85,13 +83,13 @@ pub(crate) async fn cmd_benchmark_index(drive: char) -> Result<()> {
     let start_time = Instant::now();
 
     // Open reader and read MFT
-    let reader = MftReader::open(drive_upper)
-        .with_context(|| format!("Failed to open drive {drive_upper}:"))?
+    let reader = MftReader::open(drive)
+        .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_mode(MftReadMode::Auto);
 
     let df = reader
         .read_all()
-        .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
+        .with_context(|| format!("Failed to read MFT from {drive}:"))?;
 
     let elapsed = start_time.elapsed();
     let elapsed_ms = millis_to_u64(elapsed.as_millis());
@@ -189,7 +187,7 @@ pub(crate) struct BenchmarkIndexLeanOptions {
 /// overhead. Should be ~2x faster than `benchmark-index` on large drives.
 #[cfg(windows)]
 pub(crate) async fn cmd_benchmark_index_lean(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     mode_str: &str,
     opts: BenchmarkIndexLeanOptions,
 ) -> Result<()> {
@@ -207,17 +205,15 @@ pub(crate) async fn cmd_benchmark_index_lean(
         parse_workers,
     } = opts;
 
-    let drive_upper = drive.to_ascii_uppercase();
-
     // Parse read mode
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     // Get drive type for adaptive defaults display
-    let drive_type = uffs_mft::platform::detect_drive_type(drive_upper);
+    let drive_type = uffs_mft::platform::detect_drive_type(drive);
     let effective_io_size_kb = io_size_kb.unwrap_or_else(|| drive_type.optimal_io_size() / 1024);
 
     println!("=== Lean Index Build Benchmark Tool ===");
-    println!("Drive: {drive_upper}:");
+    println!("Drive: {drive}:");
     println!("Drive Type: {drive_type:?}");
     println!("Mode: {mode}");
     println!("Bitmap: {}", if no_bitmap { "disabled" } else { "enabled" });
@@ -267,8 +263,8 @@ pub(crate) async fn cmd_benchmark_index_lean(
     println!();
 
     // Get volume info via VolumeHandle
-    let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
+    let handle =
+        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
     let vol_data = handle.volume_data();
     let mft_size = vol_data.mft_valid_data_length;
     let record_size = vol_data.bytes_per_file_record_segment;
@@ -285,7 +281,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     println!("MFT Total Size: {mft_size} bytes ({mft_size_mb} MB)");
     println!();
 
-    println!("Creating lean index for {drive_upper}:\\ ...");
+    println!("Creating lean index for {drive}:\\ ...");
     println!("Indexing in progress...");
     println!();
 
@@ -301,8 +297,8 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // - io_size_kb: I/O chunk size in KB (None = auto based on drive type)
     // - parallel_parse: enable M3 parallel parsing optimization
     // - parse_workers: number of parsing worker threads
-    let mut reader = MftReader::open(drive_upper)
-        .with_context(|| format!("Failed to open drive {drive_upper}:"))?
+    let mut reader = MftReader::open(drive)
+        .with_context(|| format!("Failed to open drive {drive}:"))?
         .with_mode(mode)
         .with_use_bitmap(!no_bitmap)
         .with_add_placeholders(!no_placeholders);
@@ -327,7 +323,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     let (index, benchmark) = reader
         .read_all_index_with_timing()
         .await
-        .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?;
+        .with_context(|| format!("Failed to read MFT from {drive}:"))?;
 
     let elapsed = start_time.elapsed();
     let elapsed_ms = millis_to_u64(elapsed.as_millis());
@@ -428,8 +424,8 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // =========================================================================
     println!("=== Reference Benchmark Guide ===");
     println!("To compare with the reference uffs.com binary:");
-    println!("  uffs.com --benchmark-mft={drive_upper}:   Raw I/O only");
-    println!("  uffs.com --benchmark-index={drive_upper}: I/O + Parse + Preprocess");
+    println!("  uffs.com --benchmark-mft={drive}:   Raw I/O only");
+    println!("  uffs.com --benchmark-index={drive}: I/O + Parse + Preprocess");
     println!();
     println!("Rust equivalent phases:");
     println!(
@@ -461,7 +457,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
 /// performance.
 #[cfg(windows)]
 pub(crate) async fn cmd_benchmark_tree(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     iterations: usize,
     no_cache: bool,
 ) -> Result<()> {
@@ -469,10 +465,8 @@ pub(crate) async fn cmd_benchmark_tree(
 
     use uffs_mft::cache::{INDEX_TTL_SECONDS, load_cached_index};
 
-    let drive_upper = drive.to_ascii_uppercase();
-
     println!("=== Tree Metrics Benchmark ===");
-    println!("Drive: {drive_upper}:");
+    println!("Drive: {drive}:");
     println!("Iterations: {iterations}");
     println!("Cache: {}", if no_cache { "disabled" } else { "enabled" });
     println!();
@@ -483,24 +477,24 @@ pub(crate) async fn cmd_benchmark_tree(
     let load_start = Instant::now();
     let mut index = if no_cache {
         println!("Building fresh index from disk...");
-        let reader = MftReader::open(drive_upper)
-            .with_context(|| format!("Failed to open drive {drive_upper}:"))?;
+        let reader =
+            MftReader::open(drive).with_context(|| format!("Failed to open drive {drive}:"))?;
         reader
             .read_all_index()
             .await
-            .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
+            .with_context(|| format!("Failed to read MFT from {drive}:"))?
     } else {
         println!("Loading index from cache...");
-        if let Some((cached, _header)) = load_cached_index(drive_upper, INDEX_TTL_SECONDS) {
+        if let Some((cached, _header)) = load_cached_index(drive, INDEX_TTL_SECONDS) {
             cached
         } else {
             println!("Cache miss - building fresh index...");
-            let reader = MftReader::open(drive_upper)
-                .with_context(|| format!("Failed to open drive {drive_upper}:"))?;
+            let reader =
+                MftReader::open(drive).with_context(|| format!("Failed to open drive {drive}:"))?;
             reader
                 .read_all_index()
                 .await
-                .with_context(|| format!("Failed to read MFT from {drive_upper}:"))?
+                .with_context(|| format!("Failed to read MFT from {drive}:"))?
         }
     };
     let load_ms = millis_to_u64(load_start.elapsed().as_millis());
@@ -583,7 +577,7 @@ pub(crate) async fn cmd_benchmark_tree(
     // Reference benchmark guide
     println!("=== Reference Benchmark Guide ===");
     println!("To compare with the reference uffs.com binary:");
-    println!("  1. Run: uffs.com --benchmark-index={drive_upper}:");
+    println!("  1. Run: uffs.com --benchmark-index={drive}:");
     println!("  2. Look for the 'Preprocess' phase timing");
     println!("  3. Compare with Rust 'Tree Metrics' timing above");
     println!();
@@ -597,7 +591,9 @@ pub(crate) async fn cmd_benchmark_tree(
 
 /// Benchmark multi-volume indexing using single IOCP (M4 optimization).
 #[cfg(windows)]
-pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> {
+pub(crate) async fn cmd_benchmark_multi_volume(
+    drives: Vec<uffs_mft::platform::DriveLetter>,
+) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::io::{MultiVolumeIocpReader, prepare_volume_state};
@@ -607,17 +603,17 @@ pub(crate) async fn cmd_benchmark_multi_volume(drives: Vec<char>) -> Result<()> 
         anyhow::bail!("No drives specified. Use --drives C,D,S");
     }
 
-    let upper_drives: Vec<char> = drives.iter().map(char::to_ascii_uppercase).collect();
+    // `DriveLetter` is uppercase by construction; no per-element remap.
 
     println!("=== Multi-Volume IOCP Benchmark (M4 Optimization) ===");
-    println!("Drives: {upper_drives:?}");
+    println!("Drives: {drives:?}");
     println!();
 
     // Prepare volume states
     let mut volume_states = Vec::new();
     let start_time = Instant::now();
 
-    for &drive in &upper_drives {
+    for &drive in &drives {
         println!("📂 Preparing volume {drive}:...");
 
         // Open volume handle

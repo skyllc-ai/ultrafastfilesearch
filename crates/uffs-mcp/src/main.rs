@@ -27,6 +27,7 @@ use thiserror as _;
 #[cfg(feature = "streamable-http")]
 use tower_service as _;
 use tracing_appender as _;
+use uffs_mft as _;
 
 mod process;
 

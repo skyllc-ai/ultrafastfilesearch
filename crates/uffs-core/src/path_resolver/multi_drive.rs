@@ -20,8 +20,8 @@ use crate::error::Result;
 /// ```rust,ignore
 /// // Build resolver from FULL MFT data (before filtering)
 /// let mut resolver = FastPathResolverMultiDrive::new();
-/// resolver.add_drive('C', &full_c_drive_df)?;
-/// resolver.add_drive('D', &full_d_drive_df)?;
+/// resolver.add_drive(uffs_mft::platform::DriveLetter::C, &full_c_drive_df)?;
+/// resolver.add_drive(uffs_mft::platform::DriveLetter::D, &full_d_drive_df)?;
 ///
 /// // Apply filters to get search results
 /// let filtered = apply_filters(&full_df)?;
@@ -32,7 +32,7 @@ use crate::error::Result;
 #[derive(Debug, Clone, Default)]
 pub struct FastPathResolverMultiDrive {
     /// Per-drive resolvers.
-    resolvers: HashMap<char, FastPathResolver>,
+    resolvers: HashMap<uffs_mft::platform::DriveLetter, FastPathResolver>,
 }
 
 impl FastPathResolverMultiDrive {
@@ -49,7 +49,11 @@ impl FastPathResolverMultiDrive {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
-    pub fn add_drive(&mut self, drive: char, full_mft_df: &DataFrame) -> Result<()> {
+    pub fn add_drive(
+        &mut self,
+        drive: uffs_mft::platform::DriveLetter,
+        full_mft_df: &DataFrame,
+    ) -> Result<()> {
         let resolver = FastPathResolver::build(full_mft_df, drive)?;
         self.resolvers.insert(drive, resolver);
         Ok(())
@@ -57,12 +61,15 @@ impl FastPathResolverMultiDrive {
 
     /// Get a resolver for a specific drive.
     #[must_use]
-    pub fn get(&self, drive: char) -> Option<&FastPathResolver> {
+    pub fn get(&self, drive: uffs_mft::platform::DriveLetter) -> Option<&FastPathResolver> {
         self.resolvers.get(&drive)
     }
 
     /// Get a mutable resolver for a specific drive.
-    pub fn get_mut(&mut self, drive: char) -> Option<&mut FastPathResolver> {
+    pub fn get_mut(
+        &mut self,
+        drive: uffs_mft::platform::DriveLetter,
+    ) -> Option<&mut FastPathResolver> {
         self.resolvers.get_mut(&drive)
     }
 
@@ -85,7 +92,13 @@ impl FastPathResolverMultiDrive {
 
                 match (drive_str, frs) {
                     (Some(drive), Some(frs_val)) => {
-                        let drive_letter = drive.chars().next().unwrap_or('?');
+                        // Fall back to `DriveLetter::X` for malformed
+                        // drive prefixes — see legacy.rs for rationale.
+                        let drive_letter = drive
+                            .chars()
+                            .next()
+                            .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+                            .unwrap_or(uffs_mft::platform::DriveLetter::X);
                         self.resolvers.get_mut(&drive_letter).map_or_else(
                             || format!("<no resolver for {drive_letter}>"),
                             |resolver| resolver.resolve_cached(frs_val),
@@ -105,7 +118,7 @@ impl FastPathResolverMultiDrive {
 
     /// Get statistics for all drives.
     #[must_use]
-    pub fn stats(&self) -> Vec<(char, FastPathResolverStats)> {
+    pub fn stats(&self) -> Vec<(uffs_mft::platform::DriveLetter, FastPathResolverStats)> {
         self.resolvers
             .iter()
             .map(|(&drive, resolver)| (drive, resolver.stats()))
@@ -137,7 +150,7 @@ impl FastPathResolverMultiDrive {
 pub fn add_paths_from_full_data(
     full_mft_df: &DataFrame,
     filtered_df: &DataFrame,
-    volume: char,
+    volume: uffs_mft::platform::DriveLetter,
 ) -> Result<DataFrame> {
     let mut resolver = FastPathResolver::build(full_mft_df, volume)?;
     resolver.add_path_column(filtered_df)

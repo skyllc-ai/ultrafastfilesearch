@@ -112,7 +112,7 @@ mod ft {
 fn row(path: &str, modified: i64, created: i64, accessed: i64) -> DisplayRow {
     DisplayRow::new(
         0_u32,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         path.to_owned(),
         1024_u64,
         false,

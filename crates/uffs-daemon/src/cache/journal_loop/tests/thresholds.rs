@@ -44,7 +44,7 @@ async fn events_threshold_triggers_save() {
         save_threshold_age: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -69,7 +69,10 @@ async fn events_threshold_triggers_save() {
     );
     assert_eq!(
         saves.first().copied(),
-        Some(('C', SaveReason::EventsExceeded)),
+        Some((
+            uffs_mft::platform::DriveLetter::C,
+            SaveReason::EventsExceeded
+        )),
         "save reason must be EventsExceeded"
     );
 }
@@ -90,7 +93,7 @@ async fn age_threshold_triggers_save_with_pending_events() {
         save_threshold_age: Duration::from_millis(30),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -128,7 +131,7 @@ async fn age_threshold_triggers_save_with_pending_events() {
     let saves = sink.save_calls();
     assert_eq!(
         saves.first().copied(),
-        Some(('C', SaveReason::AgeElapsed)),
+        Some((uffs_mft::platform::DriveLetter::C, SaveReason::AgeElapsed)),
         "save reason must be AgeElapsed; got {saves:?}"
     );
 }
@@ -149,7 +152,7 @@ async fn zero_events_drive_does_not_trigger_save() {
         save_threshold_age: Duration::from_millis(20),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),
@@ -201,7 +204,7 @@ async fn counter_resets_after_save() {
         save_threshold_age: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         null_cursor_store(),

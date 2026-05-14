@@ -61,7 +61,7 @@ pub enum ShardTier {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DriveInfo {
     /// Drive letter.
-    pub letter: char,
+    pub letter: uffs_mft::platform::DriveLetter,
     /// Number of records in the compact index.  `0` for `Parked` /
     /// `Cold` shards whose body has been released.
     pub records: usize,
@@ -121,7 +121,7 @@ pub struct StatusResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DriveMemoryInfo {
     /// Drive letter.
-    pub drive: char,
+    pub drive: uffs_mft::platform::DriveLetter,
     /// Number of records in this drive's index.
     pub records: usize,
     /// Calculated heap footprint in bytes.
@@ -196,6 +196,6 @@ pub enum DaemonStatus {
     #[serde(rename = "refreshing")]
     Refreshing {
         /// Drives being refreshed.
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
     },
 }

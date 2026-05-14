@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn parse_record_to_index_rejects_short_buffers() {
-        let mut index = MftIndex::new('C');
+        let mut index = MftIndex::new(crate::platform::DriveLetter::C);
         assert!(!parse_record_to_index(&[0_u8; 3], 42, &mut index));
     }
 

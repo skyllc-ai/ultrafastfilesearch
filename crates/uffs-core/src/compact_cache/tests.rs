@@ -70,7 +70,7 @@ fn make_test_index() -> DriveCompactIndex {
         })
         .collect();
     DriveCompactIndex {
-        letter: 'T',
+        letter: uffs_mft::platform::DriveLetter::T,
         records: ColumnStorage::from_vec(records),
         names: ColumnStorage::from_vec(names),
         trigram,
@@ -94,7 +94,8 @@ fn v6_round_trip_preserves_trigram() {
     assert!(original_key_count > 0, "test index should have trigrams");
 
     let serialized = serialize_compact(&index);
-    let (loaded, tri_ms) = deserialize_compact(&serialized, 'T').unwrap();
+    let (loaded, tri_ms) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).unwrap();
 
     // Trigram loaded from disk — should be fast (< 10ms on any hardware).
     assert!(
@@ -109,7 +110,7 @@ fn v6_round_trip_preserves_trigram() {
     assert_eq!(loaded_values, tri_values, "trigram values mismatch");
 
     // Verify other fields survived.
-    assert_eq!(loaded.letter, 'T');
+    assert_eq!(loaded.letter, uffs_mft::platform::DriveLetter::T);
     assert_eq!(loaded.records.len(), 3);
     assert_eq!(loaded.names.as_slice(), b"foobarbaz");
     assert_eq!(loaded.source_epoch, 42);
@@ -129,7 +130,7 @@ fn v9_rejected_forces_rebuild() {
         .get_mut(8..10)
         .expect("buffer too short for version")
         .copy_from_slice(&9_u16.to_le_bytes());
-    let err = deserialize_compact(&serialized, 'T')
+    let err = deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T)
         .err()
         .expect("v9 cache must be rejected");
     assert!(
@@ -158,7 +159,8 @@ fn v10_round_trip_preserves_frs_to_compact() {
     let serialized = serialize_compact(&index);
 
     // Heap deserialise path.
-    let (heap_loaded, _) = deserialize_compact(&serialized, 'T').expect("heap deser");
+    let (heap_loaded, _) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("heap deser");
     assert_eq!(
         heap_loaded.frs_to_compact, original_mapping,
         "heap-loaded frs_to_compact must match the source mapping"
@@ -167,9 +169,13 @@ fn v10_round_trip_preserves_frs_to_compact() {
     // Runtime-mmap deserialise path.
     let (_tmp, runtime_path) = runtime_fixture("f2c_round_trip.live");
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
-    let (mmap_loaded, _) =
-        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
-            .expect("runtime mmap deser");
+    let (mmap_loaded, _) = deserialize_compact_into_runtime(
+        &serialized,
+        uffs_mft::platform::DriveLetter::T,
+        &runtime_dir,
+        &runtime_path,
+    )
+    .expect("runtime mmap deser");
     assert_eq!(
         mmap_loaded.frs_to_compact, original_mapping,
         "runtime-mmap-loaded frs_to_compact must match the source mapping"
@@ -185,7 +191,8 @@ fn v10_round_trip_empty_frs_to_compact() {
     let mut index = make_test_index();
     index.frs_to_compact = Vec::new();
     let serialized = serialize_compact(&index);
-    let (loaded, _) = deserialize_compact(&serialized, 'T').expect("empty mapping deser");
+    let (loaded, _) = deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T)
+        .expect("empty mapping deser");
     assert!(
         loaded.frs_to_compact.is_empty(),
         "empty-mapping round-trip must yield Vec::new()"
@@ -213,7 +220,8 @@ fn current_header_version() {
 fn v9_round_trip_preserves_bloom() {
     let index = make_test_index();
     let serialized = serialize_compact(&index);
-    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("deser v9");
+    let (loaded, _tri_ms) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("deser v9");
 
     let bloom = loaded.bloom.as_ref().expect("v9 cache must carry bloom");
     let mut fold_buf: Vec<u8> = Vec::new();
@@ -245,7 +253,8 @@ fn v9_round_trip_preserves_path_trie() {
     let expected = index.build_path_trie();
 
     let serialized = serialize_compact(&index);
-    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("deser v9");
+    let (loaded, _tri_ms) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("deser v9");
     let actual = loaded.path_trie.as_ref().expect("v9 cache must carry trie");
 
     assert_eq!(
@@ -282,7 +291,7 @@ fn v1_rejected() {
     data.get_mut(8..10)
         .expect("buffer too short for version")
         .copy_from_slice(&1_u16.to_le_bytes());
-    let err = deserialize_compact(&data, 'X')
+    let err = deserialize_compact(&data, uffs_mft::platform::DriveLetter::X)
         .err()
         .expect("v1 cache must be rejected");
     assert!(
@@ -293,14 +302,15 @@ fn v1_rejected() {
 
 #[test]
 fn truncated_data_rejected() {
-    assert!(deserialize_compact(b"short", 'X').is_err());
+    assert!(deserialize_compact(b"short", uffs_mft::platform::DriveLetter::X).is_err());
 }
 
 #[test]
 fn ext_names_round_trips() {
     let index = make_test_index();
     let serialized = serialize_compact(&index);
-    let (deser, _) = deserialize_compact(&serialized, 'T').expect("deser");
+    let (deser, _) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("deser");
     assert_eq!(deser.ext_names, index.ext_names);
 }
 
@@ -326,9 +336,13 @@ fn v6_round_trip_via_runtime_mmap_preserves_trigram() {
     let serialized = serialize_compact(&index);
     let (_tmp, runtime_path) = runtime_fixture("v6_runtime_mmap.live");
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
-    let (loaded, tri_ms) =
-        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
-            .expect("runtime mmap deser");
+    let (loaded, tri_ms) = deserialize_compact_into_runtime(
+        &serialized,
+        uffs_mft::platform::DriveLetter::T,
+        &runtime_dir,
+        &runtime_path,
+    )
+    .expect("runtime mmap deser");
 
     // v6+ CSR is loaded from disk — never rebuilt.
     assert!(
@@ -344,7 +358,7 @@ fn v6_round_trip_via_runtime_mmap_preserves_trigram() {
 
     // Records + names columns are now mmap-backed but observably
     // identical to the heap-backed source.
-    assert_eq!(loaded.letter, 'T');
+    assert_eq!(loaded.letter, uffs_mft::platform::DriveLetter::T);
     assert_eq!(loaded.records.len(), 3);
     assert_eq!(loaded.names.as_slice(), b"foobarbaz");
     assert_eq!(loaded.source_epoch, 42);
@@ -356,13 +370,18 @@ fn mmap_path_byte_equal_to_heap_path() {
     let index = make_test_index();
     let serialized = serialize_compact(&index);
 
-    let (heap_loaded, _) = deserialize_compact(&serialized, 'T').expect("heap deser");
+    let (heap_loaded, _) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("heap deser");
 
     let (_tmp, runtime_path) = runtime_fixture("byte_equal.live");
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
-    let (mmap_loaded, _) =
-        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
-            .expect("mmap deser");
+    let (mmap_loaded, _) = deserialize_compact_into_runtime(
+        &serialized,
+        uffs_mft::platform::DriveLetter::T,
+        &runtime_dir,
+        &runtime_path,
+    )
+    .expect("mmap deser");
 
     // The two storage variants must yield identical observable
     // contents — bytemuck-cast records and names slice should be
@@ -387,9 +406,14 @@ fn runtime_mmap_rejects_truncated_data() {
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
     // `Result::err()` avoids the `T: Debug` bound that `expect_err`
     // would impose on `(DriveCompactIndex, u128)`.
-    let err = deserialize_compact_into_runtime(b"short", 'X', &runtime_dir, &runtime_path)
-        .err()
-        .expect("truncated data must error via runtime path");
+    let err = deserialize_compact_into_runtime(
+        b"short",
+        uffs_mft::platform::DriveLetter::X,
+        &runtime_dir,
+        &runtime_path,
+    )
+    .err()
+    .expect("truncated data must error via runtime path");
     assert_eq!(err.kind(), io::ErrorKind::Other);
 }
 
@@ -411,9 +435,13 @@ fn runtime_path_yields_mmap_backed_columns() {
 
     let (_tmp, runtime_path) = runtime_fixture("variant_mmap.live");
     let runtime_dir = uffs_security::runtime_dir::DefaultRuntimeDir::default();
-    let (loaded, _tri_ms) =
-        deserialize_compact_into_runtime(&serialized, 'T', &runtime_dir, &runtime_path)
-            .expect("mmap deser");
+    let (loaded, _tri_ms) = deserialize_compact_into_runtime(
+        &serialized,
+        uffs_mft::platform::DriveLetter::T,
+        &runtime_dir,
+        &runtime_path,
+    )
+    .expect("mmap deser");
 
     assert!(
         loaded.records.is_mmap(),
@@ -438,7 +466,8 @@ fn heap_path_yields_vec_backed_columns() {
     let index = make_test_index();
     let serialized = serialize_compact(&index);
 
-    let (loaded, _tri_ms) = deserialize_compact(&serialized, 'T').expect("heap deser");
+    let (loaded, _tri_ms) =
+        deserialize_compact(&serialized, uffs_mft::platform::DriveLetter::T).expect("heap deser");
 
     assert!(
         loaded.records.is_vec(),
@@ -475,7 +504,8 @@ fn purge_legacy_dir_missing_path_is_noop() {
     let path = tmp.path().join("Z_compact.uffs");
     assert!(!path.exists(), "precondition: path absent");
 
-    purge_legacy_compact_cache_dir(&path, 'Z').expect("missing path must be Ok(())");
+    purge_legacy_compact_cache_dir(&path, uffs_mft::platform::DriveLetter::Z)
+        .expect("missing path must be Ok(())");
 
     assert!(
         !path.exists(),
@@ -491,7 +521,8 @@ fn purge_legacy_dir_regular_file_is_noop() {
     let path = tmp.path().join("Z_compact.uffs");
     std::fs::write(&path, b"existing cache bytes").expect("seed regular file");
 
-    purge_legacy_compact_cache_dir(&path, 'Z').expect("regular file must be Ok(())");
+    purge_legacy_compact_cache_dir(&path, uffs_mft::platform::DriveLetter::Z)
+        .expect("regular file must be Ok(())");
 
     let bytes = std::fs::read(&path).expect("regular file must still be readable");
     assert_eq!(
@@ -510,7 +541,8 @@ fn purge_legacy_dir_empty_directory_is_removed() {
     std::fs::create_dir(&path).expect("seed empty directory");
     assert!(path.is_dir(), "precondition: path is empty dir");
 
-    purge_legacy_compact_cache_dir(&path, 'Z').expect("empty dir must be Ok(())");
+    purge_legacy_compact_cache_dir(&path, uffs_mft::platform::DriveLetter::Z)
+        .expect("empty dir must be Ok(())");
 
     assert!(
         !path.exists(),
@@ -530,7 +562,7 @@ fn purge_legacy_dir_non_empty_directory_is_refused() {
     std::fs::create_dir(&path).expect("seed dir");
     std::fs::write(path.join("unexpected.bin"), b"surprise").expect("seed dir contents");
 
-    let err = purge_legacy_compact_cache_dir(&path, 'Z')
+    let err = purge_legacy_compact_cache_dir(&path, uffs_mft::platform::DriveLetter::Z)
         .expect_err("non-empty dir must propagate the underlying io::Error");
     assert!(
         matches!(

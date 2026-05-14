@@ -64,7 +64,7 @@ mod text_tests {
 
     fn test_row(name: &str, size: u64, modified: i64, path: &str) -> SearchRow {
         SearchRow {
-            drive: 'C',
+            drive: uffs_mft::platform::DriveLetter::C,
             name: name.to_owned(),
             size,
             is_directory: false,

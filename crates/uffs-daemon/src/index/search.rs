@@ -178,7 +178,7 @@ impl IndexManager {
         let lock_us = t_lock.map_or(0, |ts| ts.elapsed().as_micros());
 
         // Snapshot per-drive info (only when profiling).
-        let drive_info: Vec<(char, usize)> = if profiling {
+        let drive_info: Vec<(uffs_mft::platform::DriveLetter, usize)> = if profiling {
             snapshot.drive_summary()
         } else {
             Vec::new()
@@ -321,8 +321,8 @@ impl IndexManager {
         // measurements.  One pass over `filtered_rows` with a
         // pre-sized hash map keeps the complexity at O(rows) and
         // makes the profiling cost independent of drive count.
-        let drive_match_counts: Vec<(char, usize)> = if profiling {
-            let mut tally: std::collections::HashMap<char, usize> =
+        let drive_match_counts: Vec<(uffs_mft::platform::DriveLetter, usize)> = if profiling {
+            let mut tally: std::collections::HashMap<uffs_mft::platform::DriveLetter, usize> =
                 std::collections::HashMap::with_capacity(drive_info.len().max(1));
             for row in &filtered_rows {
                 *tally.entry(row.drive).or_insert(0) += 1;
@@ -564,8 +564,8 @@ impl IndexManager {
         row_build_us: u128,
         write_us: u128,
         phase_timings: Option<PhaseTimings>,
-        drive_info: &[(char, usize)],
-        drive_match_counts: &[(char, usize)],
+        drive_info: &[(uffs_mft::platform::DriveLetter, usize)],
+        drive_match_counts: &[(uffs_mft::platform::DriveLetter, usize)],
     ) -> SearchProfile {
         let timings = self.drive_timings.read().await;
         let startup_us = self.startup_duration_us.load(Ordering::Relaxed);

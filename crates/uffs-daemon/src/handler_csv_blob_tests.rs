@@ -52,7 +52,12 @@ fn bare_response(rows: Vec<SearchRow>) -> SearchResponse {
 /// flags, timestamps).  The row's size is tuned per test via
 /// `size` so the produced blob can cross the 512 KB threshold on
 /// demand.
-fn sample_row(drive: char, path: String, name: String, size: u64) -> SearchRow {
+fn sample_row(
+    drive: uffs_mft::platform::DriveLetter,
+    path: String,
+    name: String,
+    size: u64,
+) -> SearchRow {
     SearchRow {
         drive,
         path,
@@ -80,7 +85,7 @@ fn sample_row(drive: char, path: String, name: String, size: u64) -> SearchRow {
 /// exact aggregated values that replace logical size / allocated
 /// on dir rows.
 fn sample_dir_row(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     path: String,
     name: String,
     descendants: u32,
@@ -108,9 +113,24 @@ fn sample_dir_row(
 #[test]
 fn try_pack_csv_blob_happy_path_multi_column() {
     let rows = vec![
-        sample_row('C', "C:\\a\\f1.dll".to_owned(), "f1.dll".to_owned(), 1024),
-        sample_row('C', "C:\\a\\f2.dll".to_owned(), "f2.dll".to_owned(), 2048),
-        sample_row('D', "D:\\b\\f3.txt".to_owned(), "f3.txt".to_owned(), 4096),
+        sample_row(
+            uffs_mft::platform::DriveLetter::C,
+            "C:\\a\\f1.dll".to_owned(),
+            "f1.dll".to_owned(),
+            1024,
+        ),
+        sample_row(
+            uffs_mft::platform::DriveLetter::C,
+            "C:\\a\\f2.dll".to_owned(),
+            "f2.dll".to_owned(),
+            2048,
+        ),
+        sample_row(
+            uffs_mft::platform::DriveLetter::D,
+            "D:\\b\\f3.txt".to_owned(),
+            "f3.txt".to_owned(),
+            4096,
+        ),
     ];
     let mut response = bare_response(rows);
     let params = SearchParams {
@@ -165,7 +185,7 @@ fn try_pack_csv_blob_happy_path_multi_column() {
 #[test]
 fn try_pack_csv_blob_skips_json_response_mode() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\a.dll".to_owned(),
         "a.dll".to_owned(),
         1024,
@@ -203,7 +223,7 @@ fn try_pack_csv_blob_skips_non_csv_format() {
         // stray-space value means the caller mangled the param
         // in-flight (e.g. a broken shell-quote round-trip).
         let mut response = bare_response(vec![sample_row(
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\a.dll".to_owned(),
             "a.dll".to_owned(),
             1024,
@@ -232,7 +252,7 @@ fn try_pack_csv_blob_skips_non_csv_format() {
 fn try_pack_csv_blob_accepts_explicit_csv_format() {
     for fmt in ["csv", "CSV", "Csv"] {
         let mut response = bare_response(vec![sample_row(
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\a.dll".to_owned(),
             "a.dll".to_owned(),
             1024,
@@ -261,7 +281,7 @@ fn try_pack_csv_blob_accepts_explicit_csv_format() {
 #[test]
 fn try_pack_csv_blob_skips_aggregations() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\a.dll".to_owned(),
         "a.dll".to_owned(),
         1024,
@@ -297,7 +317,7 @@ fn try_pack_csv_blob_skips_aggregations() {
 #[test]
 fn try_pack_csv_blob_skips_when_output_file_set() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\a.dll".to_owned(),
         "a.dll".to_owned(),
         1024,
@@ -335,7 +355,7 @@ fn try_pack_csv_blob_skips_when_output_file_set() {
 #[test]
 fn try_pack_csv_blob_accepts_columns_parity() {
     let mut response = bare_response(vec![sample_dir_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Program Files\\app".to_owned(),
         "app".to_owned(),
         12,
@@ -392,7 +412,7 @@ fn try_pack_csv_blob_accepts_columns_parity() {
 #[test]
 fn try_pack_csv_blob_accepts_parity_compat_flag() {
     let mut response = bare_response(vec![sample_dir_row(
-        'D',
+        uffs_mft::platform::DriveLetter::D,
         "D:\\Users\\alice".to_owned(),
         "alice".to_owned(),
         3,
@@ -435,7 +455,7 @@ fn try_pack_csv_blob_accepts_parity_compat_flag() {
 #[test]
 fn try_pack_csv_blob_parity_forces_header_when_disabled() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\a.txt".to_owned(),
         "a.txt".to_owned(),
         100,
@@ -472,7 +492,7 @@ fn try_pack_csv_blob_parity_forces_header_when_disabled() {
 #[test]
 fn try_pack_csv_blob_custom_appends_footer_when_drives_set() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\one.txt".to_owned(),
         "one.txt".to_owned(),
         1,
@@ -482,7 +502,7 @@ fn try_pack_csv_blob_custom_appends_footer_when_drives_set() {
         projection: vec!["path".to_owned(), "name".to_owned()],
         output_columns: Some("path,name".to_owned()),
         output_format: Some("custom".to_owned()),
-        output_drive_targets: vec!['C'],
+        output_drive_targets: vec![uffs_mft::platform::DriveLetter::C],
         ..SearchParams::default()
     };
 
@@ -518,7 +538,7 @@ fn try_pack_csv_blob_custom_appends_footer_when_drives_set() {
 #[test]
 fn try_pack_csv_blob_custom_omits_footer_when_no_drives() {
     let mut response = bare_response(vec![sample_row(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\one.txt".to_owned(),
         "one.txt".to_owned(),
         1,
@@ -589,7 +609,7 @@ fn try_pack_csv_blob_offloads_large_blob_to_shmem() {
                 "C:\\very_long_parent_folder_{idx:08}\\deeper_subfolder_with_padding\\file_{idx:010}.extension",
             );
             let name = format!("file_{idx:010}.extension");
-            sample_row('C', path, name, 1024)
+            sample_row(uffs_mft::platform::DriveLetter::C, path, name, 1024)
         })
         .collect();
 
@@ -683,8 +703,18 @@ fn try_pack_csv_blob_offloads_large_blob_to_shmem() {
 #[test]
 fn try_pack_csv_blob_skips_when_output_format_none() {
     let mut response = bare_response(vec![
-        sample_row('C', "C:\\a\\f1.dll".to_owned(), "f1.dll".to_owned(), 1024),
-        sample_row('C', "C:\\a\\f2.dll".to_owned(), "f2.dll".to_owned(), 2048),
+        sample_row(
+            uffs_mft::platform::DriveLetter::C,
+            "C:\\a\\f1.dll".to_owned(),
+            "f1.dll".to_owned(),
+            1024,
+        ),
+        sample_row(
+            uffs_mft::platform::DriveLetter::C,
+            "C:\\a\\f2.dll".to_owned(),
+            "f2.dll".to_owned(),
+            2048,
+        ),
     ]);
     let params = SearchParams {
         // Multi-column projection typical of MCP search

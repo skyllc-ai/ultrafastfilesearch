@@ -9,6 +9,7 @@ use crate::index::{
     ChildInfo, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,
     MftStats, NO_ENTRY, SizeInfo, StandardInfo,
 };
+use crate::platform::DriveLetter;
 impl MftIndex {
     /// Deserializes an index from a byte slice.
     ///
@@ -140,7 +141,14 @@ impl MftIndex {
         pos += 8;
 
         let version = read_u32!();
-        let volume = char::from_u32(read_u32!()).ok_or("Invalid volume char")?;
+        // Wire format: u32-LE drive byte, originally written as `char as
+        // u32` (5a) or `DriveLetter::as_byte() as u32` (5b+).  Both
+        // produce the same 4 bytes for ASCII A..=Z, so v0..=v13 files
+        // round-trip cleanly.
+        let volume_raw = read_u32!();
+        let volume = char::from_u32(volume_raw)
+            .and_then(|ch| DriveLetter::parse(ch).ok())
+            .ok_or("Invalid volume drive letter")?;
         let volume_serial = read_u64!();
         let usn_journal_id = read_u64!();
         let next_usn = read_i64!();

@@ -35,7 +35,7 @@ use uffs_client::connect_sync::UffsClientSync;
 pub(crate) fn daemon_load(
     mft_files: &[std::path::PathBuf],
     data_dir: Option<&std::path::Path>,
-    drives: &[char],
+    drives: &[uffs_mft::platform::DriveLetter],
     no_cache: bool,
 ) -> Result<()> {
     let Ok(mut client) = UffsClientSync::connect_raw() else {
@@ -62,11 +62,12 @@ pub(crate) fn daemon_load(
     // Drive letters without --data-dir → hot-load by letter.
     // On Windows this reads live NTFS; on non-Windows the daemon uses its
     // own data_dir.
-    let direct_drives: Vec<char> = if data_dir.is_none() && paths.is_empty() {
-        drives.to_vec()
-    } else {
-        Vec::new()
-    };
+    let direct_drives: Vec<uffs_mft::platform::DriveLetter> =
+        if data_dir.is_none() && paths.is_empty() {
+            drives.to_vec()
+        } else {
+            Vec::new()
+        };
 
     if paths.is_empty() && direct_drives.is_empty() {
         anyhow::bail!(
@@ -143,7 +144,10 @@ pub(crate) fn daemon_load(
 ///
 /// Returns the best MFT file path from each matching subdirectory.
 #[expect(clippy::print_stderr, reason = "CLI diagnostic warning")]
-fn resolve_drive_subdirs(data_dir: &std::path::Path, drives: &[char]) -> Vec<std::path::PathBuf> {
+fn resolve_drive_subdirs(
+    data_dir: &std::path::Path,
+    drives: &[uffs_mft::platform::DriveLetter],
+) -> Vec<std::path::PathBuf> {
     let mut results = Vec::new();
 
     let entries = match std::fs::read_dir(data_dir) {
@@ -169,12 +173,15 @@ fn resolve_drive_subdirs(data_dir: &std::path::Path, drives: &[char]) -> Vec<std
         let Some(letter_str) = name.strip_prefix("drive_") else {
             continue;
         };
-        let Some(letter) = letter_str.chars().next().filter(char::is_ascii_alphabetic) else {
+        let Some(letter_char) = letter_str.chars().next() else {
+            continue;
+        };
+        let Ok(letter) = uffs_mft::platform::DriveLetter::parse(letter_char) else {
             continue;
         };
 
         // If specific drives requested, skip others.
-        if !drives.is_empty() && !drives.iter().any(|dr| dr.eq_ignore_ascii_case(&letter)) {
+        if !drives.is_empty() && !drives.contains(&letter) {
             continue;
         }
 

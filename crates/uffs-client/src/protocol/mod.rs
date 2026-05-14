@@ -291,7 +291,7 @@ pub struct SearchParams {
     pub predicates: Vec<SearchPredicate>,
     /// Specific drives to search (empty = all loaded).
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// Requested projection fields in canonical order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projection: Vec<String>,
@@ -523,7 +523,7 @@ pub struct SearchParams {
     /// C.mft` targets drive C for the footer but leaves `drives`
     /// empty because the MFT path is a separate wire selector.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output_drive_targets: Vec<char>,
+    pub output_drive_targets: Vec<uffs_mft::platform::DriveLetter>,
 }
 
 /// Default-true helper for serde.

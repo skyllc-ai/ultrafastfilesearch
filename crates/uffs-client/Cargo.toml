@@ -56,6 +56,11 @@ uffs-security.workspace = true
 # output with the daemon's `--out=file` path.  Zero polars, zero
 # tokio — preserves the thin-client binary-size invariant.
 uffs-format.workspace = true
+# Typed drive-letter newtype.  Used in the protocol response shapes
+# (`LoadDriveResponse`, `TieringResponse`, ...) so the client surface
+# is typed end-to-end.  Wire format is unchanged — `DriveLetter`'s
+# serde impl emits/accepts a single ASCII char.
+uffs-mft.workspace = true
 
 # Async — optional; only pulled when the `async` feature is enabled.
 # The sync `UffsClientSync` used by the CLI does not depend on tokio.

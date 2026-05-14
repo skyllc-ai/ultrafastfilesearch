@@ -48,20 +48,22 @@ fn shard_registry_add_replace_remove_round_trip() {
     reg = reg.add(Arc::clone(&body_c));
     reg = reg.add(Arc::clone(&body_d));
     assert_eq!(reg.active_index().drives.len(), 2);
-    assert!(reg.contains('C'));
-    assert!(reg.contains('D'));
+    assert!(reg.contains(uffs_mft::platform::DriveLetter::C));
+    assert!(reg.contains(uffs_mft::platform::DriveLetter::D));
 
-    reg = reg.replace('c', Arc::clone(&body_c_v2));
+    reg = reg.replace(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c_v2));
     assert_eq!(
         reg.active_index().drives.len(),
         2,
         "replace must not duplicate",
     );
 
-    reg = reg.remove('d');
-    assert!(!reg.contains('D'));
+    reg = reg.remove(uffs_mft::platform::DriveLetter::D);
+    assert!(!reg.contains(uffs_mft::platform::DriveLetter::D));
     assert_eq!(reg.active_index().drives.len(), 1);
-    assert_eq!(reg.loaded_letters(), vec!['C']);
+    assert_eq!(reg.loaded_letters(), vec![
+        uffs_mft::platform::DriveLetter::C
+    ]);
 }
 
 /// `ShardEntry::try_transition` enforces the legal-transition graph
@@ -76,7 +78,7 @@ fn shard_entry_try_transition_legal_and_illegal() {
     use crate::cache::shard::ShardEntry;
 
     let body = Arc::new(build_test_drive());
-    let shard = ShardEntry::new_warm('C', Arc::clone(&body));
+    let shard = ShardEntry::new_warm(uffs_mft::platform::DriveLetter::C, Arc::clone(&body));
     assert_eq!(shard.state(), ShardState::Warm);
 
     // Legal: Warm → Hot.
@@ -139,9 +141,16 @@ async fn shard_registry_search_two_drives_returns_rows_from_each() {
     // Both drives must contribute records to the snapshot.
     let snap = mgr.snapshot().await;
     assert_eq!(snap.drives.len(), 2);
-    let letters: std::collections::HashSet<char> = snap.drives.iter().map(|d| d.letter).collect();
-    assert!(letters.contains(&'C'), "C drive must be in the snapshot");
-    assert!(letters.contains(&'D'), "D drive must be in the snapshot");
+    let letters: std::collections::HashSet<uffs_mft::platform::DriveLetter> =
+        snap.drives.iter().map(|d| d.letter).collect();
+    assert!(
+        letters.contains(&uffs_mft::platform::DriveLetter::C),
+        "C drive must be in the snapshot"
+    );
+    assert!(
+        letters.contains(&uffs_mft::platform::DriveLetter::D),
+        "D drive must be in the snapshot"
+    );
 }
 
 /// `IndexManager::search` records one query per dispatch on every
@@ -209,7 +218,7 @@ fn demote_letter_warm_to_parked_drops_body_and_preserves_stats() {
     // rebuild.
     let c_shard_pre = reg
         .iter()
-        .find(|s| s.drive == 'C')
+        .find(|s| s.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present pre-demote");
     for _ in 0_u32..5_u32 {
         c_shard_pre.stats.record_query();
@@ -217,17 +226,20 @@ fn demote_letter_warm_to_parked_drops_body_and_preserves_stats() {
     assert_eq!(c_shard_pre.stats.queries_total(), 5);
 
     reg = reg
-        .demote_letter('C', ShardState::Parked)
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
         .expect("warm → parked is legal");
 
     // Active index now only contains D.
     assert_eq!(reg.active_index().drives.len(), 1);
-    assert_eq!(reg.active_index().drives[0].letter, 'D');
+    assert_eq!(
+        reg.active_index().drives[0].letter,
+        uffs_mft::platform::DriveLetter::D
+    );
 
     // Both shards are still loaded; C is Parked, body lifted.
     let c_shard = reg
         .iter()
-        .find(|s| s.drive == 'C')
+        .find(|s| s.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C still loaded post-demote");
     assert_eq!(c_shard.state(), ShardState::Parked);
     assert!(c_shard.body().is_none());
@@ -248,11 +260,14 @@ fn demote_letter_warm_to_cold_drops_body() {
     let body_c = Arc::new(build_test_drive());
     let mut reg = ShardRegistry::new().add(body_c);
     reg = reg
-        .demote_letter('C', ShardState::Cold)
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
         .expect("warm → cold is legal");
 
     assert_eq!(reg.active_index().drives.len(), 0);
-    let c_shard = reg.iter().find(|s| s.drive == 'C').expect("C still loaded");
+    let c_shard = reg
+        .iter()
+        .find(|s| s.drive == uffs_mft::platform::DriveLetter::C)
+        .expect("C still loaded");
     assert_eq!(c_shard.state(), ShardState::Cold);
     assert!(c_shard.body().is_none());
 }
@@ -265,7 +280,8 @@ fn demote_letter_unknown_letter_returns_none() {
     let body_c = Arc::new(build_test_drive());
     let reg = ShardRegistry::new().add(body_c);
     assert!(
-        reg.demote_letter('Z', ShardState::Parked).is_none(),
+        reg.demote_letter(uffs_mft::platform::DriveLetter::Z, ShardState::Parked)
+            .is_none(),
         "demote on unknown letter must return None"
     );
 }
@@ -285,7 +301,8 @@ fn demote_letter_illegal_target_returns_none() {
         ShardState::Evicting,
     ] {
         assert!(
-            reg.demote_letter('C', bad_target).is_none(),
+            reg.demote_letter(uffs_mft::platform::DriveLetter::C, bad_target)
+                .is_none(),
             "demote target {bad_target} must be rejected"
         );
     }
@@ -301,18 +318,20 @@ fn demote_letter_self_demote_returns_none() {
     let body_c = Arc::new(build_test_drive());
     let mut reg = ShardRegistry::new().add(body_c);
     reg = reg
-        .demote_letter('C', ShardState::Parked)
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
         .expect("first demote");
     assert!(
-        reg.demote_letter('C', ShardState::Parked).is_none(),
+        reg.demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .is_none(),
         "Parked → Parked must be rejected"
     );
 
     reg = reg
-        .demote_letter('C', ShardState::Cold)
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
         .expect("parked → cold");
     assert!(
-        reg.demote_letter('C', ShardState::Cold).is_none(),
+        reg.demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .is_none(),
         "Cold → Cold must be rejected"
     );
 }
@@ -327,20 +346,28 @@ fn promote_letter_parked_to_warm_restores_body_and_preserves_stats() {
     let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
     // Bump a few queries before demote so we have something to
     // verify across the round trip.
-    let pre = reg.iter().find(|s| s.drive == 'C').unwrap();
+    let pre = reg
+        .iter()
+        .find(|s| s.drive == uffs_mft::platform::DriveLetter::C)
+        .unwrap();
     for _ in 0_u32..3_u32 {
         pre.stats.record_query();
     }
-    reg = reg.demote_letter('C', ShardState::Parked).expect("demote");
+    reg = reg
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+        .expect("demote");
 
     // Promote with a fresh body (Phase 4+ will fault the original
     // back from disk; for this test we just hand it the same Arc).
     reg = reg
-        .promote_letter('C', Arc::clone(&body_c))
+        .promote_letter(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c))
         .expect("promote");
 
     assert_eq!(reg.active_index().drives.len(), 1);
-    let c = reg.iter().find(|s| s.drive == 'C').unwrap();
+    let c = reg
+        .iter()
+        .find(|s| s.drive == uffs_mft::platform::DriveLetter::C)
+        .unwrap();
     assert_eq!(c.state(), ShardState::Warm);
     assert!(c.body().is_some());
     assert_eq!(
@@ -359,7 +386,8 @@ fn promote_letter_unknown_letter_returns_none() {
     let body_d = Arc::new(build_test_drive_d());
     let reg = ShardRegistry::new().add(body_c);
     assert!(
-        reg.promote_letter('Z', body_d).is_none(),
+        reg.promote_letter(uffs_mft::platform::DriveLetter::Z, body_d)
+            .is_none(),
         "promote on unknown letter must return None"
     );
 }
@@ -372,7 +400,8 @@ fn promote_letter_already_warm_returns_none() {
     let body_c = Arc::new(build_test_drive());
     let reg = ShardRegistry::new().add(Arc::clone(&body_c));
     assert!(
-        reg.promote_letter('C', body_c).is_none(),
+        reg.promote_letter(uffs_mft::platform::DriveLetter::C, body_c)
+            .is_none(),
         "promote on already-Warm shard must return None"
     );
 }
@@ -390,10 +419,12 @@ fn promote_letter_to_hot_bumps_promotions_total_when_source_is_cold() {
     let body_c = Arc::new(build_test_drive());
     let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
     // Demote C to Cold (the typical state pre-`preload`).
-    reg = reg.demote_letter('C', ShardState::Cold).expect("demote");
+    reg = reg
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+        .expect("demote");
     assert_eq!(
         reg.iter()
-            .find(|shard| shard.drive == 'C')
+            .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
             .expect("C present after Cold demote")
             .stats
             .promotions_total(),
@@ -403,12 +434,12 @@ fn promote_letter_to_hot_bumps_promotions_total_when_source_is_cold() {
 
     // Promote Cold → Hot (the actual preload-from-Cold path).
     reg = reg
-        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .promote_letter_to_hot(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c))
         .expect("promote_letter_to_hot from Cold");
 
     let c = reg
         .iter()
-        .find(|shard| shard.drive == 'C')
+        .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present post-promote");
     assert_eq!(c.state(), ShardState::Hot, "post-promote tier must be Hot");
     assert_eq!(
@@ -431,7 +462,7 @@ fn promote_letter_to_hot_does_not_bump_promotions_total_when_source_is_warm() {
     // C lands in Warm (the default after add).
     let pre_state = reg
         .iter()
-        .find(|shard| shard.drive == 'C')
+        .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present after add")
         .state();
     assert_eq!(pre_state, ShardState::Warm);
@@ -439,12 +470,12 @@ fn promote_letter_to_hot_does_not_bump_promotions_total_when_source_is_warm() {
     // Promote Warm → Hot (the operator preloads an already-Warm
     // drive — a no-cost tier-marker flip).
     reg = reg
-        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .promote_letter_to_hot(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c))
         .expect("promote_letter_to_hot from Warm");
 
     let c = reg
         .iter()
-        .find(|shard| shard.drive == 'C')
+        .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present post-promote");
     assert_eq!(c.state(), ShardState::Hot);
     assert_eq!(
@@ -468,17 +499,17 @@ fn promote_letter_to_hot_does_not_bump_promotions_total_when_source_is_parked() 
     let body_c = Arc::new(build_test_drive());
     let mut reg = ShardRegistry::new().add(Arc::clone(&body_c));
     reg = reg
-        .demote_letter('C', ShardState::Parked)
+        .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
         .expect("demote to Parked");
 
     // Promote Parked → Hot.
     reg = reg
-        .promote_letter_to_hot('C', Arc::clone(&body_c))
+        .promote_letter_to_hot(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c))
         .expect("promote_letter_to_hot from Parked");
 
     let c = reg
         .iter()
-        .find(|shard| shard.drive == 'C')
+        .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present post-promote");
     assert_eq!(c.state(), ShardState::Hot);
     assert_eq!(
@@ -504,16 +535,18 @@ fn promote_letter_to_hot_accumulates_across_repeated_cold_to_hot_cycles() {
 
     for _ in 0_u32..2_u32 {
         // Demote to Cold.
-        reg = reg.demote_letter('C', ShardState::Cold).expect("demote");
+        reg = reg
+            .demote_letter(uffs_mft::platform::DriveLetter::C, ShardState::Cold)
+            .expect("demote");
         // Promote Cold → Hot.
         reg = reg
-            .promote_letter_to_hot('C', Arc::clone(&body_c))
+            .promote_letter_to_hot(uffs_mft::platform::DriveLetter::C, Arc::clone(&body_c))
             .expect("promote_letter_to_hot");
     }
 
     let c = reg
         .iter()
-        .find(|shard| shard.drive == 'C')
+        .find(|shard| shard.drive == uffs_mft::platform::DriveLetter::C)
         .expect("C present post-cycle");
     assert_eq!(c.state(), ShardState::Hot);
     assert_eq!(

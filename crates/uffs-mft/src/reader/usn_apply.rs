@@ -67,7 +67,7 @@ pub(super) enum UsnDecision {
 /// in production traces; callers only need to act on the boolean.
 #[cfg(windows)]
 pub(super) fn usn_journal_invalidates_cache(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     header: &IndexHeader,
     current_info: &UsnJournalInfo,
 ) -> bool {
@@ -102,7 +102,7 @@ pub(super) fn usn_journal_invalidates_cache(
 /// [`UsnDecision::UseCached`] so the cached index is still served.
 #[cfg(windows)]
 pub(super) fn classify_usn_state(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     header: &IndexHeader,
     current_info: &UsnJournalInfo,
 ) -> UsnDecision {
@@ -128,7 +128,7 @@ pub(super) fn classify_usn_state(
 /// the missed entries.
 #[cfg(windows)]
 pub(super) fn apply_targeted_usn_reads(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     handle: &VolumeHandle,
     index: &mut MftIndex,
     frs_to_read: &[u64],
@@ -168,7 +168,11 @@ pub(super) fn apply_targeted_usn_reads(
 /// actually mutated `index`.  When nothing changed we skip both passes;
 /// the cached structures are still valid.
 #[cfg(windows)]
-pub(super) fn rebuild_derived_after_usn(drive: char, index: &mut MftIndex, stats: &UsnApplyStats) {
+pub(super) fn rebuild_derived_after_usn(
+    drive: crate::platform::DriveLetter,
+    index: &mut MftIndex,
+    stats: &UsnApplyStats,
+) {
     let had_changes = stats.deleted > 0 || stats.targeted_reads > 0;
     if had_changes {
         debug!(drive = %drive, "🔨 Rebuilding extension index after USN updates");
@@ -191,7 +195,7 @@ pub(super) fn rebuild_derived_after_usn(drive: char, index: &mut MftIndex, stats
 /// in-memory index that callers continue to use.
 #[cfg(windows)]
 pub(super) fn persist_usn_checkpoint(
-    drive: char,
+    drive: crate::platform::DriveLetter,
     handle: &VolumeHandle,
     index: &MftIndex,
     journal_id: u64,

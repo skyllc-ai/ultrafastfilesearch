@@ -34,7 +34,7 @@ impl MultiDriveMftReader {
     ///
     /// Returns an error if all drives fail to read.
     pub async fn read_all_index(&self) -> Result<Vec<MftIndex>> {
-        self.read_all_index_internal(None::<fn(char, MftProgress)>)
+        self.read_all_index_internal(None::<fn(crate::platform::DriveLetter, MftProgress)>)
             .await
     }
 
@@ -47,7 +47,7 @@ impl MultiDriveMftReader {
     /// Returns an error if all drives fail to read.
     pub async fn read_all_index_with_progress<F>(&self, callback: F) -> Result<Vec<MftIndex>>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         self.read_all_index_internal(Some(callback)).await
     }
@@ -115,15 +115,15 @@ impl MultiDriveMftReader {
         }
 
         let mut indices: Vec<MftIndex> = Vec::new();
-        let mut errors: Vec<(char, MftError)> = Vec::new();
+        let mut errors: Vec<(crate::platform::DriveLetter, MftError)> = Vec::new();
 
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(index)) => indices.push(index),
-                Ok(Err(error)) => errors.push(('?', error)),
+                Ok(Err(error)) => errors.push((crate::platform::DriveLetter::X, error)),
                 Err(join_err) => {
                     errors.push((
-                        '?',
+                        crate::platform::DriveLetter::X,
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
@@ -177,7 +177,7 @@ impl MultiDriveMftReader {
     /// Internal implementation for concurrent lean index reading.
     async fn read_all_index_internal<F>(&self, callback: Option<F>) -> Result<Vec<MftIndex>>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         if self.drives.is_empty() {
             return Err(MftError::InvalidInput("No drives specified".into()));
@@ -196,15 +196,15 @@ impl MultiDriveMftReader {
         }
 
         let mut indices: Vec<MftIndex> = Vec::new();
-        let mut errors: Vec<(char, MftError)> = Vec::new();
+        let mut errors: Vec<(crate::platform::DriveLetter, MftError)> = Vec::new();
 
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(index)) => indices.push(index),
-                Ok(Err(error)) => errors.push(('?', error)),
+                Ok(Err(error)) => errors.push((crate::platform::DriveLetter::X, error)),
                 Err(join_err) => {
                     errors.push((
-                        '?',
+                        crate::platform::DriveLetter::X,
                         MftError::InvalidInput(format!("Task failed: {join_err}")),
                     ));
                 }
@@ -227,9 +227,12 @@ impl MultiDriveMftReader {
     }
 
     /// Read a single drive into lean index with optional progress callback.
-    async fn read_single_drive_index<F>(drive: char, callback: Option<Arc<F>>) -> Result<MftIndex>
+    async fn read_single_drive_index<F>(
+        drive: crate::platform::DriveLetter,
+        callback: Option<Arc<F>>,
+    ) -> Result<MftIndex>
     where
-        F: Fn(char, MftProgress) + Send + Sync + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + 'static,
     {
         tokio::task::spawn_blocking(move || {
             let reader = MftReader::open(drive)?;
@@ -248,14 +251,14 @@ impl MultiDriveMftReader {
     }
 
     /// Read a single drive and save to cache.
-    async fn read_and_cache_single_drive(drive: char) -> Result<MftIndex> {
+    async fn read_and_cache_single_drive(drive: crate::platform::DriveLetter) -> Result<MftIndex> {
         tokio::task::spawn_blocking(move || Self::read_and_cache_single_drive_sync(drive))
             .await
             .map_err(|error| MftError::InvalidInput(format!("Task join error: {error}")))?
     }
 
     /// Synchronous implementation of `read_and_cache_single_drive`.
-    fn read_and_cache_single_drive_sync(drive: char) -> Result<MftIndex> {
+    fn read_and_cache_single_drive_sync(drive: crate::platform::DriveLetter) -> Result<MftIndex> {
         let reader = MftReader::open(drive)?;
         let index = reader.read_all_index_sync()?;
 
@@ -283,7 +286,7 @@ impl MultiDriveMftReader {
     /// If USN Journal is unavailable or the journal has wrapped, falls back
     /// to a full rebuild.
     async fn apply_usn_updates_to_cached_index(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         index: MftIndex,
         header: IndexHeader,
     ) -> Result<MftIndex> {
@@ -296,7 +299,7 @@ impl MultiDriveMftReader {
 
     /// Synchronous implementation of `apply_usn_updates_to_cached_index`.
     fn apply_usn_updates_to_cached_index_sync(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         index: MftIndex,
         header: &IndexHeader,
     ) -> Result<MftIndex> {
@@ -319,7 +322,10 @@ impl MultiDriveMftReader {
     /// that handles the `query_usn_journal` failure path here: when the
     /// journal is unavailable we fall back to [`UsnDecision::UseCached`]
     /// so the cached index is still served instead of erroring out.
-    fn classify_usn_state(drive: char, header: &IndexHeader) -> UsnDecision {
+    fn classify_usn_state(
+        drive: crate::platform::DriveLetter,
+        header: &IndexHeader,
+    ) -> UsnDecision {
         match query_usn_journal(drive) {
             Ok(info) => classify_with_journal_info(drive, header, &info),
             Err(error) => {
@@ -341,7 +347,7 @@ impl MultiDriveMftReader {
     /// to returning the original cached `index`; there is no fallible
     /// outcome to surface, so this returns `MftIndex` directly.
     fn apply_or_skip_usn_changes(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         index: MftIndex,
         journal_id: u64,
         start_usn: i64,
@@ -374,7 +380,7 @@ impl MultiDriveMftReader {
     /// 3. Rebuild extension index + tree metrics if anything changed, then save
     ///    the updated index back to cache.
     fn apply_usn_changes_and_save(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         mut index: MftIndex,
         records: &[crate::usn::UsnRecord],
         journal_id: u64,

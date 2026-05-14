@@ -204,12 +204,16 @@ impl ShardRegistry {
     /// `eq_ignore_ascii_case` to handle drive letters that flow
     /// through the daemon in either case.
     #[must_use]
-    pub(crate) fn replace(&self, match_letter: char, body: Arc<DriveCompactIndex>) -> Self {
+    pub(crate) fn replace(
+        &self,
+        match_letter: uffs_mft::platform::DriveLetter,
+        body: Arc<DriveCompactIndex>,
+    ) -> Self {
         let new_letter = body.letter;
         let mut shards: Vec<Arc<ShardEntry>> = self
             .shards
             .iter()
-            .filter(|shard| !shard.drive.eq_ignore_ascii_case(&match_letter))
+            .filter(|shard| shard.drive != match_letter)
             .cloned()
             .collect();
         shards.push(Arc::new(ShardEntry::new_warm(new_letter, body)));
@@ -226,11 +230,11 @@ impl ShardRegistry {
     /// [`crate::index::IndexManager::forget_drives`] calls `remove`
     /// after the eviction guard checks pass.
     #[must_use]
-    pub(crate) fn remove(&self, drive: char) -> Self {
+    pub(crate) fn remove(&self, drive: uffs_mft::platform::DriveLetter) -> Self {
         let shards: Vec<Arc<ShardEntry>> = self
             .shards
             .iter()
-            .filter(|shard| !shard.drive.eq_ignore_ascii_case(&drive))
+            .filter(|shard| shard.drive != drive)
             .cloned()
             .collect();
         Self::from_shards(shards)
@@ -278,7 +282,11 @@ impl ShardRegistry {
     /// carry `reason="pressure-cascade"` instead of the default
     /// `reason="demote"`.
     #[must_use]
-    pub(crate) fn demote_letter(&self, letter: char, target: ShardState) -> Option<Self> {
+    pub(crate) fn demote_letter(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        target: ShardState,
+    ) -> Option<Self> {
         self.demote_letter_with_reason(letter, target, DemoteReason::IdleTtl)
     }
 
@@ -320,7 +328,7 @@ impl ShardRegistry {
     #[must_use]
     pub(crate) fn demote_letter_with_reason(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         target: ShardState,
         reason: DemoteReason,
     ) -> Option<Self> {
@@ -331,7 +339,7 @@ impl ShardRegistry {
             .shards
             .iter()
             .enumerate()
-            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+            .find(|(_, shard)| shard.drive == letter)?;
         let from_state = old_arc.state();
         if !is_legal_demote_target(from_state, target) {
             return None;
@@ -361,7 +369,7 @@ impl ShardRegistry {
                 let Some(body) = old_arc.body() else {
                     tracing::error!(
                         target: "shard.transition",
-                        letter = %letter.to_ascii_uppercase(),
+                        letter = %letter,
                         from = %from_state,
                         to = %target,
                         reason = reason.as_str(),
@@ -400,7 +408,7 @@ impl ShardRegistry {
             .collect();
         tracing::info!(
             target: "shard.transition",
-            letter = %letter.to_ascii_uppercase(),
+            letter = %letter,
             from = %from_state,
             to = %target,
             freed_mb,
@@ -429,14 +437,14 @@ impl ShardRegistry {
     #[must_use]
     pub(crate) fn promote_letter(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         body: Arc<DriveCompactIndex>,
     ) -> Option<Self> {
         let (pos, old_arc) = self
             .shards
             .iter()
             .enumerate()
-            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+            .find(|(_, shard)| shard.drive == letter)?;
         let from_state = old_arc.state();
         if !matches!(from_state, ShardState::Parked | ShardState::Cold) {
             return None;
@@ -459,7 +467,7 @@ impl ShardRegistry {
             .collect();
         tracing::info!(
             target: "shard.transition",
-            letter = %letter.to_ascii_uppercase(),
+            letter = %letter,
             from = %from_state,
             to = %ShardState::Warm,
             restored_mb,
@@ -496,14 +504,14 @@ impl ShardRegistry {
     #[must_use]
     pub(crate) fn promote_letter_to_hot(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         body: Arc<DriveCompactIndex>,
     ) -> Option<Self> {
         let (pos, old_arc) = self
             .shards
             .iter()
             .enumerate()
-            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+            .find(|(_, shard)| shard.drive == letter)?;
         let from_state = old_arc.state();
         if !matches!(
             from_state,
@@ -542,7 +550,7 @@ impl ShardRegistry {
             .collect();
         tracing::info!(
             target: "shard.transition",
-            letter = %letter.to_ascii_uppercase(),
+            letter = %letter,
             from = %from_state,
             to = %ShardState::Hot,
             restored_mb,
@@ -575,14 +583,14 @@ impl ShardRegistry {
     #[must_use]
     pub(crate) fn replace_warm_body(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         body: Arc<DriveCompactIndex>,
     ) -> Option<Self> {
         let (pos, old_arc) = self
             .shards
             .iter()
             .enumerate()
-            .find(|(_, shard)| shard.drive.eq_ignore_ascii_case(&letter))?;
+            .find(|(_, shard)| shard.drive == letter)?;
         let from_state = old_arc.state();
         if !matches!(from_state, ShardState::Warm | ShardState::Hot) {
             return None;
@@ -605,7 +613,7 @@ impl ShardRegistry {
             .collect();
         tracing::info!(
             target: "shard.transition",
-            letter = %letter.to_ascii_uppercase(),
+            letter = %letter,
             from = %from_state,
             to = %ShardState::Warm,
             refreshed_mb,
@@ -622,13 +630,13 @@ impl ShardRegistry {
 
     /// `true` iff any shard exists for `drive` (regardless of tier).
     #[must_use]
-    pub(crate) fn contains(&self, drive: char) -> bool {
+    pub(crate) fn contains(&self, drive: uffs_mft::platform::DriveLetter) -> bool {
         self.shards.iter().any(|shard| shard.drive == drive)
     }
 
     /// Drive letters of every loaded shard in load order.
     #[must_use]
-    pub(crate) fn loaded_letters(&self) -> Vec<char> {
+    pub(crate) fn loaded_letters(&self) -> Vec<uffs_mft::platform::DriveLetter> {
         self.shards.iter().map(|shard| shard.drive).collect()
     }
 }
@@ -656,8 +664,11 @@ mod tests {
         assert!(reg.is_empty());
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.active_index().drives.len(), 0);
-        assert_eq!(reg.loaded_letters(), Vec::<char>::new());
-        assert!(!reg.contains('C'));
+        assert_eq!(
+            reg.loaded_letters(),
+            Vec::<uffs_mft::platform::DriveLetter>::new()
+        );
+        assert!(!reg.contains(uffs_mft::platform::DriveLetter::C));
     }
 
     /// `Default` matches `new()`.
@@ -682,7 +693,7 @@ mod tests {
     /// `IndexManager::replace_drive` relies on for fresh inserts.
     #[test]
     fn remove_missing_is_noop() {
-        let reg = ShardRegistry::new().remove('Z');
+        let reg = ShardRegistry::new().remove(uffs_mft::platform::DriveLetter::Z);
         assert!(reg.is_empty());
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.active_index().drives.len(), 0);

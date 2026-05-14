@@ -333,7 +333,7 @@ impl ExtensionIndex {
 #[derive(Clone)]
 pub struct DriveCompactIndex {
     /// Drive letter (e.g., 'C').
-    pub letter: char,
+    pub letter: uffs_mft::platform::DriveLetter,
     /// Compact records — one per MFT file/directory.
     ///
     /// Backed by [`ColumnStorage`] so Phase 2b can transparently
@@ -674,19 +674,14 @@ fn expand_links_and_ads(
 pub(crate) fn compute_path_lengths(
     records: &mut [CompactRecord],
     names: &[u8],
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) {
     // Drive prefix in characters: the letter (1 char) + colon (1 char) = 2.
-    // A `char` is always exactly one Unicode scalar value, so the letter
-    // always contributes 1 to the char count regardless of its UTF-8
-    // byte length.  Suppress the unused-variable lint by reading the
-    // parameter — if this ever becomes `&str` the arithmetic changes.
-    // `drive_letter` is read to guarantee callers pass a valid letter;
-    // the arithmetic only cares about "1 char + 1 colon".
-    debug_assert!(
-        drive_letter.is_ascii_alphabetic(),
-        "drive_letter must be ASCII A-Z, got {drive_letter:?}"
-    );
+    // `DriveLetter` is ASCII A–Z by construction (validated in
+    // `DriveLetter::parse`), so the previous runtime `debug_assert!`
+    // is now a tautology and was removed.  The arithmetic only cares
+    // about "1 letter char + 1 colon".
+    let _: uffs_mft::platform::DriveLetter = drive_letter;
     let drive_prefix_chars: u32 = 1 /* letter */ + 1 /* ':' */;
 
     // Build forward adjacency list (parent → children) for top-down BFS.
@@ -766,7 +761,7 @@ fn name_char_count(rec: &CompactRecord, names: &[u8]) -> u32 {
 /// Returns `(DriveCompactIndex, compact_build_ms, trigram_build_ms)`.
 #[must_use]
 pub fn build_compact_index(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     index: &MftIndex,
 ) -> (DriveCompactIndex, u128, u128) {
     use uffs_mft::index::PathResolver;
@@ -920,7 +915,7 @@ pub fn build_compact_index(
 /// Reclaims capacity slack from the doubling growth strategy used during
 /// construction.  Saves ~500 MB across 7 drives.
 fn shrink_compact_vecs(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     records: &mut Vec<CompactRecord>,
     names: &mut Vec<u8>,
     ext_names: &mut Vec<Box<str>>,
@@ -951,7 +946,9 @@ pub(crate) const INDEX_TTL_SECONDS: u64 = 14400;
 /// `drive_letter`. On success, log the result at `INFO` and any diffs
 /// from the compiled-in default at `WARN`. On failure, log at `WARN`
 /// and fall back to [`CaseFold::default_table()`].
-pub(crate) fn resolve_case_fold(drive_letter: char) -> uffs_text::case_fold::CaseFold {
+pub(crate) fn resolve_case_fold(
+    drive_letter: uffs_mft::platform::DriveLetter,
+) -> uffs_text::case_fold::CaseFold {
     let live_table = match uffs_mft::platform::upcase::read_upcase_table(drive_letter) {
         Ok(table) => table,
         Err(err) => {
@@ -971,7 +968,10 @@ pub(crate) fn resolve_case_fold(drive_letter: char) -> uffs_text::case_fold::Cas
 }
 
 /// Log the comparison between live and compiled-in `$UpCase` tables.
-fn log_upcase_comparison(drive_letter: char, live_fold: &uffs_text::case_fold::CaseFold) {
+fn log_upcase_comparison(
+    drive_letter: uffs_mft::platform::DriveLetter,
+    live_fold: &uffs_text::case_fold::CaseFold,
+) {
     let default = uffs_text::case_fold::CaseFold::default_table();
     let diffs = default.diff(live_fold);
 

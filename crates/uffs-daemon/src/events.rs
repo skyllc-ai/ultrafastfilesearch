@@ -33,7 +33,7 @@ pub(crate) enum DaemonEvent {
     /// A single drive finished loading.
     DriveLoaded {
         /// Drive letter (e.g. 'C').
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         /// Number of records in the drive index.
         records: usize,
         /// MFT parse time in milliseconds.
@@ -59,12 +59,12 @@ pub(crate) enum DaemonEvent {
     /// A drive refresh has started.
     RefreshStarted {
         /// Drives being refreshed.
-        drives: Vec<char>,
+        drives: Vec<uffs_mft::platform::DriveLetter>,
     },
     /// A single drive finished refreshing.
     DriveRefreshed {
         /// Drive letter.
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         /// Updated record count.
         records: usize,
         /// MFT parse time in milliseconds.
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn event_to_json_line_produces_valid_jsonrpc_notification() {
         let event = DaemonEvent::DriveLoaded {
-            drive: 'C',
+            drive: uffs_mft::platform::DriveLetter::C,
             records: 3_400_000,
             mft_ms: 2100,
             compact_ms: 850,
@@ -291,7 +291,7 @@ mod tests {
                 version: "test".to_owned(),
             },
             DaemonEvent::DriveLoaded {
-                drive: 'D',
+                drive: uffs_mft::platform::DriveLetter::D,
                 records: 100,
                 mft_ms: 10,
                 compact_ms: 5,
@@ -305,10 +305,13 @@ mod tests {
                 startup_ms: 50,
             },
             DaemonEvent::RefreshStarted {
-                drives: vec!['C', 'D'],
+                drives: vec![
+                    uffs_mft::platform::DriveLetter::C,
+                    uffs_mft::platform::DriveLetter::D,
+                ],
             },
             DaemonEvent::DriveRefreshed {
-                drive: 'C',
+                drive: uffs_mft::platform::DriveLetter::C,
                 records: 200,
                 mft_ms: 20,
                 compact_ms: 10,
@@ -368,7 +371,7 @@ mod tests {
 
         // Emit two events
         tx.emit(DaemonEvent::DriveLoaded {
-            drive: 'C',
+            drive: uffs_mft::platform::DriveLetter::C,
             records: 100,
             mft_ms: 10,
             compact_ms: 5,

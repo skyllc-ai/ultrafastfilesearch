@@ -186,7 +186,7 @@ fn daemon_status_round_trip() {
 fn search_response_inline_rows_round_trip() {
     let resp = SearchResponse {
         payload: SearchPayload::InlineRows(vec![SearchRow {
-            drive: 'C',
+            drive: uffs_mft::platform::DriveLetter::C,
             path: "C:\\test.rs".to_owned(),
             name: "test.rs".to_owned(),
             size: 1024,
@@ -1500,7 +1500,7 @@ fn from_cli_args_drive_prefix_with_ext_glob_promotes_both() {
     let params = SearchParams::from_cli_args(&args).expect("parse");
     assert_eq!(
         params.drives,
-        vec!['C'],
+        vec![uffs_mft::platform::DriveLetter::C],
         "drive prefix must populate drives filter"
     );
     assert_eq!(
@@ -1523,7 +1523,7 @@ fn from_cli_args_drive_prefix_with_ext_glob_promotes_both() {
 fn from_cli_args_drive_prefix_with_literal_preserves_pattern() {
     let args: Vec<String> = vec!["D:notepad.exe".into()];
     let params = SearchParams::from_cli_args(&args).expect("parse");
-    assert_eq!(params.drives, vec!['D']);
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::D]);
     assert_eq!(
         params.pattern, "notepad.exe",
         "literal pattern must be left alone after prefix strip"
@@ -1560,7 +1560,7 @@ fn from_cli_args_drive_prefix_lowercase_letter_is_uppercased() {
     let params = SearchParams::from_cli_args(&args).expect("parse");
     assert_eq!(
         params.drives,
-        vec!['C'],
+        vec![uffs_mft::platform::DriveLetter::C],
         "drive letter must be uppercased regardless of input case"
     );
     assert_eq!(params.pattern, "*");
@@ -1576,7 +1576,7 @@ fn from_cli_args_drive_prefix_respects_explicit_drive_flag() {
     let params = SearchParams::from_cli_args(&args).expect("parse");
     assert_eq!(
         params.drives,
-        vec!['D'],
+        vec![uffs_mft::platform::DriveLetter::D],
         "explicit --drive D must win over inferred C prefix"
     );
     // Prefix is still stripped; ext-glob promotion still fires on the rest.
@@ -1832,7 +1832,11 @@ fn default_preload_pin_minutes_is_thirty() {
 #[test]
 fn hibernate_params_round_trip() {
     let params = HibernateParams {
-        drives: vec!['C', 'D', 'E'],
+        drives: vec![
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E,
+        ],
     };
     let json = serde_json::to_string(&params).expect("serialize");
     let parsed: HibernateParams = serde_json::from_str(&json).expect("deserialize");
@@ -1854,10 +1858,16 @@ fn hibernate_params_empty_drives_means_all() {
 #[test]
 fn hibernate_response_round_trip() {
     let resp = HibernateResponse {
-        hot_demoted: vec!['C'],
-        warm_demoted: vec!['D', 'E'],
-        parked_demoted: vec!['F'],
-        already_cold: vec!['G', 'H'],
+        hot_demoted: vec![uffs_mft::platform::DriveLetter::C],
+        warm_demoted: vec![
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E,
+        ],
+        parked_demoted: vec![uffs_mft::platform::DriveLetter::F],
+        already_cold: vec![
+            uffs_mft::platform::DriveLetter::G,
+            uffs_mft::platform::DriveLetter::H,
+        ],
     };
     let json = serde_json::to_string(&resp).expect("serialize");
     let parsed: HibernateResponse = serde_json::from_str(&json).expect("deserialize");
@@ -1867,7 +1877,7 @@ fn hibernate_response_round_trip() {
 #[test]
 fn preload_params_round_trip() {
     let params = PreloadParams {
-        drives: vec!['C'],
+        drives: vec![uffs_mft::platform::DriveLetter::C],
         pin_minutes: Some(60_u32),
     };
     let json = serde_json::to_string(&params).expect("serialize");
@@ -1891,8 +1901,8 @@ fn preload_params_pin_minutes_optional() {
 #[test]
 fn preload_response_round_trip() {
     let resp = PreloadResponse {
-        promoted: vec!['C'],
-        already_hot: vec!['D'],
+        promoted: vec![uffs_mft::platform::DriveLetter::C],
+        already_hot: vec![uffs_mft::platform::DriveLetter::D],
         errors: vec!["Z: cache file missing".to_owned()],
         pin_until_unix_ms: 1_800_000_000_000_i64,
     };
@@ -1904,7 +1914,7 @@ fn preload_response_round_trip() {
 #[test]
 fn forget_params_round_trip() {
     let params = ForgetParams {
-        drives: vec!['Z'],
+        drives: vec![uffs_mft::platform::DriveLetter::Z],
         force: true,
     };
     let json = serde_json::to_string(&params).expect("serialize");
@@ -1928,8 +1938,8 @@ fn forget_params_force_defaults_false() {
 #[test]
 fn forget_response_round_trip() {
     let resp = ForgetResponse {
-        forgotten: vec!['Z'],
-        already_absent: vec!['Y'],
+        forgotten: vec![uffs_mft::platform::DriveLetter::Z],
+        already_absent: vec![uffs_mft::platform::DriveLetter::Y],
         freed_bytes: 1_234_567_890_u64,
         errors: vec!["X: permission denied".to_owned()],
     };
@@ -1955,7 +1965,7 @@ fn status_drives_response_round_trip() {
     let resp = StatusDrivesResponse {
         drives: vec![
             DriveTierStatus {
-                letter: 'C',
+                letter: uffs_mft::platform::DriveLetter::C,
                 tier: "hot".to_owned(),
                 resident_bytes: 1_073_741_824_u64, // 1 GiB
                 query_rate_per_min: 12.5_f64,
@@ -1964,7 +1974,7 @@ fn status_drives_response_round_trip() {
                 pin_until_unix_ms: 1_700_001_800_000_i64,
             },
             DriveTierStatus {
-                letter: 'D',
+                letter: uffs_mft::platform::DriveLetter::D,
                 tier: "cold".to_owned(),
                 resident_bytes: 0_u64,
                 query_rate_per_min: 0.0_f64,
@@ -2005,5 +2015,8 @@ fn hibernate_request_envelope_round_trip() {
     assert_eq!(parsed.id, Some(7));
     let inner: HibernateParams = serde_json::from_value(parsed.params.expect("params present"))
         .expect("nested params decode");
-    assert_eq!(inner.drives, vec!['C', 'D']);
+    assert_eq!(inner.drives, vec![
+        uffs_mft::platform::DriveLetter::C,
+        uffs_mft::platform::DriveLetter::D
+    ]);
 }

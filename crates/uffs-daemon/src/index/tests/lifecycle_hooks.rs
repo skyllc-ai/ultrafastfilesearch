@@ -64,9 +64,15 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
     mgr.add_drive(build_test_drive_e()).await;
 
     // Demote D → Parked (body released; bloom + trie resident).
-    assert!(mgr.demote_letter_for_test('D', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::D, ShardState::Parked)
+            .await
+    );
     // Demote E → Cold (no body, no filters).
-    assert!(mgr.demote_letter_for_test('E', ShardState::Cold).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::E, ShardState::Cold)
+            .await
+    );
 
     let response = mgr.drives().await;
     assert_eq!(
@@ -76,13 +82,22 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
     );
 
     // Load-order preserved (matches ShardRegistry::iter()).
-    let letters: Vec<char> = response.drives.iter().map(|dr| dr.letter).collect();
-    assert_eq!(letters, vec!['C', 'D', 'E'], "load order preserved");
+    let letters: Vec<uffs_mft::platform::DriveLetter> =
+        response.drives.iter().map(|dr| dr.letter).collect();
+    assert_eq!(
+        letters,
+        vec![
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E
+        ],
+        "load order preserved"
+    );
 
     // C — Warm: body present, records nonzero, tier=Warm,
     // source from the body's IndexSource (live MFT path "C:").
     let c = &response.drives[0];
-    assert_eq!(c.letter, 'C');
+    assert_eq!(c.letter, uffs_mft::platform::DriveLetter::C);
     assert_eq!(c.tier, Some(ShardTier::Warm), "C remains Warm");
     assert!(c.records > 0, "Warm shard reports its body's records.len()");
     assert_eq!(c.source, "live", "Warm shard's body source flows through");
@@ -90,7 +105,7 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
     // D — Parked: no body, records=0, tier=Parked,
     // source synthesized as "parked".
     let d = &response.drives[1];
-    assert_eq!(d.letter, 'D');
+    assert_eq!(d.letter, uffs_mft::platform::DriveLetter::D);
     assert_eq!(d.tier, Some(ShardTier::Parked), "D demoted to Parked");
     assert_eq!(d.records, 0, "Parked shard has no body in RAM");
     assert_eq!(
@@ -101,7 +116,7 @@ async fn drives_rpc_enumerates_warm_parked_and_cold_shards_with_tier_markers() {
     // E — Cold: no body, no filters, records=0, tier=Cold,
     // source synthesized as "cold".
     let e = &response.drives[2];
-    assert_eq!(e.letter, 'E');
+    assert_eq!(e.letter, uffs_mft::platform::DriveLetter::E);
     assert_eq!(e.tier, Some(ShardTier::Cold), "E demoted to Cold");
     assert_eq!(e.records, 0, "Cold shard has nothing in RAM");
     assert_eq!(
@@ -164,7 +179,11 @@ async fn demote_idle_shards_invokes_working_set_trim_once_per_batch() {
     // Backdate every shard's last_query_at_ms past the Warm→Parked
     // threshold so the controller picks up all three in one batch.
     let last_query_ms = 1_000_000_000_u64;
-    for letter in ['C', 'D', 'E'] {
+    for letter in [
+        uffs_mft::platform::DriveLetter::C,
+        uffs_mft::platform::DriveLetter::D,
+        uffs_mft::platform::DriveLetter::E,
+    ] {
         assert!(
             mgr.backdate_last_query_at_ms_for_test(letter, last_query_ms)
                 .await
@@ -180,9 +199,18 @@ async fn demote_idle_shards_invokes_working_set_trim_once_per_batch() {
     // Post-batch: every shard demoted, hook fired exactly once.
     let states = mgr.shard_states_for_test().await;
     assert_eq!(states, vec![
-        ('C', crate::cache::ShardState::Parked),
-        ('D', crate::cache::ShardState::Parked),
-        ('E', crate::cache::ShardState::Parked),
+        (
+            uffs_mft::platform::DriveLetter::C,
+            crate::cache::ShardState::Parked
+        ),
+        (
+            uffs_mft::platform::DriveLetter::D,
+            crate::cache::ShardState::Parked
+        ),
+        (
+            uffs_mft::platform::DriveLetter::E,
+            crate::cache::ShardState::Parked
+        ),
     ]);
     assert_eq!(
         counting_trim.calls(),
@@ -237,16 +265,23 @@ async fn ensure_warm_for_dispatch_invokes_prefetch_with_records_and_names_region
         Arc::new(crate::config::Config::default()),
     );
     mgr.add_drive(build_test_drive()).await;
-    assert!(mgr.demote_letter_for_test('C', ShardState::Parked).await);
+    assert!(
+        mgr.demote_letter_for_test(uffs_mft::platform::DriveLetter::C, ShardState::Parked)
+            .await
+    );
 
     // Pre-promote: no prefetch calls.
     assert!(recording_prefetch.calls().is_empty());
 
-    mgr.ensure_warm_for_dispatch(&['C'], &[]).await;
+    mgr.ensure_warm_for_dispatch(&[uffs_mft::platform::DriveLetter::C], &[])
+        .await;
 
     // Shard promoted (the Phase-3 contract this test depends on).
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Warm)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
 
     // Prefetch invoked exactly once, with two regions in a fixed
     // order: records first (typed slice → byte length), names
@@ -335,9 +370,18 @@ async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     // already stamped `mark_loaded_at(unix_now_ms())` on each shard, so
     // we backdate to known values to remove wall-clock skew from the
     // assertion.
-    assert!(mgr.backdate_last_query_at_ms_for_test('D', 1_000).await);
-    assert!(mgr.backdate_last_query_at_ms_for_test('E', 2_000).await);
-    assert!(mgr.backdate_last_query_at_ms_for_test('C', 3_000).await);
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::D, 1_000)
+            .await
+    );
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::E, 2_000)
+            .await
+    );
+    assert!(
+        mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::C, 3_000)
+            .await
+    );
 
     // Pre-cascade: trim hook never fired.
     assert_eq!(counting_trim.calls(), 0, "no cascade yet → no trim");
@@ -346,7 +390,7 @@ async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     let step1 = mgr.cascade_demote_one_step().await;
     assert_eq!(
         step1,
-        Some(('D', ShardState::Parked)),
+        Some((uffs_mft::platform::DriveLetter::D, ShardState::Parked)),
         "first cascade step demotes the LRU Warm shard (D, ts=1000)",
     );
     assert_eq!(
@@ -359,7 +403,7 @@ async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     let step2 = mgr.cascade_demote_one_step().await;
     assert_eq!(
         step2,
-        Some(('E', ShardState::Parked)),
+        Some((uffs_mft::platform::DriveLetter::E, ShardState::Parked)),
         "second cascade step demotes the next-LRU Warm shard (E, ts=2000)",
     );
     assert_eq!(counting_trim.calls(), 2);
@@ -368,7 +412,7 @@ async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     let step3 = mgr.cascade_demote_one_step().await;
     assert_eq!(
         step3,
-        Some(('C', ShardState::Parked)),
+        Some((uffs_mft::platform::DriveLetter::C, ShardState::Parked)),
         "third cascade step demotes the last Warm shard (C, ts=3000)",
     );
     assert_eq!(counting_trim.calls(), 3);
@@ -391,9 +435,9 @@ async fn cascade_demote_one_step_picks_lru_warm_and_drains_in_order() {
     // order from `shard_states_for_test`).
     let states = mgr.shard_states_for_test().await;
     assert_eq!(states, vec![
-        ('C', ShardState::Parked),
-        ('D', ShardState::Parked),
-        ('E', ShardState::Parked),
+        (uffs_mft::platform::DriveLetter::C, ShardState::Parked),
+        (uffs_mft::platform::DriveLetter::D, ShardState::Parked),
+        (uffs_mft::platform::DriveLetter::E, ShardState::Parked),
     ]);
 
     // The pressure fake was never driven — this test exercises the
@@ -579,9 +623,18 @@ mod pressure_subscriber_fixtures {
         mgr.add_drive(build_test_drive()).await;
         mgr.add_drive(build_test_drive_d()).await;
         mgr.add_drive(build_test_drive_e()).await;
-        assert!(mgr.backdate_last_query_at_ms_for_test('D', 1_000).await);
-        assert!(mgr.backdate_last_query_at_ms_for_test('E', 2_000).await);
-        assert!(mgr.backdate_last_query_at_ms_for_test('C', 3_000).await);
+        assert!(
+            mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::D, 1_000)
+                .await
+        );
+        assert!(
+            mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::E, 2_000)
+                .await
+        );
+        assert!(
+            mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::C, 3_000)
+                .await
+        );
         let initial_states = mgr.shard_states_for_test().await;
         assert!(
             initial_states.iter().all(|(_, s)| *s == ShardState::Warm),
@@ -610,7 +663,7 @@ mod pressure_subscriber_fixtures {
     /// failed assertion site, not as a hung test.
     pub(super) async fn poll_until<F>(mgr: &IndexManager, predicate: F, label: &str)
     where
-        F: Fn(&[(char, ShardState)]) -> bool,
+        F: Fn(&[(uffs_mft::platform::DriveLetter, ShardState)]) -> bool,
     {
         let deadline = std::time::Instant::now() + CASCADE_DEADLINE;
         loop {

@@ -69,7 +69,7 @@ use crate::path_trie::PathTrie;
 #[derive(Clone)]
 pub struct ParkedBody {
     /// Drive letter the cache was built for.
-    pub letter: char,
+    pub letter: uffs_mft::platform::DriveLetter,
     /// `MftIndex.build_epoch` the source compact cache was built
     /// from — used as a staleness check on promote.
     pub source_epoch: u64,
@@ -128,7 +128,7 @@ impl core::fmt::Debug for ParkedBody {
 ///   / `filters_io::read_trie_section`).
 pub fn deserialize_parked_body(
     data: &[u8],
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> Result<ParkedBody, &'static str> {
     let (filters_offset, source_epoch) = find_v9_filters_offset(data)?;
     let (bloom, after_bloom) = filters_io::read_bloom_section(data, filters_offset)?;
@@ -347,7 +347,7 @@ fn read_decompressed_plaintext(path: &std::path::Path) -> Option<(Vec<u8>, Parke
 fn is_compact_cache_stale_for_epoch(
     plaintext: &[u8],
     mft_build_epoch: u64,
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
 ) -> bool {
     if mft_build_epoch == 0 {
         return false;
@@ -419,7 +419,7 @@ fn emit_parked_load_profile(
 /// contract.
 #[must_use]
 pub fn load_parked_body(
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     ttl_seconds: u64,
     mft_build_epoch: u64,
     trust_ttl_only: bool,
@@ -505,7 +505,7 @@ mod tests {
         let children = ChildrenIndex::build(&records);
         let ext_index = ExtensionIndex::build(&records);
         let mut index = DriveCompactIndex {
-            letter: 'C',
+            letter: uffs_mft::platform::DriveLetter::C,
             records: ColumnStorage::from_vec(records),
             names: ColumnStorage::from_vec(names),
             trigram,
@@ -533,7 +533,8 @@ mod tests {
         let index = make_test_index();
         let serialized = super::super::serialize_compact(&index);
 
-        let body = deserialize_parked_body(&serialized, 'C').expect("parked deser");
+        let body = deserialize_parked_body(&serialized, uffs_mft::platform::DriveLetter::C)
+            .expect("parked deser");
 
         // Bloom: every record's folded basename hits.
         let mut fold_buf: Vec<u8> = Vec::new();
@@ -558,7 +559,7 @@ mod tests {
         assert_eq!(body.path_trie.child_indices(), expected.child_indices());
 
         // Metadata: epoch + letter + fold round-trip.
-        assert_eq!(body.letter, 'C');
+        assert_eq!(body.letter, uffs_mft::platform::DriveLetter::C);
         assert_eq!(body.source_epoch, 1234);
     }
 
@@ -577,7 +578,8 @@ mod tests {
             .expect("buffer too short for version")
             .copy_from_slice(&8_u16.to_le_bytes());
 
-        let err = deserialize_parked_body(&serialized, 'C').expect_err("v8 must reject");
+        let err = deserialize_parked_body(&serialized, uffs_mft::platform::DriveLetter::C)
+            .expect_err("v8 must reject");
         assert!(
             err.contains("stale compact version"),
             "error should mention 'stale compact version': {err:?}",
@@ -595,7 +597,8 @@ mod tests {
         let byte = serialized.get_mut(0).expect("non-empty buffer");
         *byte = byte.wrapping_add(1);
 
-        let _err = deserialize_parked_body(&serialized, 'C').expect_err("bad magic must reject");
+        let _err = deserialize_parked_body(&serialized, uffs_mft::platform::DriveLetter::C)
+            .expect_err("bad magic must reject");
     }
 
     /// Truncating the buffer at successively shorter prefixes must
@@ -639,7 +642,7 @@ mod tests {
         ];
         for &prefix in &prefixes {
             let truncated = serialized.get(..prefix).expect("prefix in range");
-            let result = deserialize_parked_body(truncated, 'C');
+            let result = deserialize_parked_body(truncated, uffs_mft::platform::DriveLetter::C);
             assert!(
                 result.is_err(),
                 "prefix {prefix}/{parked_end} (full {full}) must be rejected (got {result:?})",
@@ -682,7 +685,8 @@ mod tests {
     fn parked_body_size_bytes_is_nonzero_and_bounded() {
         let index = make_test_index();
         let serialized = super::super::serialize_compact(&index);
-        let body = deserialize_parked_body(&serialized, 'C').expect("parked deser");
+        let body = deserialize_parked_body(&serialized, uffs_mft::platform::DriveLetter::C)
+            .expect("parked deser");
 
         let bloom_bytes = body.bloom.size_bytes();
         let trie_bytes = body.path_trie.size_bytes();

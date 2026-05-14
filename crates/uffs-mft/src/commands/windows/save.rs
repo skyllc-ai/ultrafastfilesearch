@@ -61,7 +61,7 @@ use crate::display::{clean_path_for_display, format_bytes, format_duration, form
 #[cfg(windows)]
 #[expect(clippy::too_many_arguments, reason = "CLI command with many options")]
 pub(crate) async fn cmd_save(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     output: &Path,
     compress: bool,
     compression_level: i32,
@@ -88,15 +88,14 @@ pub(crate) async fn cmd_save(
     use uffs_mft::{MftReader, SaveRawOptions};
 
     let start_time = Instant::now();
-    let drive_upper = drive.to_ascii_uppercase();
 
-    info!(drive = %drive_upper, "Reading raw MFT from drive");
+    info!(drive = %drive, "Reading raw MFT from drive");
 
     // Get volume info for display
     let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
     let vol_data = handle.volume_data();
 
-    let drive_type = detect_drive_type(drive_upper);
+    let drive_type = detect_drive_type(drive);
     let drive_type_str = drive_type_label(drive_type, "Unknown");
 
     // Calculate metrics
@@ -129,7 +128,7 @@ pub(crate) async fn cmd_save(
     let options = SaveRawOptions {
         compress: if raw_compat { false } else { compress },
         compression_level,
-        volume_letter: drive_upper,
+        volume_letter: drive,
         raw_compat,
     };
 
@@ -146,7 +145,7 @@ pub(crate) async fn cmd_save(
     // Print formatted output
     println!("═══════════════════════════════════════════════════════════════");
     println!("                         MFT SAVED");
-    println!("                    Drive: {drive_upper}: ({drive_type_str})");
+    println!("                    Drive: {drive}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📁 MFT STRUCTURE");
@@ -211,7 +210,7 @@ pub(crate) async fn cmd_save(
 /// capturing the non-deterministic I/O ordering for realistic testing.
 #[cfg(windows)]
 async fn cmd_save_iocp(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     output: &Path,
     compress: bool,
     compression_level: i32,
@@ -223,15 +222,14 @@ async fn cmd_save_iocp(
     use uffs_mft::{IocpCaptureOptions, MftReader};
 
     let start_time = Instant::now();
-    let drive_upper = drive.to_ascii_uppercase();
 
-    info!(drive = %drive_upper, concurrency, "Reading MFT with IOCP capture mode");
+    info!(drive = %drive, concurrency, "Reading MFT with IOCP capture mode");
 
     // Get volume info for display
     let handle = VolumeHandle::open(drive).with_context(|| format!("Failed to open {drive}:"))?;
     let vol_data = handle.volume_data();
 
-    let drive_type = detect_drive_type(drive_upper);
+    let drive_type = detect_drive_type(drive);
     let drive_type_str = drive_type_label(drive_type, "Unknown");
 
     // Calculate metrics
@@ -240,7 +238,7 @@ async fn cmd_save_iocp(
 
     println!("═══════════════════════════════════════════════════════════════");
     println!("                    MFT IOCP CAPTURE");
-    println!("                    Drive: {drive_upper}: ({drive_type_str})");
+    println!("                    Drive: {drive}: ({drive_type_str})");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("📊 MFT INFO");
@@ -257,7 +255,7 @@ async fn cmd_save_iocp(
     let options = IocpCaptureOptions {
         compress,
         compression_level,
-        volume_letter: drive_upper,
+        volume_letter: drive,
         // IOCP concurrency is bounded by the CLI parser (max 255); the
         // saturating `try_from` fallback is unreachable for valid CLI
         // input and replaces the previous truncating `as u8` cast.
@@ -317,27 +315,26 @@ async fn cmd_save_iocp(
 /// `$UpCase` is public NTFS specification data).
 #[cfg(windows)]
 #[expect(clippy::print_stdout, reason = "intentional user-facing CLI output")]
-async fn cmd_save_upcase(drive: char, output: &Path) -> Result<()> {
+async fn cmd_save_upcase(drive: uffs_mft::platform::DriveLetter, output: &Path) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::platform::VolumeHandle;
     use uffs_mft::platform::upcase::{self, UpcaseHeader};
 
     let start = Instant::now();
-    let drive_upper = drive.to_ascii_uppercase();
 
     println!("═══════════════════════════════════════════════════════════════");
-    println!("  Reading $UpCase table from {drive_upper}: via raw volume I/O");
+    println!("  Reading $UpCase table from {drive}: via raw volume I/O");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
 
     // Read the table from the live volume.
     let table = upcase::read_upcase_table(drive)
-        .with_context(|| format!("Failed to read $UpCase from {drive_upper}:"))?;
+        .with_context(|| format!("Failed to read $UpCase from {drive}:"))?;
 
     // Get volume metadata for the header.
     let handle = VolumeHandle::open(drive)
-        .with_context(|| format!("Failed to open {drive_upper}: for metadata"))?;
+        .with_context(|| format!("Failed to open {drive}: for metadata"))?;
     let vol = handle.volume_data();
 
     // Compute CRC-32 of the raw table bytes.
@@ -354,7 +351,7 @@ async fn cmd_save_upcase(drive: char, output: &Path) -> Result<()> {
         volume_serial: vol.volume_serial_number,
         table_crc32,
         timestamp,
-        drive: drive_upper,
+        drive,
     };
 
     // Atomic write (header + raw table, no encryption).

@@ -62,6 +62,10 @@ streamable-http = [
 [dependencies]
 # Internal
 uffs-client.workspace = true
+# Typed drive-letter newtype.  Direct dep so the MCP roots / schema
+# code can name `DriveLetter` natively (parse into the typed value
+# rather than chasing the re-export through `uffs-client`).
+uffs-mft.workspace = true
 
 # Async — `net` re-enabled because the HTTP gateway binds a TCP
 # listener and the health-check probes use `tokio::net::TcpStream`.

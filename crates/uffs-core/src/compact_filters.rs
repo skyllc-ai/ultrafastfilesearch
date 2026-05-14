@@ -200,7 +200,7 @@ mod tests {
         let children = ChildrenIndex::build(&records);
         let ext_index = ExtensionIndex::build(&records);
         DriveCompactIndex {
-            letter: 'C',
+            letter: uffs_mft::platform::DriveLetter::C,
             records: ColumnStorage::from_vec(records),
             names: ColumnStorage::from_vec(names),
             trigram,
@@ -319,7 +319,7 @@ mod tests {
         let children = ChildrenIndex::build(&records);
         let ext_index = ExtensionIndex::build(&records);
         let drive = DriveCompactIndex {
-            letter: 'X',
+            letter: uffs_mft::platform::DriveLetter::X,
             records: ColumnStorage::from_vec(records),
             names: ColumnStorage::from_vec(names),
             trigram,

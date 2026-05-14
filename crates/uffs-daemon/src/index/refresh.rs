@@ -33,8 +33,8 @@ use crate::events::DaemonEvent;
 
 impl IndexManager {
     /// Refresh specific drives (or all if empty).
-    pub(crate) async fn refresh(&self, drives: &[char]) {
-        let drives_to_refresh: Vec<char> = if drives.is_empty() {
+    pub(crate) async fn refresh(&self, drives: &[uffs_mft::platform::DriveLetter]) {
+        let drives_to_refresh: Vec<uffs_mft::platform::DriveLetter> = if drives.is_empty() {
             let snap = self.snapshot().await;
             snap.drives.iter().map(|dr| dr.letter).collect()
         } else {
@@ -72,7 +72,7 @@ impl IndexManager {
     /// shared index on success, and traces the outcome of every arm
     /// of the resulting `Result<Result<_, _>, JoinError>`.  Caller
     /// holds no locks across the await points.
-    async fn refresh_one_drive(&self, letter: char) {
+    async fn refresh_one_drive(&self, letter: uffs_mft::platform::DriveLetter) {
         let Some(source) = self.lookup_drive_source(letter).await else {
             tracing::warn!(drive = %letter, "Drive not found for refresh");
             return;
@@ -101,7 +101,7 @@ impl IndexManager {
     /// matching error trace.
     async fn apply_refresh_result(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         result: Result<
             anyhow::Result<(
                 uffs_core::compact::DriveCompactIndex,
@@ -128,7 +128,10 @@ impl IndexManager {
     /// Returned by clone so the caller can hand the source to
     /// `spawn_blocking` without keeping the read guard alive across
     /// the await.
-    async fn lookup_drive_source(&self, letter: char) -> Option<uffs_core::compact::IndexSource> {
+    async fn lookup_drive_source(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<uffs_core::compact::IndexSource> {
         let snap = self.snapshot().await;
         snap.drives
             .iter()
@@ -142,7 +145,7 @@ impl IndexManager {
     /// stay in lockstep with the index.
     async fn apply_refresh_success(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         new_drive: uffs_core::compact::DriveCompactIndex,
         timing: &uffs_core::compact::LoadTiming,
     ) {
@@ -177,7 +180,7 @@ impl IndexManager {
     /// [`MftSource`]: uffs_core::compact::MftSource
     fn resolve_refresh_mft_source(
         mft_path: &std::path::Path,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     ) -> uffs_core::compact::MftSource {
         if Self::is_live_drive_marker(mft_path) {
             #[cfg(windows)]

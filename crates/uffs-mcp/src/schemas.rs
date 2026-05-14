@@ -43,8 +43,12 @@ pub(crate) struct SearchOutput {
 /// `structuredContent` exposes 100% of the data the CLI/API returns.
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct SearchRowOutput {
-    /// Drive letter.
-    pub drive: char,
+    /// Drive letter (single ASCII A..=Z over the wire — see
+    /// `DriveLetter` serde impl).  JSON schema is `char` to preserve
+    /// the prior MCP contract since `DriveLetter` lives in `uffs-mft`
+    /// (no `schemars` dep).
+    #[schemars(with = "char")]
+    pub drive: uffs_mft::platform::DriveLetter,
     /// Filename.
     pub name: String,
     /// File extension (lowercase, without leading dot). Empty for directories
@@ -103,8 +107,11 @@ pub(crate) struct DrivesOutput {
 /// A single drive entry (structured).
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct DriveOutput {
-    /// Drive letter (e.g. 'C').
-    pub letter: char,
+    /// Drive letter (e.g. `DriveLetter::C`).  Serialized as a single
+    /// ASCII char (e.g. `"C"`) to keep wire compatibility with prior
+    /// `char`-typed schema.  JSON schema is `char` (see [`SearchRowOutput`]).
+    #[schemars(with = "char")]
+    pub letter: uffs_mft::platform::DriveLetter,
     /// Number of records in the compact index.
     pub records: usize,
     /// Data source (`"cache"`, `"live"`, `"mft_file"`).

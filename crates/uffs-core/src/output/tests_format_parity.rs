@@ -74,7 +74,7 @@ fn format_parity_basic_file_row() {
 
     let rows = vec![DisplayRow::new(
         0_u32,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Temp\\sample.txt".to_owned(),
         256,
         false,
@@ -106,7 +106,7 @@ fn format_parity_parity_compat_directory_row() {
 
     let rows = vec![DisplayRow::new(
         0_u32,
-        'D',
+        uffs_mft::platform::DriveLetter::D,
         "D:\\Users\\alice\\Documents".to_owned(),
         0,
         true,
@@ -138,7 +138,7 @@ fn format_parity_all_columns_baseline() {
 
     let rows = vec![DisplayRow::new(
         0_u32,
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         "C:\\Projects\\uffs\\README.md".to_owned(),
         4321,
         false,
@@ -171,7 +171,7 @@ fn format_parity_parallel_branch_matches() {
         .map(|idx| {
             DisplayRow::new(
                 idx,
-                'C',
+                uffs_mft::platform::DriveLetter::C,
                 format!("C:\\batch\\row_{idx:05}.bin"),
                 u64::from(idx),
                 false,

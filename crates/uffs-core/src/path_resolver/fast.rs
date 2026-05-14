@@ -54,7 +54,7 @@ pub struct FastPathResolver {
     /// Arena holding all file names.
     names: NameArena,
     /// Volume letter (e.g., 'C').
-    volume: char,
+    volume: uffs_mft::platform::DriveLetter,
     /// Pre-computed paths for caching.
     ///
     /// Uses `FxHashMap<u64, String>` instead of `Vec<Option<String>>` to
@@ -79,7 +79,7 @@ impl FastPathResolver {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
-    pub fn build(df: &DataFrame, volume: char) -> Result<Self> {
+    pub fn build(df: &DataFrame, volume: uffs_mft::platform::DriveLetter) -> Result<Self> {
         let frs_col = df.column("frs")?.u64()?;
         let parent_col = df.column("parent_frs")?.u64()?;
         let name_col = df.column("name")?.str()?;
@@ -193,7 +193,7 @@ impl FastPathResolver {
         }
 
         // Build final path (uppercase drive letter for legacy-output parity)
-        path_buf.push(self.volume.to_ascii_uppercase());
+        path_buf.push(self.volume.as_char());
         path_buf.push_str(":\\");
 
         // Append components in reverse order

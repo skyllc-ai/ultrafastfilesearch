@@ -72,7 +72,7 @@ async fn shard_ttl_event_emits_all_three_thresholds() {
     // path (emits the canonical `idle-demote` shard.ttl event).
     let last_query_ms = 1_000_000_000_u64;
     assert!(
-        mgr.backdate_last_query_at_ms_for_test('C', last_query_ms)
+        mgr.backdate_last_query_at_ms_for_test(uffs_mft::platform::DriveLetter::C, last_query_ms)
             .await
     );
     let now_ms = last_query_ms + WARM_TO_PARKED_IDLE_SECS * 1000;
@@ -80,7 +80,10 @@ async fn shard_ttl_event_emits_all_three_thresholds() {
 
     // Verify the Warm→Parked transition actually happened.
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Parked)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Parked
+    )]);
 
     // Find the `idle-demote`-reason `shard.ttl` event for drive C.
     let events = log.events();
@@ -205,7 +208,10 @@ async fn below_ttl_event_pins_target_level_message_and_reason() {
     // The drive must NOT have demoted — that's the precondition
     // for the below-ttl branch to be the one that fired.
     let states = mgr.shard_states_for_test().await;
-    assert_eq!(states, vec![('C', ShardState::Warm)]);
+    assert_eq!(states, vec![(
+        uffs_mft::platform::DriveLetter::C,
+        ShardState::Warm
+    )]);
 
     let events = log.events();
     let ttl_events: Vec<&CapturedEvent> = events

@@ -7,6 +7,7 @@ use super::{
     ChildInfo, ExtensionIndex, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo,
     MftIndex, MftStats, NO_ENTRY, frs_to_usize, len_to_u32,
 };
+use crate::platform::DriveLetter;
 
 /// Returns the current Unix-microsecond timestamp for `build_epoch`.
 #[must_use]
@@ -19,7 +20,7 @@ fn current_epoch_micros() -> u64 {
 impl MftIndex {
     /// Create a new empty index for the given volume
     #[must_use]
-    pub fn new(volume: char) -> Self {
+    pub fn new(volume: DriveLetter) -> Self {
         Self {
             volume,
             extensions: ExtensionTable::new(),
@@ -30,7 +31,7 @@ impl MftIndex {
 
     /// Create with pre-allocated capacity
     #[must_use]
-    pub fn with_capacity(volume: char, record_capacity: usize) -> Self {
+    pub fn with_capacity(volume: DriveLetter, record_capacity: usize) -> Self {
         Self {
             volume,
             records: Vec::with_capacity(record_capacity),
@@ -58,7 +59,7 @@ impl MftIndex {
     ///
     /// # Arguments
     ///
-    /// * `volume` - Volume letter (e.g., 'C')
+    /// * `volume` - Volume letter (e.g., [`DriveLetter::C`])
     /// * `estimated_records` - Number of valid records from bitmap popcount
     /// * `max_frs` - Highest FRS number from bitmap (used for `frs_to_idx`
     ///   sizing)
@@ -76,7 +77,11 @@ impl MftIndex {
     /// - `children`: `estimated_records * 3 / 2` (directories have multiple
     ///   children)
     #[must_use]
-    pub fn with_capacity_optimized(volume: char, estimated_records: usize, max_frs: u64) -> Self {
+    pub fn with_capacity_optimized(
+        volume: DriveLetter,
+        estimated_records: usize,
+        max_frs: u64,
+    ) -> Self {
         // Safety margin for placeholder records added during path resolution
         let records_capacity = estimated_records + (estimated_records / 20);
 
@@ -360,7 +365,7 @@ impl MftIndex {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut index = MftIndex::new('C');
+    /// let mut index = MftIndex::new(DriveLetter::C);
     /// // ... parse MFT records ...
     /// index.build_extension_index();
     ///

@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 pub struct HibernateParams {
     /// Specific drives to hibernate.  Empty vector = every loaded drive.
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
 }
 
 /// Response for the `hibernate` method.
@@ -54,16 +54,16 @@ pub struct HibernateParams {
 pub struct HibernateResponse {
     /// Drives whose pre-call tier was `Hot`.
     #[serde(default)]
-    pub hot_demoted: Vec<char>,
+    pub hot_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives whose pre-call tier was `Warm`.
     #[serde(default)]
-    pub warm_demoted: Vec<char>,
+    pub warm_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives whose pre-call tier was `Parked`.
     #[serde(default)]
-    pub parked_demoted: Vec<char>,
+    pub parked_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that were already `Cold` (or unknown to the registry).
     #[serde(default)]
-    pub already_cold: Vec<char>,
+    pub already_cold: Vec<uffs_mft::platform::DriveLetter>,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ pub struct PreloadParams {
     /// Drives to promote to `Hot`.  Empty = invalid (the daemon returns
     /// [`super::ERR_INVALID_PARAMS`]).
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// Pin duration in minutes.  `None` ⇒ [`DEFAULT_PRELOAD_PIN_MINUTES`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_minutes: Option<u32>,
@@ -107,11 +107,11 @@ pub struct PreloadParams {
 pub struct PreloadResponse {
     /// Drives that transitioned to `Hot` as part of this call.
     #[serde(default)]
-    pub promoted: Vec<char>,
+    pub promoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that were already `Hot`.  Pin window is still extended
     /// to the new [`Self::pin_until_unix_ms`].
     #[serde(default)]
-    pub already_hot: Vec<char>,
+    pub already_hot: Vec<uffs_mft::platform::DriveLetter>,
     /// Per-drive errors, prefixed with the drive letter
     /// (`"Z: cache file missing"`).
     #[serde(default)]
@@ -142,7 +142,7 @@ pub struct ForgetParams {
     /// Drives to forget.  Empty = invalid (the daemon returns
     /// [`super::ERR_INVALID_PARAMS`]).
     #[serde(default)]
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// Force-forget non-`Cold` drives by auto-hibernating first.
     /// Default `false` ⇒ refuse with [`super::ERR_DRIVE_BUSY`] so the
     /// side effect (memory drop) is explicit.
@@ -160,10 +160,10 @@ pub struct ForgetParams {
 pub struct ForgetResponse {
     /// Drives whose cache files were deleted in this call.
     #[serde(default)]
-    pub forgotten: Vec<char>,
+    pub forgotten: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that had no cache files on disk (idempotent no-op).
     #[serde(default)]
-    pub already_absent: Vec<char>,
+    pub already_absent: Vec<uffs_mft::platform::DriveLetter>,
     /// Cumulative bytes freed across every successfully-forgotten drive.
     #[serde(default)]
     pub freed_bytes: u64,
@@ -208,10 +208,14 @@ pub struct StatusDrivesResponse {
 /// `ShardEntry` state plus the per-shard usage counters maintained by
 /// the journal-loop telemetry.  See `crates/uffs-daemon/src/cache/`
 /// for the daemon-side source of truth.
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+///
+/// `Default` is intentionally not derived: `letter` is a typed
+/// `DriveLetter` which has no canonical zero value, and no caller
+/// currently constructs `DriveTierStatus` via `::default()`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct DriveTierStatus {
     /// Drive letter.
-    pub letter: char,
+    pub letter: uffs_mft::platform::DriveLetter,
     /// Current tier name (lowercase, matching
     /// [`super::response_status::ShardTier`]).
     pub tier: String,

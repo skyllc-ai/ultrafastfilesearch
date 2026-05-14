@@ -23,7 +23,7 @@ use super::RequestHandler;
 /// because the packing loop only reads `row.path`.
 fn path_only_row(path: String) -> SearchRow {
     SearchRow {
-        drive: 'C',
+        drive: uffs_mft::platform::DriveLetter::C,
         path,
         name: String::new(),
         size: 0,

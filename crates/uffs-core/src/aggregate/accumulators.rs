@@ -619,7 +619,7 @@ fn extract_group_key(
             || u64::from(record.extension_id),
             |map| map.canonical_id(drive_ordinal, record.extension_id),
         ),
-        Some(FieldId::Drive) => u64::from(u32::from(drive.letter)),
+        Some(FieldId::Drive) => u64::from(u32::from(drive.letter.as_byte())),
         Some(FieldId::Type) => {
             use crate::search::derived::{
                 SEMANTIC_TYPE_ID_DIRECTORY, SEMANTIC_TYPE_ID_FILE, semantic_type_id_from_extension,

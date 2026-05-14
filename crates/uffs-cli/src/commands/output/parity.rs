@@ -235,8 +235,12 @@ pub(super) fn write_legacy_drive_footer<W: Write + ?Sized>(
     writer: &mut W,
     ctx: &CppFooterContext<'_>,
 ) -> Result<()> {
+    // `uffs-format` deliberately does not depend on `uffs-mft` (issue
+    // #216); convert at the crate boundary so the format crate keeps
+    // its narrow char-only API.
+    let chars: Vec<char> = ctx.output_targets.iter().map(|dl| dl.as_char()).collect();
     let fmt_ctx = uffs_format::DriveFooterContext {
-        output_targets: ctx.output_targets,
+        output_targets: &chars,
         pattern: ctx.pattern,
         row_count: ctx.row_count,
     };

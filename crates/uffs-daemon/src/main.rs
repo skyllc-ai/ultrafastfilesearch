@@ -90,7 +90,7 @@ struct Cli {
 
     /// Live drives to load (Windows only, e.g. C D E).
     #[arg(long = "drive", value_name = "LETTER")]
-    drives: Vec<char>,
+    drives: Vec<uffs_mft::platform::DriveLetter>,
 
     /// Idle timeout in seconds before auto-retire (default: 7200 = 2 hours).
     #[arg(long, default_value = "7200")]
@@ -210,7 +210,7 @@ fn log_load_response(resp: &LoadDriveResponse) {
     reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
 )]
 fn forward_to_running_daemon(
-    drives: &[char],
+    drives: &[uffs_mft::platform::DriveLetter],
     mft_files: &[String],
     no_cache: bool,
 ) -> anyhow::Result<()> {

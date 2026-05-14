@@ -71,6 +71,12 @@ uffs-client = { path = "../uffs-client", version = "0.5.90", default-features = 
 # rationale (R6 of `release-automation-plan.md`).
 uffs-format = { path = "../uffs-format", version = "0.5.90" }
 
+# Typed drive-letter newtype.  Direct dep so the CLI command signatures
+# (`daemon_load`, `daemon_tiering`, etc.) name `DriveLetter` natively
+# rather than re-exporting through `uffs-client`.  Wire format is
+# unchanged — the (de)serialise impl emits a single ASCII char.
+uffs-mft.workspace = true
+
 # Error handling
 anyhow.workspace = true
 

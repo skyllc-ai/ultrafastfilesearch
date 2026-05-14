@@ -229,7 +229,7 @@ impl IndexManager {
     )]
     pub(crate) async fn load_live_drives(
         &self,
-        drives: &[char],
+        drives: &[uffs_mft::platform::DriveLetter],
         no_cache: bool,
         lifecycle: &crate::lifecycle::LifecycleHandle,
     ) {
@@ -272,10 +272,10 @@ impl IndexManager {
         reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
     )]
     fn spawn_drive_loaders(
-        drives: &[char],
+        drives: &[uffs_mft::platform::DriveLetter],
         no_cache: bool,
     ) -> tokio::task::JoinSet<(
-        char,
+        uffs_mft::platform::DriveLetter,
         anyhow::Result<(
             uffs_core::compact::DriveCompactIndex,
             uffs_core::compact::LoadTiming,
@@ -307,7 +307,7 @@ impl IndexManager {
     async fn collect_drive_load_results(
         &self,
         mut join_set: tokio::task::JoinSet<(
-            char,
+            uffs_mft::platform::DriveLetter,
             anyhow::Result<(
                 uffs_core::compact::DriveCompactIndex,
                 uffs_core::compact::LoadTiming,
@@ -376,7 +376,7 @@ impl IndexManager {
         &self,
         join_result: Result<
             (
-                char,
+                uffs_mft::platform::DriveLetter,
                 anyhow::Result<(
                     uffs_core::compact::DriveCompactIndex,
                     uffs_core::compact::LoadTiming,
@@ -412,7 +412,7 @@ impl IndexManager {
     #[cfg(windows)]
     async fn install_loaded_drive(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         drive_index: uffs_core::compact::DriveCompactIndex,
         timing: uffs_core::compact::LoadTiming,
         loaded: usize,
@@ -518,10 +518,7 @@ impl IndexManager {
         // mounted shard so the demote-controller's idle clock starts
         // ticking from now, not from epoch zero.  See
         // `DriveStats::mark_loaded_at` doc.
-        if let Some(shard) = new_registry
-            .iter()
-            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
-        {
+        if let Some(shard) = new_registry.iter().find(|shard| shard.drive == letter) {
             shard.stats.mark_loaded_at(now_ms);
         }
         *guard = Arc::new(new_registry);
@@ -537,7 +534,7 @@ impl IndexManager {
     /// computed against the pre-refresh snapshot.
     pub(super) async fn replace_drive(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         new_drive: uffs_core::compact::DriveCompactIndex,
     ) {
         let body = Arc::new(new_drive);
@@ -551,10 +548,7 @@ impl IndexManager {
         // The replaced shard gets a fresh `Arc<DriveStats>` (replace
         // builds a new ShardEntry), so we don't need to preserve any
         // older counters here.
-        if let Some(shard) = new_registry
-            .iter()
-            .find(|shard| shard.drive.eq_ignore_ascii_case(&canonical))
-        {
+        if let Some(shard) = new_registry.iter().find(|shard| shard.drive == canonical) {
             shard.stats.mark_loaded_at(now_ms);
         }
         *guard = Arc::new(new_registry);

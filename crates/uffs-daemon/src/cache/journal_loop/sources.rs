@@ -88,14 +88,14 @@ impl JournalSource for MacStubJournalSource {
 #[derive(Debug)]
 pub(crate) struct WindowsJournalSource {
     /// Drive letter for which this source reads the USN journal.
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
 }
 
 #[cfg(windows)]
 impl WindowsJournalSource {
     /// Create a source bound to `drive`.
     #[must_use]
-    pub(crate) const fn new(drive: char) -> Self {
+    pub(crate) const fn new(drive: uffs_mft::platform::DriveLetter) -> Self {
         Self { drive }
     }
 }
@@ -166,8 +166,8 @@ impl JournalSource for WindowsJournalSource {
 pub(crate) struct NullCursorStore;
 
 impl CursorStore for NullCursorStore {
-    fn load(&self, _letter: char) -> u64 {
+    fn load(&self, _letter: uffs_mft::platform::DriveLetter) -> u64 {
         0
     }
-    fn store(&self, _letter: char, _cursor: u64) {}
+    fn store(&self, _letter: uffs_mft::platform::DriveLetter, _cursor: u64) {}
 }

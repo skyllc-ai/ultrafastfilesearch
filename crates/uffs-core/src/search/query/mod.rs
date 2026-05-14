@@ -240,7 +240,7 @@ fn extract_trigram_needle(needle: &str, is_glob: bool, is_or: bool) -> String {
     reason = "extracted from search_compact_drive to satisfy too_many_lines lint"
 )]
 fn log_search_profile(
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     tri_ms: u128,
     match_ms: u128,
     resolve_ms: u128,
@@ -519,7 +519,7 @@ pub(crate) fn search_compact_drive_tree(
 /// display hint is adjusted.
 pub(super) fn make_display_row(
     record_index: u32,
-    drive_letter: char,
+    drive_letter: uffs_mft::platform::DriveLetter,
     rec: &CompactRecord,
     name: &str,
     path: String,
@@ -549,8 +549,11 @@ pub(super) fn make_display_row(
 /// Returns a 3-byte `&str` without heap allocation.  Uses safe
 /// `from_utf8` with a fallback — the bytes are always valid ASCII.
 #[inline]
-pub(super) fn stack_volume_prefix(buf: &mut [u8; 4], letter: char) -> &str {
-    buf[0] = letter.to_ascii_uppercase() as u8;
+pub(super) fn stack_volume_prefix(
+    buf: &mut [u8; 4],
+    letter: uffs_mft::platform::DriveLetter,
+) -> &str {
+    buf[0] = letter.as_char() as u8;
     buf[1] = b':';
     buf[2] = b'\\';
     core::str::from_utf8(buf.get(..3).unwrap_or(b"?:\\")).unwrap_or("?:\\")

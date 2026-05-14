@@ -17,13 +17,16 @@
 //! * [`ensure_warm`] — `ensure_warm_for_dispatch` happy-path, missing-cache,
 //!   panicking-loader, parallel re-promote, and bloom-aware promote-side gating
 //!   (Phase 4 task 4.11).
-//! * [`idle_demote`] — `demote_idle_shards` TTL-driven cascade, round-trip
-//!   query stats, and `shard.transition` event emission.
+//! * [`idle_demote`] — `demote_idle_shards` TTL-driven cascade and round-trip
+//!   query stats (state-ladder behaviour only).
+//! * [`idle_demote_tracing`] — `shard.transition` tracing-event contract,
+//!   pressure-cascade single-event regression, and the PR-f promote anti-thrash
+//!   invariant.
 //! * [`lifecycle_hooks`] — Phase 5 task 5.8 / 5.9 / 5.10 `WorkingSetTrim` +
 //!   `Prefetch` + `PressureSignal` injection tests, plus the `drives` RPC
 //!   tier-marker enumeration.
 //! * [`tracing_capture`] — shared `tracing::Subscriber` scaffold (`EventLog` /
-//!   `CapturedEvent`) used by [`idle_demote`]'s `shard.transition`
+//!   `CapturedEvent`) used by [`idle_demote_tracing`] and other
 //!   observability-contract tests.
 
 #![expect(
@@ -48,6 +51,7 @@ mod body_loader_fakes;
 mod ensure_warm;
 mod forget_status;
 mod idle_demote;
+mod idle_demote_tracing;
 mod lifecycle_hooks;
 mod manager;
 mod registry;
@@ -64,7 +68,7 @@ pub(crate) mod tracing_capture;
 /// Build a synthetic drive with root + 1 dir + 5 files of varied
 /// sizes/extensions.
 fn build_test_drive() -> uffs_core::compact::DriveCompactIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     // Root directory
     let root_off = idx.add_name(".");
@@ -107,7 +111,7 @@ fn build_test_drive() -> uffs_core::compact::DriveCompactIndex {
         rec.stdinfo.modified = 1_000_000;
     }
 
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     drive
 }
 
@@ -129,7 +133,7 @@ fn spec(kind: &str) -> AggregateSpecWire {
 /// Same shape as [`build_test_drive`] but a different letter so a
 /// 2-drive registry is unambiguous.
 fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
-    let mut idx = MftIndex::new('D');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::D);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -149,7 +153,7 @@ fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
     rec.stdinfo.flags = 0x20;
     rec.stdinfo.modified = 1_000_000;
 
-    let (drive, _, _) = build_compact_index('D', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::D, &idx);
     drive
 }
 
@@ -158,7 +162,7 @@ fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
 /// need to verify "queries on C only → D and E both demote, C
 /// stays Warm" and "advance past parked TTL → all three Cold".
 fn build_test_drive_e() -> uffs_core::compact::DriveCompactIndex {
-    let mut idx = MftIndex::new('E');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::E);
     let root_off = idx.add_name(".");
     let root = idx.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);
@@ -178,7 +182,7 @@ fn build_test_drive_e() -> uffs_core::compact::DriveCompactIndex {
     rec.stdinfo.flags = 0x20;
     rec.stdinfo.modified = 1_000_000;
 
-    let (drive, _, _) = build_compact_index('E', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::E, &idx);
     drive
 }
 
@@ -190,7 +194,10 @@ struct FixedBodyLoader {
 }
 
 impl crate::cache::body_loader::BodyLoader for FixedBodyLoader {
-    fn load(&self, _letter: char) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
+    fn load(
+        &self,
+        _letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
         Some(Arc::clone(&self.body))
     }
 }

@@ -343,7 +343,7 @@ mod tests {
     ///   - "config.ini" (FRS 104, 200 bytes)  — duplicate (2 copies)
     ///   - "config.ini" (FRS 105, 200 bytes)
     fn build_dup_drive() -> DriveCompactIndex {
-        let mut idx = MftIndex::new('T');
+        let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         // Root directory.
         let root_off = idx.add_name(".");
@@ -373,7 +373,7 @@ mod tests {
         add_file(&mut idx, 104, "config.ini", 200);
         add_file(&mut idx, 105, "config.ini", 200);
 
-        let (drive, _, _) = build_compact_index('T', &idx);
+        let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::T, &idx);
         drive
     }
 
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn singleton_elimination_no_false_duplicates() {
-        let mut idx = MftIndex::new('T');
+        let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         // Root.
         let root_off = idx.add_name(".");
@@ -612,7 +612,7 @@ mod tests {
             rec.stdinfo.flags = 0x20;
         }
 
-        let (drive, _, _) = build_compact_index('T', &idx);
+        let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::T, &idx);
         let mut acc = DuplicateAccumulator::new(
             vec![FieldId::Size, FieldId::Name],
             DuplicateVerify::None,
@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn zero_byte_files_excluded_from_duplicates() {
-        let mut idx = MftIndex::new('T');
+        let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         let root_off = idx.add_name(".");
         let root = idx.get_or_create(ROOT_FRS);
@@ -659,7 +659,7 @@ mod tests {
             rec.stdinfo.flags = 0x20;
         }
 
-        let (drive, _, _) = build_compact_index('T', &idx);
+        let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::T, &idx);
         let mut acc = DuplicateAccumulator::new(
             vec![FieldId::Size, FieldId::Name],
             DuplicateVerify::None,
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn directories_excluded_from_duplicates() {
-        let mut idx = MftIndex::new('T');
+        let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         let root_off = idx.add_name(".");
         let root = idx.get_or_create(ROOT_FRS);
@@ -702,7 +702,7 @@ mod tests {
             };
         }
 
-        let (drive, _, _) = build_compact_index('T', &idx);
+        let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::T, &idx);
         let mut acc = DuplicateAccumulator::new(
             vec![FieldId::Size, FieldId::Name],
             DuplicateVerify::None,
@@ -734,7 +734,7 @@ mod tests {
 
         // Load C: drive index.  `load_drive` returns `(index, timing)`;
         // the test only uses the index itself.
-        let source = MftSource::Live('C');
+        let source = MftSource::Live(uffs_mft::platform::DriveLetter::C);
         let (drive, _load_timing) = load_drive(&source, false).expect("failed to load C: drive");
 
         let mut acc = DuplicateAccumulator::new(

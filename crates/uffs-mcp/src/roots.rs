@@ -170,8 +170,16 @@ pub(crate) fn apply_roots_scope(state: &RootsState, params: &mut SearchParams) {
     };
 
     // Only apply drive scoping when the caller didn't set explicit drives.
+    // Drives advertised by the client come from the `roots/list` MCP
+    // exchange; we validate via `DriveLetter::parse` and drop entries
+    // that aren't ASCII A..=Z (silently — malformed roots are a client
+    // bug, not a server-side error).
     if params.drives.is_empty() && !drives.is_empty() {
-        params.drives = drives.iter().filter_map(|drv| drv.chars().next()).collect();
+        params.drives = drives
+            .iter()
+            .filter_map(|drv| drv.chars().next())
+            .filter_map(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+            .collect();
     }
 
     // Only inject path-prefix predicates when the caller didn't already
@@ -375,7 +383,7 @@ mod tests {
         let mut params = SearchParams::default();
         apply_roots_scope(&state, &mut params);
 
-        assert_eq!(params.drives, vec!['C']);
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
         assert_eq!(params.predicates.len(), 1);
         assert_eq!(params.predicates[0].field, "path");
         assert_eq!(params.predicates[0].op, SearchPredicateOp::StartsWith);
@@ -394,7 +402,7 @@ mod tests {
         let mut params = SearchParams::default();
         apply_roots_scope(&state, &mut params);
 
-        assert_eq!(params.drives, vec!['D']);
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::D]);
         // "D:" is only 2 chars — should NOT inject a path predicate.
         assert!(params.predicates.is_empty());
     }
@@ -406,13 +414,13 @@ mod tests {
         update_roots_state(&mut state, &roots);
 
         let mut params = SearchParams {
-            drives: vec!['D'], // User explicitly set drives.
+            drives: vec![uffs_mft::platform::DriveLetter::D], // User explicitly set drives.
             ..Default::default()
         };
         apply_roots_scope(&state, &mut params);
 
         // Should NOT override explicit drives.
-        assert_eq!(params.drives, vec!['D']);
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::D]);
         // But should still add path predicate since no path pred exists.
         assert_eq!(params.predicates.len(), 1);
     }
@@ -450,7 +458,7 @@ mod tests {
         let mut params = SearchParams::default();
         apply_roots_scope(&state, &mut params);
 
-        assert_eq!(params.drives, vec!['C']);
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
         // Common prefix is "C:\Users\me\" (truncated at last separator).
         assert_eq!(params.predicates.len(), 1);
         assert_eq!(

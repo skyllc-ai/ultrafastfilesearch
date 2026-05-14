@@ -163,16 +163,16 @@ struct RecordingSink {
     /// Storing only the count (not the full `Vec<FileChange>`)
     /// keeps the Mutex contention minimal and the assertions
     /// focused on the loop semantics rather than payload shape.
-    calls: Mutex<Vec<(char, usize)>>,
+    calls: Mutex<Vec<(uffs_mft::platform::DriveLetter, usize)>>,
     /// One entry per `trigger_save()` call: `(letter, reason)`.
     /// Phase 7-C surface — lets tests assert the threshold state
     /// machine fires the right reason at the right time.
-    save_calls: Mutex<Vec<(char, SaveReason)>>,
+    save_calls: Mutex<Vec<(uffs_mft::platform::DriveLetter, SaveReason)>>,
     /// One entry per `journal_wrapped()` call: `letter`.
     /// Phase 7-D surface — lets tests assert the wrap-detection
     /// state machine fires when `journal_id` changes between
     /// successive non-zero polls.
-    wrap_calls: Mutex<Vec<char>>,
+    wrap_calls: Mutex<Vec<uffs_mft::platform::DriveLetter>>,
     /// Boolean to return from `accept()`.  Tests flip this to
     /// `false` to exercise the registry-race / Parked-shard path
     /// (loop must continue cleanly when accept returns false).
@@ -189,45 +189,45 @@ impl RecordingSink {
         }
     }
 
-    fn calls(&self) -> Vec<(char, usize)> {
+    fn calls(&self) -> Vec<(uffs_mft::platform::DriveLetter, usize)> {
         lock_or_recover(&self.calls).clone()
     }
 
-    fn save_calls(&self) -> Vec<(char, SaveReason)> {
+    fn save_calls(&self) -> Vec<(uffs_mft::platform::DriveLetter, SaveReason)> {
         lock_or_recover(&self.save_calls).clone()
     }
 
-    fn wrap_calls(&self) -> Vec<char> {
+    fn wrap_calls(&self) -> Vec<uffs_mft::platform::DriveLetter> {
         lock_or_recover(&self.wrap_calls).clone()
     }
 }
 
 impl PatchSink for RecordingSink {
-    fn accept(&self, letter: char, changes: &[FileChange]) -> bool {
+    fn accept(&self, letter: uffs_mft::platform::DriveLetter, changes: &[FileChange]) -> bool {
         lock_or_recover(&self.calls).push((letter, changes.len()));
         *lock_or_recover(&self.accept_outcome)
     }
 
-    fn trigger_save(&self, letter: char, reason: SaveReason) {
+    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason) {
         lock_or_recover(&self.save_calls).push((letter, reason));
     }
 
-    fn journal_wrapped(&self, letter: char) {
+    fn journal_wrapped(&self, letter: uffs_mft::platform::DriveLetter) {
         lock_or_recover(&self.wrap_calls).push(letter);
     }
 }
 
-/// In-memory cursor store backed by a `HashMap<char, u64>`.
-/// Pre-loaded by tests via [`Self::set_cursor`] to seed the
+/// In-memory cursor store backed by a `HashMap<uffs_mft::platform::DriveLetter,
+/// u64>`. Pre-loaded by tests via [`Self::set_cursor`] to seed the
 /// loop's initial cursor; observed via [`Self::store_log`] to
 /// assert the loop's persistence behaviour.
 struct FakeCursorStore {
-    cursors: Mutex<std::collections::HashMap<char, u64>>,
+    cursors: Mutex<std::collections::HashMap<uffs_mft::platform::DriveLetter, u64>>,
     /// Append-only log of every `(letter, cursor)` passed to
     /// `store()`, in call order.  Lets tests assert which
     /// cursors were persisted at which points (not just the
     /// final state).
-    store_log: Mutex<Vec<(char, u64)>>,
+    store_log: Mutex<Vec<(uffs_mft::platform::DriveLetter, u64)>>,
 }
 
 impl FakeCursorStore {
@@ -238,24 +238,24 @@ impl FakeCursorStore {
         }
     }
 
-    fn set_cursor(&self, letter: char, cursor: u64) {
+    fn set_cursor(&self, letter: uffs_mft::platform::DriveLetter, cursor: u64) {
         lock_or_recover(&self.cursors).insert(letter, cursor);
     }
 
-    fn store_log(&self) -> Vec<(char, u64)> {
+    fn store_log(&self) -> Vec<(uffs_mft::platform::DriveLetter, u64)> {
         lock_or_recover(&self.store_log).clone()
     }
 }
 
 impl CursorStore for FakeCursorStore {
-    fn load(&self, letter: char) -> u64 {
+    fn load(&self, letter: uffs_mft::platform::DriveLetter) -> u64 {
         lock_or_recover(&self.cursors)
             .get(&letter)
             .copied()
             .unwrap_or(0)
     }
 
-    fn store(&self, letter: char, cursor: u64) {
+    fn store(&self, letter: uffs_mft::platform::DriveLetter, cursor: u64) {
         lock_or_recover(&self.cursors).insert(letter, cursor);
         lock_or_recover(&self.store_log).push((letter, cursor));
     }

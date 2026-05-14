@@ -10,7 +10,7 @@ use super::prelude::*;
 #[derive(Debug)]
 pub struct VolumeState {
     /// Drive letter (e.g., 'C')
-    pub drive_letter: char,
+    pub drive_letter: crate::platform::DriveLetter,
     /// Volume handle (opened with OVERLAPPED flag)
     pub handle: HANDLE,
     /// Extent map for this volume's MFT
@@ -414,7 +414,7 @@ impl MultiVolumeIocpReader {
 #[cfg(windows)]
 #[must_use]
 pub fn prepare_volume_state(
-    drive_letter: char,
+    drive_letter: crate::platform::DriveLetter,
     handle: HANDLE,
     extent_map: MftExtentMap,
     bitmap: Option<crate::platform::MftBitmap>,

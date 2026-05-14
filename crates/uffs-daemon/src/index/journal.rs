@@ -57,8 +57,13 @@ use crate::cache::journal_loop::JournalLoopHandle;
 /// handling pattern in this crate (per the `in_flight_promotes`
 /// field doc rationale).
 fn lock_journal_handles(
-    map: &std::sync::Mutex<std::collections::HashMap<char, JournalLoopHandle>>,
-) -> std::sync::MutexGuard<'_, std::collections::HashMap<char, JournalLoopHandle>> {
+    map: &std::sync::Mutex<
+        std::collections::HashMap<uffs_mft::platform::DriveLetter, JournalLoopHandle>,
+    >,
+) -> std::sync::MutexGuard<
+    '_,
+    std::collections::HashMap<uffs_mft::platform::DriveLetter, JournalLoopHandle>,
+> {
     map.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -94,7 +99,11 @@ impl IndexManager {
     /// `false` is **not** an error to propagate — the caller logs
     /// at warn/debug level depending on whether the failure was a
     /// real I/O error or just a benign demote race.
-    pub(crate) async fn handle_journal_refresh(&self, letter: char, reason: &str) -> bool {
+    pub(crate) async fn handle_journal_refresh(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: &str,
+    ) -> bool {
         // Heavy work: live MFT read + USN replay + compact rebuild.
         // Runs on the blocking pool so the runtime's worker threads
         // stay free to service search RPCs concurrent with the refresh.
@@ -148,7 +157,7 @@ impl IndexManager {
     ///     returns `false`).
     pub(crate) async fn handle_journal_save(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         reason: &str,
         changes: Vec<FileChange>,
     ) -> bool {
@@ -194,7 +203,7 @@ impl IndexManager {
     /// snapshot observing the pre-tick state.
     async fn snapshot_shard_for_letter(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     ) -> Option<Arc<crate::cache::shard::ShardEntry>> {
         let guard = self.index.read().await;
         guard.iter().find(|entry| entry.drive == letter).cloned()
@@ -215,7 +224,7 @@ impl IndexManager {
     async fn run_surgical_patch_task(
         &self,
         shard: &Arc<crate::cache::shard::ShardEntry>,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         reason: &str,
         changes: Vec<FileChange>,
     ) -> PatchTaskOutcome {
@@ -240,7 +249,11 @@ impl IndexManager {
     /// happens in the production flow because each drive is loaded
     /// exactly once before this method fires), the previous handle
     /// is **cancelled** so the orphaned loop tears down cleanly.
-    pub(crate) fn attach_journal_handle(&self, letter: char, handle: JournalLoopHandle) {
+    pub(crate) fn attach_journal_handle(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        handle: JournalLoopHandle,
+    ) {
         let mut guard = lock_journal_handles(&self.journal_handles);
         if let Some(previous) = guard.insert(letter, handle) {
             tracing::warn!(
@@ -264,7 +277,7 @@ impl IndexManager {
     /// — a benign race that we log at debug-level and absorb.
     async fn apply_journal_body(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         reason: &str,
         body: Arc<uffs_core::compact::DriveCompactIndex>,
     ) -> bool {
@@ -297,7 +310,7 @@ impl IndexManager {
 /// batches; the surgical patch short-circuits to a debug-log no-op
 /// so the journal loop's cursor still advances and the per-shard
 /// save trigger resets.
-fn log_save_empty_batch(letter: char, reason: &str) {
+fn log_save_empty_batch(letter: uffs_mft::platform::DriveLetter, reason: &str) {
     tracing::debug!(
         target: "shard.journal",
         drive = %letter,
@@ -313,7 +326,7 @@ fn log_save_empty_batch(letter: char, reason: &str) {
 /// has been registered via `add_drive` before its journal loop
 /// starts.  Reaching this arm indicates a startup-ordering bug or
 /// an out-of-order drive eject, both worth surfacing.
-fn log_save_no_shard(letter: char, reason: &str, change_count: usize) {
+fn log_save_no_shard(letter: uffs_mft::platform::DriveLetter, reason: &str, change_count: usize) {
     tracing::debug!(
         target: "shard.journal",
         drive = %letter,
@@ -330,7 +343,11 @@ fn log_save_no_shard(letter: char, reason: &str, change_count: usize) {
 /// surgical-patch blocking task.  The next promote re-reads the
 /// on-disk body which a previous patch tick already updated, so
 /// the per-shard drift is bounded by the per-shard save cadence.
-fn log_save_shard_demoted(letter: char, reason: &str, change_count: usize) {
+fn log_save_shard_demoted(
+    letter: uffs_mft::platform::DriveLetter,
+    reason: &str,
+    change_count: usize,
+) {
     tracing::debug!(
         target: "shard.journal",
         drive = %letter,
@@ -345,7 +362,7 @@ fn log_save_shard_demoted(letter: char, reason: &str, change_count: usize) {
 /// stats so operators can grep for the surgical-patch tick rate
 /// and the create / delete / rename / skip mix per drive.
 fn log_save_patch_applied(
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     reason: &str,
     change_count: usize,
     stats: &uffs_core::compact_loader::PatchStats,
@@ -380,7 +397,10 @@ fn log_save_patch_applied(
 /// failure for operator visibility.  The next save tick re-attempts
 /// from the latest in-memory body, so transient disk errors heal
 /// themselves.
-fn spawn_compact_cache_save_task(letter: char, body: Arc<uffs_core::compact::DriveCompactIndex>) {
+fn spawn_compact_cache_save_task(
+    letter: uffs_mft::platform::DriveLetter,
+    body: Arc<uffs_core::compact::DriveCompactIndex>,
+) {
     let _save_join = tokio::task::spawn_blocking(move || {
         if let Err(err) = uffs_core::compact_cache::save_compact_cache_background(&body) {
             tracing::warn!(
@@ -436,7 +456,7 @@ fn classify_patch_result(
         )>,
         tokio::task::JoinError,
     >,
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     reason: &str,
     change_count: usize,
 ) -> PatchTaskOutcome {
@@ -479,7 +499,7 @@ fn unwrap_refreshed_body(
         )>,
         tokio::task::JoinError,
     >,
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     reason: &str,
 ) -> Option<Arc<uffs_core::compact::DriveCompactIndex>> {
     match body_result {

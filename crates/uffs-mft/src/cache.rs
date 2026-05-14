@@ -235,8 +235,8 @@ pub fn cache_dir() -> PathBuf {
 ///
 /// Returns `{SECURE_CACHE_DIR}/{DRIVE}_index.uffs`.
 #[must_use]
-pub fn cache_file_path(drive: char) -> PathBuf {
-    cache_dir().join(format!("{}_index.uffs", drive.to_ascii_uppercase()))
+pub fn cache_file_path(drive: crate::platform::DriveLetter) -> PathBuf {
+    cache_dir().join(format!("{}_index.uffs", drive.as_char()))
 }
 
 /// Checks if a cached index file exists and is fresh (within TTL).
@@ -250,7 +250,7 @@ pub fn cache_file_path(drive: char) -> PathBuf {
 ///
 /// `true` if the cache file exists and was modified within the TTL window.
 #[must_use]
-pub fn is_cache_fresh(drive: char, ttl_seconds: u64) -> bool {
+pub fn is_cache_fresh(drive: crate::platform::DriveLetter, ttl_seconds: u64) -> bool {
     let path = cache_file_path(drive);
     std::fs::metadata(&path).is_ok_and(|meta| {
         meta.modified().is_ok_and(|modified| {
@@ -266,7 +266,7 @@ pub fn is_cache_fresh(drive: char, ttl_seconds: u64) -> bool {
 ///
 /// Returns `None` if the file doesn't exist or age cannot be determined.
 #[must_use]
-pub fn cache_age_seconds(drive: char) -> Option<u64> {
+pub fn cache_age_seconds(drive: crate::platform::DriveLetter) -> Option<u64> {
     let path = cache_file_path(drive);
     let meta = std::fs::metadata(&path).ok()?;
     let modified = meta.modified().ok()?;
@@ -287,7 +287,10 @@ pub fn cache_age_seconds(drive: char) -> Option<u64> {
 ///
 /// `Some((index, header))` if cache is fresh, `None` otherwise.
 #[must_use]
-pub fn load_cached_index(drive: char, ttl_seconds: u64) -> Option<(MftIndex, IndexHeader)> {
+pub fn load_cached_index(
+    drive: crate::platform::DriveLetter,
+    ttl_seconds: u64,
+) -> Option<(MftIndex, IndexHeader)> {
     if !is_cache_fresh(drive, ttl_seconds) {
         return None;
     }
@@ -304,7 +307,7 @@ pub fn load_cached_index(drive: char, ttl_seconds: u64) -> Option<(MftIndex, Ind
     match result {
         Ok(Some((index, header))) => {
             // Verify the volume matches
-            (header.volume == drive.to_ascii_uppercase()).then_some((index, header))
+            (header.volume == drive).then_some((index, header))
         }
         _ => None,
     }
@@ -321,7 +324,7 @@ pub fn load_cached_index(drive: char, ttl_seconds: u64) -> Option<(MftIndex, Ind
 /// Returns an error if directory creation, locking, or file writing fails.
 pub fn save_to_cache(
     index: &MftIndex,
-    drive: char,
+    drive: crate::platform::DriveLetter,
     volume_serial: u64,
     usn_journal_id: u64,
     next_usn: i64,
@@ -361,7 +364,7 @@ pub fn save_to_cache(
 /// propagated (best-effort save).
 pub fn save_to_cache_background(
     index: &MftIndex,
-    drive: char,
+    drive: crate::platform::DriveLetter,
     volume_serial: u64,
     usn_journal_id: u64,
     next_usn: i64,
@@ -417,8 +420,8 @@ pub fn save_to_cache_background(
 ///
 /// Called automatically by [`save_to_cache`] to ensure the compact index
 /// is rebuilt from the updated `MftIndex`.
-fn invalidate_compact_cache(drive: char) {
-    let compact_path = cache_dir().join(format!("{drive}_compact.uffs"));
+fn invalidate_compact_cache(drive: crate::platform::DriveLetter) {
+    let compact_path = cache_dir().join(format!("{}_compact.uffs", drive.as_char()));
     if compact_path.exists() {
         if let Err(err) = std::fs::remove_file(&compact_path) {
             tracing::warn!(
@@ -439,7 +442,7 @@ fn invalidate_compact_cache(drive: char) {
 ///
 /// Overwrites the file with zeros before deleting. Does nothing if the
 /// file doesn't exist.
-pub fn remove_cached_index(drive: char) {
+pub fn remove_cached_index(drive: crate::platform::DriveLetter) {
     let path = cache_file_path(drive);
     let _rm_cache = secure_remove(&path);
     // Also clean up the lock file
@@ -471,20 +474,22 @@ pub fn remove_all_cached_indices() {
 ///
 /// Returns a vector of drive letters that have cached indices.
 #[must_use]
-pub fn list_cached_drives() -> Vec<char> {
+pub fn list_cached_drives() -> Vec<crate::platform::DriveLetter> {
     let dir = cache_dir();
     let mut drives = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
-                // Parse "C_index.uffs" -> 'C'
+                // Parse "C_index.uffs" -> DriveLetter::C.  Non-letter
+                // prefixes (e.g. stray `.tmp` / `.lock` files) fall
+                // out via `DriveLetter::parse`.
                 if name.ends_with("_index.uffs")
                     && name.len() >= 12
                     && let Some(drive_char) = name.chars().next()
-                    && drive_char.is_ascii_alphabetic()
+                    && let Ok(letter) = crate::platform::DriveLetter::parse(drive_char)
                 {
-                    drives.push(drive_char.to_ascii_uppercase());
+                    drives.push(letter);
                 }
             }
         }
@@ -508,7 +513,7 @@ pub fn list_cached_drives() -> Vec<char> {
 ///
 /// `true` if any drive's cache is missing or expired.
 #[must_use]
-pub fn any_cache_expired(drives: &[char], ttl_seconds: u64) -> bool {
+pub fn any_cache_expired(drives: &[crate::platform::DriveLetter], ttl_seconds: u64) -> bool {
     for &drive in drives {
         if !is_cache_fresh(drive, ttl_seconds) {
             return true;
@@ -568,8 +573,8 @@ const CACHE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// E.g. `{SECURE_CACHE_DIR}/C_index.lock`
 #[must_use]
-pub fn cache_lock_path(drive: char) -> PathBuf {
-    cache_dir().join(format!("{}_index.lock", drive.to_ascii_uppercase()))
+pub fn cache_lock_path(drive: crate::platform::DriveLetter) -> PathBuf {
+    cache_dir().join(format!("{}_index.lock", drive.as_char()))
 }
 
 /// Result of a cache check operation.
@@ -604,7 +609,7 @@ pub enum CacheStatus {
 /// This is a high-level function that returns the cache status and optionally
 /// loads the index if fresh.
 #[must_use]
-pub fn check_cache_status(drive: char, ttl_seconds: u64) -> CacheStatus {
+pub fn check_cache_status(drive: crate::platform::DriveLetter, ttl_seconds: u64) -> CacheStatus {
     let path = cache_file_path(drive);
 
     // Check if file exists
@@ -626,7 +631,7 @@ pub fn check_cache_status(drive: char, ttl_seconds: u64) -> CacheStatus {
         // Try to load the index
         match MftIndex::load_from_file(&path) {
             Ok((index, header)) => {
-                if header.volume == drive.to_ascii_uppercase() {
+                if header.volume == drive {
                     CacheStatus::Fresh {
                         index,
                         header,
@@ -647,13 +652,13 @@ pub fn check_cache_status(drive: char, ttl_seconds: u64) -> CacheStatus {
 #[derive(Debug)]
 pub enum MultiDriveCacheStatus {
     /// All drives have fresh caches.
-    AllFresh(Vec<(char, MftIndex, IndexHeader)>),
+    AllFresh(Vec<(crate::platform::DriveLetter, MftIndex, IndexHeader)>),
     /// Some or all drives need refresh - rebuild all.
     NeedsRebuild {
         /// Drives that need rebuilding.
-        stale_drives: Vec<char>,
+        stale_drives: Vec<crate::platform::DriveLetter>,
         /// Drives that are fresh (but will be rebuilt anyway for consistency).
-        fresh_drives: Vec<char>,
+        fresh_drives: Vec<crate::platform::DriveLetter>,
     },
 }
 
@@ -662,7 +667,10 @@ pub enum MultiDriveCacheStatus {
 /// For multi-drive operations, if ANY drive is stale, we recommend rebuilding
 /// ALL drives to ensure consistency.
 #[must_use]
-pub fn check_multi_drive_cache(drives: &[char], ttl_seconds: u64) -> MultiDriveCacheStatus {
+pub fn check_multi_drive_cache(
+    drives: &[crate::platform::DriveLetter],
+    ttl_seconds: u64,
+) -> MultiDriveCacheStatus {
     let mut fresh = Vec::new();
     let mut stale = Vec::new();
     let mut indices = Vec::new();

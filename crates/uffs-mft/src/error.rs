@@ -15,7 +15,7 @@ pub enum MftError {
     #[error("Failed to open volume '{volume}': {source}")]
     VolumeOpen {
         /// The volume letter that failed to open.
-        volume: char,
+        volume: crate::platform::DriveLetter,
         /// The underlying I/O error.
         #[source]
         source: std::io::Error,
@@ -23,7 +23,7 @@ pub enum MftError {
 
     /// Volume is not NTFS formatted.
     #[error("Volume '{0}' is not NTFS formatted")]
-    NotNtfs(char),
+    NotNtfs(crate::platform::DriveLetter),
 
     /// Insufficient privileges to read MFT.
     #[error("Insufficient privileges to read MFT. Run as Administrator.")]

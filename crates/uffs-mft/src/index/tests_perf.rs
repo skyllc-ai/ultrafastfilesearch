@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn display_stats() {
     // Create a simple index with some files
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add a few files with different extensions
     let txt_ext_id = index.extensions.intern("txt");
@@ -53,7 +53,7 @@ fn extension_index_query_performance() {
     use std::time::Instant;
 
     // Create index with 10K files across 10 extensions
-    let mut index = MftIndex::with_capacity('C', 10_000);
+    let mut index = MftIndex::with_capacity(crate::platform::DriveLetter::C, 10_000);
 
     // Create 10 different extensions
     let mut ext_ids = Vec::new();
@@ -114,7 +114,7 @@ fn full_postprocessing_performance() {
     use std::time::Instant;
 
     // Create a realistic index with 100K files
-    let mut index = MftIndex::with_capacity('C', 100_000);
+    let mut index = MftIndex::with_capacity(crate::platform::DriveLetter::C, 100_000);
 
     // Add root directory
     let root_frs = 5;

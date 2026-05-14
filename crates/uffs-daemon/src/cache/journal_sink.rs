@@ -21,10 +21,10 @@
 //! receiver and processes messages serially.
 //!
 //! Phase 8 B3 extension: per-letter
-//! [`std::sync::Mutex<HashMap<char, Vec<FileChange>>>`] **pending
-//! buffer** owned by the sink.  `accept` appends to the buffer
-//! synchronously (no mpsc traffic).  `trigger_save` drains the buffer
-//! for that letter and ships the drained `Vec<FileChange>` into
+//! [`std::sync::Mutex<HashMap<uffs_mft::platform::DriveLetter,
+//! Vec<FileChange>>>`] **pending buffer** owned by the sink.  `accept` appends
+//! to the buffer synchronously (no mpsc traffic).  `trigger_save` drains the
+//! buffer for that letter and ships the drained `Vec<FileChange>` into
 //! [`ApplyMsg::Save`] so the applier can run a *surgical*
 //! [`crate::cache::ShardEntry::apply_usn_patch_to_body`] instead of a
 //! full [`uffs_core::compact_loader::load_drive_with_usn_refresh`].
@@ -83,7 +83,7 @@ enum ApplyMsg {
     /// failure log.
     Save {
         /// Drive letter to refresh.
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         /// Why the save threshold fired.
         reason: SaveReason,
         /// Drained per-letter event buffer.  Empty on age-elapsed
@@ -98,7 +98,7 @@ enum ApplyMsg {
     /// against the new journal head.
     Wrap {
         /// Drive letter whose USN journal was recreated.
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
     },
 }
 
@@ -138,7 +138,7 @@ pub(crate) struct RegistryPatchSink {
     /// tick cadence.  Poisoning is recovered via
     /// [`std::sync::PoisonError::into_inner`] (matching the
     /// `lock_journal_handles` helper in `index/journal.rs`).
-    pending: Mutex<HashMap<char, Vec<FileChange>>>,
+    pending: Mutex<HashMap<uffs_mft::platform::DriveLetter, Vec<FileChange>>>,
 }
 
 impl RegistryPatchSink {
@@ -175,7 +175,9 @@ impl RegistryPatchSink {
     /// would otherwise propagate a panic from the applier task into
     /// every subsequent journal-loop tick, killing the whole
     /// journal-refresh subsystem.
-    fn lock_pending(&self) -> std::sync::MutexGuard<'_, HashMap<char, Vec<FileChange>>> {
+    fn lock_pending(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<uffs_mft::platform::DriveLetter, Vec<FileChange>>> {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -201,7 +203,7 @@ impl RegistryPatchSink {
 }
 
 impl PatchSink for RegistryPatchSink {
-    fn accept(&self, letter: char, changes: &[FileChange]) -> bool {
+    fn accept(&self, letter: uffs_mft::platform::DriveLetter, changes: &[FileChange]) -> bool {
         // Phase 8: append to the per-letter pending buffer instead
         // of putting traffic on the mpsc channel.  `trigger_save`
         // drains this buffer and forwards the changes into the
@@ -218,7 +220,7 @@ impl PatchSink for RegistryPatchSink {
         true
     }
 
-    fn trigger_save(&self, letter: char, reason: SaveReason) {
+    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason) {
         // Drain the per-letter buffer in one swoop so the applier
         // sees a snapshot of all events accumulated since the
         // previous save.  An empty drained Vec is forwarded as-is
@@ -234,7 +236,7 @@ impl PatchSink for RegistryPatchSink {
         });
     }
 
-    fn journal_wrapped(&self, letter: char) {
+    fn journal_wrapped(&self, letter: uffs_mft::platform::DriveLetter) {
         // Wrap means the journal head reset; any buffered events
         // are stale relative to the new cursor.  Discard the
         // pending buffer and rely on the applier's full reload to
@@ -353,7 +355,10 @@ mod tests {
     /// dropping the `lock_pending()` guard before returning so the
     /// caller's assertions don't hold the mutex (satisfies
     /// `clippy::significant_drop_tightening` in tests).
-    fn pending_frs_for_letter(sink: &RegistryPatchSink, letter: char) -> Option<Vec<u64>> {
+    fn pending_frs_for_letter(
+        sink: &RegistryPatchSink,
+        letter: uffs_mft::platform::DriveLetter,
+    ) -> Option<Vec<u64>> {
         let guard = sink.lock_pending();
         guard
             .get(&letter)
@@ -366,11 +371,14 @@ mod tests {
     async fn accept_buffers_changes_without_enqueueing() {
         let (sink, mut rx) = RegistryPatchSink::new_for_test();
 
-        let accepted = sink.accept('C', &[make_change(100), make_change(101)]);
+        let accepted = sink.accept(uffs_mft::platform::DriveLetter::C, &[
+            make_change(100),
+            make_change(101),
+        ]);
         assert!(accepted, "accept must return true optimistically");
 
         // The pending buffer holds the two events for letter 'C'.
-        let buf = pending_frs_for_letter(&sink, 'C')
+        let buf = pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C)
             .expect("accept must populate pending buffer for 'C'");
         assert_eq!(
             buf,
@@ -392,11 +400,15 @@ mod tests {
     async fn multiple_accepts_accumulate_in_pending() {
         let (sink, _rx) = RegistryPatchSink::new_for_test();
 
-        sink.accept('C', &[make_change(1)]);
-        sink.accept('C', &[make_change(2), make_change(3)]);
-        sink.accept('C', &[make_change(4)]);
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(1)]);
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[
+            make_change(2),
+            make_change(3),
+        ]);
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(4)]);
 
-        let buf = pending_frs_for_letter(&sink, 'C').expect("buffer for 'C' must exist");
+        let buf = pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C)
+            .expect("buffer for 'C' must exist");
         assert_eq!(
             buf,
             [1, 2, 3, 4],
@@ -411,8 +423,14 @@ mod tests {
     async fn trigger_save_drains_pending_into_save_message() {
         let (sink, mut rx) = RegistryPatchSink::new_for_test();
 
-        sink.accept('C', &[make_change(10), make_change(11)]);
-        sink.trigger_save('C', SaveReason::EventsExceeded);
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[
+            make_change(10),
+            make_change(11),
+        ]);
+        sink.trigger_save(
+            uffs_mft::platform::DriveLetter::C,
+            SaveReason::EventsExceeded,
+        );
 
         let ApplyMsg::Save {
             letter,
@@ -422,7 +440,7 @@ mod tests {
         else {
             panic!("expected ApplyMsg::Save, got Wrap");
         };
-        assert_eq!(letter, 'C');
+        assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
         assert!(matches!(reason, SaveReason::EventsExceeded));
         assert_eq!(
             changes.iter().map(|change| change.frs).collect::<Vec<_>>(),
@@ -432,7 +450,7 @@ mod tests {
 
         // Pending buffer for 'C' is gone after the drain.
         assert!(
-            pending_frs_for_letter(&sink, 'C').is_none(),
+            pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C).is_none(),
             "trigger_save must remove the per-letter pending entry",
         );
     }
@@ -444,7 +462,7 @@ mod tests {
     async fn trigger_save_with_no_pending_sends_empty_changes() {
         let (sink, mut rx) = RegistryPatchSink::new_for_test();
 
-        sink.trigger_save('Z', SaveReason::AgeElapsed);
+        sink.trigger_save(uffs_mft::platform::DriveLetter::Z, SaveReason::AgeElapsed);
 
         let ApplyMsg::Save {
             letter,
@@ -454,7 +472,7 @@ mod tests {
         else {
             panic!("expected ApplyMsg::Save, got Wrap");
         };
-        assert_eq!(letter, 'Z');
+        assert_eq!(letter, uffs_mft::platform::DriveLetter::Z);
         assert!(matches!(reason, SaveReason::AgeElapsed));
         assert!(
             changes.is_empty(),
@@ -470,22 +488,25 @@ mod tests {
     async fn journal_wrapped_discards_pending_buffer_and_sends_wrap() {
         let (sink, mut rx) = RegistryPatchSink::new_for_test();
 
-        sink.accept('C', &[make_change(5), make_change(6)]);
-        sink.journal_wrapped('C');
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[
+            make_change(5),
+            make_change(6),
+        ]);
+        sink.journal_wrapped(uffs_mft::platform::DriveLetter::C);
 
         let ApplyMsg::Wrap { letter } = rx.try_recv().expect("journal_wrapped must enqueue Wrap")
         else {
             panic!("expected ApplyMsg::Wrap, got Save");
         };
-        assert_eq!(letter, 'C');
+        assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
 
         assert!(
-            pending_frs_for_letter(&sink, 'C').is_none(),
+            pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C).is_none(),
             "journal_wrapped must discard the per-letter pending entry",
         );
 
         // A subsequent trigger_save must see an empty buffer.
-        sink.trigger_save('C', SaveReason::AgeElapsed);
+        sink.trigger_save(uffs_mft::platform::DriveLetter::C, SaveReason::AgeElapsed);
         let ApplyMsg::Save {
             changes: post_wrap_changes,
             ..
@@ -505,11 +526,17 @@ mod tests {
     async fn pending_buffers_are_per_letter() {
         let (sink, mut rx) = RegistryPatchSink::new_for_test();
 
-        sink.accept('C', &[make_change(1)]);
-        sink.accept('D', &[make_change(2), make_change(3)]);
+        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(1)]);
+        sink.accept(uffs_mft::platform::DriveLetter::D, &[
+            make_change(2),
+            make_change(3),
+        ]);
 
         // Drain 'C' first — should NOT include any of 'D's events.
-        sink.trigger_save('C', SaveReason::EventsExceeded);
+        sink.trigger_save(
+            uffs_mft::platform::DriveLetter::C,
+            SaveReason::EventsExceeded,
+        );
         let ApplyMsg::Save {
             letter: c_letter,
             changes: c_changes,
@@ -518,7 +545,7 @@ mod tests {
         else {
             panic!("expected ApplyMsg::Save for 'C'");
         };
-        assert_eq!(c_letter, 'C');
+        assert_eq!(c_letter, uffs_mft::platform::DriveLetter::C);
         assert_eq!(
             c_changes
                 .iter()
@@ -528,7 +555,10 @@ mod tests {
         );
 
         // 'D's buffer must still hold its events.
-        sink.trigger_save('D', SaveReason::EventsExceeded);
+        sink.trigger_save(
+            uffs_mft::platform::DriveLetter::D,
+            SaveReason::EventsExceeded,
+        );
         let ApplyMsg::Save {
             letter: d_letter,
             changes: d_changes,
@@ -537,7 +567,7 @@ mod tests {
         else {
             panic!("expected ApplyMsg::Save for 'D'");
         };
-        assert_eq!(d_letter, 'D');
+        assert_eq!(d_letter, uffs_mft::platform::DriveLetter::D);
         assert_eq!(
             d_changes
                 .iter()
@@ -589,7 +619,10 @@ mod tests {
         // Send one message so the applier wakes up, observes the
         // dropped Weak, and exits.  Without this the applier blocks
         // on `recv().await` forever (no Weak-watch primitive in tokio).
-        sink.trigger_save('C', SaveReason::EventsExceeded);
+        sink.trigger_save(
+            uffs_mft::platform::DriveLetter::C,
+            SaveReason::EventsExceeded,
+        );
 
         let join_result = tokio::time::timeout(core::time::Duration::from_secs(2), applier).await;
         assert!(
@@ -633,7 +666,13 @@ mod tests {
         // fast path in `handle_journal_save` short-circuits to a
         // debug-log no-op.  The test verifies the applier processes
         // all 5 in order before the sink's drop closes the channel.
-        for letter in ['C', 'D', 'E', 'F', 'G'] {
+        for letter in [
+            uffs_mft::platform::DriveLetter::C,
+            uffs_mft::platform::DriveLetter::D,
+            uffs_mft::platform::DriveLetter::E,
+            uffs_mft::platform::DriveLetter::F,
+            uffs_mft::platform::DriveLetter::G,
+        ] {
             sink.trigger_save(letter, SaveReason::EventsExceeded);
         }
 

@@ -42,7 +42,7 @@ use uffs_client::protocol::response::{
 ///   Already Cold:     (none)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn daemon_hibernate(drives: &[char]) -> Result<()> {
+pub(crate) fn daemon_hibernate(drives: &[uffs_mft::platform::DriveLetter]) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -104,7 +104,10 @@ pub(crate) fn daemon_hibernate(drives: &[char]) -> Result<()> {
 ///   Pin expires at:    1700001800000 (Unix-millis)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn daemon_preload(drives: &[char], pin_minutes: Option<u32>) -> Result<()> {
+pub(crate) fn daemon_preload(
+    drives: &[uffs_mft::platform::DriveLetter],
+    pin_minutes: Option<u32>,
+) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -169,7 +172,7 @@ pub(crate) fn daemon_preload(drives: &[char], pin_minutes: Option<u32>) -> Resul
 ///   Already absent:   (none)
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn daemon_forget(drives: &[char], force: bool) -> Result<()> {
+pub(crate) fn daemon_forget(drives: &[uffs_mft::platform::DriveLetter], force: bool) -> Result<()> {
     let mut client = UffsClientSync::connect_raw()
         .map_err(|err| anyhow::anyhow!("Daemon is not running: {err}"))?;
 
@@ -357,13 +360,16 @@ fn format_bytes(bytes: u64) -> String {
 /// `"(none)"` when the slice is empty.  Keeps the per-line output
 /// in [`daemon_hibernate`] / [`daemon_preload`] / [`daemon_forget`]
 /// visually aligned even on no-op calls.
-fn format_drive_list(drives: &[char]) -> String {
+fn format_drive_list(drives: &[uffs_mft::platform::DriveLetter]) -> String {
     if drives.is_empty() {
         "(none)".to_owned()
     } else {
+        // `DriveLetter` implements `Display` (renders as the
+        // uppercase ASCII char), so `ToString::to_string` produces
+        // the same output as the previous `char::to_string`.
         drives
             .iter()
-            .map(char::to_string)
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     }

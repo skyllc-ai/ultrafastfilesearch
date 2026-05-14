@@ -47,7 +47,7 @@ pub(crate) trait CacheCleaner: Send + Sync + 'static {
     /// `metadata.len()` over every file actually removed; `errors`
     /// is empty on full success and one entry per non-`NotFound`
     /// `io::Error` otherwise.
-    fn forget(&self, letter: char) -> (u64, Vec<String>);
+    fn forget(&self, letter: uffs_mft::platform::DriveLetter) -> (u64, Vec<String>);
 }
 
 /// Production implementation that resolves the four canonical
@@ -69,7 +69,7 @@ pub(crate) trait CacheCleaner: Send + Sync + 'static {
 pub(crate) struct PlatformCacheCleaner;
 
 impl CacheCleaner for PlatformCacheCleaner {
-    fn forget(&self, letter: char) -> (u64, Vec<String>) {
+    fn forget(&self, letter: uffs_mft::platform::DriveLetter) -> (u64, Vec<String>) {
         let paths = drive_cache_paths(letter);
         delete_drive_cache_files(&paths)
     }
@@ -81,7 +81,7 @@ impl CacheCleaner for PlatformCacheCleaner {
 /// submodule can drive [`delete_drive_cache_files`] against a
 /// [`tempfile::TempDir`] without dragging the platform paths into
 /// the test fixture.
-fn drive_cache_paths(letter: char) -> [PathBuf; 4] {
+fn drive_cache_paths(letter: uffs_mft::platform::DriveLetter) -> [PathBuf; 4] {
     [
         uffs_core::compact_cache::compact_cache_path(letter),
         uffs_core::compact_cache::usn_cursor_path(letter),
@@ -148,7 +148,7 @@ fn format_path_error(path: &Path, err: &io::Error) -> String {
 /// separately by an `ErroringCacheCleaner` in the same test module.
 #[cfg(test)]
 pub(crate) struct CountingCacheCleaner {
-    calls: std::sync::Mutex<Vec<char>>,
+    calls: std::sync::Mutex<Vec<uffs_mft::platform::DriveLetter>>,
     freed_per_call: u64,
 }
 
@@ -167,7 +167,7 @@ impl CountingCacheCleaner {
     /// Snapshot the per-letter call sequence.  Cloned out of the
     /// internal `Mutex` so the assertion site doesn't have to hold
     /// the lock.
-    pub(crate) fn calls(&self) -> Vec<char> {
+    pub(crate) fn calls(&self) -> Vec<uffs_mft::platform::DriveLetter> {
         self.calls
             .lock()
             .expect("CountingCacheCleaner::calls — mutex poisoned in test fixture")
@@ -177,7 +177,7 @@ impl CountingCacheCleaner {
 
 #[cfg(test)]
 impl CacheCleaner for CountingCacheCleaner {
-    fn forget(&self, letter: char) -> (u64, Vec<String>) {
+    fn forget(&self, letter: uffs_mft::platform::DriveLetter) -> (u64, Vec<String>) {
         self.calls
             .lock()
             .expect("CountingCacheCleaner::forget — mutex poisoned in test fixture")

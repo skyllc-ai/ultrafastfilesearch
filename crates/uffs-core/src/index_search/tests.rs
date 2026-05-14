@@ -41,7 +41,7 @@ fn push_file_name_ref(index: &mut MftIndex, name: &str) -> Result<IndexNameRef, 
 }
 
 fn build_index_query_fixture() -> Result<MftIndex, TestError> {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_name = push_name_ref(&mut index, ".")?;
     let root = index.get_or_create(ROOT_FRS);
@@ -177,7 +177,7 @@ fn extensions() {
 
 #[test]
 fn extension_index_integration() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_name_offset = index.add_name(".");
     let root = index.get_or_create(ROOT_FRS);
     root.stdinfo.set_directory(true);

@@ -160,7 +160,7 @@ impl MftIndex {
     /// # Example
     ///
     /// ```ignore
-    /// let mut index = MftIndex::new('C');
+    /// let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     /// // ... parse MFT records ...
     /// index.sort_directory_children(); // Sort all directory children
     /// ```

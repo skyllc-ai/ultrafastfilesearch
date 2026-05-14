@@ -327,7 +327,7 @@ pub(crate) fn write_display_row_columns(
                 buf.push_str(itoa_buf.format(pct));
             }
             OutputColumn::Drive => {
-                buf.push(row.drive);
+                buf.push(row.drive.as_char());
             }
             OutputColumn::Extension => {
                 buf.push_str(&cfg.quote);

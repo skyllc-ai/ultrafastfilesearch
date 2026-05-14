@@ -21,7 +21,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     // Read MFT from C: drive (requires admin privileges)
-//!     let df = MftReader::open('C')?.read_all()?;
+//!     let df = MftReader::open(crate::platform::DriveLetter::C)?.read_all()?;
 //!
 //!     println!("Found {} files", df.height());
 //!

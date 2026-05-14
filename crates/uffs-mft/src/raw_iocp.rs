@@ -83,8 +83,8 @@ pub struct IocpCaptureHeader {
     pub total_records: u64,
     /// Total uncompressed data size.
     pub total_data_size: u64,
-    /// Volume letter (e.g., 'C').
-    pub volume_letter: char,
+    /// Volume letter (e.g., [`crate::platform::DriveLetter::C`]).
+    pub volume_letter: crate::platform::DriveLetter,
     /// IOCP concurrency level used during capture.
     pub concurrency: u8,
     /// Bytes of NTFS reserved clusters added to root's `tree_allocated`.
@@ -113,7 +113,7 @@ impl IocpCaptureHeader {
         buf[24..28].copy_from_slice(&self.chunk_count.to_le_bytes());
         buf[28..36].copy_from_slice(&self.total_records.to_le_bytes());
         buf[36..44].copy_from_slice(&self.total_data_size.to_le_bytes());
-        buf[44] = self.volume_letter as u8;
+        buf[44] = self.volume_letter.as_byte();
         buf[45] = self.concurrency;
         // Reserved_allocated_bytes at bytes 46-53 (zero for legacy captures).
         buf[46..54].copy_from_slice(&self.reserved_allocated_bytes.to_le_bytes());
@@ -149,11 +149,12 @@ impl IocpCaptureHeader {
         let total_data_size = u64::from_le_bytes([
             buf[36], buf[37], buf[38], buf[39], buf[40], buf[41], buf[42], buf[43],
         ]);
-        let volume_letter = if buf[44].is_ascii_alphabetic() {
-            char::from(buf[44]).to_ascii_uppercase()
-        } else {
-            'X'
-        };
+        // Drive letter at byte 44.  Falls back to the historical
+        // `'X'` sentinel ([`DriveLetter::X`]) for captures with no
+        // volume context (e.g. legacy v0 dumps that didn't set the
+        // field).
+        let volume_letter = crate::platform::DriveLetter::parse(char::from(buf[44]))
+            .unwrap_or(crate::platform::DriveLetter::X);
         let concurrency = buf[45];
         // Bytes 46-53: reserved_allocated_bytes (zero for v1 captures).
         let reserved_allocated_bytes = u64::from_le_bytes([
@@ -227,8 +228,11 @@ pub struct IocpCaptureOptions {
     pub compress: bool,
     /// Compression level (1-22, default 3).
     pub compression_level: i32,
-    /// Volume letter (e.g., 'C', 'D').
-    pub volume_letter: char,
+    /// Volume letter (e.g., `C`, `D`).  Defaults to
+    /// [`crate::platform::DriveLetter::X`]
+    /// — see [`IocpCaptureHeader::volume_letter`] for the sentinel
+    /// convention.
+    pub volume_letter: crate::platform::DriveLetter,
     /// IOCP concurrency level.
     pub concurrency: u8,
     /// Bytes of NTFS reserved clusters for root `tree_allocated`.
@@ -244,7 +248,7 @@ impl Default for IocpCaptureOptions {
         Self {
             compress: true,
             compression_level: 3,
-            volume_letter: 'X',
+            volume_letter: crate::platform::DriveLetter::X,
             concurrency: 8,
             reserved_allocated_bytes: 0,
         }
@@ -261,7 +265,7 @@ pub struct IocpCaptureWriter {
     /// MFT record size.
     record_size: u32,
     /// Volume letter.
-    volume_letter: char,
+    volume_letter: crate::platform::DriveLetter,
     /// IOCP concurrency.
     concurrency: u8,
     /// Compression enabled.
@@ -412,7 +416,7 @@ impl IocpCaptureData {
 
     /// Returns the volume letter.
     #[must_use]
-    pub const fn volume_letter(&self) -> char {
+    pub const fn volume_letter(&self) -> crate::platform::DriveLetter {
         self.header.volume_letter
     }
 }

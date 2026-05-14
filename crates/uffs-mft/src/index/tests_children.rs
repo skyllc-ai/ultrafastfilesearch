@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn sort_directory_children_basic() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a directory (FRS 100)
     let dir_frs = 100_u64;
@@ -77,7 +77,7 @@ fn sort_directory_children_basic() {
 
 #[test]
 fn sort_directory_children_empty() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a directory with no children
     let dir_frs = 100_u64;
@@ -94,7 +94,7 @@ fn sort_directory_children_empty() {
 
 #[test]
 fn sort_directory_children_single_child() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a directory with one child
     let dir_frs = 100_u64;
@@ -137,7 +137,7 @@ fn sort_directory_children_single_child() {
 fn sort_directory_children_performance() {
     use std::time::Instant;
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a directory with 1000 children
     let dir_frs = 100_u64;

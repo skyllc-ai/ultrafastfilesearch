@@ -164,7 +164,7 @@ impl MftReader {
     /// from `apply_usn_updates_to_fresh_index`.
     #[cfg(windows)]
     fn apply_or_skip_usn_changes(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         index: crate::index::MftIndex,
         handle: &crate::platform::VolumeHandle,
         journal_id: u64,
@@ -203,7 +203,7 @@ impl MftReader {
     ///    save the updated index back to cache.
     #[cfg(windows)]
     fn apply_usn_changes_and_save(
-        drive: char,
+        drive: crate::platform::DriveLetter,
         mut index: crate::index::MftIndex,
         handle: &crate::platform::VolumeHandle,
         records: &[crate::usn::UsnRecord],

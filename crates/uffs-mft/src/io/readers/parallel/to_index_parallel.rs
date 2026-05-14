@@ -91,7 +91,7 @@ impl ParallelMftReader {
     pub fn read_all_sliding_window_iocp_to_index_parallel<F>(
         &self,
         overlapped_handle: HANDLE,
-        volume: char,
+        volume: crate::platform::DriveLetter,
         concurrency: Option<usize>,
         io_chunk_size: Option<usize>,
         num_workers: Option<usize>,

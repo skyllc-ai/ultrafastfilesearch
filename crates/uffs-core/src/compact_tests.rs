@@ -23,7 +23,7 @@ fn push_name(index: &mut MftIndex, name: &str) -> IndexNameRef {
 
 /// Build a small fixture: root, one dir ("Docs"), a few files.
 fn fixture_index() -> MftIndex {
-    let mut idx = MftIndex::new('C');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     // Root (FRS 5)
     let root_name = push_name(&mut idx, ".");
@@ -121,7 +121,7 @@ fn fixture_index() -> MftIndex {
 #[test]
 fn compact_preserves_all_critical_fields() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // Find file.txt by scanning names
     let file_rec = drive
@@ -144,7 +144,7 @@ fn compact_preserves_all_critical_fields() {
 #[test]
 fn compact_preserves_directory_tree_metrics() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     let docs_rec = drive
         .records
@@ -164,7 +164,7 @@ fn compact_preserves_directory_tree_metrics() {
 #[test]
 fn compact_expands_hardlink_names() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // Both primary and alternate hardlink names must appear as separate
     // CompactRecords so the unified pipeline matches the legacy pipeline.
@@ -195,7 +195,7 @@ fn compact_expands_hardlink_names() {
 #[test]
 fn compact_stores_only_primary_stream_size() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     let ads_rec = drive
         .records
@@ -221,7 +221,7 @@ fn compact_stores_only_primary_stream_size() {
 #[test]
 fn compact_filters_system_metafiles() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // $MFT (FRS 0) must be filtered at build time — its CompactRecord should
     // have name_len=0 (default/zeroed), matching the legacy pipeline which
@@ -243,7 +243,7 @@ fn compact_filters_system_metafiles() {
 #[test]
 fn compact_parent_idx_and_children_correct() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // Find Docs' compact index
     let docs_pos = drive
@@ -281,7 +281,7 @@ fn compact_parent_idx_and_children_correct() {
 #[test]
 fn compact_names_lower_is_correct() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     let docs_rec = drive
         .records
@@ -301,7 +301,7 @@ fn compact_names_lower_is_correct() {
 #[test]
 fn compact_record_count_includes_hardlinks() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
     // Compact index has base records (same count as MftIndex) plus extra
     // records for expanded hardlink alternate names.
     assert!(
@@ -327,7 +327,7 @@ fn compact_record_count_includes_hardlinks() {
 #[test]
 fn compact_parity_root_present_sysfiles_absent_hardlinks_expanded() {
     let idx = fixture_index();
-    let (drive, _, _) = build_compact_index('C', &idx);
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // (A) System metafiles must NOT appear.
     let system_names: Vec<&str> = drive
@@ -369,7 +369,7 @@ fn compact_parity_root_present_sysfiles_absent_hardlinks_expanded() {
 
 /// Build a fixture with a file that has an ADS (Zone.Identifier).
 fn fixture_index_with_ads() -> MftIndex {
-    let mut idx = MftIndex::new('M');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::M);
 
     // Root (FRS 5)
     let root_name = push_name(&mut idx, ".");
@@ -421,7 +421,7 @@ fn fixture_index_with_ads() -> MftIndex {
 #[test]
 fn ads_expanded_into_compact_records() {
     let idx = fixture_index_with_ads();
-    let (compact, _, _) = build_compact_index('M', &idx);
+    let (compact, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::M, &idx);
 
     // Collect all non-empty names.
     let all_names: Vec<&str> = compact
@@ -444,7 +444,7 @@ fn ads_expanded_into_compact_records() {
 #[test]
 fn ads_compact_record_has_stream_size() {
     let idx = fixture_index_with_ads();
-    let (compact, _, _) = build_compact_index('M', &idx);
+    let (compact, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::M, &idx);
 
     let ads_rec = compact
         .records
@@ -464,7 +464,7 @@ fn ads_compact_record_has_stream_size() {
 #[test]
 fn ads_compact_record_inherits_timestamps() {
     let idx = fixture_index_with_ads();
-    let (compact, _, _) = build_compact_index('M', &idx);
+    let (compact, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::M, &idx);
 
     let base_rec = compact
         .records
@@ -497,7 +497,7 @@ fn ads_compact_record_inherits_timestamps() {
 
 #[test]
 fn ads_on_directory_strips_directory_flag() {
-    let mut idx = MftIndex::new('M');
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::M);
 
     // Create root (FRS 5)
     let root_name = push_name(&mut idx, ".");
@@ -535,7 +535,7 @@ fn ads_on_directory_strips_directory_flag() {
     dir_mut.stream_count = 2;
     dir_mut.total_stream_count = 2;
 
-    let (compact, _, _) = build_compact_index('M', &idx);
+    let (compact, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::M, &idx);
 
     // The directory itself should have DIRECTORY flag.
     let dir_compact = compact

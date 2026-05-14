@@ -69,7 +69,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
 fn daemon_start(
     mft_files: &[std::path::PathBuf],
     data_dir: Option<&std::path::Path>,
-    drives: &[char],
+    drives: &[uffs_mft::platform::DriveLetter],
     no_cache: bool,
     log_level: &str,
     log_file: Option<&std::path::Path>,

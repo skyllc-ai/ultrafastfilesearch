@@ -32,7 +32,7 @@ pub struct PathResolver {
     /// Cache of resolved paths
     cache: HashMap<u64, String>,
     /// Volume letter (e.g., 'C')
-    volume: char,
+    volume: uffs_mft::platform::DriveLetter,
 }
 
 impl PathResolver {
@@ -46,7 +46,7 @@ impl PathResolver {
     /// # Errors
     ///
     /// Returns an error if required columns are missing.
-    pub fn build(df: &DataFrame, volume: char) -> Result<Self> {
+    pub fn build(df: &DataFrame, volume: uffs_mft::platform::DriveLetter) -> Result<Self> {
         let frs_col = df.column("frs")?.u64()?;
         let parent_col = df.column("parent_frs")?.u64()?;
         let name_col = df.column("name")?.str()?;
@@ -101,11 +101,7 @@ impl PathResolver {
 
         // Build path from components (reverse order, uppercase drive letter)
         components.reverse();
-        let path = format!(
-            "{}:\\{}",
-            self.volume.to_ascii_uppercase(),
-            components.join("\\")
-        );
+        let path = format!("{}:\\{}", self.volume.as_char(), components.join("\\"));
 
         // Cache the result
         self.cache.insert(frs, path.clone());
@@ -173,7 +169,7 @@ pub fn add_path_column_multi_drive(df: &DataFrame) -> Result<DataFrame> {
     let name_col = df.column("name")?.str()?;
 
     // Build per-drive resolvers
-    let mut resolvers: HashMap<char, PathResolver> = HashMap::new();
+    let mut resolvers: HashMap<uffs_mft::platform::DriveLetter, PathResolver> = HashMap::new();
 
     // First pass: build entries for each drive
     for i in 0..df.height() {
@@ -183,8 +179,15 @@ pub fn add_path_column_multi_drive(df: &DataFrame) -> Result<DataFrame> {
             parent_col.get(i),
             name_col.get(i),
         ) {
-            // Extract drive letter from "C:" format
-            let drive_letter = drive_str.chars().next().unwrap_or('?');
+            // Extract drive letter from "C:" format; fall back to
+            // `DriveLetter::X` (matches the previous `'?'` sentinel
+            // semantics — any record whose drive prefix isn't ASCII
+            // A–Z gets bucketed under the "unknown" letter).
+            let drive_letter = drive_str
+                .chars()
+                .next()
+                .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+                .unwrap_or(uffs_mft::platform::DriveLetter::X);
 
             let resolver = resolvers
                 .entry(drive_letter)
@@ -206,7 +209,11 @@ pub fn add_path_column_multi_drive(df: &DataFrame) -> Result<DataFrame> {
 
             match (drive_str, frs) {
                 (Some(drive), Some(frs_val)) => {
-                    let drive_letter = drive.chars().next().unwrap_or('?');
+                    let drive_letter = drive
+                        .chars()
+                        .next()
+                        .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+                        .unwrap_or(uffs_mft::platform::DriveLetter::X);
                     resolvers.get_mut(&drive_letter).map_or_else(
                         || "<unknown>".to_owned(),
                         |resolver| {

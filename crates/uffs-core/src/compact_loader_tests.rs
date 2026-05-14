@@ -99,7 +99,7 @@ fn make_synthetic_drive() -> DriveCompactIndex {
         .collect();
 
     DriveCompactIndex {
-        letter: 'T',
+        letter: uffs_mft::platform::DriveLetter::T,
         records: ColumnStorage::from_vec(records),
         names: ColumnStorage::from_vec(names),
         trigram,

@@ -39,24 +39,24 @@ use crate::cache::{ShardState, unix_now_ms};
 
 /// Outcome of a [`IndexManager::hibernate_shards`] call.
 ///
-/// Each `Vec<char>` lists the drives whose pre-call tier matched the
-/// field name and that are now `Cold` (or, for `already_cold`, were
-/// already there).  The handler maps this 1:1 onto
+/// Each `Vec<uffs_mft::platform::DriveLetter>` lists the drives whose pre-call
+/// tier matched the field name and that are now `Cold` (or, for `already_cold`,
+/// were already there).  The handler maps this 1:1 onto
 /// [`uffs_client::protocol::response::HibernateResponse`]; the
 /// internal type exists so the RPC layer can do the serialisation
 /// without re-walking the registry.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct HibernateOutcome {
     /// Drives whose pre-call tier was `Hot`.
-    pub hot_demoted: Vec<char>,
+    pub hot_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives whose pre-call tier was `Warm`.
-    pub warm_demoted: Vec<char>,
+    pub warm_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives whose pre-call tier was `Parked`.
-    pub parked_demoted: Vec<char>,
+    pub parked_demoted: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that were already `Cold` (or whose state was
     /// `Unknown` / `Evicting`, which the operator path cannot
     /// pre-empt).  No registry rebuild for these.
-    pub already_cold: Vec<char>,
+    pub already_cold: Vec<uffs_mft::platform::DriveLetter>,
 }
 
 /// Outcome of a [`IndexManager::preload_drive`] call for one drive.
@@ -127,19 +127,18 @@ impl IndexManager {
     /// canonical `shard.transition` event so operators can grep
     /// `reason="operator-hibernate"` to distinguish manual
     /// hibernation from idle-tick or pressure-cascade demotes.
-    pub(crate) async fn hibernate_shards(&self, drives: &[char]) -> HibernateOutcome {
+    pub(crate) async fn hibernate_shards(
+        &self,
+        drives: &[uffs_mft::platform::DriveLetter],
+    ) -> HibernateOutcome {
         // ── Phase 1: read-lock detect ──────────────────────────────
         let mut outcome = HibernateOutcome::default();
-        let demotes: Vec<(char, ShardState)> = {
+        let demotes: Vec<(uffs_mft::platform::DriveLetter, ShardState)> = {
             let guard = self.index.read().await;
-            let mut to_demote: Vec<(char, ShardState)> = Vec::new();
+            let mut to_demote: Vec<(uffs_mft::platform::DriveLetter, ShardState)> = Vec::new();
             for shard in guard.iter() {
                 let drive = shard.drive;
-                if !drives.is_empty()
-                    && !drives
-                        .iter()
-                        .any(|filter| filter.eq_ignore_ascii_case(&drive))
-                {
+                if !drives.is_empty() && !drives.contains(&drive) {
                     continue;
                 }
                 let from_state = shard.state();
@@ -173,8 +172,8 @@ impl IndexManager {
                 }
             }
             // Explicit early drop so the read lock is released
-            // before the `Vec<(char, ShardState)>` is returned and
-            // the surrounding block exits.  Tightens the read-lock
+            // before the `Vec<(uffs_mft::platform::DriveLetter, ShardState)>` is returned
+            // and the surrounding block exits.  Tightens the read-lock
             // hold time for any concurrent dispatcher while keeping
             // clippy::significant_drop_tightening satisfied.
             drop(guard);
@@ -248,13 +247,17 @@ impl IndexManager {
     /// the moment the pin is armed (Unix-millis).  Pre-existing
     /// pins are overwritten — every `preload` call resets the pin
     /// window, even for already-pinned drives.
-    pub(crate) async fn preload_drive(&self, letter: char, pin_minutes: u32) -> PreloadOutcome {
+    pub(crate) async fn preload_drive(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        pin_minutes: u32,
+    ) -> PreloadOutcome {
         // ── Phase 1: read-lock detect (state + body) ───────────────
         let snapshot = {
             let guard = self.index.read().await;
             guard
                 .iter()
-                .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+                .find(|shard| shard.drive == letter)
                 .map(|shard| (shard.drive, shard.state(), shard.body(), Arc::clone(shard)))
         };
         let Some((drive, from_state, current_body, current_arc)) = snapshot else {
@@ -276,7 +279,7 @@ impl IndexManager {
                 current_arc.pin_until(pin_until_ms);
                 tracing::info!(
                     target: "shard.transition",
-                    letter = %drive.to_ascii_uppercase(),
+                    letter = %drive,
                     pin_until_ms,
                     pin_minutes,
                     reason = "preload-pin-extend",
@@ -325,7 +328,7 @@ impl IndexManager {
     /// readable above and the swap mechanics auditable here.
     async fn swap_in_hot_with_pin(
         &self,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         body: Arc<uffs_core::compact::DriveCompactIndex>,
         pin_until_ms: u64,
     ) -> PreloadOutcome {
@@ -339,7 +342,7 @@ impl IndexManager {
         // forces the rebuild to fail.
         let prev_state = guard
             .iter()
-            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
+            .find(|shard| shard.drive == letter)
             .map_or(ShardState::Unknown, |shard| shard.state());
 
         let Some(new_registry) = guard.promote_letter_to_hot(letter, body) else {
@@ -359,10 +362,7 @@ impl IndexManager {
         // `find` short-circuit is defensive — the drive must
         // exist in the rebuilt registry by construction.
         let now_ms = unix_now_ms();
-        if let Some(new_shard) = new_registry
-            .iter()
-            .find(|shard| shard.drive.eq_ignore_ascii_case(&letter))
-        {
+        if let Some(new_shard) = new_registry.iter().find(|shard| shard.drive == letter) {
             new_shard.stats.mark_loaded_at(now_ms);
             new_shard.pin_until(pin_until_ms);
         }
@@ -386,7 +386,7 @@ impl IndexManager {
     /// `target: "shard.transition"` and the preload continues.
     fn prefault_body(
         prefetch: &Arc<dyn crate::cache::prefetch::Prefetch>,
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         body: &Arc<uffs_core::compact::DriveCompactIndex>,
     ) {
         // Build the records + names regions inline, mirroring the

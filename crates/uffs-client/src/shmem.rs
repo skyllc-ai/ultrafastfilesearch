@@ -206,7 +206,7 @@ pub fn write_search_results(
         let name_len = u32::try_from(name_bytes.len()).unwrap_or(u32::MAX);
 
         records.push(ShmemRecord {
-            drive: row.drive as u8,
+            drive: row.drive.as_byte(),
             is_directory: u8::from(row.is_directory),
             _pad: [0; 2],
             flags: row.flags,
@@ -372,7 +372,13 @@ pub fn read_search_results(path: &Path) -> io::Result<SearchResponse> {
             .map_err(|utf8_err| io::Error::new(io::ErrorKind::InvalidData, utf8_err))?;
 
         rows.push(SearchRow {
-            drive: char::from(rec.drive),
+            // Shmem records are written with `row.drive.as_byte()`
+            // (which is always in `b'A'..=b'Z'`), so the `TryFrom`
+            // succeeds in normal operation.  A fallback to
+            // `DriveLetter::X` keeps the reader resilient against
+            // truncated / corrupted blobs without panicking.
+            drive: uffs_mft::platform::DriveLetter::try_from(rec.drive)
+                .unwrap_or(uffs_mft::platform::DriveLetter::X),
             path: path_str.to_owned(),
             name: name_str.to_owned(),
             size: rec.size,

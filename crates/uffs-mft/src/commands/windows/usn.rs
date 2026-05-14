@@ -29,7 +29,7 @@ use crate::display::format_usn_reason;
 
 /// Query USN Journal information for a drive.
 #[cfg(windows)]
-pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
+pub(crate) async fn cmd_usn_info(drive: uffs_mft::platform::DriveLetter) -> Result<()> {
     use uffs_mft::usn::query_usn_journal;
 
     println!("🔍 Querying USN Journal for {drive}:...");
@@ -72,7 +72,11 @@ pub(crate) async fn cmd_usn_info(drive: char) -> Result<()> {
 
 /// Read recent USN Journal changes for a drive.
 #[cfg(windows)]
-pub(crate) async fn cmd_usn_read(drive: char, start_usn: Option<i64>, limit: usize) -> Result<()> {
+pub(crate) async fn cmd_usn_read(
+    drive: uffs_mft::platform::DriveLetter,
+    start_usn: Option<i64>,
+    limit: usize,
+) -> Result<()> {
     use uffs_mft::usn::{query_usn_journal, read_usn_journal};
 
     println!("🔍 Reading USN Journal for {drive}:...");

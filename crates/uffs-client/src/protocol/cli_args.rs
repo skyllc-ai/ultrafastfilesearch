@@ -281,8 +281,8 @@ impl SearchParams {
 )]
 struct RawCliArgs {
     pattern: Option<String>,
-    drive: Option<char>,
-    drives: Option<Vec<char>>,
+    drive: Option<uffs_mft::platform::DriveLetter>,
+    drives: Option<Vec<uffs_mft::platform::DriveLetter>>,
     files_only: bool,
     dirs_only: bool,
     hide_system: bool,
@@ -552,7 +552,7 @@ impl RawCliArgs {
         let agg_only = !agg_specs.is_empty() && !force_rows;
 
         // ── Drives ─────────────────────────────────────────────────
-        let drives: Vec<char> = self
+        let drives: Vec<uffs_mft::platform::DriveLetter> = self
             .drives
             .or_else(|| self.drive.map(|ch| vec![ch]))
             .unwrap_or_default();

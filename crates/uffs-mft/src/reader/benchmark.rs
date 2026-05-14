@@ -60,7 +60,7 @@ impl PhaseTimings {
 #[derive(Debug, Clone)]
 pub struct DriveCharacteristics {
     /// Drive letter (e.g., 'C').
-    pub drive_letter: char,
+    pub drive_letter: crate::platform::DriveLetter,
     /// Detected drive type (SSD, HDD, Unknown).
     pub drive_type: String,
     /// Total MFT size in bytes.
@@ -176,7 +176,7 @@ pub(super) struct MftMetrics {
 #[must_use]
 #[cfg(windows)]
 pub(super) fn build_drive_characteristics(
-    drive_letter: char,
+    drive_letter: crate::platform::DriveLetter,
     drive_type: DriveType,
     mft: MftMetrics,
     chunk_size_bytes: usize,

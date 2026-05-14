@@ -87,6 +87,12 @@ hostname.workspace = true
 rustc-hash.workspace = true
 zerocopy.workspace = true
 
+# Wire-format (de)serialisation for `DriveLetter` — used by the
+# daemon event stream and the compact index header.  The dep is
+# narrow: only the `Serialize`/`Deserialize` derives + manual impls
+# on `DriveLetter` itself.
+serde.workspace = true
+
 # Chaos test harness dependencies (ChaosMftReader is public for CLI)
 rand.workspace = true
 rand_chacha.workspace = true

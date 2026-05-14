@@ -55,7 +55,9 @@ pub(crate) fn broker_available() -> bool {
 /// Returns the raw handle value (as a `u64`) that can be used for MFT reading.
 /// The handle is already duplicated into our process by the broker.
 #[cfg(windows)]
-pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
+pub(crate) fn request_volume_handle(
+    drive_letter: uffs_mft::platform::DriveLetter,
+) -> anyhow::Result<u64> {
     use std::io::{Read as _, Write as _};
 
     use uffs_broker_protocol::{
@@ -71,8 +73,10 @@ pub(crate) fn request_volume_handle(drive_letter: char) -> anyhow::Result<u64> {
         .map_err(|err| anyhow::anyhow!("Failed to connect to broker: {err}"))?;
 
     // Encode the 1-byte request via the shared protocol module.
+    // `uffs-broker-protocol` is a leaf crate with no `uffs-mft` dep,
+    // so we convert at the boundary.
     let request_bytes = HandleRequest {
-        drive: drive_letter,
+        drive: drive_letter.as_char(),
     }
     .encode();
     pipe.write_all(&request_bytes)?;
@@ -112,6 +116,8 @@ pub(crate) const fn broker_available() -> bool {
     clippy::single_call_fn,
     reason = "platform stub — mirrors Windows variant"
 )]
-pub(crate) fn request_volume_handle(_drive_letter: char) -> anyhow::Result<u64> {
+pub(crate) fn request_volume_handle(
+    _drive_letter: uffs_mft::platform::DriveLetter,
+) -> anyhow::Result<u64> {
     anyhow::bail!("Access Broker is a Windows-only feature")
 }

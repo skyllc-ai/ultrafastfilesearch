@@ -44,7 +44,9 @@ impl RollupAccumulator {
     #[inline]
     pub fn feed(&mut self, record: &CompactRecord, drive: &DriveCompactIndex, idx: usize) {
         let key = match self.mode {
-            RollupMode::Drive => u32::from(u8::try_from(u32::from(drive.letter)).unwrap_or(b'?')),
+            RollupMode::Drive => {
+                u32::from(u8::try_from(u32::from(drive.letter.as_byte())).unwrap_or(b'?'))
+            }
             RollupMode::Path { depth } => ancestor_at_depth(record, drive, idx, depth),
             RollupMode::Ancestor { record_idx } => child_of_ancestor(drive, idx, record_idx),
         };
@@ -319,7 +321,7 @@ mod tests {
         let children = ChildrenIndex::build(&records);
 
         DriveCompactIndex {
-            letter: 'C',
+            letter: uffs_mft::platform::DriveLetter::C,
             records: crate::compact_storage::ColumnStorage::from_vec(records),
             names: crate::compact_storage::ColumnStorage::from_vec(names_blob),
             trigram: TrigramIndex::empty(),

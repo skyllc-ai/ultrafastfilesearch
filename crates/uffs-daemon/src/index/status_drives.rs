@@ -56,11 +56,9 @@ impl IndexManager {
             drop(guard);
             rows
         };
-        drives.sort_by(|lhs, rhs| {
-            lhs.letter
-                .to_ascii_uppercase()
-                .cmp(&rhs.letter.to_ascii_uppercase())
-        });
+        // `DriveLetter` is canonical uppercase, so sort-by-letter is
+        // case-insensitive by construction.
+        drives.sort_by_key(|row| row.letter);
         StatusDrivesResponse { drives }
     }
 }

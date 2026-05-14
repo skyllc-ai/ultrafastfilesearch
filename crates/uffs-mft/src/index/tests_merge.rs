@@ -116,7 +116,7 @@ fn cross_fragment_merge_extension_placeholder() {
     assert_ne!(fragment_b.get_or_create(100).stdinfo.created, 0);
     assert!(fragment_b.get_or_create(100).has_base_data());
 
-    let mut index = MftIndex::new('D');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::D);
     index.merge_fragments(vec![fragment_a, fragment_b]);
 
     let record = &index.records[index.frs_to_idx[100] as usize];
@@ -158,7 +158,7 @@ fn cross_fragment_merge_multiple_extension_names() {
     record_b.stdinfo.created = 132_456_789_012_345_678;
     record_b.stdinfo.modified = 132_456_789_012_345_678;
 
-    let mut index = MftIndex::new('D');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::D);
     index.merge_fragments(vec![fragment_a, fragment_b]);
 
     let record = &index.records[index.frs_to_idx[100] as usize];
@@ -206,7 +206,7 @@ fn cross_fragment_merge_base_first() {
     record_b.first_name.next_entry = link_c_idx;
     record_b.name_count = 2;
 
-    let mut index = MftIndex::new('D');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::D);
     index.merge_fragments(vec![fragment_a, fragment_b]);
 
     let record = &index.records[index.frs_to_idx[100] as usize];
@@ -226,7 +226,7 @@ fn cross_fragment_merge_base_first() {
 /// references.
 #[test]
 fn rebuild_children_from_names_basic() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
     let root_rec = index.get_or_create(root_frs);
@@ -281,7 +281,7 @@ fn rebuild_children_from_names_basic() {
 /// Test that `rebuild_children_from_names()` handles hard links correctly.
 #[test]
 fn rebuild_children_from_names_hardlinks() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let dir1_frs = 100_u64;
     let dir2_frs = 101_u64;
@@ -340,7 +340,7 @@ fn rebuild_children_from_names_hardlinks() {
 /// Test that `rebuild_children_from_names()` skips self-referencing root.
 #[test]
 fn rebuild_children_from_names_skips_root_self_reference() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
     let rec = index.get_or_create(root_frs);
@@ -360,7 +360,7 @@ fn rebuild_children_from_names_skips_root_self_reference() {
 /// Test that tree metrics correctly handles empty directories.
 #[test]
 fn tree_metrics_empty_directory_descendants() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
     let root_rec = index.get_or_create(root_frs);
@@ -387,7 +387,7 @@ fn tree_metrics_empty_directory_descendants() {
 /// Test that tree metrics correctly handles directories with internal streams.
 #[test]
 fn tree_metrics_internal_streams_two_channel() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
     let root_rec = index.get_or_create(root_frs);

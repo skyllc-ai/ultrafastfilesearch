@@ -80,7 +80,7 @@ pub struct UpcaseHeader {
     /// Timestamp (Unix epoch seconds) when the table was captured.
     pub timestamp: u64,
     /// Drive letter (ASCII uppercase).
-    pub drive: char,
+    pub drive: crate::platform::DriveLetter,
 }
 
 impl UpcaseHeader {
@@ -103,7 +103,7 @@ impl UpcaseHeader {
         buf[16..24].copy_from_slice(&self.volume_serial.to_le_bytes());
         buf[24..28].copy_from_slice(&self.table_crc32.to_le_bytes());
         buf[28..36].copy_from_slice(&self.timestamp.to_le_bytes());
-        buf[36] = self.drive as u8;
+        buf[36] = self.drive.as_byte();
         // 37..64 reserved (already zeroed)
 
         let raw: &[u8] = bytemuck::cast_slice(table.as_ref());
@@ -154,7 +154,8 @@ impl UpcaseHeader {
             timestamp: u64::from_le_bytes([
                 data[28], data[29], data[30], data[31], data[32], data[33], data[34], data[35],
             ]),
-            drive: data[36] as char,
+            drive: crate::platform::DriveLetter::parse(char::from(data[36]))
+                .unwrap_or(crate::platform::DriveLetter::X),
         })
     }
 }
@@ -319,7 +320,7 @@ fn parse_data_runs(record_bytes: &[u8]) -> Result<UpcaseDataRuns> {
 ///
 /// Returns [`MftError::PlatformNotSupported`] on non-Windows.
 #[cfg(not(windows))]
-pub const fn read_upcase_table(_drive: char) -> Result<Box<[u16; 65_536]>> {
+pub const fn read_upcase_table(_drive: crate::platform::DriveLetter) -> Result<Box<[u16; 65_536]>> {
     Err(MftError::PlatformNotSupported)
 }
 
@@ -332,7 +333,7 @@ pub const fn read_upcase_table(_drive: char) -> Result<Box<[u16; 65_536]>> {
 /// [`MftError::InvalidData`] if the assembled table is shorter than the
 /// expected 128 KiB (65 536 code-point entries).
 #[cfg(windows)]
-pub fn read_upcase_table(drive: char) -> Result<Box<[u16; 65_536]>> {
+pub fn read_upcase_table(drive: crate::platform::DriveLetter) -> Result<Box<[u16; 65_536]>> {
     use crate::parse::apply_fixup;
     use crate::platform::VolumeHandle;
 
@@ -520,7 +521,7 @@ mod tests {
             volume_serial: 0xDEAD_BEEF_CAFE_1234,
             table_crc32: table_crc,
             timestamp: 1_700_000_000,
-            drive: 'C',
+            drive: crate::platform::DriveLetter::C,
         };
 
         let dir = std::env::temp_dir().join("uffs_upcase_test");
@@ -539,7 +540,7 @@ mod tests {
         assert_eq!(loaded_hdr.ntfs_minor, 1);
         assert_eq!(loaded_hdr.volume_serial, 0xDEAD_BEEF_CAFE_1234);
         assert_eq!(loaded_hdr.table_crc32, table_crc);
-        assert_eq!(loaded_hdr.drive, 'C');
+        assert_eq!(loaded_hdr.drive, crate::platform::DriveLetter::C);
 
         // Table contents must match.
         assert_eq!(loaded_tbl.as_ref(), table.as_ref());
@@ -572,7 +573,7 @@ mod tests {
         let (hdr, tbl) = load_upcase_from_file(&ref_path)?;
 
         // Header sanity.
-        assert_eq!(hdr.drive, 'C');
+        assert_eq!(hdr.drive, crate::platform::DriveLetter::C);
         assert_eq!(hdr.table_crc32, 0xCEE8_CFFA);
 
         // Table must match the embedded default exactly.

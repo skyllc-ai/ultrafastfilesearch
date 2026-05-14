@@ -599,7 +599,7 @@ impl UffsClientSync {
     /// Returns `ClientError` on I/O, protocol, or timeout failure.
     pub fn load_drive_letters(
         &mut self,
-        drives: &[char],
+        drives: &[uffs_mft::platform::DriveLetter],
         no_cache: bool,
     ) -> Result<crate::protocol::response::LoadDriveResponse, ClientError> {
         let params = serde_json::json!({
@@ -615,7 +615,10 @@ impl UffsClientSync {
     /// # Errors
     ///
     /// Returns `ClientError` on I/O, protocol, or timeout failure.
-    pub fn refresh(&mut self, drives: &[char]) -> Result<(), ClientError> {
+    pub fn refresh(
+        &mut self,
+        drives: &[uffs_mft::platform::DriveLetter],
+    ) -> Result<(), ClientError> {
         let params = serde_json::json!({"drives": drives});
         let _result = self.send_request("refresh", Some(params))?;
         Ok(())

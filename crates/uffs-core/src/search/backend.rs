@@ -32,7 +32,16 @@ const UNLIMITED: usize = usize::MAX;
 /// The filename is **not** stored separately — it is derived from the `path`
 /// field using `name_start` (byte offset where the filename begins within
 /// `path`).  This avoids one heap allocation per result row.
-#[derive(Debug, Clone, Default)]
+///
+/// `Default` is implemented manually below: [`uffs_mft::platform::DriveLetter`]
+/// has no `Default` impl (it's a validated `A..=Z` newtype with no canonical
+/// zero), but the `sort_rows_with_fold` hot path uses
+/// [`core::mem::take`] to move rows out of a `&mut [DisplayRow]` slice
+/// as part of a Schwartzian decorate/sort/undecorate transform.  The
+/// take leaves a transient placeholder in the slice that's
+/// immediately overwritten by the put-back step, so any consistent
+/// drive letter works for the placeholder.
+#[derive(Debug, Clone)]
 #[expect(
     clippy::partial_pub_fields,
     reason = "name_start is private by design — accessed via name() method"
@@ -41,7 +50,7 @@ pub struct DisplayRow {
     /// Record index within the compact/cache file.
     pub record_index: u32,
     /// Drive letter this result belongs to.
-    pub drive: char,
+    pub drive: uffs_mft::platform::DriveLetter,
     /// Full resolved path (e.g., `C:\Users\file.txt`).
     pub path: String,
     /// Byte offset within `path` where the filename begins.
@@ -80,7 +89,7 @@ impl DisplayRow {
     )]
     pub fn new(
         record_index: u32,
-        drive: char,
+        drive: uffs_mft::platform::DriveLetter,
         path: String,
         size: u64,
         is_directory: bool,
@@ -152,6 +161,33 @@ impl DisplayRow {
 /// hands back a struct field (or the pre-computed filename slice),
 /// matching the trait's inlineability requirement.
 ///
+/// Manual `Default` impl — see the struct doc-comment for why we
+/// don't derive it.  All fields default to their natural zero
+/// (`0`, `String::new()`, `false`) except `drive`, which we set to
+/// [`uffs_mft::platform::DriveLetter::A`] purely as a placeholder for
+/// [`core::mem::take`] in the sort hot path.  Callers never observe
+/// this value: the take is immediately followed by a put-back.
+impl Default for DisplayRow {
+    fn default() -> Self {
+        Self {
+            record_index: 0,
+            drive: uffs_mft::platform::DriveLetter::A,
+            path: String::new(),
+            name_start: 0,
+            size: 0,
+            is_directory: false,
+            modified: 0,
+            created: 0,
+            accessed: 0,
+            flags: 0,
+            allocated: 0,
+            descendants: 0,
+            treesize: 0,
+            tree_allocated: 0,
+        }
+    }
+}
+
 /// The trait method `name()` collides with `DisplayRow::name()` (the
 /// inherent accessor that pre-dates the trait); the trait impl
 /// delegates to the inherent impl so the behaviour is identical.
@@ -160,7 +196,11 @@ impl DisplayRow {
 impl uffs_format::FormatRow for DisplayRow {
     #[inline]
     fn drive(&self) -> char {
-        self.drive
+        // `uffs-format` is a foundation crate that intentionally
+        // doesn't depend on `uffs-mft`, so the trait surface
+        // stays `char`.  `DriveLetter::as_char` is the canonical
+        // zero-cost conversion to the ASCII letter.
+        self.drive.as_char()
     }
     #[inline]
     fn path(&self) -> &str {
@@ -323,7 +363,7 @@ pub struct SearchRequest<'a> {
     pub search_filters: &'a mut super::filters::SearchFilters,
     /// Drive-letter filter: only search drives whose letter is in this
     /// slice.  An empty slice means "search all loaded drives".
-    pub drives_filter: &'a [char],
+    pub drives_filter: &'a [uffs_mft::platform::DriveLetter],
 }
 
 impl<'a> SearchRequest<'a> {
@@ -378,7 +418,7 @@ impl DriveIndex {
 
     /// List loaded drives with record counts.
     #[must_use]
-    pub fn drive_summary(&self) -> Vec<(char, usize)> {
+    pub fn drive_summary(&self) -> Vec<(uffs_mft::platform::DriveLetter, usize)> {
         self.drives
             .iter()
             .map(|dr| (dr.letter, dr.records.len()))
@@ -433,7 +473,7 @@ impl MultiDriveBackend {
 
     /// List loaded drives with record counts.
     #[must_use]
-    pub fn drive_summary(&self) -> Vec<(char, usize)> {
+    pub fn drive_summary(&self) -> Vec<(uffs_mft::platform::DriveLetter, usize)> {
         self.drives
             .iter()
             .map(|dr| (dr.letter, dr.records.len()))
@@ -486,7 +526,7 @@ impl MultiDriveBackend {
         // docs for the composition rules.  `drive_from_prefix` owns the
         // single-element vec so the borrow in `effective_drives_filter`
         // stays valid through the stash-and-partition block below.
-        let mut drive_from_prefix: Vec<char> = Vec::new();
+        let mut drive_from_prefix: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
         apply_dispatch_safety_nets(
             &mut pattern,
             match_path,
@@ -495,11 +535,12 @@ impl MultiDriveBackend {
             search_filters,
             &mut drive_from_prefix,
         );
-        let effective_drives_filter: &[char] = if drive_from_prefix.is_empty() {
-            drives_filter
-        } else {
-            &drive_from_prefix
-        };
+        let effective_drives_filter: &[uffs_mft::platform::DriveLetter] =
+            if drive_from_prefix.is_empty() {
+                drives_filter
+            } else {
+                &drive_from_prefix
+            };
 
         // When a drive filter is active, temporarily swap out non-matching
         // drives so the rest of the search logic (which uses `self.drives`)
@@ -508,11 +549,9 @@ impl MultiDriveBackend {
             None
         } else {
             let all = core::mem::take(&mut self.drives);
-            let (keep, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|dr| {
-                effective_drives_filter
-                    .iter()
-                    .any(|fl| fl.eq_ignore_ascii_case(&dr.letter))
-            });
+            let (keep, rest): (Vec<_>, Vec<_>) = all
+                .into_iter()
+                .partition(|dr| effective_drives_filter.contains(&dr.letter));
             self.drives = keep;
             Some(rest)
         };
@@ -752,7 +791,7 @@ pub fn search_index(
     // docs for the composition rules.  `drive_from_prefix` owns the
     // single-element vec so the borrow in `effective_drives_filter`
     // stays valid for the rest of the function.
-    let mut drive_from_prefix: Vec<char> = Vec::new();
+    let mut drive_from_prefix: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
     apply_dispatch_safety_nets(
         &mut pattern,
         match_path,
@@ -761,21 +800,19 @@ pub fn search_index(
         search_filters,
         &mut drive_from_prefix,
     );
-    let effective_drives_filter: &[char] = if drive_from_prefix.is_empty() {
-        drives_filter
-    } else {
-        &drive_from_prefix
-    };
+    let effective_drives_filter: &[uffs_mft::platform::DriveLetter] =
+        if drive_from_prefix.is_empty() {
+            drives_filter
+        } else {
+            &drive_from_prefix
+        };
 
     // Filter drives without mutation — just skip non-matching ones.
     let mut active_drives: Vec<&DriveCompactIndex> = index
         .drives
         .iter()
         .filter(|dr| {
-            effective_drives_filter.is_empty()
-                || effective_drives_filter
-                    .iter()
-                    .any(|fl| fl.eq_ignore_ascii_case(&dr.letter))
+            effective_drives_filter.is_empty() || effective_drives_filter.contains(&dr.letter)
         })
         .map(Arc::as_ref)
         .collect();

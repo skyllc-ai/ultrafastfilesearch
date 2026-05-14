@@ -56,7 +56,7 @@ impl MftReader {
             let handle = VolumeHandle::open(volume)?;
             let reader = Self {
                 volume,
-                source: super::MftSource::LiveVolume(handle),
+                source: super::MftSource::LiveVolume(Box::new(handle)),
                 mode,
                 merge_extensions,
                 use_bitmap,

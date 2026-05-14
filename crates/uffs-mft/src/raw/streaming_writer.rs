@@ -41,7 +41,7 @@ pub struct StreamingRawMftWriter {
     /// Whether compression is enabled.
     compress: bool,
     /// Volume letter (e.g., 'C', 'D').
-    volume_letter: char,
+    volume_letter: crate::platform::DriveLetter,
     /// Whether raw compatibility mode is enabled (no header).
     raw_compat: bool,
     /// Zstd encoder (if compressing).

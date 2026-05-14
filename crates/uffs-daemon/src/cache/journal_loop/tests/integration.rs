@@ -97,7 +97,7 @@ async fn ten_thousand_events_end_to_end() {
         save_threshold_age: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
-        'C',
+        uffs_mft::platform::DriveLetter::C,
         Arc::clone(&source) as Arc<dyn JournalSource>,
         Arc::clone(&sink) as Arc<dyn PatchSink>,
         Arc::clone(&cursor_store) as Arc<dyn CursorStore>,
@@ -132,7 +132,9 @@ async fn ten_thousand_events_end_to_end() {
     );
     // Every accept call was for letter 'C'.
     assert!(
-        calls.iter().all(|(letter, _)| *letter == 'C'),
+        calls
+            .iter()
+            .all(|(letter, _)| *letter == uffs_mft::platform::DriveLetter::C),
         "every accept() must be for drive 'C'; got {calls:?}"
     );
 
@@ -147,7 +149,9 @@ async fn ten_thousand_events_end_to_end() {
         saves.len()
     );
     assert!(
-        saves.iter().all(|(letter, _)| *letter == 'C'),
+        saves
+            .iter()
+            .all(|(letter, _)| *letter == uffs_mft::platform::DriveLetter::C),
         "every save must be for drive 'C'; got {saves:?}"
     );
 

@@ -647,9 +647,18 @@ mod tests {
 
     #[test]
     fn parse_drive_letter_accepts_letter_colon_and_whitespace_variants() {
-        assert_eq!(parse_drive_letter("c"), Ok('C'));
-        assert_eq!(parse_drive_letter("C:"), Ok('C'));
-        assert_eq!(parse_drive_letter(" d: "), Ok('D'));
+        assert_eq!(
+            parse_drive_letter("c"),
+            Ok(uffs_mft::platform::DriveLetter::C)
+        );
+        assert_eq!(
+            parse_drive_letter("C:"),
+            Ok(uffs_mft::platform::DriveLetter::C)
+        );
+        assert_eq!(
+            parse_drive_letter(" d: "),
+            Ok(uffs_mft::platform::DriveLetter::D)
+        );
     }
 
     #[test]
@@ -683,7 +692,7 @@ mod tests {
         // in uffs-client for the full rewrite semantics.
         assert_eq!(params.pattern, "*");
         assert_eq!(params.ext.as_deref(), Some("rs"));
-        assert_eq!(params.drives, vec!['C']);
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
         assert_eq!(params.output_tz_offset_hours, Some(-8));
     }
 

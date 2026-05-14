@@ -150,34 +150,40 @@ fn infer_drive_letter_pins_canonical_mapping() {
     // Standard captures: `<letter>_mft.iocp`.
     assert_eq!(
         IndexManager::infer_drive_letter(Path::new("G_mft.iocp")),
-        'G'
+        uffs_mft::platform::DriveLetter::G
     );
     assert_eq!(
         IndexManager::infer_drive_letter(Path::new("c_mft.iocp")),
-        'C'
+        uffs_mft::platform::DriveLetter::C
     );
 
     // Lone letter, no extension.
-    assert_eq!(IndexManager::infer_drive_letter(Path::new("d")), 'D');
+    assert_eq!(
+        IndexManager::infer_drive_letter(Path::new("d")),
+        uffs_mft::platform::DriveLetter::D
+    );
 
     // Path with directory components — only the file stem matters.
     assert_eq!(
         IndexManager::infer_drive_letter(Path::new("data_dir/drive_e/E_mft.iocp")),
-        'E'
+        uffs_mft::platform::DriveLetter::E
     );
 
     // Non-conforming names fall back to 'X' rather than panicking.
     assert_eq!(
         IndexManager::infer_drive_letter(Path::new("1bad_name")),
-        'X'
+        uffs_mft::platform::DriveLetter::X
     );
     assert_eq!(
         IndexManager::infer_drive_letter(Path::new("_underscore.iocp")),
-        'X'
+        uffs_mft::platform::DriveLetter::X
     );
 
     // Empty path components default to 'X' (file_name() returns None).
-    assert_eq!(IndexManager::infer_drive_letter(Path::new("")), 'X');
+    assert_eq!(
+        IndexManager::infer_drive_letter(Path::new("")),
+        uffs_mft::platform::DriveLetter::X
+    );
 }
 
 /// `is_live_drive_marker` distinguishes a cached source whose

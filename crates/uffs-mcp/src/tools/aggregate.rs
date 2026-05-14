@@ -100,10 +100,11 @@ pub(crate) async fn run(
         });
     }
 
-    let drives: Vec<char> = args
+    let drives: Vec<uffs_mft::platform::DriveLetter> = args
         .drives
         .iter()
-        .filter_map(|ch| ch.chars().next())
+        .filter_map(|drv| drv.chars().next())
+        .filter_map(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
         .collect();
 
     let mut params = SearchParams {

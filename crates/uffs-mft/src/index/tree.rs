@@ -35,7 +35,7 @@ impl MftIndex {
     /// # Example
     ///
     /// ```ignore
-    /// let mut index = MftIndex::new('C');
+    /// let mut index = MftIndex::new(crate::platform::DriveLetter::C);
     /// // ... parse MFT records ...
     /// index.compute_tree_metrics(); // Compute tree metrics for all directories
     /// ```

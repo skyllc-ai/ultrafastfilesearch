@@ -52,11 +52,11 @@ use crate::cache::{ShardState, unix_now_ms};
 pub(crate) struct ForgetOutcome {
     /// Drives whose cache files were deleted in this call (any
     /// `freed_bytes > 0`).
-    pub forgotten: Vec<char>,
+    pub forgotten: Vec<uffs_mft::platform::DriveLetter>,
     /// Drives that had no cache files on disk and weren't loaded in
     /// the registry (idempotent no-op, e.g. a re-run after a previous
     /// successful `forget`).
-    pub already_absent: Vec<char>,
+    pub already_absent: Vec<uffs_mft::platform::DriveLetter>,
     /// Cumulative bytes freed across every successfully-forgotten
     /// drive.
     pub freed_bytes: u64,
@@ -85,7 +85,7 @@ pub(crate) enum ForgetOutcomeOrBusy {
     /// All-or-nothing refusal: one or more drives are non-`Cold`
     /// and `force` was `false`.  Vec carries `(letter, current_tier)`
     /// for every refused drive in registry order.
-    Busy(Vec<(char, ShardState)>),
+    Busy(Vec<(uffs_mft::platform::DriveLetter, ShardState)>),
 }
 
 impl IndexManager {
@@ -103,20 +103,25 @@ impl IndexManager {
     /// Returns [`ForgetOutcomeOrBusy::Busy`] when the all-or-nothing
     /// refusal triggers; otherwise [`ForgetOutcomeOrBusy::Ok`] with
     /// the populated [`ForgetOutcome`].
-    pub(crate) async fn forget_drives(&self, drives: &[char], force: bool) -> ForgetOutcomeOrBusy {
+    pub(crate) async fn forget_drives(
+        &self,
+        drives: &[uffs_mft::platform::DriveLetter],
+        force: bool,
+    ) -> ForgetOutcomeOrBusy {
         // ── Phase 1: read-lock detect ──────────────────────────────
         //
         // Enumerate (letter, current_tier) tuples for every requested
         // drive.  Drives not in the registry record `None` so the
         // cleaner phase still gets a chance to remove stale on-disk
         // files (idempotent re-run semantics).
-        let mut snapshots: Vec<(char, Option<ShardState>)> = Vec::with_capacity(drives.len());
-        let mut busy: Vec<(char, ShardState)> = Vec::new();
+        let mut snapshots: Vec<(uffs_mft::platform::DriveLetter, Option<ShardState>)> =
+            Vec::with_capacity(drives.len());
+        let mut busy: Vec<(uffs_mft::platform::DriveLetter, ShardState)> = Vec::new();
         let guard = self.index.read().await;
         for &requested in drives {
             let found = guard
                 .iter()
-                .find(|shard| shard.drive.eq_ignore_ascii_case(&requested))
+                .find(|shard| shard.drive == requested)
                 .map(|shard| (shard.drive, shard.state()));
             match found {
                 Some((drive, state)) => {
@@ -168,7 +173,10 @@ impl IndexManager {
     /// `hibernate_shards`'s per-letter rebuild pattern).  Pins are
     /// cleared implicitly — the rebuilt `ShardEntry` starts at
     /// `pin_until_ms = 0`.
-    async fn auto_hibernate_for_forget(&self, snapshots: &[(char, Option<ShardState>)]) {
+    async fn auto_hibernate_for_forget(
+        &self,
+        snapshots: &[(uffs_mft::platform::DriveLetter, Option<ShardState>)],
+    ) {
         for &(drive, state_opt) in snapshots {
             let Some(state) = state_opt else {
                 continue;
@@ -201,7 +209,11 @@ impl IndexManager {
     /// Classifies the result into [`ForgetOutcome::forgotten`] /
     /// [`ForgetOutcome::already_absent`] / [`ForgetOutcome::errors`]
     /// per the rules documented on [`ForgetOutcome`] above.
-    async fn forget_one(&self, letter: char, outcome: &mut ForgetOutcome) {
+    async fn forget_one(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        outcome: &mut ForgetOutcome,
+    ) {
         // Step 1: evict from registry (idempotent — `remove` is a
         // no-op when the letter isn't present).
         let mut guard = self.index.write().await;

@@ -51,8 +51,9 @@ fn vb(row: &Value, key: &str) -> bool {
 
 /// Context for legacy baseline-compatible footer formatting.
 pub(crate) struct CppFooterContext<'a> {
-    /// Drive letters to include in the footer (e.g., `['C', 'D']`).
-    pub output_targets: &'a [char],
+    /// Drive letters to include in the footer (e.g.
+    /// `[DriveLetter::C, DriveLetter::D]`).
+    pub output_targets: &'a [uffs_mft::platform::DriveLetter],
     /// Original search pattern string.
     pub pattern: &'a str,
     /// Total result row count for fast-scan heuristic.
@@ -80,7 +81,7 @@ pub fn write_native_results(
     pos: &str,
     neg: &str,
     tz_offset: Option<i32>,
-    output_targets: &[char],
+    output_targets: &[uffs_mft::platform::DriveLetter],
     _elapsed: Duration,
     pattern: &str,
 ) -> Result<()> {

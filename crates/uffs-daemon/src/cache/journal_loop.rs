@@ -144,9 +144,9 @@ pub(crate) trait JournalSource: Send + Sync + 'static {
 /// 3. Swaps the new body via
 ///    [`crate::cache::ShardRegistry::replace_warm_body`].
 ///
-/// Tests wire it to a `Mutex<Vec<(char, Vec<FileChange>)>>` recorder
-/// so the test can assert which letters saw which changes without
-/// touching a real registry.
+/// Tests wire it to a `Mutex<Vec<(uffs_mft::platform::DriveLetter,
+/// Vec<FileChange>)>>` recorder so the test can assert which letters saw which
+/// changes without touching a real registry.
 ///
 /// The sink is **synchronous** (no `async fn`) for consistency with
 /// the rest of the cache traits and so the loop body stays
@@ -160,7 +160,7 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// caller should treat the tick as a no-op (Parked / Cold
     /// shard, registry race, etc.).  The boolean is purely
     /// informational — the loop continues in either case.
-    fn accept(&self, letter: char, changes: &[FileChange]) -> bool;
+    fn accept(&self, letter: uffs_mft::platform::DriveLetter, changes: &[FileChange]) -> bool;
 
     /// Trigger a background compact-cache save for `letter`.
     ///
@@ -175,7 +175,7 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// background thread; the loop does not wait for it.  If
     /// the save fails, the implementor logs but does not
     /// propagate — the next threshold crossing will retry.
-    fn trigger_save(&self, letter: char, reason: SaveReason);
+    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason);
 
     /// Notify the sink that the USN journal for `letter` was
     /// detected to have wrapped (Phase 7 task 7.7).
@@ -194,7 +194,7 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// next poll starts from the new journal's head.  No patches
     /// are applied for the wrap-tick — the sink's `accept` is
     /// **not** called.
-    fn journal_wrapped(&self, letter: char);
+    fn journal_wrapped(&self, letter: uffs_mft::platform::DriveLetter);
 }
 
 /// Pluggable cursor-persistence surface (Phase 7 task 7.6).
@@ -215,14 +215,14 @@ pub(crate) trait CursorStore: Send + Sync + 'static {
     /// Load the persisted cursor for `letter`.  Returns 0 (the
     /// "start from journal head" sentinel) when no cursor has
     /// been persisted yet or when the load failed.
-    fn load(&self, letter: char) -> u64;
+    fn load(&self, letter: uffs_mft::platform::DriveLetter) -> u64;
 
     /// Persist `cursor` for `letter`.  Best-effort — the
     /// implementor logs failures but does not propagate.  The
     /// loop calls this every time it fires a save trigger so
     /// the on-disk cursor advances in lockstep with the on-disk
     /// snapshot.
-    fn store(&self, letter: char, cursor: u64);
+    fn store(&self, letter: uffs_mft::platform::DriveLetter, cursor: u64);
 }
 
 /// Why a [`PatchSink::trigger_save`] call fired.
@@ -365,7 +365,7 @@ impl Default for JournalLoopConfig {
 /// only state-machine entry point is [`Self::run`].
 pub(crate) struct JournalLoop {
     /// Drive letter this loop polls.
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     /// Plug-in journal-data source.
     source: Arc<dyn JournalSource>,
     /// Plug-in patch consumer.
@@ -399,7 +399,7 @@ impl JournalLoop {
     /// watching `cancel_rx`, configured by `config`.
     #[must_use]
     pub(crate) fn new(
-        letter: char,
+        letter: uffs_mft::platform::DriveLetter,
         source: Arc<dyn JournalSource>,
         sink: Arc<dyn PatchSink>,
         cursor_store: Arc<dyn CursorStore>,
@@ -497,7 +497,7 @@ impl JournalLoop {
 async fn wait_for_next_tick(
     cancel_rx: &mut watch::Receiver<bool>,
     poll_interval: Duration,
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
 ) -> bool {
     if *cancel_rx.borrow() {
         tracing::debug!(drive = %letter, "Journal loop cancellation requested before tick");
@@ -527,7 +527,7 @@ async fn wait_for_next_tick(
 async fn poll_blocking(
     source: Arc<dyn JournalSource>,
     cursor: u64,
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
 ) -> Option<JournalPollResult> {
     let poll_result = tokio::task::spawn_blocking(move || source.poll(cursor)).await;
     match poll_result {
@@ -562,7 +562,7 @@ async fn poll_blocking(
 /// caller persists the cursor in lockstep), `false` otherwise.
 fn process_tick(
     sink: &dyn PatchSink,
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     cursor: u64,
     changes: &[FileChange],
     save_trigger: &mut SaveTrigger,
@@ -629,7 +629,7 @@ impl JournalLoopHandle {
 /// before the runtime tears down.
 #[must_use]
 pub(crate) fn spawn_journal_loop(
-    letter: char,
+    letter: uffs_mft::platform::DriveLetter,
     source: Arc<dyn JournalSource>,
     sink: Arc<dyn PatchSink>,
     cursor_store: Arc<dyn CursorStore>,

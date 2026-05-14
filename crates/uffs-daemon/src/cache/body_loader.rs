@@ -51,7 +51,7 @@ use uffs_core::compact::DriveCompactIndex;
 pub(crate) trait BodyLoader: Send + Sync + 'static {
     /// Materialise the body for `letter`, or return `None` if the
     /// underlying source is missing / stale / corrupted.
-    fn load(&self, letter: char) -> Option<Arc<DriveCompactIndex>>;
+    fn load(&self, letter: uffs_mft::platform::DriveLetter) -> Option<Arc<DriveCompactIndex>>;
 }
 
 /// Production loader: reads
@@ -80,7 +80,7 @@ pub(crate) trait BodyLoader: Send + Sync + 'static {
 pub(crate) struct DiskBodyLoader;
 
 impl BodyLoader for DiskBodyLoader {
-    fn load(&self, letter: char) -> Option<Arc<DriveCompactIndex>> {
+    fn load(&self, letter: uffs_mft::platform::DriveLetter) -> Option<Arc<DriveCompactIndex>> {
         // Phase 5 (#94): primary path — USN-refreshed re-promote.
         // On Windows this applies USN deltas to the cached MftIndex
         // and rebuilds the compact index, so the body served to the

@@ -84,11 +84,11 @@ fn real_main() -> Result<()> {
         .next()
         .context("Drive letter argument must not be empty")?;
 
-    if !drive_input.is_ascii_alphabetic() {
-        anyhow::bail!("Drive letter must be A-Z, got: {drive_input}");
-    }
-
-    let drive = drive_input.to_ascii_uppercase();
+    // `DriveLetter::parse` enforces ASCII-letter validation and
+    // canonicalises to uppercase, replacing the previous hand-rolled
+    // `is_ascii_alphabetic` + `to_ascii_uppercase` pair.
+    let drive = uffs_mft::platform::DriveLetter::parse(drive_input)
+        .with_context(|| format!("Drive letter must be A-Z, got: {drive_input}"))?;
 
     println!("===============================================");
     println!("Dumping $MFT extents for volume {drive}:");

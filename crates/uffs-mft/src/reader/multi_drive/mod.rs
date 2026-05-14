@@ -41,7 +41,7 @@ pub(super) fn drive_reader_budget(total_drives: usize) -> usize {
 #[derive(Debug)]
 pub struct DriveReadResult {
     /// The drive letter.
-    pub drive: char,
+    pub drive: crate::platform::DriveLetter,
     /// The `DataFrame` (if successful).
     pub dataframe: Option<DataFrame>,
     /// The error (if failed).
@@ -58,10 +58,15 @@ pub struct DriveReadResult {
 ///
 /// ```rust,ignore
 /// use uffs_mft::MultiDriveMftReader;
+/// use uffs_mft::platform::DriveLetter;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
-///     let reader = MultiDriveMftReader::new(vec!['C', 'D', 'E']);
+///     let reader = MultiDriveMftReader::new(vec![
+///         DriveLetter::C,
+///         DriveLetter::D,
+///         DriveLetter::E,
+///     ]);
 ///     let df = reader.read_all().await?;
 ///     println!("Found {} files across all drives", df.height());
 ///     Ok(())
@@ -70,7 +75,7 @@ pub struct DriveReadResult {
 #[derive(Debug, Clone)]
 pub struct MultiDriveMftReader {
     /// The drive letters to read from.
-    drives: Vec<char>,
+    drives: Vec<crate::platform::DriveLetter>,
 }
 
 impl MultiDriveMftReader {
@@ -78,20 +83,17 @@ impl MultiDriveMftReader {
     ///
     /// # Arguments
     ///
-    /// * `drives` - List of drive letters to read (e.g., `vec!['C', 'D', 'E']`)
+    /// * `drives` - List of drive letters to read (e.g., `vec![DriveLetter::C,
+    ///   DriveLetter::D, DriveLetter::E]`). Already validated and canonicalised
+    ///   to uppercase by the [`crate::platform::DriveLetter`] newtype.
     #[must_use]
-    pub fn new(drives: Vec<char>) -> Self {
-        Self {
-            drives: drives
-                .into_iter()
-                .map(|ch| ch.to_ascii_uppercase())
-                .collect(),
-        }
+    pub const fn new(drives: Vec<crate::platform::DriveLetter>) -> Self {
+        Self { drives }
     }
 
     /// Returns the list of drives this reader will process.
     #[must_use]
-    pub fn drives(&self) -> &[char] {
+    pub fn drives(&self) -> &[crate::platform::DriveLetter] {
         &self.drives
     }
 
@@ -117,7 +119,7 @@ impl MultiDriveMftReader {
     #[expect(clippy::unused_async, reason = "async for API parity with windows")]
     pub async fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         Err(MftError::PlatformNotSupported)
     }
@@ -159,7 +161,7 @@ impl MultiDriveMftReader {
         _callback: F,
     ) -> Result<Vec<crate::index::MftIndex>>
     where
-        F: Fn(char, MftProgress) + Send + Sync + Clone + 'static,
+        F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
     {
         Err(MftError::PlatformNotSupported)
     }

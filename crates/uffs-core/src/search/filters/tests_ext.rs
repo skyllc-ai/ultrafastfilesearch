@@ -513,7 +513,7 @@ fn apply_type_filter_rejects_wrong_extension() {
         // .rs is "code"; .jpg is NOT code
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\src\\main.rs".to_owned(),
             100,
             false,
@@ -528,7 +528,7 @@ fn apply_type_filter_rejects_wrong_extension() {
         ),
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\pics\\photo.jpg".to_owned(),
             5000,
             false,
@@ -557,7 +557,7 @@ fn apply_path_contains_filters_by_substring() {
     let mut rows = vec![
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\Windows\\System32\\cmd.exe".to_owned(),
             100,
             false,
@@ -572,7 +572,7 @@ fn apply_path_contains_filters_by_substring() {
         ),
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\Users\\hello.exe".to_owned(),
             200,
             false,
@@ -614,7 +614,7 @@ fn apply_min_bulkiness_rejects_low_ratio() {
         // allocated=4096, size=4096 → bulkiness=1_000_000 (100%)
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\tight.bin".to_owned(),
             4096,
             false,
@@ -630,7 +630,7 @@ fn apply_min_bulkiness_rejects_low_ratio() {
         // allocated=20480, size=4096 → bulkiness=5_000_000 (500%)
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             "C:\\bloated.bin".to_owned(),
             4096,
             false,
@@ -663,7 +663,7 @@ fn apply_min_path_len_rejects_short_paths() {
     let mut rows = vec![
         DisplayRow::new(
             0,
-            'C',
+            uffs_mft::platform::DriveLetter::C,
             short.to_owned(),
             100,
             false,
@@ -676,7 +676,21 @@ fn apply_min_path_len_rejects_short_paths() {
             0,
             0,
         ),
-        DisplayRow::new(0, 'C', long, 200, false, 0, 0, 0, 0x20, 4096, 0, 0, 0),
+        DisplayRow::new(
+            0,
+            uffs_mft::platform::DriveLetter::C,
+            long,
+            200,
+            false,
+            0,
+            0,
+            0,
+            0x20,
+            4096,
+            0,
+            0,
+            0,
+        ),
     ];
     let filters = SearchFilters {
         min_path_len: Some(200),

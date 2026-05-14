@@ -113,7 +113,11 @@ impl ChaosMftReader {
         reason = "chaos reader: load, chunk, shuffle, spawn parser threads, merge — \
                   single orchestration pipeline that must remain cohesive"
     )]
-    pub fn read_with_chaos(&self, mft_path: &Path, volume: char) -> anyhow::Result<MftIndex> {
+    pub fn read_with_chaos(
+        &self,
+        mft_path: &Path,
+        volume: crate::platform::DriveLetter,
+    ) -> anyhow::Result<MftIndex> {
         use alloc::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -628,7 +632,7 @@ mod chaos_integration_tests {
 
         let chaos_reader = ChaosMftReader::new(ChaosStrategy::Reverse, 2 * 1024 * 1024);
 
-        let result = chaos_reader.read_with_chaos(&mft_path, 'D');
+        let result = chaos_reader.read_with_chaos(&mft_path, crate::platform::DriveLetter::D);
 
         match result {
             Ok(index) => {
@@ -662,7 +666,7 @@ mod chaos_integration_tests {
 
         let chaos_reader = ChaosMftReader::new(ChaosStrategy::Interleaved, 2 * 1024 * 1024);
 
-        let result = chaos_reader.read_with_chaos(&mft_path, 'D');
+        let result = chaos_reader.read_with_chaos(&mft_path, crate::platform::DriveLetter::D);
 
         match result {
             Ok(index) => {

@@ -171,7 +171,7 @@ pub struct DaemonConfig {
     /// Data directory containing `drive_*` subdirectories.
     pub data_dir: Option<PathBuf>,
     /// Explicit drive letters (Windows only).
-    pub drives: Vec<char>,
+    pub drives: Vec<uffs_mft::platform::DriveLetter>,
     /// Idle timeout in seconds (0 = use default 7200s / 2 hours).
     pub idle_timeout: u64,
     /// Disable auto-retire.
@@ -190,7 +190,7 @@ pub struct DaemonConfig {
 /// Bail if the daemon has nothing to serve.
 fn validate_data_sources(
     mft_files: &[PathBuf],
-    drives: &[char],
+    drives: &[uffs_mft::platform::DriveLetter],
     lifecycle_mgr: &lifecycle::LifecycleManager,
 ) -> anyhow::Result<()> {
     let has_data = !mft_files.is_empty() || {
@@ -203,7 +203,7 @@ fn validate_data_sources(
             // `drives` is Windows-only; no auto-discovery on macOS/Linux.
             // The explicit type pins the annotation clippy expects on
             // discarded bindings.
-            let _: &[char] = drives;
+            let _: &[uffs_mft::platform::DriveLetter] = drives;
             false
         }
     };
@@ -474,18 +474,18 @@ fn gather_mft_files(config: &DaemonConfig) -> Vec<PathBuf> {
 
 /// Returns `true` when `path`'s parent directory carries a
 /// `drive_<letter>` prefix that matches one of `wanted` (case-
-/// insensitive).
-fn drive_letter_matches(path: &std::path::Path, wanted: &[char]) -> bool {
+/// insensitive — `DriveLetter::parse` canonicalises to uppercase).
+fn drive_letter_matches(
+    path: &std::path::Path,
+    wanted: &[uffs_mft::platform::DriveLetter],
+) -> bool {
     path.parent()
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix("drive_"))
         .and_then(|suffix| suffix.chars().next())
-        .is_some_and(|letter| {
-            wanted
-                .iter()
-                .any(|drive| drive.eq_ignore_ascii_case(&letter))
-        })
+        .and_then(|letter_ch| uffs_mft::platform::DriveLetter::parse(letter_ch).ok())
+        .is_some_and(|letter| wanted.contains(&letter))
 }
 
 /// Resolve the drive list to scan.
@@ -494,7 +494,7 @@ fn drive_letter_matches(path: &std::path::Path, wanted: &[char]) -> bool {
 /// respects the explicit list.  Always empty on non-Windows since
 /// live MFT scanning is Windows-only.
 #[cfg(windows)]
-fn resolve_drive_list(config: &DaemonConfig) -> Vec<char> {
+fn resolve_drive_list(config: &DaemonConfig) -> Vec<uffs_mft::platform::DriveLetter> {
     let explicit = config.drives.clone();
     if explicit.is_empty() {
         let auto_drives = uffs_mft::detect_ntfs_drives();
@@ -516,7 +516,7 @@ fn resolve_drive_list(config: &DaemonConfig) -> Vec<char> {
 /// Non-Windows variant: live MFT scanning is unsupported, so the
 /// drive list is always empty regardless of `config`.
 #[cfg(not(windows))]
-const fn resolve_drive_list(_config: &DaemonConfig) -> Vec<char> {
+const fn resolve_drive_list(_config: &DaemonConfig) -> Vec<uffs_mft::platform::DriveLetter> {
     Vec::new()
 }
 
@@ -527,7 +527,7 @@ const fn resolve_drive_list(_config: &DaemonConfig) -> Vec<char> {
 fn spawn_load_task(
     load_index: Arc<index::IndexManager>,
     mft_files: Vec<PathBuf>,
-    drives: Vec<char>,
+    drives: Vec<uffs_mft::platform::DriveLetter>,
     no_cache: bool,
     load_lifecycle: lifecycle::LifecycleHandle,
 ) -> tokio::task::JoinHandle<()> {
@@ -551,7 +551,8 @@ fn spawn_load_task(
         )
         .await;
         if broker_is_available {
-            let _handle_result = broker_client::request_volume_handle('C');
+            let _handle_result =
+                broker_client::request_volume_handle(uffs_mft::platform::DriveLetter::C);
         }
         tracing::info!("Load task completed");
 
@@ -583,7 +584,7 @@ fn spawn_load_task(
 #[cfg(windows)]
 async fn load_live_drives_if_windows(
     load_index: &Arc<index::IndexManager>,
-    drives: &[char],
+    drives: &[uffs_mft::platform::DriveLetter],
     no_cache: bool,
     load_lifecycle: &lifecycle::LifecycleHandle,
     broker_is_available: bool,
@@ -606,7 +607,7 @@ async fn load_live_drives_if_windows(
 /// per-drive elevation prompt.  Failures are debug-traced and
 /// ignored — the direct-open path takes over transparently.
 #[cfg(windows)]
-fn warm_up_broker_handles(drives: &[char]) {
+fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
     for &drive_letter in drives {
         match broker_client::request_volume_handle(drive_letter) {
             Ok(handle) => {
@@ -836,7 +837,9 @@ async fn spawn_journal_loops_for_warm_shards(
 /// Mac/Linux uses the canonical `_letter` rename rather than a
 /// `let _ = letter;` body workaround that clippy flags.
 #[cfg(windows)]
-fn make_journal_source(letter: char) -> Arc<dyn cache::journal_loop::JournalSource> {
+fn make_journal_source(
+    letter: uffs_mft::platform::DriveLetter,
+) -> Arc<dyn cache::journal_loop::JournalSource> {
     Arc::new(cache::journal_loop::sources::WindowsJournalSource::new(
         letter,
     ))
@@ -846,7 +849,9 @@ fn make_journal_source(letter: char) -> Arc<dyn cache::journal_loop::JournalSour
 /// the [`crate::cache::journal_loop::sources::MacStubJournalSource`]
 /// stub (no NTFS USN journal on these platforms).
 #[cfg(not(windows))]
-fn make_journal_source(_letter: char) -> Arc<dyn cache::journal_loop::JournalSource> {
+fn make_journal_source(
+    _letter: uffs_mft::platform::DriveLetter,
+) -> Arc<dyn cache::journal_loop::JournalSource> {
     Arc::new(cache::journal_loop::sources::MacStubJournalSource)
 }
 

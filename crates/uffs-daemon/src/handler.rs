@@ -417,8 +417,8 @@ impl RequestHandler {
             .and_then(|val| serde_json::from_value(val.clone()).ok())
             .unwrap_or_default();
 
-        let mut loaded: Vec<char> = Vec::new();
-        let mut already_loaded: Vec<char> = Vec::new();
+        let mut loaded: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
+        let mut already_loaded: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
 
         // Hot-load by MFT file path.
@@ -431,12 +431,17 @@ impl RequestHandler {
             {
                 Ok(Some(letter)) => loaded.push(letter),
                 Ok(None) => {
-                    // Infer the letter for reporting.
+                    // Infer the drive letter from the file stem for
+                    // reporting.  Falls back to `DriveLetter::X` for
+                    // malformed filenames — matches the historical
+                    // `'?'` sentinel behaviour (rows get bucketed
+                    // under the "unknown" letter).
                     let letter = path
                         .file_name()
                         .and_then(|name| name.to_str())
                         .and_then(|stem| stem.chars().next())
-                        .map_or('?', |ch| ch.to_ascii_uppercase());
+                        .and_then(|ch| uffs_mft::platform::DriveLetter::parse(ch).ok())
+                        .unwrap_or(uffs_mft::platform::DriveLetter::X);
                     already_loaded.push(letter);
                 }
                 Err(load_err) => {
@@ -451,7 +456,9 @@ impl RequestHandler {
             match self.index.hot_load_drive(letter, params.no_cache).await {
                 Ok(records) => {
                     tracing::info!(drive = %letter, records, "Drive hot-loaded via RPC");
-                    loaded.push(letter.to_ascii_uppercase());
+                    // `DriveLetter` is uppercase by construction; no
+                    // remap needed before push.
+                    loaded.push(letter);
                 }
                 Err(load_err) => {
                     errors.push(format!("{letter}: {load_err}"));
@@ -573,8 +580,8 @@ impl RequestHandler {
         }
         let pin_minutes = params.pin_minutes.unwrap_or(DEFAULT_PRELOAD_PIN_MINUTES);
 
-        let mut promoted: Vec<char> = Vec::new();
-        let mut already_hot: Vec<char> = Vec::new();
+        let mut promoted: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
+        let mut already_hot: Vec<uffs_mft::platform::DriveLetter> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
         let mut latest_pin_until_ms: i64 = 0;
 
@@ -582,11 +589,11 @@ impl RequestHandler {
             use crate::index::tiering_ops::PreloadOutcome;
             match self.index.preload_drive(letter, pin_minutes).await {
                 PreloadOutcome::Promoted { pin_until_ms, .. } => {
-                    promoted.push(letter.to_ascii_uppercase());
+                    promoted.push(letter);
                     latest_pin_until_ms = i64::try_from(pin_until_ms).unwrap_or(i64::MAX);
                 }
                 PreloadOutcome::AlreadyHot { pin_until_ms } => {
-                    already_hot.push(letter.to_ascii_uppercase());
+                    already_hot.push(letter);
                     latest_pin_until_ms = i64::try_from(pin_until_ms).unwrap_or(i64::MAX);
                 }
                 PreloadOutcome::UnknownDrive => {
@@ -655,16 +662,8 @@ impl RequestHandler {
             }
             ForgetOutcomeOrBusy::Ok(outcome) => {
                 let response = ForgetResponse {
-                    forgotten: outcome
-                        .forgotten
-                        .into_iter()
-                        .map(|letter| letter.to_ascii_uppercase())
-                        .collect(),
-                    already_absent: outcome
-                        .already_absent
-                        .into_iter()
-                        .map(|letter| letter.to_ascii_uppercase())
-                        .collect(),
+                    forgotten: outcome.forgotten,
+                    already_absent: outcome.already_absent,
                     freed_bytes: outcome.freed_bytes,
                     errors: outcome.errors,
                 };

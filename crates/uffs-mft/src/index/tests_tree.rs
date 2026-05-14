@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn compute_tree_metrics_simple() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a simple tree:
     // root (FRS 5)
@@ -111,7 +111,7 @@ fn compute_tree_metrics_simple() {
 
 #[test]
 fn compute_tree_metrics_deep_tree() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a deep tree:
     // root (FRS 5)
@@ -203,7 +203,7 @@ fn compute_tree_metrics_deep_tree() {
 
 #[test]
 fn compute_tree_metrics_empty() {
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Empty index should not crash
     index.compute_tree_metrics();
@@ -215,7 +215,7 @@ fn compute_tree_metrics_empty() {
 fn compute_tree_metrics_performance() {
     use std::time::Instant;
 
-    let mut index = MftIndex::new('C');
+    let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Create a large tree with 10,000 files
     // Structure: root -> 100 directories -> 100 files each

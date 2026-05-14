@@ -16,7 +16,7 @@ fn header_roundtrip() -> TestResult {
         record_count: 1000,
         original_size: 1024 * 1000,
         compressed_size: 500_000,
-        volume_letter: 'G',
+        volume_letter: crate::platform::DriveLetter::G,
     };
 
     let bytes = header.to_bytes();
@@ -61,14 +61,14 @@ fn save_load_uncompressed() -> TestResult {
     let options = SaveRawOptions {
         compress: false,
         compression_level: 3,
-        volume_letter: 'C',
+        volume_letter: crate::platform::DriveLetter::C,
         raw_compat: false,
     };
     let header = save_raw_mft(&path, &data, record_size, &options)?;
 
     assert_eq!(header.record_count, 4);
     assert_eq!(header.record_size, record_size);
-    assert_eq!(header.volume_letter, 'C');
+    assert_eq!(header.volume_letter, crate::platform::DriveLetter::C);
     assert!(!header.is_compressed());
 
     let loaded = load_raw_mft(&path, &LoadRawOptions::default())?;
@@ -127,7 +127,7 @@ fn load_header_only() -> TestResult {
     let options = SaveRawOptions {
         compress: false,
         compression_level: 3,
-        volume_letter: 'D',
+        volume_letter: crate::platform::DriveLetter::D,
         raw_compat: false,
     };
     save_raw_mft(&path, &data, record_size, &options)?;
@@ -154,7 +154,7 @@ fn iter_records() {
         record_count: 3,
         original_size: 12,
         compressed_size: 0,
-        volume_letter: 'X',
+        volume_letter: crate::platform::DriveLetter::X,
     };
 
     let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -178,14 +178,14 @@ fn volume_letter_preserved() -> TestResult {
     let options = SaveRawOptions {
         compress: false,
         compression_level: 3,
-        volume_letter: 'G',
+        volume_letter: crate::platform::DriveLetter::G,
         raw_compat: false,
     };
     let header = save_raw_mft(&path, &data, record_size, &options)?;
-    assert_eq!(header.volume_letter, 'G');
+    assert_eq!(header.volume_letter, crate::platform::DriveLetter::G);
 
     let loaded = load_raw_mft(&path, &LoadRawOptions::default())?;
-    assert_eq!(loaded.header.volume_letter, 'G');
+    assert_eq!(loaded.header.volume_letter, crate::platform::DriveLetter::G);
 
     std::fs::remove_file(&path)?;
 
@@ -210,7 +210,7 @@ fn raw_compat_mode() -> TestResult {
     let options = SaveRawOptions {
         compress: false,
         compression_level: 3,
-        volume_letter: 'G',
+        volume_letter: crate::platform::DriveLetter::G,
         raw_compat: true,
     };
 
@@ -264,16 +264,19 @@ fn load_raw_ntfs_format() -> TestResult {
     assert_eq!(loaded.header.version, 0);
     assert_eq!(loaded.header.record_size, record_size);
     assert_eq!(loaded.header.record_count, record_count);
-    assert_eq!(loaded.header.volume_letter, 'X');
+    assert_eq!(loaded.header.volume_letter, crate::platform::DriveLetter::X);
     assert_eq!(loaded.data, data);
 
     let options = LoadRawOptions {
         header_only: false,
-        volume_letter: Some('D'),
+        volume_letter: Some(crate::platform::DriveLetter::D),
         forensic: false,
     };
     let loaded_with_override = load_raw_mft(&path, &options)?;
-    assert_eq!(loaded_with_override.header.volume_letter, 'D');
+    assert_eq!(
+        loaded_with_override.header.volume_letter,
+        crate::platform::DriveLetter::D
+    );
 
     std::fs::remove_file(&path)?;
 

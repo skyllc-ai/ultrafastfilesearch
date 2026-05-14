@@ -50,7 +50,7 @@ use crate::display::char_or_dot;
     unsafe_code,
     reason = "FFI: SetFilePointerEx, ReadFile for raw volume I/O"
 )]
-pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
+pub(crate) async fn cmd_benchmark_mft(drive: uffs_mft::platform::DriveLetter) -> Result<()> {
     use std::time::Instant;
 
     use uffs_mft::io::AlignedBuffer;
@@ -58,20 +58,18 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
 
-    let drive_upper = drive.to_ascii_uppercase();
-
     // =========================================================================
     // Open volume and get metadata
     // =========================================================================
-    let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
+    let handle =
+        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
 
     let vol_data = handle.volume_data();
 
     // Get MFT extents
     let extents = handle
         .get_mft_extents()
-        .with_context(|| format!("Failed to get MFT extents for {drive_upper}:"))?;
+        .with_context(|| format!("Failed to get MFT extents for {drive}:"))?;
 
     // Calculate MFT metrics
     let mft_size = vol_data.mft_valid_data_length;
@@ -83,7 +81,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: char) -> Result<()> {
     // Print Volume Information (matches the reference benchmark layout)
     // =========================================================================
     println!("=== MFT Read Benchmark Tool ===");
-    println!("Drive: {drive_upper}:");
+    println!("Drive: {drive}:");
     println!();
     println!("Volume Information:");
     println!("  BytesPerSector: {}", vol_data.bytes_per_sector);

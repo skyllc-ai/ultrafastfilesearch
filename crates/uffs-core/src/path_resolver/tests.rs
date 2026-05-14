@@ -27,7 +27,7 @@ fn create_test_df() -> Result<DataFrame, uffs_polars::PolarsError> {
 #[test]
 fn resolve_path() -> TestResult {
     let df = create_test_df()?;
-    let mut resolver = PathResolver::build(&df, 'C')?;
+    let mut resolver = PathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     let path = resolver.resolve(102)?;
     assert_eq!(path, "C:\\Users\\john\\Documents");
@@ -37,7 +37,7 @@ fn resolve_path() -> TestResult {
 #[test]
 fn path_caching() -> TestResult {
     let df = create_test_df()?;
-    let mut resolver = PathResolver::build(&df, 'C')?;
+    let mut resolver = PathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     // First resolution
     let path1 = resolver.resolve(102)?;
@@ -55,7 +55,7 @@ fn path_caching() -> TestResult {
 #[test]
 fn fast_resolve_path() -> TestResult {
     let df = create_test_df()?;
-    let resolver = FastPathResolver::build(&df, 'C')?;
+    let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     let path = resolver.resolve(102);
     assert_eq!(path, "C:\\Users\\john\\Documents");
@@ -65,7 +65,7 @@ fn fast_resolve_path() -> TestResult {
 #[test]
 fn fast_resolve_root() -> TestResult {
     let df = create_test_df()?;
-    let resolver = FastPathResolver::build(&df, 'C')?;
+    let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     // Root directory (FRS 5) should resolve to just "C:\"
     let path = resolver.resolve(5);
@@ -76,7 +76,7 @@ fn fast_resolve_root() -> TestResult {
 #[test]
 fn fast_resolve_cached() -> TestResult {
     let df = create_test_df()?;
-    let mut resolver = FastPathResolver::build(&df, 'C')?;
+    let mut resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     // First resolution (builds and caches)
     let path1 = resolver.resolve_cached(102);
@@ -95,7 +95,7 @@ fn fast_resolve_cached() -> TestResult {
 #[test]
 fn fast_resolve_missing_frs() -> TestResult {
     let df = create_test_df()?;
-    let resolver = FastPathResolver::build(&df, 'C')?;
+    let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     // FRS 999 doesn't exist
     let path = resolver.resolve(999);
@@ -106,7 +106,7 @@ fn fast_resolve_missing_frs() -> TestResult {
 #[test]
 fn fast_add_path_column() -> TestResult {
     let df = create_test_df()?;
-    let mut resolver = FastPathResolver::build(&df, 'C')?;
+    let mut resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     let result = resolver.add_path_column(&df)?;
 
@@ -122,7 +122,7 @@ fn fast_add_path_column() -> TestResult {
 #[test]
 fn fast_resolver_stats() -> TestResult {
     let df = create_test_df()?;
-    let resolver = FastPathResolver::build(&df, 'C')?;
+    let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     let stats = resolver.stats();
     assert_eq!(stats.entry_count, 4);
@@ -161,7 +161,7 @@ fn name_arena_empty() {
 #[test]
 fn fast_add_path_column_parallel() -> TestResult {
     let df = create_test_df()?;
-    let resolver = FastPathResolver::build(&df, 'C')?;
+    let resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     let result = resolver.add_path_column_parallel(&df)?;
 
@@ -180,7 +180,7 @@ fn fast_add_path_column_parallel() -> TestResult {
 #[test]
 fn fast_add_path_column_auto() -> TestResult {
     let df = create_test_df()?;
-    let mut resolver = FastPathResolver::build(&df, 'C')?;
+    let mut resolver = FastPathResolver::build(&df, uffs_mft::platform::DriveLetter::C)?;
 
     // Small DataFrame should use sequential
     let result = resolver.add_path_column_auto(&df)?;

@@ -37,7 +37,7 @@ use crate::display::format_number_commas;
 /// Truncates a string to a maximum length, adding "..." if truncated.
 #[cfg(windows)]
 pub(crate) async fn cmd_bench(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     json: bool,
     no_df: bool,
     requested_runs: u32,
@@ -46,14 +46,13 @@ pub(crate) async fn cmd_bench(
 ) -> Result<()> {
     use uffs_mft::{BenchmarkResult, MftReadMode, MftReader};
 
-    let drive_upper = drive.to_ascii_uppercase();
     let runs = requested_runs.max(1);
 
     // Parse read mode
     let mode: MftReadMode = mode_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     if !json {
-        println!("🔬 Benchmarking MFT read on drive {drive_upper}:");
+        println!("🔬 Benchmarking MFT read on drive {drive}:");
         println!("   Runs: {runs}");
         println!("   Skip DataFrame: {no_df}");
         println!("   Mode: {mode}");
@@ -62,7 +61,7 @@ pub(crate) async fn cmd_bench(
     }
 
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         runs,
         skip_df = no_df,
         mode = %mode,
@@ -476,7 +475,7 @@ pub(crate) async fn cmd_bench_all(
 /// skipping the `DataFrame` build when `no_df` is set.
 #[cfg(windows)]
 async fn benchmark_single_drive(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     no_df: bool,
     runs: u32,
     full: bool,

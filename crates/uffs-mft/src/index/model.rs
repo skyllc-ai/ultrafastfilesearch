@@ -7,6 +7,7 @@ use super::{
     ExtensionIndex, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo,
     MftStats,
 };
+use crate::platform::DriveLetter;
 
 /// Directory child entry.
 ///
@@ -37,10 +38,18 @@ pub struct ChildInfo {
 }
 
 /// Lean in-memory MFT index used by the parser and query layers.
-#[derive(Debug, Default)]
+///
+/// `Default` is implemented manually rather than derived because
+/// [`DriveLetter`] has no canonical default — `Default::default()`
+/// supplies [`DriveLetter::C`] as a placeholder and the four
+/// production constructors ([`MftIndex::new`], `with_capacity`,
+/// `with_capacity_optimized`, plus the test fixtures in
+/// `index/tests_ads.rs`) all overwrite it with the caller's actual
+/// volume immediately after the struct-update.
+#[derive(Debug)]
 pub struct MftIndex {
-    /// Volume letter (e.g., 'C').
-    pub volume: char,
+    /// Volume letter (e.g., `C`).
+    pub volume: DriveLetter,
     /// All file and directory records.
     pub records: Vec<FileRecord>,
     /// FRS → record index lookup (O(1) access).
@@ -76,6 +85,32 @@ pub struct MftIndex {
     /// build or mutation (e.g. USN update).  Downstream caches (compact
     /// index) compare their `source_epoch` against this to detect staleness.
     pub build_epoch: u64,
+}
+
+impl Default for MftIndex {
+    /// Placeholder index used as the `..Default::default()` spread source
+    /// inside [`MftIndex::new`].  The `volume` field is supplied as
+    /// [`DriveLetter::C`] only to satisfy the type system — every public
+    /// constructor overwrites it with the caller-provided letter
+    /// immediately after the struct-update.
+    fn default() -> Self {
+        Self {
+            volume: DriveLetter::C,
+            records: Vec::new(),
+            frs_to_idx: Vec::new(),
+            names: String::new(),
+            links: Vec::new(),
+            streams: Vec::new(),
+            internal_streams: Vec::new(),
+            children: Vec::new(),
+            stats: MftStats::default(),
+            extensions: ExtensionTable::default(),
+            extension_index: None,
+            forensic_mode: false,
+            reserved_allocated_bytes: 0,
+            build_epoch: 0,
+        }
+    }
 }
 
 /// Proportional hard-link size division formula used by tree metrics.

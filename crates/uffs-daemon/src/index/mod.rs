@@ -77,7 +77,8 @@ type InFlightLoad = Shared<BoxFuture<'static, Option<Arc<uffs_core::compact::Dri
 /// `HashMap` stores no invariants that need recovery, so we recover
 /// the inner state via [`std::sync::PoisonError::into_inner`] rather
 /// than panicking on poisoning.
-type InFlightPromotes = Arc<StdMutex<std::collections::HashMap<char, InFlightLoad>>>;
+type InFlightPromotes =
+    Arc<StdMutex<std::collections::HashMap<uffs_mft::platform::DriveLetter, InFlightLoad>>>;
 
 /// Per-drive load timing stored for profile reporting.
 ///
@@ -176,7 +177,8 @@ pub(crate) struct IndexManager {
     /// Duration from daemon start to `Ready` (microseconds, set once).
     startup_duration_us: AtomicU64,
     /// Per-drive load timing for `--profile` reporting.
-    drive_timings: RwLock<std::collections::HashMap<char, StoredDriveTiming>>,
+    drive_timings:
+        RwLock<std::collections::HashMap<uffs_mft::platform::DriveLetter, StoredDriveTiming>>,
     /// Source for `Parked` / `Cold` shard bodies during
     /// promote-on-search.  Production paths use
     /// [`crate::cache::body_loader::DiskBodyLoader`]; the
@@ -303,7 +305,12 @@ pub(crate) struct IndexManager {
     /// [`JournalLoopHandle`]: crate::cache::journal_loop::JournalLoopHandle
     /// [`watch::Sender`]: tokio::sync::watch::Sender
     journal_handles: Arc<
-        StdMutex<std::collections::HashMap<char, crate::cache::journal_loop::JournalLoopHandle>>,
+        StdMutex<
+            std::collections::HashMap<
+                uffs_mft::platform::DriveLetter,
+                crate::cache::journal_loop::JournalLoopHandle,
+            >,
+        >,
     >,
     /// Parsed `daemon.toml` (Phase 6).  Loaded once at
     /// [`crate::run_daemon`] startup via
@@ -527,7 +534,7 @@ impl IndexManager {
     /// Cold).  Pre-Phase-3 this matched the active-index drive list
     /// exactly; post-Phase-3 it can include shards whose body has been
     /// dropped.
-    pub(crate) async fn loaded_drive_letters(&self) -> Vec<char> {
+    pub(crate) async fn loaded_drive_letters(&self) -> Vec<uffs_mft::platform::DriveLetter> {
         let guard = self.index.read().await;
         guard.loaded_letters()
     }

@@ -339,19 +339,23 @@ pub(crate) fn is_aggregate_preset(spec: &str) -> bool {
 /// Extract a drive letter from a search pattern, if present.
 ///
 /// Patterns like `c:/*.txt` or `D:\folder` start with a drive prefix.
-/// Returns `Some('C')` (uppercased) if found, `None` otherwise.
+/// Returns the typed `DriveLetter` if found, `None` otherwise.
 ///
 /// ```
 /// # use uffs_client::format::extract_drive_letter;
-/// assert_eq!(extract_drive_letter("c:/*.txt"), Some('C'));
-/// assert_eq!(extract_drive_letter("D:\\folder"), Some('D'));
+/// # use uffs_mft::platform::DriveLetter;
+/// assert_eq!(extract_drive_letter("c:/*.txt"), Some(DriveLetter::C));
+/// assert_eq!(extract_drive_letter("D:\\folder"), Some(DriveLetter::D));
 /// assert_eq!(extract_drive_letter("*.txt"), None);
 /// assert_eq!(extract_drive_letter(">regex"), None);
 /// ```
 #[must_use]
-pub fn extract_drive_letter(pattern: &str) -> Option<char> {
+pub fn extract_drive_letter(pattern: &str) -> Option<uffs_mft::platform::DriveLetter> {
     let bytes = pattern.as_bytes();
     let first = *bytes.first()?;
     let second = *bytes.get(1)?;
-    (second == b':' && first.is_ascii_alphabetic()).then(|| (first as char).to_ascii_uppercase())
+    if second != b':' || !first.is_ascii_alphabetic() {
+        return None;
+    }
+    uffs_mft::platform::DriveLetter::parse(first as char).ok()
 }

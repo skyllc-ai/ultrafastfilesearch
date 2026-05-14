@@ -26,7 +26,7 @@ use crate::progress::spinner;
 /// `full`, `unique`, `info_only`, `build_index`, `debug_tree`, and
 /// `forensic` toggle output sections per the CLI flags.
 pub(crate) async fn cmd_read(
-    drive: char,
+    drive: uffs_mft::platform::DriveLetter,
     output: PathBuf,
     mode_str: &str,
     full: bool,
@@ -38,17 +38,16 @@ pub(crate) async fn cmd_read(
     use uffs_mft::MftReadMode;
 
     let start_time = Instant::now();
-    let drive_upper = drive.to_ascii_uppercase();
 
     warn_unsupported_forensic(forensic);
 
     let mode: MftReadMode = mode_str
         .parse()
         .map_err(|err: String| anyhow::anyhow!(err))?;
-    log_read_startup(drive_upper, &output, mode, full, unique);
+    log_read_startup(drive, &output, mode, full, unique);
 
     let pb = spinner("Opening volume...");
-    let reader = open_reader_with_logging(drive, drive_upper, mode, full, unique)?;
+    let reader = open_reader_with_logging(drive, mode, full, unique)?;
 
     pb.set_message("Reading MFT records...");
     let (mut df, record_count) = read_records_with_logging(&reader)?;
@@ -59,7 +58,7 @@ pub(crate) async fn cmd_read(
     let total_elapsed = start_time.elapsed();
     let file_size_mb = bytes_to_mb_f64(file_size);
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         records = record_count,
         total_elapsed_ms = total_elapsed.as_millis(),
         output_size_mb = format!("{:.2}", file_size_mb),
@@ -92,7 +91,7 @@ fn warn_unsupported_forensic(forensic: bool) {
 /// Single startup `info!` for the live-read pipeline; encapsulates the
 /// branch on `unique` so the caller stays linear.
 fn log_read_startup(
-    drive_upper: char,
+    drive: uffs_mft::platform::DriveLetter,
     output: &std::path::Path,
     mode: uffs_mft::MftReadMode,
     full: bool,
@@ -104,7 +103,7 @@ fn log_read_startup(
         " (expanding hard links)"
     };
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         output = %output.display(),
         mode = %mode,
         full,
@@ -117,8 +116,7 @@ fn log_read_startup(
 /// Open the volume handle, configure the reader, and trace the open
 /// duration.  Returns the prepared [`MftReader`] for the read phase.
 fn open_reader_with_logging(
-    drive: char,
-    drive_upper: char,
+    drive: uffs_mft::platform::DriveLetter,
     mode: uffs_mft::MftReadMode,
     full: bool,
     unique: bool,
@@ -127,7 +125,7 @@ fn open_reader_with_logging(
 
     use tracing::debug;
 
-    debug!(drive = %drive_upper, "🔓 Opening volume handle");
+    debug!(drive = %drive, "🔓 Opening volume handle");
     let open_start = Instant::now();
     let reader = MftReader::open(drive)
         .with_context(|| format!("Failed to open drive {drive}:"))?
@@ -136,7 +134,7 @@ fn open_reader_with_logging(
         .with_expand_links(!unique);
 
     info!(
-        drive = %drive_upper,
+        drive = %drive,
         elapsed_ms = open_start.elapsed().as_millis(),
         "✅ Volume opened successfully"
     );

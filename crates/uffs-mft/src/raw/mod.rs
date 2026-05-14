@@ -80,9 +80,13 @@ pub struct RawMftHeader {
     pub original_size: u64,
     /// Compressed size (0 if not compressed).
     pub compressed_size: u64,
-    /// Volume letter (e.g., 'C', 'D'). Added in v2.
-    /// For v1 files, this defaults to 'X'.
-    pub volume_letter: char,
+    /// Volume letter (e.g., `C`, `D`).  Added in v2.
+    ///
+    /// For v1 files (and for raw-NTFS dumps with no volume context),
+    /// this defaults to [`crate::platform::DriveLetter::X`] — the
+    /// historical sentinel meaning "unknown source volume; let the
+    /// loader override via `LoadRawOptions::volume_letter`".
+    pub volume_letter: crate::platform::DriveLetter,
 }
 
 impl RawMftHeader {
@@ -103,8 +107,8 @@ impl RawMftHeader {
         buf[20..28].copy_from_slice(&self.record_count.to_le_bytes());
         buf[28..36].copy_from_slice(&self.original_size.to_le_bytes());
         buf[36..44].copy_from_slice(&self.compressed_size.to_le_bytes());
-        // Volume letter at byte 44 (v2+)
-        buf[44] = self.volume_letter as u8;
+        // Volume letter at byte 44 (v2+) — single ASCII byte.
+        buf[44] = self.volume_letter.as_byte();
         // Reserved bytes 45-63 are already zero
         buf
     }
@@ -140,11 +144,14 @@ impl RawMftHeader {
             buf[36], buf[37], buf[38], buf[39], buf[40], buf[41], buf[42], buf[43],
         ]);
 
-        // Volume letter at byte 44 (v2+), default to 'X' for v1 files
-        let volume_letter = if version >= 2 && buf[44].is_ascii_alphabetic() {
-            char::from(buf[44]).to_ascii_uppercase()
+        // Volume letter at byte 44 (v2+); falls back to the historical
+        // [`DriveLetter::X`] sentinel for v1 files and for v2 files where
+        // the byte isn't a valid ASCII letter (e.g. truncated or zeroed).
+        let volume_letter = if version >= 2 {
+            crate::platform::DriveLetter::parse(char::from(buf[44]))
+                .unwrap_or(crate::platform::DriveLetter::X)
         } else {
-            'X'
+            crate::platform::DriveLetter::X
         };
 
         Ok(Self {
@@ -166,8 +173,10 @@ pub struct SaveRawOptions {
     pub compress: bool,
     /// Compression level (1-22, default 3).
     pub compression_level: i32,
-    /// Volume letter (e.g., 'C', 'D').
-    pub volume_letter: char,
+    /// Volume letter (e.g., `C`, `D`).  Defaults to
+    /// [`crate::platform::DriveLetter::X`] — see
+    /// [`RawMftHeader::volume_letter`] for the sentinel convention.
+    pub volume_letter: crate::platform::DriveLetter,
     /// If true, save in raw compatibility mode (no header, just raw MFT bytes).
     /// This format is compatible with other MFT tools like analyzeMFT, MFT2CSV.
     pub raw_compat: bool,
@@ -178,7 +187,7 @@ impl Default for SaveRawOptions {
         Self {
             compress: true,
             compression_level: 3,
-            volume_letter: 'X',
+            volume_letter: crate::platform::DriveLetter::X,
             raw_compat: false,
         }
     }
@@ -190,8 +199,9 @@ pub struct LoadRawOptions {
     /// If true, only load the header without reading data.
     pub header_only: bool,
     /// Override volume letter (useful for raw NTFS files that don't have this
-    /// info). If None, uses 'X' as default for raw files.
-    pub volume_letter: Option<char>,
+    /// info).  `None` falls back to [`crate::platform::DriveLetter::X`] for raw
+    /// files.
+    pub volume_letter: Option<crate::platform::DriveLetter>,
     /// Enable forensic mode: include deleted, corrupt, and extension records.
     /// Adds `is_deleted`, `is_corrupt`, `is_extension`, `base_frs` columns to
     /// output. WARNING: May significantly increase output size (10-50% more
@@ -450,7 +460,9 @@ pub fn load_raw_mft<P: AsRef<Path>>(path: P, options: &LoadRawOptions) -> Result
             record_count,
             original_size: file_size,
             compressed_size: 0,
-            volume_letter: options.volume_letter.unwrap_or('X'),
+            volume_letter: options
+                .volume_letter
+                .unwrap_or(crate::platform::DriveLetter::X),
         };
 
         // If header-only mode, return empty data

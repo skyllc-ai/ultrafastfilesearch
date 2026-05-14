@@ -38,19 +38,20 @@ use uffs_mft::{bytes_to_mb_f64, u64_to_f64, usize_to_f64, usize_to_u64};
 
 /// Diagnose MFT bitmap to investigate why records aren't being skipped.
 #[cfg(windows)]
-pub(crate) async fn cmd_bitmap_diag(drive: char, show_samples: bool) -> Result<()> {
+pub(crate) async fn cmd_bitmap_diag(
+    drive: uffs_mft::platform::DriveLetter,
+    show_samples: bool,
+) -> Result<()> {
     use uffs_mft::VolumeHandle;
 
-    let drive_upper = drive.to_ascii_uppercase();
-
     println!("═══════════════════════════════════════════════════════════════");
-    println!("              MFT BITMAP DIAGNOSTIC - Drive {drive_upper}:");
+    println!("              MFT BITMAP DIAGNOSTIC - Drive {drive}:");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
 
     // Open volume
-    let handle = VolumeHandle::open(drive_upper)
-        .with_context(|| format!("Failed to open volume {drive_upper}:"))?;
+    let handle =
+        VolumeHandle::open(drive).with_context(|| format!("Failed to open volume {drive}:"))?;
 
     let volume_data = handle.volume_data();
     let record_size = volume_data.bytes_per_file_record_segment;

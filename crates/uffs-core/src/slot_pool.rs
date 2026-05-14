@@ -130,7 +130,7 @@ impl core::fmt::Debug for SlotPool {
 #[derive(Debug, Clone)]
 pub struct DriveLoadEstimate {
     /// Drive letter.
-    pub letter: char,
+    pub letter: uffs_mft::platform::DriveLetter,
     /// Estimated peak memory in bytes for loading this drive.
     pub peak_bytes: u64,
     /// Whether a compact cache hit is expected (much cheaper).
@@ -161,7 +161,7 @@ const CACHE_MISS_PEAK_MULTIPLIER: f64 = 1.4;
 ///    (transient `MftIndex` + compact build)
 /// 3. Neither → conservative default
 #[must_use]
-pub fn estimate_drive_cost(drive_letter: char) -> DriveLoadEstimate {
+pub fn estimate_drive_cost(drive_letter: uffs_mft::platform::DriveLetter) -> DriveLoadEstimate {
     let compact_path = crate::compact_cache::compact_cache_path(drive_letter);
     let mft_path = uffs_mft::cache::cache_file_path(drive_letter);
 
@@ -227,7 +227,7 @@ pub fn estimate_drive_cost(drive_letter: char) -> DriveLoadEstimate {
     clippy::float_arithmetic,
     reason = "Budget estimation uses approximate floating-point arithmetic by design"
 )]
-pub fn compute_load_budget(drives: &[char]) -> SlotPool {
+pub fn compute_load_budget(drives: &[uffs_mft::platform::DriveLetter]) -> SlotPool {
     if drives.is_empty() {
         return SlotPool::new(1);
     }
@@ -326,7 +326,11 @@ mod tests {
 
     #[test]
     fn compute_budget_returns_at_least_one() {
-        let pool = compute_load_budget(&['Z', 'Y', 'X']);
+        let pool = compute_load_budget(&[
+            uffs_mft::platform::DriveLetter::Z,
+            uffs_mft::platform::DriveLetter::Y,
+            uffs_mft::platform::DriveLetter::X,
+        ]);
         assert!(pool.total() >= 1, "budget must be at least 1 slot");
         assert!(pool.total() <= 3, "budget can't exceed num drives");
     }
@@ -339,7 +343,7 @@ mod tests {
 
     #[test]
     fn estimate_unknown_drive_uses_default() {
-        let est = estimate_drive_cost('Z');
+        let est = estimate_drive_cost(uffs_mft::platform::DriveLetter::Z);
         assert!(!est.compact_cache_hit);
         assert_eq!(est.peak_bytes, DEFAULT_PEAK_PER_DRIVE);
     }
