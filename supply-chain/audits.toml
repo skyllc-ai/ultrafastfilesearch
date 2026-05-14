@@ -37,6 +37,18 @@ Audit rationale (Apr 2026, v0.5.71):
   error on missing var rather than silently succeeding.
 - License: MIT OR Apache-2.0 (inherited from paste)."""
 
+[[audits.rmcp]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.6.0 -> 1.7.0"
+notes = "Inspected 1.6.0->1.7.0 source diff (8 .rs files, ~50 lines of net change). No new unsafe blocks, no new fs/net/process/FFI surface, no crypto/auth/permission changes. Notable shifts: (a) JsonRpcError.id widened to Option<RequestId> per MCP 2025-11-25 error-response spec; (b) PromptMessageContent::Resource flattened to fix a JSON shape bug (with regression test); (c) async_rw transport switched from FramedRead to BufReader + manual line decode, adding parse-error recovery (sends JSON-RPC -32700 and continues instead of terminating) AND UTF-8 BOM stripping (RFC 8259 §8.1); (d) Cargo.toml narrows chrono to default-features=false + only the 'now' feature (surface reduction). All changes match the published CHANGELOG and are robustness improvements."
+
+[[audits.rmcp-macros]]
+who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.6.0 -> 1.7.0"
+notes = "Pure version-sync release: zero source code changes between 1.6.0 and 1.7.0 (verified via 'diff -qr' over the src/ trees). Only .cargo_vcs_info.json, CHANGELOG.md, Cargo.lock, and the version string in Cargo.toml differ. rmcp-macros is bumped in lockstep with the parent rmcp crate's 1.7.0 release."
+
 [[audits.rustls]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
