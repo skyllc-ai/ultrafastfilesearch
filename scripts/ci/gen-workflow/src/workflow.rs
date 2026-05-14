@@ -54,9 +54,9 @@
 //! offending line so the validator fails closed (refuses to opine
 //! rather than silently mis-classifying).
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 /// Minimal in-memory model of `.github/workflows/pr-fast.yml`.
 #[derive(Debug, Default)]
@@ -113,8 +113,7 @@ pub(crate) fn parse(text: &str) -> Result<Workflow> {
     };
 
     let mut idx = jobs_idx + 1;
-    while idx < lines.len() {
-        let line = lines[idx];
+    while let Some(&line) = lines.get(idx) {
         // End of `jobs:` block: a non-empty line at column 0 (next
         // top-level key like `name:`, `permissions:`, etc.).
         if !line.trim().is_empty() && !line.starts_with(' ') {
@@ -171,8 +170,7 @@ fn job_key_at(line: &str, indent: usize) -> Option<&str> {
 fn parse_job_body(lines: &[&str], start: usize) -> Result<(Job, usize)> {
     let mut job = Job::default();
     let mut idx = start;
-    while idx < lines.len() {
-        let line = lines[idx];
+    while let Some(&line) = lines.get(idx) {
         // End of body: a non-empty line at indent < 4 (next job or
         // top-level key).
         if !line.trim().is_empty() && line_indent(line) < 2 * INDENT_STEP {
@@ -224,11 +222,14 @@ fn unquote(value: &str) -> String {
     let cleaned = value.split('#').next().unwrap_or(value).trim();
     if let Some(inner) = cleaned
         .strip_prefix('\'')
-        .and_then(|s| s.strip_suffix('\''))
+        .and_then(|stripped| stripped.strip_suffix('\''))
     {
         return inner.to_owned();
     }
-    if let Some(inner) = cleaned.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+    if let Some(inner) = cleaned
+        .strip_prefix('"')
+        .and_then(|stripped| stripped.strip_suffix('"'))
+    {
         return inner.to_owned();
     }
     cleaned.to_owned()
@@ -237,7 +238,7 @@ fn unquote(value: &str) -> String {
 /// Number of leading spaces on a line.  Tabs are treated as a single
 /// character (we never emit them and `pr-fast.yml` doesn't either).
 fn line_indent(line: &str) -> usize {
-    line.bytes().take_while(|b| *b == b' ').count()
+    line.bytes().take_while(|byte| *byte == b' ').count()
 }
 
 /// Parse the value half of a `needs:` field.  Three shapes:
@@ -254,8 +255,7 @@ fn parse_needs_value(value: &str, lines: &[&str], start: usize) -> Result<(Vec<S
         // Block-style list.
         let mut items = Vec::new();
         let mut idx = start;
-        while idx < lines.len() {
-            let line = lines[idx];
+        while let Some(&line) = lines.get(idx) {
             let body_start = " ".repeat(3 * INDENT_STEP);
             let Some(stripped) = line.strip_prefix(&body_start) else {
                 break;
@@ -268,12 +268,15 @@ fn parse_needs_value(value: &str, lines: &[&str], start: usize) -> Result<(Vec<S
         }
         return Ok((items, idx - start));
     }
-    if let Some(inside) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+    if let Some(inside) = trimmed
+        .strip_prefix('[')
+        .and_then(|stripped| stripped.strip_suffix(']'))
+    {
         // Flow-style: comma-separated.
         let items: Vec<String> = inside
             .split(',')
             .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .filter(|item| !item.is_empty())
             .map(unquote)
             .collect();
         return Ok((items, 0));
@@ -286,12 +289,18 @@ fn parse_needs_value(value: &str, lines: &[&str], start: usize) -> Result<(Vec<S
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    clippy::indexing_slicing,
+    reason = "test code uses idiomatic short bindings + positional indexing against fixed-shape \
+              fixtures; failures panic with adequate context (issue #212)"
+)]
 mod tests {
     use super::*;
 
     /// Tiny fixture covering all three `needs:` shapes plus an
     /// `if:` field.  Matches real shapes from `pr-fast.yml`.
-    const FIXTURE: &str = r"
+    const FIXTURE: &str = "
 name: PR Fast CI
 on: pull_request
 jobs:
@@ -366,7 +375,7 @@ jobs:
 
     #[test]
     fn missing_needs_yields_empty_vec() {
-        let yaml = r"
+        let yaml = "
 jobs:
   alone:
     name: Alone
@@ -396,7 +405,7 @@ jobs:
     #[test]
     fn nested_blocks_under_jobs_are_skipped_cleanly() {
         // `with:`, `env:`, multi-line `run: |` are all ignored.
-        let yaml = r"
+        let yaml = "
 jobs:
   complex:
     name: Complex
@@ -436,7 +445,7 @@ jobs:
 
     #[test]
     fn flow_list_without_closing_bracket_fails() {
-        let yaml = r"
+        let yaml = "
 jobs:
   bad:
     needs: [a, b
@@ -451,7 +460,7 @@ jobs:
         // Real workflows often have blank lines BETWEEN the list and
         // the next field.  Ensure we stop the list at the first
         // non-list-item line, not on the blank.
-        let yaml = r"
+        let yaml = "
 jobs:
   j:
     name: J

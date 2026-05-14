@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
+#![expect(
+    clippy::print_stderr,
+    reason = "operational CLI tool — user-facing summary + drift report go to stderr (issue #212)"
+)]
+
 //! `gen-workflow` — gate-manifest workflow structural validator.
 //!
 //! Phase 3 deliverable from `docs/architecture/gates-manifest-plan.md`
@@ -53,10 +58,17 @@
 //! into one job, so display names like `Clippy` are not 1:1
 //! derivable from manifest fields without a schema extension).
 
+// `BTreeMap`/`BTreeSet` live in `alloc`; the workspace
+// `clippy::std_instead_of_alloc` lint correctly prefers the canonical
+// path over `std::collections::*` re-exports.  Bin crates need the
+// explicit `extern crate alloc;` to make the `alloc::` namespace
+// visible (libraries get it for free via the 2024 edition's prelude).
+extern crate alloc;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::Parser;
 
 mod manifest;

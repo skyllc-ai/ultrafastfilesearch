@@ -44,18 +44,16 @@ serde = { workspace = true }
 toml = { workspace = true }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lints policy
+# Lints (issue #212)
 # ─────────────────────────────────────────────────────────────────────────────
-# This crate intentionally does NOT opt into `[lints] workspace = true`,
-# matching the convention established by `scripts/ci-pipeline` and
-# `scripts/ci/gen-hooks`.  The `[workspace.lints]` stack adds
-# restriction-class lints (`print_stderr`, `min_ident_chars`,
-# `indexing_slicing`, `std_instead_of_alloc`) that fight the ergonomics
-# of an operational CLI tool that legitimately writes to stderr.
-#
-# The `just lint-prod` and `just lint-tests` recipes (which the
-# pre-push hook and `pr-fast.yml::clippy` job both run) still apply
-# the strict CLI flag stack — `pedantic`, `nursery`, `cargo`,
-# `unwrap_used`, `expect_used`, `missing_docs_in_private_items`,
-# `-D warnings` — and this crate passes them cleanly without any
-# per-item suppressions.
+# Inherit the full workspace lint stack (matches all 14 product crates +
+# uffs-diag).  The previous wholesale opt-out skipped ~60 high-value lints
+# (cast_lossless, redundant_clone, manual_memcpy, …) along with the 4-5
+# CLI-inappropriate ones it was meant to skip.  Per workspace rule 1
+# ("targeted allow, keep minimal, scoped, justify in comments"), the
+# CLI-inappropriate lints are suppressed via file-level `#![expect(...)]`
+# blocks in `src/*.rs` with `reason = "..."` strings, matching the
+# precedent in `crates/uffs-diag/src/bin/*.rs`.  See `CLIPPY_POSTURE.md`
+# § CLI-tooling for the policy.
+[lints]
+workspace = true

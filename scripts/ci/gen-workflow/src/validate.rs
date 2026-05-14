@@ -24,9 +24,9 @@
 //!   recognised vocabulary (see [`PermissiveSet::from_if_expr`]).  Drift = any
 //!   class needed but not accepted.
 
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use regex::Regex;
 
 use crate::manifest::{Gate, Manifest};
@@ -233,7 +233,7 @@ fn check_if_predicates(manifest: &Manifest, workflow: &Workflow) -> Vec<String> 
         };
         let needed: PermissiveSet = gates
             .iter()
-            .map(|g| PermissiveSet::from_gate_when(&g.when))
+            .map(|gate| PermissiveSet::from_gate_when(&gate.when))
             .fold(PermissiveSet::default(), PermissiveSet::union);
 
         let actual = PermissiveSet::from_if_expr(job.if_expr.as_deref());
@@ -241,7 +241,7 @@ fn check_if_predicates(manifest: &Manifest, workflow: &Workflow) -> Vec<String> 
         if !actual.contains(needed) {
             let gate_summary = gates
                 .iter()
-                .map(|g| format!("{}({})", g.id, g.when))
+                .map(|gate| format!("{}({})", gate.id, gate.when))
                 .collect::<Vec<_>>()
                 .join(", ");
             issues.push(format!(
@@ -405,6 +405,12 @@ fn check_required_name_guard(workflow: &Workflow) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    clippy::indexing_slicing,
+    reason = "test code uses idiomatic short bindings + positional indexing against fixed-shape \
+              fixtures; failures panic with adequate context (issue #212)"
+)]
 mod tests {
     use super::*;
     use crate::{manifest, workflow};
@@ -448,7 +454,7 @@ gate_when = "rust_changed"
 
     /// Workflow fixture that's CONSISTENT with the manifest above.
     /// Tests mutate this string to provoke each drift class.
-    const WORKFLOW_FIXTURE: &str = r"
+    const WORKFLOW_FIXTURE: &str = "
 name: PR Fast CI
 on: pull_request
 jobs:
@@ -733,7 +739,7 @@ jobs:
           [other-bracket]=ignored
 "#;
         let ids = extract_aggregator_ids(yaml).unwrap();
-        let expected: BTreeSet<String> = std::iter::once("valid-id".to_owned()).collect();
+        let expected: BTreeSet<String> = core::iter::once("valid-id".to_owned()).collect();
         assert_eq!(ids, expected);
     }
 }

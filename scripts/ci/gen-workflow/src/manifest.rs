@@ -41,9 +41,9 @@
 //! ignored via `serde(default)` on the surrounding struct + serde's
 //! permissive mode for unknown TOML keys.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
 /// Top-level gate-manifest document.
@@ -122,6 +122,12 @@ impl Gate {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    clippy::indexing_slicing,
+    reason = "test code uses idiomatic short bindings + positional indexing against fixed-shape \
+              fixtures; failures panic with adequate context (issue #212)"
+)]
 mod tests {
     use super::*;
 
