@@ -478,8 +478,14 @@ impl OutputConfig {
         let Some(filetime) = filetime_opt else { return };
         let tz_offset_secs: i32 = fixed_tz.map_or(0_i32, chrono::FixedOffset::local_minus_utc);
         let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
-        if let Some((year, month, day, hour, minute, second)) =
-            uffs_time::filetime_to_calendar(local_ft)
+        if let Some(uffs_time::CalendarParts {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        }) = uffs_time::filetime_to_calendar(local_ft)
         {
             Self::append_display(
                 row_buffer,

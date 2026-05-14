@@ -715,9 +715,14 @@ static LOCAL_TZ_OFFSET_SECS: std::sync::LazyLock<i32> =
 fn format_filetime_with_tz(filetime: i64, tz_offset_secs: i32) -> String {
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
     match uffs_time::filetime_to_calendar(local_ft) {
-        Some((year, month, day, hour, minute, second)) => {
-            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
-        }
+        Some(uffs_time::CalendarParts {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        }) => format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}"),
         None => "0000-00-00 00:00:00".to_owned(),
     }
 }

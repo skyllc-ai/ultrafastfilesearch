@@ -199,8 +199,14 @@ fn push_u64(buf: &mut String, value: u64) {
 fn append_datetime_tz(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
     use core::fmt::Write as _;
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
-    if let Some((year, month, day, hour, minute, second)) =
-        uffs_time::filetime_to_calendar(local_ft)
+    if let Some(uffs_time::CalendarParts {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    }) = uffs_time::filetime_to_calendar(local_ft)
     {
         let _ok = write!(
             buf,

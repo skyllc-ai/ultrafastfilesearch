@@ -7,7 +7,7 @@
 #[must_use]
 pub const fn month_from_filetime(filetime: i64) -> u32 {
     match uffs_time::filetime_to_calendar(filetime) {
-        Some((_, month, ..)) => month,
+        Some(uffs_time::CalendarParts { month, .. }) => month,
         None => 1, // default to January for unset timestamps
     }
 }

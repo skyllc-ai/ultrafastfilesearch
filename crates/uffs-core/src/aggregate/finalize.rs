@@ -780,7 +780,9 @@ fn format_range_key(index: usize, boundaries: &[u64]) -> String {
 /// Format a FILETIME timestamp key as an ISO date (`YYYY-MM-DD`).
 fn format_timestamp_key(filetime: i64) -> String {
     match uffs_time::filetime_to_calendar(filetime) {
-        Some((year, month, day, ..)) => format!("{year:04}-{month:02}-{day:02}"),
+        Some(uffs_time::CalendarParts {
+            year, month, day, ..
+        }) => format!("{year:04}-{month:02}-{day:02}"),
         None => "0000-00-00".to_owned(),
     }
 }

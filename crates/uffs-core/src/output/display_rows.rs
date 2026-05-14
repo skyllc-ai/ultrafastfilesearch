@@ -382,8 +382,14 @@ pub(crate) fn push_flag(buf: &mut String, cfg: &OutputConfig, flags: u32, mask: 
 /// submodule at `display_rows_tests.rs`.
 pub(crate) fn append_datetime_native(buf: &mut String, filetime: i64, tz_offset_secs: i32) {
     let local_ft = uffs_time::filetime_with_tz_bias(filetime, tz_offset_secs);
-    if let Some((year, month, day, hour, minute, second)) =
-        uffs_time::filetime_to_calendar(local_ft)
+    if let Some(uffs_time::CalendarParts {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    }) = uffs_time::filetime_to_calendar(local_ft)
     {
         #[expect(
             clippy::let_underscore_must_use,
