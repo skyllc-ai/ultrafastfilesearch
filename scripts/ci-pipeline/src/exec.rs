@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "operational CLI tool — step progress to stdout, error details to stderr (issue #212)"
+)]
+
 //! Subprocess execution primitives for the UFFS CI pipeline.
 //!
 //! * [`execute_command`] / [`execute_command_with_env`] — spawn a single
@@ -16,12 +22,14 @@
 //! `create_fillup_spinner` is a private helper for
 //! `execute_command_with_env`'s non-verbose output mode.
 
-use std::io::Write;
+use core::future::Future;
+use core::time::Duration;
+use std::io::Write as _;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
-use colored::Colorize;
+use anyhow::{Context as _, Result, bail};
+use colored::Colorize as _;
 use futures::future::try_join_all;
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::process::Command;
@@ -168,16 +176,18 @@ pub(crate) async fn execute_command_with_env(
             .append(true)
             .open(log_path)
     {
-        let _ = writeln!(file, "\n=== {name} ({cmd}) ===");
-        let _ = writeln!(file, "Command: {} {}", cmd, args.join(" "));
-        let _ = writeln!(file, "Duration: {}s", duration.as_secs());
+        // Best-effort diagnostic log; discard write errors so a full
+        // disk or revoked permission doesn't abort the pipeline.
+        _ = writeln!(file, "\n=== {name} ({cmd}) ===");
+        _ = writeln!(file, "Command: {} {}", cmd, args.join(" "));
+        _ = writeln!(file, "Duration: {}s", duration.as_secs());
         if !result.stdout.is_empty() {
-            let _ = writeln!(file, "--- stdout ---");
-            let _ = file.write_all(&result.stdout);
+            _ = writeln!(file, "--- stdout ---");
+            _ = file.write_all(&result.stdout);
         }
         if !result.stderr.is_empty() {
-            let _ = writeln!(file, "--- stderr ---");
-            let _ = file.write_all(&result.stderr);
+            _ = writeln!(file, "--- stderr ---");
+            _ = file.write_all(&result.stderr);
         }
     }
 
@@ -188,7 +198,7 @@ pub(crate) async fn execute_command_with_env(
         let exit_code = result
             .status
             .code()
-            .map_or_else(|| "unknown".to_string(), |c| c.to_string());
+            .map_or_else(|| "unknown".to_owned(), |code| code.to_string());
         println!("{} {} failed (exit code: {})", "❌".red(), name, exit_code);
 
         // Print stderr on failure even in non-verbose mode
@@ -236,13 +246,13 @@ pub(crate) async fn execute_parallel(
         command_count
     );
 
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
+    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
     let tasks: Vec<_> = commands
         .into_iter()
         .map(|(name, cmd, args)| {
-            let semaphore = semaphore.clone();
+            let permit_source = alloc::sync::Arc::clone(&semaphore);
             async move {
-                let _permit = semaphore
+                let _permit = permit_source
                     .acquire()
                     .await
                     .context("Failed to acquire semaphore")?;
@@ -280,18 +290,19 @@ pub(crate) async fn execute_parallel_with_env(
         command_count
     );
 
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
+    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
+    let env_vars_template = env_vars.to_vec();
     let tasks: Vec<_> = commands
         .into_iter()
         .map(|(name, cmd, args)| {
-            let semaphore = semaphore.clone();
-            let env_vars = env_vars.to_vec();
+            let permit_source = alloc::sync::Arc::clone(&semaphore);
+            let task_env = env_vars_template.clone();
             async move {
-                let _permit = semaphore
+                let _permit = permit_source
                     .acquire()
                     .await
                     .context("Failed to acquire semaphore")?;
-                execute_command_with_env(name, cmd, &args, &env_vars, ctx)
+                execute_command_with_env(name, cmd, &args, &task_env, ctx)
                     .await
                     .with_context(|| format!("Parallel execution failed for '{name}'"))
             }
@@ -331,7 +342,7 @@ pub(crate) async fn execute_step_with_tracking<F, Fut>(
 ) -> Result<()>
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<()>>,
+    Fut: Future<Output = Result<()>>,
 {
     if state.is_step_completed(step_name) {
         println!("⏭️  Skipping completed step: {step_name}");
@@ -346,16 +357,16 @@ where
     // Record step duration regardless of success/failure
     state
         .step_durations_secs
-        .insert(step_name.to_string(), duration_secs);
+        .insert(step_name.to_owned(), duration_secs);
 
     match result {
         Ok(()) => {
             state.mark_step_completed(step_name)?;
             Ok(())
         }
-        Err(e) => {
-            state.mark_step_failed(step_name, &e.to_string())?;
-            Err(e)
+        Err(err) => {
+            state.mark_step_failed(step_name, &err.to_string())?;
+            Err(err)
         }
     }
 }

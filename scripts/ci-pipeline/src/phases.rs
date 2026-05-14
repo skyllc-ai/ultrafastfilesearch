@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    reason = "operational CLI tool — phase banners + step results go to stdout (issue #212)"
+)]
+
 //! Non-resumable Phase 1 / Phase 2 driver functions.
 //!
 //! These variants skip the [`crate::workflow::WorkflowState`] wrapper
@@ -19,8 +24,8 @@
 //!   `coverage-report` subcommand primitives; referenced from both
 //!   `phase1_tests` and the CLI dispatch.
 
-use anyhow::{Context, Result};
-use colored::Colorize;
+use anyhow::{Context as _, Result};
+use colored::Colorize as _;
 
 use crate::context::{PipelineContext, get_cargo_target_dir};
 use crate::exec::{execute_command, execute_parallel_with_env};

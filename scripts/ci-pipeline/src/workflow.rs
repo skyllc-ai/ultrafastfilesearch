@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    clippy::use_debug,
+    reason = "operational CLI tool — workflow status + phase enum (Debug-formatted) go to stdout (issue #212)"
+)]
+
 //! Resumable-workflow state machine for the UFFS ship pipeline.
 //!
 //! * [`WorkflowPhase`] — coarse-grained pipeline phase (what we're doing).
@@ -13,11 +19,11 @@
 //! are embedded in the on-disk JSON, so renaming one is a
 //! backwards-incompatible change to the resumable-state format.
 
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -160,7 +166,7 @@ impl WorkflowState {
     /// Returns an error if the state file exists but cannot be read, or
     /// if its contents cannot be parsed as JSON (e.g. the file was hand-
     /// edited to an invalid shape).
-    pub fn load() -> Result<Self> {
+    pub(crate) fn load() -> Result<Self> {
         let path = Path::new(Self::STATE_FILE);
         if path.exists() {
             let content = fs::read_to_string(path).context("Failed to read workflow state file")?;
@@ -177,7 +183,7 @@ impl WorkflowState {
     /// Returns an error if the state cannot be serialized, the parent
     /// directory cannot be created, the temp file cannot be written, or
     /// the final rename fails.
-    pub fn save(&self) -> Result<()> {
+    pub(crate) fn save(&self) -> Result<()> {
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize workflow state")?;
         let path = Path::new(Self::STATE_FILE);
@@ -199,7 +205,7 @@ impl WorkflowState {
     ///
     /// Propagates any failure from [`Self::save`] after the in-memory
     /// transition has been applied.
-    pub fn advance_phase(&mut self, new_phase: WorkflowPhase) -> Result<()> {
+    pub(crate) fn advance_phase(&mut self, new_phase: WorkflowPhase) -> Result<()> {
         println!(
             "🔄 Advancing workflow phase: {:?} → {:?}",
             self.phase, new_phase
@@ -223,23 +229,23 @@ impl WorkflowState {
     ///
     /// Propagates any failure from [`Self::save`] after the in-memory
     /// update has been applied.
-    pub fn record_error(&mut self, error: &str) -> Result<()> {
+    pub(crate) fn record_error(&mut self, error: &str) -> Result<()> {
         self.failure_count += 1;
-        self.last_error = Some(error.to_string());
+        self.last_error = Some(error.to_owned());
         self.save()
     }
 
     /// Build a fresh workflow state for `current_version`.  Intended
     /// for `--fresh` runs that want to reset the resumable state.
     #[must_use]
-    pub fn new_workflow(current_version: String) -> Self {
+    pub(crate) fn new_workflow(current_version: String) -> Self {
         Self {
             current_version,
             workflow_id: Uuid::new_v4().to_string(),
             phase: WorkflowPhase::Clean,
             started_at: Utc::now(),
             completed_at: None,
-            last_successful_version: "unknown".to_string(),
+            last_successful_version: "unknown".to_owned(),
             failure_count: 0,
             last_error: None,
             step_tracker: StepTracker::default(),
@@ -252,7 +258,7 @@ impl WorkflowState {
     /// phase (i.e. a prior ship run crashed mid-flight) so a `ship
     /// --resume` invocation is meaningful.
     #[must_use]
-    pub const fn is_resumable(&self) -> bool {
+    pub(crate) const fn is_resumable(&self) -> bool {
         matches!(
             self.phase,
             WorkflowPhase::VersionIncrementing
@@ -267,7 +273,7 @@ impl WorkflowState {
     /// Return `true` if `step` has been marked completed in the current
     /// workflow (persisted in `completed_steps`).
     #[must_use]
-    pub fn is_step_completed(&self, step: &str) -> bool {
+    pub(crate) fn is_step_completed(&self, step: &str) -> bool {
         self.step_tracker.completed_steps.contains(step)
     }
 
@@ -277,8 +283,8 @@ impl WorkflowState {
     /// # Errors
     ///
     /// Propagates any failure from [`Self::save`].
-    pub fn mark_step_started(&mut self, step: &str) -> Result<()> {
-        self.step_tracker.current_step = Some(step.to_string());
+    pub(crate) fn mark_step_started(&mut self, step: &str) -> Result<()> {
+        self.step_tracker.current_step = Some(step.to_owned());
         self.step_tracker.failed_steps.remove(step);
         println!("🔄 Starting step: {step}");
         self.save()
@@ -291,8 +297,8 @@ impl WorkflowState {
     /// # Errors
     ///
     /// Propagates any failure from [`Self::save`].
-    pub fn mark_step_completed(&mut self, step: &str) -> Result<()> {
-        self.step_tracker.completed_steps.insert(step.to_string());
+    pub(crate) fn mark_step_completed(&mut self, step: &str) -> Result<()> {
+        self.step_tracker.completed_steps.insert(step.to_owned());
         self.step_tracker.failed_steps.remove(step);
         self.step_tracker.current_step = None;
         println!("✅ Completed step: {step}");
@@ -306,8 +312,8 @@ impl WorkflowState {
     ///
     /// Propagates any failure from [`Self::record_error`] or
     /// [`Self::save`].
-    pub fn mark_step_failed(&mut self, step: &str, error: &str) -> Result<()> {
-        self.step_tracker.failed_steps.insert(step.to_string());
+    pub(crate) fn mark_step_failed(&mut self, step: &str, error: &str) -> Result<()> {
+        self.step_tracker.failed_steps.insert(step.to_owned());
         self.step_tracker.completed_steps.remove(step);
         self.step_tracker.current_step = None;
         self.record_error(&format!("Step '{step}' failed: {error}"))?;
@@ -328,7 +334,7 @@ impl WorkflowState {
     /// Propagates any failure from [`Self::save`] when the state was
     /// actually mutated (the save is skipped when the step was not
     /// previously completed, so the no-op path cannot error).
-    pub fn invalidate_step(&mut self, step: &str) -> Result<()> {
+    pub(crate) fn invalidate_step(&mut self, step: &str) -> Result<()> {
         let was_completed = self.step_tracker.completed_steps.remove(step);
         self.step_tracker.failed_steps.remove(step);
         if was_completed {
@@ -343,11 +349,12 @@ impl WorkflowState {
     /// in `crate::ship`) uses this to render the per-run "remaining"
     /// banner.
     #[must_use]
-    pub fn get_pending_steps(&self, all_steps: &[&str]) -> Vec<String> {
+    pub(crate) fn get_pending_steps(&self, all_steps: &[&str]) -> Vec<String> {
         all_steps
             .iter()
+            .copied()
             .filter(|step| !self.is_step_completed(step))
-            .map(std::string::ToString::to_string)
+            .map(str::to_owned)
             .collect()
     }
 }
@@ -355,12 +362,12 @@ impl WorkflowState {
 impl Default for WorkflowState {
     fn default() -> Self {
         Self {
-            current_version: "unknown".to_string(),
+            current_version: "unknown".to_owned(),
             workflow_id: Uuid::new_v4().to_string(),
             phase: WorkflowPhase::Clean,
             started_at: Utc::now(),
             completed_at: None,
-            last_successful_version: "unknown".to_string(),
+            last_successful_version: "unknown".to_owned(),
             failure_count: 0,
             last_error: None,
             step_tracker: StepTracker::default(),
@@ -440,7 +447,12 @@ pub(crate) fn print_workflow_status(state: &WorkflowState) {
             println!("💡 Full ship lane:   just ship");
             println!("💡 Fresh ship run:   just ship-fresh");
         }
-        _ => {
+        WorkflowPhase::VersionIncrementing
+        | WorkflowPhase::Testing
+        | WorkflowPhase::Building
+        | WorkflowPhase::Deploying
+        | WorkflowPhase::GitCommitting
+        | WorkflowPhase::GitPushing => {
             println!("\n💡 Resume ship workflow: just ship");
             println!("💡 Start fresh:          just ship-fresh");
         }

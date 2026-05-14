@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    reason = "operational CLI tool — progress + summary lines go to stdout (issue #212)"
+)]
+
 //! Cross-compilation syntax validation for the `cross-check`
 //! subcommand.  Runs native-tooling Linux + Windows `cargo check`
 //! passes, skipping each half gracefully if the corresponding tool-
@@ -8,7 +13,7 @@
 //! `cargo-xwin` can still call `just check-cross` without a fatal
 //! error).
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::context::PipelineContext;
 use crate::exec::execute_command;

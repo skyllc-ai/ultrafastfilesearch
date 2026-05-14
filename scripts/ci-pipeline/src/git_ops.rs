@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    reason = "operational CLI tool — git/gh progress lines go to stdout (issue #212)"
+)]
+
 //! `git` + `gh` CLI helpers that Phase 2 of the ship pipeline drives.
 //!
 //! The entry points are [`git_commit`] (create the `chore: development
@@ -16,8 +21,8 @@
 //! `origin/release/<ver>`" and re-run the cached-completed push step
 //! instead of silently skipping it.
 
-use anyhow::{Context, Result, bail};
-use colored::Colorize;
+use anyhow::{Context as _, Result, bail};
+use colored::Colorize as _;
 use tokio::process::Command;
 
 use crate::context::PipelineContext;
@@ -103,7 +108,7 @@ fn detect_current_branch() -> Result<String> {
         .context("Failed to get current branch")?;
     let current_branch = String::from_utf8_lossy(&branch_output.stdout)
         .trim()
-        .to_string();
+        .to_owned();
     if current_branch.is_empty() || current_branch == "HEAD" {
         bail!("Could not determine current branch (detached HEAD?)");
     }
@@ -171,7 +176,7 @@ fn find_existing_release_pr(release_branch: &str) -> Result<Option<String>> {
         .context("Failed to query existing release PR via gh")?;
     let trimmed = String::from_utf8_lossy(&existing_pr_output.stdout)
         .trim()
-        .to_string();
+        .to_owned();
     Ok((!trimmed.is_empty()).then_some(trimmed))
 }
 

@@ -5,6 +5,13 @@
 // Contact: 50460704+githubrobbi@users.noreply.github.com for licensing
 // inquiries.
 
+#![expect(
+    clippy::print_stdout,
+    clippy::use_debug,
+    reason = "operational CLI tool — user-facing banner + debug formatting of workflow state \
+              go to stdout via println! (issue #212)"
+)]
+
 //! UFFS CI pipeline driver — Tokio async orchestration of the
 //! pre-push, pre-ship, and ship workflows.
 //!
@@ -32,6 +39,13 @@
 //! `handle_check_all`, etc.) is a small coordinator — the real work
 //! lives in the modules above.
 
+// `BTreeMap`/`BTreeSet` live in `alloc`; the workspace
+// `clippy::std_instead_of_alloc` lint correctly prefers the canonical
+// path over `std::collections::*` re-exports.  Bin crates need the
+// explicit `extern crate alloc;` to make the `alloc::` namespace
+// visible (libraries get it for free via the 2024 edition's prelude).
+extern crate alloc;
+
 mod cli;
 mod context;
 mod cross_check;
@@ -42,9 +56,9 @@ mod ship;
 mod version;
 mod workflow;
 
-use anyhow::{Context, Result};
-use clap::Parser;
-use colored::Colorize;
+use anyhow::{Context as _, Result};
+use clap::Parser as _;
+use colored::Colorize as _;
 use tokio::process::Command;
 
 use crate::cli::{Cli, Commands};
@@ -90,8 +104,9 @@ async fn print_startup_banner_and_warm_sccache(ctx: &PipelineContext) {
     }
 
     if ctx.flags.sccache_enabled {
-        // No-op if already running; safe and fast.
-        let _ = Command::new("sccache").arg("--start-server").output().await;
+        // No-op if already running; safe and fast.  Best-effort
+        // warm-up; ignore failures (e.g. sccache binary missing).
+        _ = Command::new("sccache").arg("--start-server").output().await;
     }
 }
 

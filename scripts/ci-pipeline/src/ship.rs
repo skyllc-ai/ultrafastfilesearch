@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    reason = "operational CLI tool — ship-pipeline phase banners + completion footers go to stdout (issue #212)"
+)]
+
 //! Resumable ship pipeline driver.
 //!
 //! Everything in this module wraps [`crate::exec::execute_step_with_tracking`]
@@ -17,10 +22,10 @@
 //!   next-steps helpers.
 //! * `run_ship_pipeline` — the entry point `just ship` ultimately calls.
 
-use std::time::Duration;
+use core::time::Duration;
 
-use anyhow::{Context, Result};
-use colored::Colorize;
+use anyhow::{Context as _, Result};
+use colored::Colorize as _;
 use tokio::process::Command;
 
 use crate::context::{
@@ -81,8 +86,8 @@ async fn tracked_clean_step(state: &mut WorkflowState, ctx: &PipelineContext) ->
 
         let should_clean = ctx.flags.force_clean
             || (!ctx.flags.force_no_clean
-                && (free_gb.is_some_and(|g| g < ctx.min_free_gb)
-                    || target_gb.is_some_and(|g| g > ctx.max_target_gb)));
+                && (free_gb.is_some_and(|gb| gb < ctx.min_free_gb)
+                    || target_gb.is_some_and(|gb| gb > ctx.max_target_gb)));
 
         if should_clean {
             if ctx.flags.force_clean {
@@ -383,7 +388,7 @@ fn load_or_reset_ship_state(ctx: &PipelineContext) -> Result<WorkflowState> {
             "{} Fresh run requested - resetting workflow state",
             "🔄".yellow()
         );
-        let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_string());
+        let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_owned());
         let new_state = WorkflowState::new_workflow(current_version);
         new_state
             .save()
@@ -391,7 +396,7 @@ fn load_or_reset_ship_state(ctx: &PipelineContext) -> Result<WorkflowState> {
         Ok(new_state)
     } else {
         Ok(WorkflowState::load().unwrap_or_else(|_| {
-            let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_string());
+            let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_owned());
             WorkflowState::new_workflow(current_version)
         }))
     }

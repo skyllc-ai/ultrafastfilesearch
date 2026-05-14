@@ -15,10 +15,11 @@
 //! construction needs (`get_cargo_target_dir`, `command_exists`,
 //! `disk_free_bytes`, `dir_size_bytes`).
 
+use core::time::Duration;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -78,7 +79,7 @@ pub(crate) fn command_exists(cmd: &str) -> bool {
     std::process::Command::new("which")
         .arg(cmd)
         .output()
-        .is_ok_and(|o| o.status.success())
+        .is_ok_and(|out| out.status.success())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,11 +113,10 @@ pub(crate) async fn disk_free_bytes(path: &Path) -> Option<u64> {
     let mut lines = stdout.lines();
     lines.next()?; // header
     let last = lines.last()?;
-    let cols: Vec<&str> = last.split_whitespace().collect();
-    if cols.len() < 4 {
-        return None;
-    }
-    let avail_k = cols[3].parse::<u64>().ok()?;
+    // `df -Pk` line format: `Filesystem 1024-blocks Used Available Capacity
+    // Mounted-on`. Use the iterator API instead of byte-indexing so a malformed
+    // `df` output yields `None` rather than panicking via `cols[3]`.
+    let avail_k = last.split_whitespace().nth(3)?.parse::<u64>().ok()?;
     Some(avail_k * 1024)
 }
 
@@ -224,7 +224,7 @@ impl PipelineContext {
     /// can opt out of sccache auto-detection — validation runs prefer a
     /// warm cargo incremental cache over a cold sccache cache for lower
     /// per-run variance.
-    pub fn new(cli: &Cli, validation_command: bool) -> Self {
+    pub(crate) fn new(cli: &Cli, validation_command: bool) -> Self {
         let max_jobs = cli.jobs.unwrap_or_else(|| num_cpus::get().min(16));
 
         // Build global environment variables
@@ -266,7 +266,9 @@ impl PipelineContext {
             None
         } else {
             let log_dir = PathBuf::from("build/logs");
-            let _ = fs::create_dir_all(&log_dir);
+            // Best-effort log dir creation; downstream open() will
+            // surface the failure if it actually matters.
+            _ = fs::create_dir_all(&log_dir);
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             Some(log_dir.join(format!("ci-pipeline-{timestamp}.log")))
         };

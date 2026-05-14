@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
-//
+
+#![expect(
+    clippy::print_stdout,
+    reason = "operational CLI tool — version bump confirmations + tip messages go to stdout (issue #212)"
+)]
+
 //! Version discovery + bump helpers for the UFFS ship pipeline.
 //!
 //! * [`get_current_version`] — read `[workspace.package].version` out of the
@@ -16,8 +21,8 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use colored::Colorize;
+use anyhow::{Context as _, Result, bail};
+use colored::Colorize as _;
 use tokio::process::Command;
 
 use crate::context::PipelineContext;
@@ -37,7 +42,7 @@ pub(crate) fn get_current_version() -> Result<String> {
         if line.trim().starts_with("version = ")
             && let Some(version) = line.split('"').nth(1)
         {
-            return Ok(version.to_string());
+            return Ok(version.to_owned());
         }
     }
     bail!("Could not find version in Cargo.toml")
@@ -65,11 +70,10 @@ pub(crate) fn extract_version_from_cargo_toml(content: &str) -> Result<String> {
                 break;
             }
             if trimmed.starts_with("version")
-                && let Some(equals_pos) = trimmed.find('=')
+                && let Some((_, after_eq)) = trimmed.split_once('=')
             {
-                let version_part = &trimmed[equals_pos + 1..].trim();
-                let version = version_part.trim_matches('"').trim_matches('\'');
-                return Ok(version.to_string());
+                let version = after_eq.trim().trim_matches('"').trim_matches('\'');
+                return Ok(version.to_owned());
             }
         }
     }
@@ -143,32 +147,33 @@ pub(crate) async fn update_polars_git(_ctx: &PipelineContext) -> Result<()> {
         .context("Failed to read crates/uffs-polars/Cargo.toml")?;
     if let Some(rev_line) = cargo_toml
         .lines()
-        .find(|l| l.contains("polars") && l.contains("rev ="))
+        .find(|line| line.contains("polars") && line.contains("rev ="))
     {
-        // Extract the rev hash
-        if let Some(start) = rev_line.find("rev = \"") {
-            let hash_start = start + 7;
-            if let Some(end) = rev_line[hash_start..].find('"') {
-                let pinned_rev = &rev_line[hash_start..hash_start + end];
-                println!(
-                    "{}",
-                    format!(
-                        "📌 Polars pinned to rev={} — skipping auto-update",
-                        &pinned_rev[..12]
-                    )
-                    .blue()
-                );
-                // Still run cargo update to ensure lockfile matches the pinned rev
-                let status = Command::new("cargo")
-                    .args(["update", "-p", "polars", "--precise", pinned_rev])
-                    .status()
-                    .await
-                    .context("Failed to run cargo update for pinned polars")?;
-                if !status.success() {
-                    println!("⚠️  cargo update --precise failed (lockfile may already be correct)");
-                }
-                return Ok(());
+        // Extract the rev hash from `... rev = "<hash>" ...`.  Two
+        // `split_once('"')` steps walk past the opening + closing
+        // quotes without any byte-range slicing, so the lint's
+        // UTF-8-boundary panic concern doesn't apply here.
+        if let Some((_, after_open)) = rev_line.split_once("rev = \"")
+            && let Some((pinned_rev, _)) = after_open.split_once('"')
+        {
+            // Short prefix for display; `.get(..12)` returns None if
+            // the rev is shorter than 12 chars (git hashes are 40)
+            // — fall back to the full string in that defensive case.
+            let short_rev = pinned_rev.get(..12).unwrap_or(pinned_rev);
+            println!(
+                "{}",
+                format!("📌 Polars pinned to rev={short_rev} — skipping auto-update").blue()
+            );
+            // Still run cargo update to ensure lockfile matches the pinned rev
+            let status = Command::new("cargo")
+                .args(["update", "-p", "polars", "--precise", pinned_rev])
+                .status()
+                .await
+                .context("Failed to run cargo update for pinned polars")?;
+            if !status.success() {
+                println!("⚠️  cargo update --precise failed (lockfile may already be correct)");
             }
+            return Ok(());
         }
     }
 
