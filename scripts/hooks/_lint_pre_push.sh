@@ -206,6 +206,7 @@ spawn_bg "gates-drift" bash scripts/ci/check_gates_drift.sh
 spawn_bg "hooks-drift" cargo run -q --release -p uffs-gen-hooks -- --check
 spawn_bg "workflow-drift" cargo run -q --release -p uffs-gen-workflow -- --check
 spawn_bg "fast-drift" cargo run -q --release -p uffs-gen-hooks -- --target pre-commit --check
+spawn_bg "manifest-drift" cargo run -q --release -p uffs-manifest-audit -- --check
 spawn_bg "commit-subjects" bash -c '
     set -euo pipefail
     [[ -z "${COMMIT_RANGES// /}" ]] && exit 0

@@ -218,6 +218,48 @@ right place to catch the drift before it reaches the remote.
 """
 
 [[gate]]
+id = "manifest-drift"
+label = "Workspace manifest-inheritance drift detector (manifest-audit --check)"
+command = [
+  "cargo",
+  "run",
+  "-q",
+  "--release",
+  "-p",
+  "uffs-manifest-audit",
+  "--",
+  "--check",
+]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "dep_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 2
+bucket = "bg"
+order = 29
+notes = """
+Phase 1 follow-up from
+`docs/dev/architecture/code_clean/phase_1_manifest_implementation_plan.md`
+(local-only) — issue #211.  Encodes the 15 Phase-1 manifest invariants
+(§3 of the plan) as machine-checkable assertions and runs them against
+every member `Cargo.toml`.  Catches the drift class the manual Phase-1
+audit can only detect on the annual cadence: a new crate landing
+without `[lints] workspace = true`, an accidental `edition = "..."`
+override, a `[profile.*]` block sneaking into a member manifest, a
+new path-dep pointing outside `[workspace.members]`, etc.
+
+Gated on `dep_changed` (Cargo.{toml,lock} | supply-chain/) because the
+audit only needs to fire when a manifest actually changes.  Documented
+exceptions (uffs-cli/uffs-format publish-pin, uffs-polars/polars
+facade-canonical, uffs-daemon/libmimalloc-sys feature-delta,
+uffs-diag underscore-bin names, 5-crate explicit-publish-true set)
+are hardcoded in the audit with in-code citations — adding a new
+deviation requires updating the exception list AND citing why,
+keeping the gate green on intentional deviations while still firing
+on accidental ones.
+"""
+
+[[gate]]
 id = "commit-subjects"
 label = "Conventional Commits subject validator"
 command = [

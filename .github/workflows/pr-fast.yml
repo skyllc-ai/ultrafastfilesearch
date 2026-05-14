@@ -287,6 +287,35 @@ jobs:
       - run: cargo run -q --release -p uffs-gen-hooks -- --target pre-commit --check
 
   # ─────────────────────────────────────────────────────────────────────
+  # manifest-drift — Phase 1 follow-up from
+  # `docs/dev/architecture/code_clean/phase_1_manifest_implementation_plan.md`
+  # (local-only) — issue #211.  Encodes the 15 Phase-1 manifest
+  # invariants as machine-checkable assertions and runs them against
+  # every member `Cargo.toml`.  Catches the drift class the manual
+  # Phase-1 audit can only detect on the annual cadence (a new crate
+  # landing without `[lints] workspace = true`, an `edition = "..."`
+  # override, a `[profile.*]` block in a member, etc).  Gated on
+  # `dep_changed` so docs-only PRs skip the audit.  Cache key shared
+  # with `sanity` per the sibling drift-detector pattern.
+  # ─────────────────────────────────────────────────────────────────────
+  manifest-drift:
+    name: Manifest inheritance drift
+    runs-on: ubuntu-22.04
+    needs: classify
+    if: needs.classify.outputs.dep == 'true'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: pr-fast-sanity
+          save-if: 'false'
+      - run: cargo run -q --release -p uffs-manifest-audit -- --check
+
+  # ─────────────────────────────────────────────────────────────────────
   # fmt — rustfmt check.  Gates on rust_changed (pure TOML / config /
   # docs edits don't need rustfmt).
   # ─────────────────────────────────────────────────────────────────────
@@ -628,6 +657,7 @@ jobs:
       - hooks-drift
       - workflow-drift
       - fast-drift
+      - manifest-drift
       - fmt
       - sanity
       - clippy
@@ -653,6 +683,7 @@ jobs:
             [hooks-drift]='${{ needs.hooks-drift.result }}'
             [workflow-drift]='${{ needs.workflow-drift.result }}'
             [fast-drift]='${{ needs.fast-drift.result }}'
+            [manifest-drift]='${{ needs.manifest-drift.result }}'
             [fmt]='${{ needs.fmt.result }}'
             [sanity]='${{ needs.sanity.result }}'
             [clippy]='${{ needs.clippy.result }}'
