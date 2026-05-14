@@ -46,6 +46,49 @@
 //! | `modified`   | `Datetime[μs]` | Modification timestamp         |
 //! | `accessed`   | `Datetime[μs]` | Access timestamp               |
 //! | `flags`      | `UInt16`       | Bit-packed attributes          |
+//!
+//! ## API hygiene policy (Phase 3b §3.4 / §3.6 / §3.7)
+//!
+//! The vast majority of `pub struct` declarations in this crate fall
+//! into one of three categories, each with a **uniform decision**:
+//!
+//! 1. **NTFS on-disk zerocopy types** (`#[repr(C, packed)]` +
+//!    `#[derive(FromBytes, Immutable, KnownLayout)]`): `MultiSectorHeader`,
+//!    `AttributeRecordHeader`, `ResidentAttributeData`,
+//!    `NonResidentAttributeData`, `FileRecordSegmentHeader`, `IndexHeader`,
+//!    `IndexRoot`, `StandardInformation`, `FileNameAttribute`,
+//!    `ExtendedStandardInfo`, `AttributeListEntry`, `ReparsePointHeader`,
+//!    `ReparseMountPointBuffer`, `NtfsBootSector`, IOCP capture headers, etc.
+//!    The field layout **is** the NTFS specification (or the IOCP capture file
+//!    contract); `pub` fields are non-negotiable.  `#[non_exhaustive]` would
+//!    forbid the very `MyHeader { … }` literals that the zerocopy decoder
+//!    helpers build by hand.  **Kept exhaustive.**
+//!
+//! 2. **Index / record DTOs** (`MftIndex`, `FileRecord`, `ChildInfo`,
+//!    `LinkInfo`, `SizeInfo`, `StandardInfo`, `IndexStreamInfo`,
+//!    `IndexNameRef`, `UsnApplyStats`, `IndexBuildTiming`, `ParseResult`,
+//!    `ParsedColumns`, `ParsedRecord`, `ReadChunk`, `RawMftHeader`,
+//!    `RawMftData`, etc.):  read-mostly value types consumed by `uffs-core` and
+//!    `uffs-daemon`.  Hundreds of struct-literal construction sites;
+//!    `#[non_exhaustive]` would require migrating each to a builder for
+//!    marginal benefit while the crate is Polars-blocked from publishing.
+//!    **Kept exhaustive.**
+//!
+//! 3. **Configuration option structs** (`LoadRawOptions`, `SaveRawOptions`,
+//!    `IocpCaptureOptions`):  `pub` fields are config knobs with
+//!    `Default::default()`; struct-literal construction is the natural API.
+//!    **Kept exhaustive** for the same migration-cost reason; revisit when the
+//!    crate publishes.
+//!
+//! The few `pub enum` declarations (`AttributeType`, `ReparseTag`,
+//! `DriveType`, `FileFlags`, etc.) are **closed type-code enums**
+//! defined by the NTFS specification — new variants only appear when
+//! Microsoft extends NTFS — and **state-machine / dispatch enums**
+//! that consumers exhaustively match.  Either category falls under
+//! the playbook §3.6 "keep exhaustive" rule.  **Kept exhaustive.**
+//!
+//! No `pub trait` declarations live in this crate, so the
+//! sealed-trait decision (§3.7) is **N/A**.
 
 #![warn(clippy::all, clippy::pedantic)]
 #![expect(

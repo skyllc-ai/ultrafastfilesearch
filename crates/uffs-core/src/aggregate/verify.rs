@@ -30,6 +30,20 @@ use super::spec::DuplicateVerify;
 /// Each member in a [`DuplicateGroup`] is identified by `(record_idx,
 /// drive_ordinal)`. The implementor resolves this to a file path and reads the
 /// requested bytes.
+///
+/// # Sealed-trait decision (Phase 3b §3.7)
+///
+/// **Kept open** (not sealed).  This trait is a deliberate
+/// dependency-injection seam: the daemon supplies a production
+/// reader that resolves `(record_idx, drive_ordinal)` against the
+/// live `MftIndex` + drive registry, and the test suite supplies an
+/// in-memory mock reader.  Sealing the trait would force the mock
+/// implementations to live inside `uffs-core` (or behind a feature
+/// flag), undermining the test-isolation rationale that motivated
+/// the abstraction in the first place.  External crates may
+/// implement `FileReader` to plug in alternate I/O strategies
+/// (e.g. async readers, network-backed readers) without changes to
+/// `uffs-core`.
 pub trait FileReader {
     /// Read the first `count` bytes of the file identified by `(record_idx,
     /// drive_ordinal)`.

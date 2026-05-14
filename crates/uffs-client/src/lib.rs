@@ -13,6 +13,26 @@
 //! let results = client.search("*.rs").await?;
 //! let drives = client.drives().await?;
 //! ```
+//!
+//! ## API hygiene policy (Phase 3b §3.4 / §3.6 / §3.7)
+//!
+//! - **`protocol::*` wire DTOs / wire enums** — `pub` fields **are** the
+//!   contract (`serde` JSON keys 1:1; §3.4).  Kept exhaustive (§3.6): monorepo
+//!   deploys daemon + client together (no skew scenario), hundreds of
+//!   struct-literal construction sites, and the wire enums
+//!   (`SearchPredicateOp`, `SearchPayload`, `DaemonStatus`, …) are dispatch
+//!   enums where exhaustive `match` is the compile-time safety net.  Revisit
+//!   when this crate publishes externally.
+//! - **`schema::*` field-metadata DTOs / enums** — same field-discipline
+//!   reasoning as `protocol`; closed type-code enums by definition.
+//! - **`UffsClient` / `UffsClientSync`** — fields private, smart constructors
+//!   protect reader/writer pairing and `next_id` monotonicity invariants; sync
+//!   sibling adds the Windows `deadline_guard` watchdog-already-spawned
+//!   invariant.  See the focused decision record on `connect::UffsClient`.
+//! - **`ClientError`** — `#[non_exhaustive]` applied (the lone API attribute
+//!   change in Phase 3b); safe under both external usage patterns in
+//!   `uffs-cli`.
+//! - **§3.7** N/A — no `pub trait` declarations in this crate.
 
 // Suppress unused crate warnings for deps used in sub-modules
 use serde as _;
@@ -45,6 +65,10 @@ mod connect_logging;
 #[cfg(feature = "async")]
 mod connect_platform;
 pub mod connect_sync;
+/// Auto-start daemon helpers (`auto_start_daemon`, `is_process_alive`,
+/// `is_daemon_process`) — split off `connect_sync` to keep that file
+/// under the 800-LOC policy ceiling.
+pub(crate) mod connect_sync_autostart;
 /// Platform-specific `platform_connect` impls and the `rpc_deadline` helper.
 ///
 /// Split `impl` blocks live on [`connect_sync::UffsClientSync`];

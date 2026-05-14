@@ -16,6 +16,26 @@ use crate::column::{OutputColumn, PARITY_COLUMN_ORDER};
 /// double-quote quote character, header row on, positive / negative
 /// boolean rendered as `"1"` / `"0"`).  The TZ offset defaults to the
 /// host's local timezone, matching the pre-unification CLI behaviour.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// All fields are `pub` because this is a **configuration DTO**:
+/// callers fill in the knobs they care about and rely on
+/// [`Default::default`] for the rest.  The builder methods
+/// ([`Self::with_columns`], [`Self::with_separator`], etc.) layer
+/// fluent ergonomics on top but never claim sole-constructor status.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive** for now.  Two workspace-internal call sites
+/// (`uffs_daemon::handler_blob::core_config_to_format` and
+/// `uffs_core::output::tests_format_parity`) struct-literal-construct
+/// this type; both live in the same monorepo and can be updated
+/// atomically.  When `uffs-format` graduates from its Polars-blocked
+/// state and becomes externally publishable
+/// (`docs/architecture/crate-graph.md` §5), revisit and add
+/// `#[non_exhaustive]` plus typed builder methods for the fields that
+/// today only have string-parsing builders.
 #[derive(Debug, Clone)]
 pub struct OutputConfig {
     /// Columns to output.

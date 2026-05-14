@@ -25,6 +25,17 @@
 //! per CLI invocation.
 
 /// Classification of the process's standard output destination.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive.**  The CLI's NUL-short-circuit / TTY-batching /
+/// pipe-default dispatch in [`crate::shmem::write_search_results`]
+/// and the daemon-side fast-path selector both `match` exhaustively
+/// over this enum — the compile-time exhaustiveness check is the
+/// safety net that guarantees every newly-added stdout destination
+/// (e.g. a future shared-memory transport) gets explicit handling at
+/// both call sites.  This is the playbook §3.6 "state-machine /
+/// dispatch enum" exception.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdoutKind {
     /// Interactive terminal / console (TTY).

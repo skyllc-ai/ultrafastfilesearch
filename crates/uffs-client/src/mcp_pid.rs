@@ -86,6 +86,22 @@ pub fn remove_mcp_pid_file() {
 }
 
 /// Parsed MCP server PID file.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// All fields are `pub` because this is a **parsed-data DTO** returned
+/// by [`parse_mcp_pid_file_full`] — callers read fields directly to
+/// render `uffs mcp status` output and to decide whether the running
+/// MCP server matches the requested transport / data sources.  No
+/// invariants are protected (the parse function is the validator).
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive.**  The PID-file shape evolves only in lockstep
+/// with the writer functions ([`write_mcp_pid_file_with_transport`],
+/// [`write_mcp_pid_file_full`]) in this same module — there is no
+/// scenario where an external consumer reads a future version of the
+/// file that has fields the current `McpPidInfo` cannot represent.
 #[derive(Debug, Clone)]
 pub struct McpPidInfo {
     /// Process ID.

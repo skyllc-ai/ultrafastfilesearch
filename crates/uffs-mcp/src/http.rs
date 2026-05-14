@@ -51,6 +51,21 @@ pub(crate) struct AppState {
 }
 
 /// Configuration for the HTTP gateway.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// All three fields are `pub` because this is a **configuration DTO**.
+/// `bind_addr` is a required parameter (no default that makes sense);
+/// `auth_token` is genuinely optional; `daemon_spawn_args` is a
+/// forwarded vector with no invariants to protect.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive.**  Same rationale as [`crate::McpConfig`] —
+/// `uffs-mcp` is a bin-dominant internal app and the construction
+/// sites all live in this crate's bins (`src/main.rs`,
+/// `src/bin/http_gateway.rs`) plus the test module below.  Revisit
+/// when / if `uffs-mcp` exposes an embedding API.
 pub struct HttpGatewayConfig {
     /// TCP bind address (e.g. `127.0.0.1:8080`).
     pub bind_addr: core::net::SocketAddr,

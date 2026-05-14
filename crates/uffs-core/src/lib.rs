@@ -39,6 +39,54 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## API hygiene policy (Phase 3b §3.4 / §3.6 / §3.7)
+//!
+//! `uffs-core` is the query-engine and aggregation crate (Layer 3
+//! per `docs/architecture/crate-graph.md`), consumed exclusively by
+//! `uffs-daemon`.  Its public surface — 69 `pub struct`, 35 `pub enum`,
+//! 1 `pub trait` — falls into four uniform categories with shared
+//! decisions:
+//!
+//! 1. **Aggregation specs & results** (`aggregate::spec::*`,
+//!    `aggregate::buckets::*`, `aggregate::duplicates::*`,
+//!    `aggregate::finalize::*`, `aggregate::accumulators::*`): builder-style
+//!    `pub`-field DTOs that the daemon constructs from incoming JSON wire
+//!    input.  Hundreds of struct-literal construction sites in handler /
+//!    facet-values / aggregate paths; a `#[non_exhaustive]` migration would
+//!    require introducing a typed builder for every spec type for marginal
+//!    benefit while the crate is Polars-blocked from publishing.  **Kept
+//!    exhaustive.**
+//!
+//! 2. **Search backend value types** (`search::backend::DisplayRow`,
+//!    `search::backend::DriveScopedRows`, `search::field::*`): canonical row
+//!    representations that the formatter and the daemon hold in memory.  `pub`
+//!    fields are the contract that `uffs-format::FormatRow` ↔ `DisplayRow` and
+//!    the parallel-writer fast path depend on.  **Kept exhaustive.**
+//!
+//! 3. **Compact-cache headers** (`compact::*`, `compact_cache::*`,
+//!    `compact_loader::*`, `compact_storage::*`): on-disk format contracts
+//!    paralleling the NTFS zerocopy types in `uffs-mft`. Field layout **is**
+//!    the cache file format; `pub` fields are non-negotiable.  **Kept
+//!    exhaustive.**
+//!
+//! 4. **Pattern / trigram / bloom / index-search** types: search- pipeline data
+//!    structures with `pub` constructor results. Same migration-cost rationale;
+//!    **kept exhaustive**.
+//!
+//! The 35 `pub enum` declarations are **state-machine / dispatch
+//! enums** (`FieldId`, `AggregateOp`, `BucketKind`, `SortDirection`,
+//! pattern AST nodes, etc.) consumed by hundreds of exhaustive `match`
+//! arms across `uffs-daemon`.  The compile-time exhaustiveness check
+//! is the safety net guaranteeing every variant has handling logic at
+//! every dispatch site — the playbook §3.6 "keep exhaustive" rule.
+//! **Kept exhaustive.**
+//!
+//! The single `pub trait` — [`aggregate::verify::FileReader`] — is
+//! the **dependency-injection point** between the daemon's real file
+//! reader and the test-side mock reader.  External impls are by
+//! design.  Sealing would defeat the trait's purpose.  **Kept open**
+//! (see the type-level decision record on `FileReader` itself).
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic)]

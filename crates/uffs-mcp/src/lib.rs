@@ -152,6 +152,23 @@ use tracing::info;
 // ── Configuration ───────────────────────────────────────────────────
 
 /// Configuration for the MCP server.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// Both fields are `pub` because this is a **configuration DTO**.
+/// `daemon_spawn_args` is a forwarded `Vec<String>` (no invariants to
+/// protect); `idle_timeout_secs == 0` is the documented sentinel for
+/// "no timeout" and is validated at the call site, not in a setter.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive.**  `uffs-mcp` is a bin-dominant internal app
+/// (Layer 4 in `docs/architecture/crate-graph.md`), not externally
+/// consumed; the only struct-literal construction lives in this
+/// crate's own bin (`src/main.rs`) and tests.  If `uffs-mcp` ever
+/// publishes a library facade for embedding the MCP server in
+/// external apps, revisit and add `#[non_exhaustive]` plus an
+/// `McpConfigBuilder`.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
     /// Extra CLI args forwarded to `uffs daemon run` when auto-starting

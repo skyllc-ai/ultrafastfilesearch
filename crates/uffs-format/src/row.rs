@@ -23,6 +23,24 @@
 /// Every accessor must return in O(1) and without allocation — the
 /// formatter calls these per row on the hot path and the parallel
 /// writer relies on them being cheap enough to inline.
+///
+/// # Sealed-trait decision (Phase 3b §3.7)
+///
+/// **Kept open** (not sealed).  Two distinct crates impl this trait:
+///
+/// - `uffs_core::search::backend::DisplayRow` — the daemon's in-memory row
+///   (filename stored as an offset slice into `path` to avoid a per-row
+///   allocation).
+/// - `uffs_client::protocol::response::SearchRow` — the wire type the CLI
+///   receives over IPC (filename stored as a standalone `String` because the
+///   JSON wire format serialises it that way).
+///
+/// Sealing would prevent either of those impls or force both row
+/// types into `uffs-format`, which would invert the dependency
+/// direction codified in `docs/architecture/crate-graph.md`.  The
+/// trait deliberately stays open so consumers can plug their own row
+/// representation if they ever need to (e.g. a future Parquet-shaped
+/// row backend that avoids the JSON allocation entirely).
 pub trait FormatRow {
     /// Drive letter (e.g. `'C'`).
     fn drive(&self) -> char;

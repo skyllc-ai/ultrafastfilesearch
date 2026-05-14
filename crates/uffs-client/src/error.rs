@@ -4,6 +4,19 @@
 //! Client error types.
 
 /// Errors that can occur when communicating with the daemon.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Applied.**  The playbook explicitly calls error enums out as
+/// canonical `#[non_exhaustive]` candidates, and the practical cost
+/// here is zero: every external consumer in this workspace either
+/// uses `if let Some(ClientError::Variant { … }) = …` (which is
+/// already non-exhaustive by nature) or struct-literal-constructs a
+/// specific variant (which `#[non_exhaustive]` on the **enum** does
+/// not forbid — only on individual variants).  This unblocks adding
+/// new error variants without a major-version bump once `uffs-client`
+/// publishes.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     /// Failed to connect to the daemon socket.

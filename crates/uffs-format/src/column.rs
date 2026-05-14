@@ -20,6 +20,16 @@ use serde::{Deserialize, Serialize};
 ///
 /// 1:1 with `uffs_core::search::field::FieldId::ALL` — every variant
 /// here has an equally-named counterpart in core.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **Kept exhaustive.**  The exhaustive `match` in
+/// `uffs_core::output::display_rows::write_display_row_columns` is the
+/// compile-time safety net that guarantees every variant has display
+/// logic.  Marking this `#[non_exhaustive]` would force a wildcard
+/// arm (or `unreachable!()`), eliminating that guarantee.  When a new
+/// column is added, the missing-arm compile error in that match site
+/// is the desired feedback loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputColumn {

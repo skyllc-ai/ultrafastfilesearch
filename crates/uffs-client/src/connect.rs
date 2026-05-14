@@ -32,6 +32,23 @@ use crate::protocol::{RpcRequest, SearchParams};
 /// Uses boxed async I/O so the same struct works with Unix domain sockets
 /// (macOS/Linux) and named pipes (Windows) without generics leaking into
 /// the public API.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// All fields are **private**; the only way to construct a
+/// `UffsClient` is via one of the connection entry points
+/// ([`Self::connect`], [`Self::connect_with_args`], or — for tests —
+/// the `pub(crate)` `from_parts` / `from_parts_for_test`).  This
+/// protects two non-trivial invariants:
+///
+/// - The `reader` / `writer` halves both belong to the same IPC endpoint (a
+///   mismatched pair would silently corrupt RPCs).
+/// - `next_id` starts at `1` and is monotonically incremented by
+///   `Self::next_request_id`, preserving JSON-RPC's correlation guarantee.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **N/A** — no `pub` fields means future fields slot in transparently.
 pub struct UffsClient {
     /// Buffered reader for the IPC connection.
     reader: BufReader<Box<dyn tokio::io::AsyncRead + Unpin + Send>>,

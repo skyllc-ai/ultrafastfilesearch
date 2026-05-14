@@ -7,6 +7,29 @@
 //! columns, their types, aliases, display names, and aggregation capabilities.
 //! These are pure value types with zero polars dependency, suitable for use
 //! in both the thin CLI and the daemon.
+//!
+//! # Field / `#[non_exhaustive]` policy (Phase 3b §3.4 / §3.6)
+//!
+//! Every `pub struct` here (`FieldMeta`, `AggregateMeta`) is a
+//! **schema-metadata DTO** with `pub` fields by design — callers
+//! struct-literal-construct one entry per `FieldId` variant in
+//! `field_metadata::FIELD_META`.  Adding `#[non_exhaustive]` would
+//! force ~40 entries to be rewritten through a builder.
+//!
+//! Every `pub enum` here (`FieldId`, `Cardinality`, `FieldType`,
+//! `FieldAccess`, `SortDirection`) is **exhaustively matched** at
+//! hundreds of consumer sites — the exhaustiveness check is the
+//! compile-time guarantee that every field has display logic, every
+//! type has aggregation rules, every direction has a sort
+//! implementation, etc.  This is the playbook §3.6 "state-machine /
+//! dispatch enum" exception to applying `#[non_exhaustive]`.
+//!
+//! **Verdict:** Kept exhaustive workspace-wide; revisit when
+//! `uffs-client::schema` is split into an externally-publishable
+//! crate (today blocked by Polars dep on `FieldId` consumers in
+//! `uffs-core`).
+//!
+//! No `pub trait` declarations here, so §3.7 is **N/A**.
 
 pub mod field_metadata;
 #[cfg(test)]

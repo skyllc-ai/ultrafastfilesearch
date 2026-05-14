@@ -74,6 +74,21 @@ enum ClientSlot {
 }
 
 /// The UFFS MCP server — wraps a daemon client and dispatches MCP requests.
+///
+/// # Field discipline (Phase 3b §3.4)
+///
+/// All fields are **private**; construction goes through one of
+/// [`Self::new`], [`Self::new_lazy`], [`Self::new_unconnected`], or
+/// the `pub(crate)` `Self::new_lazy_with_stats`.  This preserves
+/// the invariant that every server instance has a `ClientSlot`, a
+/// fresh `last_activity` epoch, and an `McpStats` shared handle —
+/// none of which a caller should be poking at directly.
+///
+/// # `#[non_exhaustive]` decision (Phase 3b §3.6)
+///
+/// **N/A** — no `pub` fields means there is nothing for callers to
+/// match exhaustively or struct-literal-construct from outside the
+/// crate.  Future fields slot in without any API impact.
 pub struct UffsMcpServer {
     /// Daemon connection strategy (active with `spawn_args`, or none).
     slot: ClientSlot,
