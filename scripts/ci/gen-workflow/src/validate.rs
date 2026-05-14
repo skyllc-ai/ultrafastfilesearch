@@ -321,7 +321,12 @@ fn extract_aggregator_ids(workflow_text: &str) -> Result<BTreeSet<String>> {
 /// For each manifest gate's resolved job-id, verify presence in:
 /// 1. `workflow.jobs["required"].needs`
 /// 2. the bash `declare -A R=(...)` table inside `required`
-/// 3. `workflow.jobs["notify-failure"].needs`
+///
+/// The third invariant — coverage in `workflow.jobs["notify-failure"].needs:`
+/// — was retired in the Design C refactor for #209.  Failure notification
+/// is now produced by `.github/workflows/ci-failure-notify.yml`, which
+/// triggers off `workflow_run [completed]` rather than via an in-workflow
+/// `notify-failure` job needing a `needs:` list of every gate.
 ///
 /// # Errors
 ///
@@ -339,16 +344,11 @@ fn check_aggregator_coverage(
         .get("required")
         .map(|job| job.needs.iter().cloned().collect())
         .unwrap_or_default();
-    let notify_needs: BTreeSet<String> = workflow
-        .jobs
-        .get("notify-failure")
-        .map(|job| job.needs.iter().cloned().collect())
-        .unwrap_or_default();
     let aggregator_ids = extract_aggregator_ids(workflow_text)?;
 
-    // Each manifest job-id must appear in all three lists.  We
-    // dedupe via BTreeSet to avoid duplicate reports for folded
-    // gates (e.g. rustdoc + doc-tests both → docs).
+    // Each manifest job-id must appear in both lists.  We dedupe via
+    // BTreeSet to avoid duplicate reports for folded gates (e.g.
+    // rustdoc + doc-tests both → docs).
     let needed_ids: BTreeSet<&str> = manifest.pr_fast_gates().map(Gate::pr_fast_job_id).collect();
 
     for job_id in needed_ids {
@@ -360,11 +360,6 @@ fn check_aggregator_coverage(
         if !aggregator_ids.contains(job_id) {
             issues.push(format!(
                 "Property 3 (aggregator coverage): job `{job_id}` is missing from the `declare -A R=(...)` table inside the required job"
-            ));
-        }
-        if !notify_needs.contains(job_id) {
-            issues.push(format!(
-                "Property 3 (aggregator coverage): job `{job_id}` is missing from notify-failure.needs:"
             ));
         }
     }
@@ -504,14 +499,6 @@ jobs:
             [file-size]='${{ needs.file-size.result }}'
             [sanity]='${{ needs.sanity.result }}'
           )
-
-  notify-failure:
-    name: Notify on failure
-    runs-on: ubuntu-22.04
-    needs: [classify, fmt, file-size, sanity, required]
-    if: failure()
-    steps:
-      - run: echo
 ";
 
     /// Helper — parse both fixtures and run the validator.
@@ -669,20 +656,12 @@ jobs:
         );
     }
 
-    #[test]
-    fn property3_detects_missing_notify_failure_needs() {
-        let workflow = WORKFLOW_FIXTURE.replace(
-            "    needs: [classify, fmt, file-size, sanity, required]",
-            "    needs: [classify, fmt, file-size, required]", // sanity removed
-        );
-        let issues = validate_fixture(MANIFEST_FIXTURE, &workflow);
-        assert!(
-            issues
-                .iter()
-                .any(|s| s.contains("Property 3") && s.contains("notify-failure.needs:")),
-            "expected P3 missing-from-notify, got: {issues:?}"
-        );
-    }
+    // `property3_detects_missing_notify_failure_needs` was retired with
+    // the Design C refactor for #209.  The notify-failure invariant
+    // no longer applies because failure notification has been moved
+    // out of pr-fast.yml into ci-failure-notify.yml (workflow_run-
+    // triggered, post-auto-rerun-window), which doesn't carry a
+    // `needs:` list of every gate.
 
     // ─── Property 4 mutation tests ────────────────────────────────
 

@@ -193,13 +193,16 @@ scrape_pr_fast() {
         | sort -u
 }
 
-# Jobs in pr-fast.yml that exist for orchestration / branch protection
-# / failure handling, NOT for an individual gate.  These are EXEMPT
-# from the manifest — they have no matching `[[gate]]` entry.
+# Jobs in pr-fast.yml that exist for orchestration / branch protection,
+# NOT for an individual gate.  These are EXEMPT from the manifest —
+# they have no matching `[[gate]]` entry.
+#
+# `notify-failure` was removed in the Design C refactor for #209
+# (failure notification now lives in `.github/workflows/ci-failure-notify.yml`),
+# so it's no longer listed here.
 WORKFLOW_INFRA_JOBS=(
     "classify"
     "required"
-    "notify-failure"
 )
 
 # ── Mapping helpers ────────────────────────────────────────────────────

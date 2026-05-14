@@ -14,9 +14,10 @@ on:
 
 # Workflow-level permissions follow least-privilege (§2.8):
 # every job that doesn't declare its own `permissions:` block
-# inherits `contents: read` only.  `notify-failure` re-declares
-# `issues: write` on its own block so that scope is scoped to the
-# one job that actually opens issues.
+# inherits `contents: read` only.  Failure notification has been
+# moved out of this workflow into `.github/workflows/ci-failure-notify.yml`
+# (Design C for #209), so no in-workflow job needs `issues: write`
+# anymore.
 permissions:
   contents: read
 
@@ -823,73 +824,21 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # Failure Notification — opens a GitHub Issue on any job failure
+  # Failure Notification has been moved out of this workflow into
+  # `.github/workflows/ci-failure-notify.yml` (Design C for #209).
+  # That workflow triggers off `workflow_run [completed]` AFTER
+  # `auto-rerun-transient.yml` has had its 60-second window to retry
+  # transient flakes, so this Tier 2 nightly no longer self-files
+  # false-positive `ci-failure-tier-2` issues for transient HTTP 429
+  # / network blips / runner-setup faults.
+  #
+  # The advisory-job exemption (mutants + fuzz intentionally omitted
+  # from notification triggers) is preserved indirectly: those two
+  # jobs use `continue-on-error: true`, so when they fail the workflow
+  # run's overall `conclusion` is still `success` — and
+  # `ci-failure-notify.yml` only files an issue on `conclusion ==
+  # 'failure'`.  When either job is promoted to a hard gate (see the
+  # `Check pipeline success` step's comment in the tier-2-summary
+  # job), removing `continue-on-error: true` will automatically wire
+  # it into the notification path.
   # ═══════════════════════════════════════════════════════════════════════════
-
-  notify-failure:
-    name: 🔔 Notify on Failure
-    runs-on: ubuntu-latest
-    # `mutants` and `fuzz` intentionally OMITTED from this needs-list
-    # so an advisory cargo-mutants miss or cargo-fuzz crash does NOT
-    # open a Tier 2 failure issue.  Both jobs carry `continue-on-
-    # error: true` (advisory initial rollout; see header comments in
-    # each job definition).  Once either is promoted from advisory
-    # to a hard gate (see the `Check pipeline success` step's comment
-    # in the tier-2-summary job), add it here too.
-    needs: [file-size-policy, coverage, build-validation, udeps, hack, miri, careful, msrv]
-    if: failure()
-    # §2.8: every job caps its runtime.  Cheap notifier — 2 min is
-    # generous for a single API call round-trip + JSON formatting.
-    timeout-minutes: 2
-    permissions:
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            // Per-workflow label so Tier 1 / Tier 2 / Release failures
-            // triage to distinct issues instead of piling onto one.
-            const label = 'ci-failure-tier-2';
-            const title = `🔴 CI Failure: Tier 2 Nightly CI — ${context.sha.substring(0, 7)}`;
-            const body = [
-              `## CI Pipeline Failed`,
-              ``,
-              `| Field | Value |`,
-              `|-------|-------|`,
-              `| **Workflow** | \`${context.workflow}\` |`,
-              `| **Run** | [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) |`,
-              `| **Branch** | \`${context.ref}\` |`,
-              `| **Commit** | [\`${context.sha.substring(0, 7)}\`](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}) |`,
-              `| **Triggered by** | @${context.actor} |`,
-              ``,
-              `📧 Notification sent to: githubrobbi@nios.net`,
-            ].join('\n');
-
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: label,
-              per_page: 1,
-            });
-
-            if (existing.data.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.data[0].number,
-                body: body,
-              });
-              core.info(`Updated existing issue #${existing.data[0].number}`);
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: [label, 'ci-failure'],
-                assignees: ['githubrobbi'],
-              });
-              core.info('Created new failure issue');
-            }

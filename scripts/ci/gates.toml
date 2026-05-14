@@ -160,10 +160,12 @@ structural properties of `.github/workflows/pr-fast.yml` against this
 manifest: (1) every pr-fast-tier gate has a corresponding job, (2) each
 job's `if:` predicate is at least as permissive as the LUB of its
 folded gates' `gate_when` classes, (3) every gate's resolved job-id is
-present in `required.needs:`, the bash `declare -A R=(...)`
-aggregator, AND `notify-failure.needs:`, and (4) the `required` job's
-`name:` is exactly `PR Fast CI / required` (the literal string in the
-repo's branch-protection rule).  See plan §4.2 for the full property
+present in `required.needs:` AND the bash `declare -A R=(...)`
+aggregator, and (4) the `required` job's `name:` is exactly
+`PR Fast CI / required` (the literal string in the repo's
+branch-protection rule).  The `notify-failure.needs:` invariant
+was retired in the Design C refactor for #209 (failure notification
+now lives in `.github/workflows/ci-failure-notify.yml`).  See plan §4.2 for the full property
 specification and the rationale for the structural-validator design
 (vs. the originally-planned YAML emitter).
 
@@ -173,8 +175,8 @@ gate-set of every consumer; `hooks-drift` ensures the on-disk pre-push
 hook matches what the generator would emit; `workflow-drift` ensures
 the structural properties of the per-gate jobs in `pr-fast.yml` are
 consistent with the manifest, including the rename-bookkeeping failure
-mode (`required.needs:` / aggregator table / `notify-failure.needs:`)
-that motivated the whole gate-manifest plan.
+mode (`required.needs:` / aggregator table) that motivated the whole
+gate-manifest plan.
 """
 
 [[gate]]
