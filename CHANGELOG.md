@@ -639,7 +639,7 @@ hunting for the wrong things.
   ticks Phase 7 retroactively; Phase 6 stays open pending one
   more 24-h run with the trace-level harness fix.
 
-## [0.5.95] - 2026-05-08
+## [0.5.96] - 2026-05-08
 
 > **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
 > reached a published GitHub Release: the `release.yml` finalize step hit
@@ -648,7 +648,7 @@ hunting for the wrong things.
 > partial release was deleted, the tag name became permanently locked by
 > GitHub's *immutable releases* feature (the pre-receive hook refuses any
 > future ref creation under that name even after a clean delete).  The
-> public release sequence therefore jumps `v0.5.90 → v0.5.95`; all
+> public release sequence therefore jumps `v0.5.90 → v0.5.96`; all
 > intended v0.5.91 changes are rolled forward into this release.
 
 ### Fixed
