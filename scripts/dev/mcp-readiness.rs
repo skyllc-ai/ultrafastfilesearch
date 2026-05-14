@@ -1114,14 +1114,24 @@ fn discover_drive_mft_files(data_dir: &str) -> Vec<(char, String)> {
 
 /// Parse drive count and individual drive letters from `uffs daemon status`.
 ///
-/// The status output format is:
+/// The status output format (v0.5.95+, Phase 8-E memory-tiering) is:
+/// ```text
+///   Drives:
+///     [Warm]   C: —  3,428,455 records (file:.../C_mft.iocp) — 730 MB ...
+///     [Parked] D: — bloom + trie kept resident; body released
+/// ```
+///
+/// Legacy daemons (≤ v0.5.94) used the un-tiered shape:
 /// ```text
 ///   Drives:      7 loaded (25,846,853 records)
 ///     C:  3,428,455 records
 ///     D:  7,065,539 records
 /// ```
 ///
-/// Returns `(count_from_header, vec_of_drive_letters)`.
+/// Returns `(count, vec_of_drive_letters)`.  The parser accepts both
+/// shapes: it strips an optional `[Tier]` prefix on per-drive lines
+/// before looking for the letter, and falls back to the header count
+/// only when no per-drive lines parsed (legacy header-only format).
 fn parse_drives_from_status(status_output: &str) -> (usize, Vec<char>) {
     let mut header_count: usize = 0;
     let mut letters: Vec<char> = Vec::new();
@@ -1129,7 +1139,8 @@ fn parse_drives_from_status(status_output: &str) -> (usize, Vec<char>) {
     for line in status_output.lines() {
         let trimmed = line.trim();
 
-        // Parse "Drives:      N loaded ..." header.
+        // Parse legacy "Drives:      N loaded ..." header (skipped on
+        // v0.5.95+ where the header is just "Drives:").
         if let Some(rest) = trimmed.strip_prefix("Drives:") {
             let rest = rest.trim();
             if let Some(num_str) = rest.split_whitespace().next() {
@@ -1140,19 +1151,22 @@ fn parse_drives_from_status(status_output: &str) -> (usize, Vec<char>) {
             continue;
         }
 
-        // Parse individual drive lines like "  C: —  3,428,455 records".
-        // After trimming: starts with a single letter, then `:`.
-        if trimmed.len() >= 2 {
-            let mut chars = trimmed.chars();
-            if let Some(letter) = chars.next() {
-                if letter.is_ascii_alphabetic() && chars.next() == Some(':') {
-                    letters.push(letter.to_ascii_uppercase());
-                }
+        // Skip an optional `[Tier]` prefix (v0.5.95+ format), then
+        // look for `<letter>:` at the start of the remainder.
+        let after_tier = trimmed
+            .strip_prefix('[')
+            .and_then(|rest| rest.split_once(']'))
+            .map_or(trimmed, |(_, after)| after.trim_start());
+        let mut chars = after_tier.chars();
+        if let Some(letter) = chars.next() {
+            if letter.is_ascii_alphabetic() && chars.next() == Some(':') {
+                letters.push(letter.to_ascii_uppercase());
             }
         }
     }
 
-    // Prefer the counted letters; fall back to header count.
+    // Prefer the counted letters; fall back to header count when the
+    // per-drive lines didn't parse (legacy header-only shape).
     if letters.is_empty() && header_count > 0 {
         (header_count, letters)
     } else {
