@@ -38,9 +38,11 @@
 //!    (over-runs); narrower is drift (would block a gate from running on its
 //!    trigger).
 //! 3. **Aggregator coverage** — every gate's resolved job-id is in
-//!    `required.needs:`, the `declare -A R=(...)` aggregator inside the
-//!    `required` job, AND `notify-failure.needs:`.  This is the exact
-//!    rename-bookkeeping failure mode that motivated the whole plan.
+//!    `required.needs:` AND the `declare -A R=(...)` aggregator inside the
+//!    `required` job.  This is the exact rename-bookkeeping failure mode that
+//!    motivated the whole plan.  (The `notify-failure.needs:` invariant was
+//!    retired in the Design C refactor for #209; failure notification now lives
+//!    in `.github/workflows/ci-failure-notify.yml`.)
 //! 4. **Branch-protection guard** — the `required` job's `name:` field is
 //!    exactly the literal string `PR Fast CI / required`. This name is in the
 //!    repo's branch-protection rule (`required_status_checks`); a refactor that

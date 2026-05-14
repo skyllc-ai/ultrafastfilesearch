@@ -678,60 +678,14 @@ jobs:
           exit "$fail"
 
   # ─────────────────────────────────────────────────────────────────────
-  # notify-failure — file a tracking issue when the workflow breaks,
-  # using the same per-workflow label convention as tier-2.yml.
+  # notify-failure was REMOVED in the Design C refactor for #209 — it
+  # is now handled by `.github/workflows/ci-failure-notify.yml`, which
+  # triggers off `workflow_run [completed]` AFTER `auto-rerun-transient.yml`
+  # has had its 60-second window to retry transient flakes.  See the
+  # header of `ci-failure-notify.yml` for the full rationale and the
+  # status-decision matrix.
+  #
+  # Genuine failures still produce a tracking issue (same title /
+  # label / body schema as before); transient failures auto-absorb
+  # without ever opening one.
   # ─────────────────────────────────────────────────────────────────────
-  notify-failure:
-    name: 🔔 Notify on Failure
-    runs-on: ubuntu-latest
-    needs: [classify, file-size, gates-drift, hooks-drift, workflow-drift, fast-drift, fmt, sanity, clippy, docs, test-build, tests, security, windows-lint, required]
-    if: failure() && github.event_name != 'pull_request'
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const title = `🔴 CI Failure: PR Fast CI — ${context.sha.substring(0, 7)}`;
-            const body = [
-              `## PR Fast CI failed on ${context.ref}`,
-              ``,
-              `| Field | Value |`,
-              `|-------|-------|`,
-              `| **Workflow** | \`${context.workflow}\` |`,
-              `| **Run** | [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) |`,
-              `| **Branch** | \`${context.ref}\` |`,
-              `| **Commit** | [\`${context.sha.substring(0, 7)}\`](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${context.sha}) |`,
-              `| **Triggered by** | @${context.actor} |`,
-            ].join('\n');
-
-            const label = 'ci-failure-pr-fast';
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: label,
-              per_page: 1,
-            });
-
-            if (existing.data.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.data[0].number,
-                body: body,
-              });
-              core.info(`Updated existing issue #${existing.data[0].number}`);
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: title,
-                body: body,
-                labels: [label, 'ci-failure'],
-                assignees: ['githubrobbi'],
-              });
-              core.info('Created new failure issue');
-            }
