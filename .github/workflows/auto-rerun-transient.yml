@@ -102,9 +102,16 @@ jobs:
     # already-retried runs.  The fork check is a belt-and-suspenders
     # measure — `rerun-failed-jobs` would 404 anyway, but failing
     # silently is cheaper than logging the rejection.
+    #
+    # We also gate on `conclusion == 'failure'` so this job is a
+    # strict no-op on the second `workflow_run` event the rerun
+    # itself fires (which has `conclusion = success` when the retry
+    # works).  That second event is consumed by `cleanup-stale-
+    # notification` below.
     if: >-
       github.repository_owner == 'skyllc-ai' &&
-      github.event.workflow_run.run_attempt < 2
+      github.event.workflow_run.run_attempt < 2 &&
+      github.event.workflow_run.conclusion == 'failure'
     permissions:
       actions: write
       contents: read
@@ -239,3 +246,109 @@ jobs:
             "/repos/${GH_REPO}/actions/runs/${RUN_ID}/rerun-failed-jobs"
 
           printf '✅ Rerun dispatched.  See the workflow run page for the new attempt.\n'
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # cleanup-stale-notification — close auto-filed CI-failure issues whose
+  # underlying workflow run flipped back to green after a successful rerun.
+  #
+  # Why this exists:
+  #   The watched workflows (PR Fast CI, Tier 2 Nightly) embed their own
+  #   `notify-failure` job which fires inside the workflow run as soon as
+  #   any gate job fails — well before this `auto-rerun-transient`
+  #   workflow even sees the `workflow_run [completed]` event.  Property 3
+  #   of `gen-workflow/src/validate.rs` requires every gate to list
+  #   `notify-failure.needs:`, so we cannot simply delete those in-workflow
+  #   notifiers without restructuring the gates manifest.
+  #
+  #   Net effect: a transient failure briefly produces an open `ci-failure-*`
+  #   issue.  When the rerun (dispatched by the `rerun` job above) succeeds
+  #   and flips the run's conclusion to `success`, GitHub fires a second
+  #   `workflow_run [completed]` event with `run_attempt >= 2` and
+  #   `conclusion == 'success'`.  This job consumes that event and closes
+  #   the now-stale issue with a comment pointing at the green rerun.
+  #
+  #   The match key is the short SHA in the auto-filed issue's title
+  #   (`🔴 CI Failure: ... — <short_sha>`) compared against the
+  #   workflow_run's `head_sha`.  Per-workflow labels (`ci-failure-pr-fast`,
+  #   `ci-failure-tier-2`) make this O(1) issue-list scan.
+  #
+  # Genuine (non-transient) failures stay open because the `rerun` job
+  # finds no transient signature and never dispatches a retry, so the
+  # second `workflow_run` event with `conclusion == 'success'` never fires.
+  cleanup-stale-notification:
+    name: Close stale ci-failure issue after successful rerun
+    runs-on: ubuntu-22.04
+    if: >-
+      github.repository_owner == 'skyllc-ai' &&
+      github.event.workflow_run.run_attempt >= 2 &&
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      issues: write
+      contents: read
+    timeout-minutes: 3
+
+    steps:
+      - name: Close auto-filed issue if title matches this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          SERVER_URL: ${{ github.server_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          short_sha="${HEAD_SHA:0:7}"
+
+          # Map watched-workflow name → per-workflow ci-failure label.
+          # The mapping mirrors the labels emitted by each workflow's
+          # `notify-failure` job (see `pr-fast.yml`, `tier-2.yml`).
+          # CodeQL is intentionally absent — its workflow has no
+          # `notify-failure` job (advisory / `continue-on-error`).
+          case "${WORKFLOW_NAME}" in
+            "PR Fast CI")
+              label="ci-failure-pr-fast"
+              ;;
+            "🌙 UFFS Tier 2 Nightly CI")
+              label="ci-failure-tier-2"
+              ;;
+            *)
+              printf 'ℹ️  No notification-cleanup policy for workflow: %s\n' "${WORKFLOW_NAME}"
+              exit 0
+              ;;
+          esac
+
+          printf '🧹 Looking for stale `%s` issues whose title ends in `— %s` ...\n' \
+            "${label}" "${short_sha}"
+
+          # List open issues with the right label.  We filter client-side
+          # by title-suffix match against the short SHA — the search API's
+          # `in:title` qualifier matches anywhere in the title, but the
+          # short SHA is the title's literal suffix in every auto-filed
+          # notification, so an exact suffix match is more precise.
+          mapfile -t issue_nums < <(
+            gh issue list --repo "${GH_REPO}" \
+              --label "${label}" \
+              --state open \
+              --json number,title \
+              --jq ".[] | select(.title | endswith(\"— ${short_sha}\")) | .number"
+          )
+
+          if [[ "${#issue_nums[@]}" -eq 0 ]]; then
+            printf '✅ No stale `%s` issues found for commit %s.\n' "${label}" "${short_sha}"
+            exit 0
+          fi
+
+          rerun_url="${SERVER_URL}/${GH_REPO}/actions/runs/${RUN_ID}"
+
+          for n in "${issue_nums[@]}"; do
+            printf '   • closing issue #%s\n' "${n}"
+            gh issue close "${n}" \
+              --repo "${GH_REPO}" \
+              --comment "Auto-closed: the originally-failed CI run for commit \`${short_sha}\` was retried by the auto-rerun-transient workflow and **succeeded** — the failure was transient (HTTP 429 / network / runner setup). See the green [rerun](${rerun_url}). No code regression."
+          done
+
+          printf '✅ Closed %d stale `%s` issue(s) for commit %s.\n' \
+            "${#issue_nums[@]}" "${label}" "${short_sha}"
