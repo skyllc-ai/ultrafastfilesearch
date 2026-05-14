@@ -1943,17 +1943,47 @@ fn run_rpc_custom_validator(name: &str, result: &Value) -> Result<String> {
         }
 
         // ── RPC.2: drives method ────────────────────────────────────
+        //
+        // Tier-aware contract (Phase 3+): Warm / Hot shards have their
+        // body in RAM and must report `records > 0`; Parked / Cold
+        // shards legitimately report `records: 0` because their body
+        // was released by the demote ladder (bloom + trie stay
+        // resident).  The `tier` field is populated by every daemon
+        // from v0.5.82 onward; for older daemons we fall back to the
+        // `source` string ("parked" / "cold") which carries the same
+        // information.
         "RPC.2" => {
             let drives = result.get("drives").and_then(|v| v.as_array())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'drives' array"))?;
             if drives.is_empty() { bail!("No drives loaded"); }
+            let mut resident = 0_usize;
+            let mut demoted = 0_usize;
             for (i, d) in drives.iter().enumerate() {
                 let letter = d.get("letter").and_then(|v| v.as_str()).unwrap_or("");
                 if letter.is_empty() { bail!("Drive {i}: missing 'letter'"); }
                 let records = d.get("records").and_then(|v| v.as_u64()).unwrap_or(0);
-                if records == 0 { bail!("Drive {i} ({letter}): 0 records"); }
+                let tier = d.get("tier").and_then(|v| v.as_str()).unwrap_or("");
+                let source = d.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                // Body-released shards: `tier` ∈ {parked, cold, evicting,
+                // unknown}, or (pre-v0.5.82 daemons) `source` ∈ {parked, cold}.
+                let body_released = matches!(tier, "parked" | "cold" | "evicting" | "unknown")
+                    || matches!(source, "parked" | "cold");
+                if body_released {
+                    demoted += 1;
+                    continue;
+                }
+                if records == 0 {
+                    bail!(
+                        "Drive {i} ({letter}, tier={tier:?}, source={source:?}): \
+                         0 records but shard is not Parked/Cold — body should be loaded"
+                    );
+                }
+                resident += 1;
             }
-            Ok(format!("{} drives loaded", drives.len()))
+            Ok(format!(
+                "{} drives loaded ({resident} resident, {demoted} demoted)",
+                drives.len(),
+            ))
         }
 
         // ── RPC.3: info method ──────────────────────────────────────
