@@ -3,7 +3,7 @@
 
 //! `inspect` (alias `file-info`) command — show stats for a Parquet index file.
 //!
-//! This is the `uffs_mft` equivalent of the former `uffs info` command.
+//! This is the `uffs-mft` equivalent of the former `uffs info` command.
 //! Works cross-platform (no MFT or Windows APIs needed).
 
 use std::io::Write;

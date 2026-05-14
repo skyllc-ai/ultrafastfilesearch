@@ -3,8 +3,8 @@
 
 //! Scan magic values across all records in a raw MFT snapshot.
 //!
-//! Offline, cross-platform tool operating on `uffs_mft`'s raw MFT format
-//! (`*.raw` produced by `uffs_mft save`). For each record, we inspect the
+//! Offline, cross-platform tool operating on `uffs-mft`'s raw MFT format
+//! (`*.raw` produced by `uffs-mft save`). For each record, we inspect the
 //! `MultiSectorHeader.magic` and classify it as FILE/RCRD/INDX/zero/other.
 //! We then aggregate counts by FRS bucket to locate where valid FILE records
 //! stop and other data (e.g. RCRD/zeros) begin.
@@ -96,7 +96,7 @@ struct BucketCounts {
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: scan_mft_magic <mft.raw> [bucket_size]");
+        eprintln!("Usage: scan-mft-magic <mft.raw> [bucket_size]");
         std::process::exit(1);
     }
 

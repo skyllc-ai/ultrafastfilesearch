@@ -64,7 +64,7 @@ $env:RUST_BACKTRACE = "full"
 # so they require at least "debug" level to appear.
 if ($VerboseLog) {
     # TRACE: Maximum verbosity - all C++ algorithm modules at trace level
-    $env:RUST_LOG = "uffs_mft=trace,uffs_cli=trace,uffs_core=trace"
+    $env:RUST_LOG = "uffs-mft=trace,uffs_cli=trace,uffs_core=trace"
     Write-Host "📋 Verbose logging enabled (TRACE level for all uffs modules)" -ForegroundColor Yellow
 } else {
     # Default: warn level - captures post-tree diagnostics for LIVE issues
@@ -245,7 +245,7 @@ try {
 
     $UffsExe    = Join-Path $BinDir "uffs.exe"
     $UffsCom    = Join-Path $BinDir "uffs.com"
-    $UffsMftExe = Join-Path $BinDir "uffs_mft.exe"
+    $UffsMftExe = Join-Path $BinDir "uffs-mft.exe"
 
     # Everything — gold-standard MFT-based reference
     # We edit the APPDATA ini per-drive to avoid indexing all 25M+ files at once.
@@ -287,7 +287,7 @@ try {
     LogLine "|--------|------|--------|"
     LogLine ("| uffs.exe (Rust) | ``$UffsExe`` | " + $(if ($hasRust) { "✅" } else { "❌" }) + " |")
     LogLine ("| uffs.com (C++) | ``$UffsCom`` | " + $(if ($hasCpp) { "✅" } else { "❌" }) + " |")
-    LogLine ("| uffs_mft.exe | ``$UffsMftExe`` | " + $(if ($hasMft) { "✅" } else { "❌" }) + " |")
+    LogLine ("| uffs-mft.exe | ``$UffsMftExe`` | " + $(if ($hasMft) { "✅" } else { "❌" }) + " |")
     LogLine ("| Everything.exe | ``$(if ($EverythingExe) { $EverythingExe } else { '(not found)' })`` | " + $(if ($EverythingExe) { "✅" } else { "⏭️" }) + " |")
     LogLine ("| es.exe | ``$(if ($EsExe) { $EsExe } else { '(not found)' })`` | " + $(if ($EsExe) { "✅" } else { "⏭️" }) + " |")
     LogLine ("| Everything INI | ``$EverythingIniPath`` | " + $(if (Test-Path -LiteralPath $EverythingIniPath) { "✅" } else { "⏭️" }) + " |")
@@ -354,7 +354,7 @@ try {
             if (Test-ArtifactFresh $mftIocpPath) {
                 Write-Host "  ⏭️  IOCP capture fresh — skipping: $mftIocp" -ForegroundColor DarkGreen
             } else {
-                $timings += Invoke-CmdToLog -Title "uffs_mft save (IOCP capture): drive $mftDrive" `
+                $timings += Invoke-CmdToLog -Title "uffs-mft save (IOCP capture): drive $mftDrive" `
                     -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftIocpPath`" --iocp") `
                     -LogFileName "${mftDrive}_mft_save_iocp.log" `
                     -OutDir $driveDir
@@ -365,7 +365,7 @@ try {
             if (Test-ArtifactFresh $mftNoCompressPath) {
                 Write-Host "  ⏭️  Uncompressed MFT fresh — skipping: $mftNoCompress" -ForegroundColor DarkGreen
             } else {
-                $timings += Invoke-CmdToLog -Title "uffs_mft save (uncompressed): drive $mftDrive" `
+                $timings += Invoke-CmdToLog -Title "uffs-mft save (uncompressed): drive $mftDrive" `
                     -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive --output `"$mftNoCompressPath`" --no-compress") `
                     -LogFileName "${mftDrive}_mft_save.log" `
                     -OutDir $driveDir
@@ -382,7 +382,7 @@ try {
                 if (Test-ArtifactFresh $mftCompressedPath) {
                     Write-Host "  ⏭️  Compressed MFT fresh — skipping: $mftCompressed" -ForegroundColor DarkGreen
                 } else {
-                    $timings += Invoke-CmdToLog -Title "uffs_mft save (compressed): drive $mftDrive" `
+                    $timings += Invoke-CmdToLog -Title "uffs-mft save (compressed): drive $mftDrive" `
                         -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftCompressedPath`"") `
                         -LogFileName "${mftDrive}_mft_save_compressed.log" `
                         -OutDir $driveDir
@@ -392,7 +392,7 @@ try {
                 if (Test-ArtifactFresh $mftRawPath) {
                     Write-Host "  ⏭️  Raw MFT fresh — skipping: $mftRaw" -ForegroundColor DarkGreen
                 } else {
-                    $timings += Invoke-CmdToLog -Title "uffs_mft save (raw): drive $mftDrive" `
+                    $timings += Invoke-CmdToLog -Title "uffs-mft save (raw): drive $mftDrive" `
                         -CommandLine ("`"$UffsMftExe`" save --drive $mftDrive -o `"$mftRawPath`" --raw") `
                         -LogFileName "${mftDrive}_mft_save_raw.log" `
                         -OutDir $driveDir
@@ -643,7 +643,7 @@ try {
                 Write-Host "  ⏭️  Rust LIVE TRACE fresh — skipping: $rustLiveTraceOut" -ForegroundColor DarkGreen
             } else {
                 $savedRustLog = $env:RUST_LOG
-                $env:RUST_LOG = "uffs_mft=debug,uffs_cli=debug,uffs_core=debug"
+                $env:RUST_LOG = "uffs-mft=debug,uffs_cli=debug,uffs_core=debug"
                 $runs += Run-LoggedLocal -Title "Rust LIVE TRACE: drive $Drive" `
                     -CmdLine ("`"$UffsExe`" `"*`" --drive $Drive --no-cache --parity-compat --format custom") `
                     -LogFileName $rustLiveTraceLog `

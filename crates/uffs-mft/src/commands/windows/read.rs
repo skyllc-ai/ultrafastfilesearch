@@ -85,7 +85,7 @@ fn warn_unsupported_forensic(forensic: bool) {
         return;
     }
     warn!("⚠️ Forensic mode (--forensic) is not yet supported for live reads.");
-    warn!("   Use 'uffs_mft save' to save the MFT, then 'uffs_mft load --forensic' to analyze.");
+    warn!("   Use 'uffs-mft save' to save the MFT, then 'uffs-mft load --forensic' to analyze.");
     warn!("   Proceeding with normal mode...");
 }
 

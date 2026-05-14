@@ -22,7 +22,7 @@ mod reader;
 mod shared;
 
 // Public IOCP reader API.  MultiVolumeIocpReader / VolumeState /
-// prepare_volume_state are consumed by the uffs_mft bin (benchmark_index)
+// prepare_volume_state are consumed by the uffs-mft bin (benchmark_index)
 // via external-style paths; IocpMftReader was Phase 2.5-demoted from pub
 // (commit 1529cb162) — restored here to preserve its public contract.
 pub use multi_volume::{MultiVolumeIoOp, MultiVolumeIocpReader, VolumeState, prepare_volume_state};

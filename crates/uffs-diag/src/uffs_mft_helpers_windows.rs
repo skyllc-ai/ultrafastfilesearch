@@ -4,7 +4,7 @@
 //! Windows-only helpers for inspecting the full uffs-mft raw->fixup->parse
 //! pipeline for a single FRS.
 //!
-//! This module is used by the `inspect_mft_record_flow` diagnostic binary on
+//! This module is used by the `inspect-mft-record-flow` diagnostic binary on
 //! Windows. Keeping it as a regular module (not a bin target) avoids extra
 //! `main`/lint noise while still exercising the real `apply_fixup` +
 //! `parse_record_full` pipeline.

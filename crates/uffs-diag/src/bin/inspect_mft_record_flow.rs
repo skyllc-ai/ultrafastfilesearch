@@ -4,7 +4,7 @@
 //! Inspect the full Rust raw->fixup->parse pipeline for specific FRS.
 //!
 //! Offline, cross-platform tool that loads a `.raw` MFT snapshot produced by
-//! `uffs_mft save`, then for selected FRS runs the same `apply_fixup` and
+//! `uffs-mft save`, then for selected FRS runs the same `apply_fixup` and
 //! `parse_record_full` logic used by the Windows reader. This lets us pinpoint
 //! where a record is being dropped (fixup vs parse) compared to the reference
 //! CSV.
@@ -153,7 +153,7 @@ fn parse_file_record_segment_header(data: &[u8]) -> Option<FileRecordSegmentHead
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: inspect_mft_record_flow <mft.raw> <frs1> [frs2 frs3 ...]");
+        eprintln!("Usage: inspect-mft-record-flow <mft.raw> <frs1> [frs2 frs3 ...]");
         std::process::exit(1);
     }
 
@@ -214,7 +214,7 @@ fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     }
 
     // First, dump basic header fields without fixup so we can compare to
-    // dump_mft_records.
+    // dump-mft-records.
     let Some(hdr) = read_header(record) else {
         println!("Failed to decode FileRecordSegmentHeader");
         return;
@@ -240,7 +240,7 @@ fn inspect_record_flow(raw: &RawMftData, frs: u64) {
     // `apply_fixup` + `parse_record_full` pipeline because those helpers are
     // behind `cfg(windows)` in the library. This diagnostic focuses on
     // verifying that the on-disk header for a given FRS matches what
-    // `dump_mft_records` reports and what the reference reader sees.
+    // `dump-mft-records` reports and what the reference reader sees.
 
     // On Windows we can run the full fixup + parse pipeline, because the
     // helpers live in the uffs-mft crate behind cfg(windows).

@@ -672,7 +672,7 @@ hunting for the wrong things.
   emitted an ad-hoc (linker-signed) `CodeDirectory`, leaving the embedded
   hash inconsistent with the on-disk file.  macOS 26+'s hardened
   taskgated then refuses to launch the binary.  In v0.5.72 this hit
-  `uffsmcp` and `uffsd` deterministically; `uffs` and `uffs_mft` survived
+  `uffsmcp` and `uffsd` deterministically; `uffs` and `uffs-mft` survived
   by binary-layout chance — a fragile guarantee that wouldn't hold on
   the next rebuild.
 
@@ -1526,7 +1526,7 @@ thin clients over a unified `uffsd` process.
 
 ### Added
 - Baseline CI validation for modernization effort
-- Windows cross-compilation for all binaries (uffs, uffs_mft, uffs_tui, uffs_gui)
+- Windows cross-compilation for all binaries (uffs, uffs-mft, uffs_tui, uffs_gui)
 - Modernization tracker and wave guides
 
 ### Changed

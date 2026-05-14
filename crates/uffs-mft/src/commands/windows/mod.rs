@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Windows-only command handlers for the `uffs_mft` binary.
+//! Windows-only command handlers for the `uffs-mft` binary.
 
 mod bench;
 mod benchmark_index;

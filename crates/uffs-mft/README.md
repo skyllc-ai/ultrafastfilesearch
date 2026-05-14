@@ -36,7 +36,7 @@ Track each drive against a saved golden baseline or the previous UFFS release fo
 - **Caching** - Persistent index cache with TTL-based freshness
 - **Polars DataFrame output** - Columnar format with SIMD operations
 
-## Binary: `uffs_mft`
+## Binary: `uffs-mft`
 
 The crate includes a standalone binary for MFT operations:
 
@@ -44,37 +44,37 @@ The crate includes a standalone binary for MFT operations:
 # Build the binary
 cargo build --release -p uffs-mft
 
-# The binary will be at: target/release/uffs_mft.exe
+# The binary will be at: target/release/uffs-mft.exe
 ```
 
 ## Quick Start
 
 ```bash
 # List available NTFS drives
-uffs_mft drives
+uffs-mft drives
 
 # Get MFT info for a drive (fast, ~10ms)
-uffs_mft info --drive C
+uffs-mft info --drive C
 
 # Build and cache index (recommended for repeated use)
-uffs_mft index-update --drive C
+uffs-mft index-update --drive C
 
 # Incremental update (sub-second after initial build)
-uffs_mft index-update --drive C
+uffs-mft index-update --drive C
 
 # Export to Parquet for analysis
-uffs_mft read --drive C --output mft.parquet
+uffs-mft read --drive C --output mft.parquet
 ```
 
 ## Global Options
 
 ```bash
 # Enable verbose output (shows detailed logging)
-uffs_mft -v <command>
+uffs-mft -v <command>
 
 # Or use environment variable for fine-grained control
-RUST_LOG=info uffs_mft <command>
-RUST_LOG=debug uffs_mft <command>
+RUST_LOG=info uffs-mft <command>
+RUST_LOG=debug uffs-mft <command>
 ```
 
 ## Commands Reference
@@ -84,7 +84,7 @@ RUST_LOG=debug uffs_mft <command>
 #### `drives` - List NTFS Drives
 
 ```bash
-uffs_mft drives
+uffs-mft drives
 ```
 
 Lists all available NTFS drives with size and estimated MFT records.
@@ -93,13 +93,13 @@ Lists all available NTFS drives with size and estimated MFT records.
 
 ```bash
 # Quick info (~10ms)
-uffs_mft info --drive C
+uffs-mft info --drive C
 
 # Deep scan with file statistics (~2-10s)
-uffs_mft info --drive C --deep
+uffs-mft info --drive C --deep
 
 # Show unique FRS only (no hard link expansion)
-uffs_mft info --drive C --deep --unique
+uffs-mft info --drive C --deep --unique
 ```
 
 **Options:**
@@ -111,13 +111,13 @@ uffs_mft info --drive C --deep --unique
 
 ```bash
 # Export to Parquet (recommended)
-uffs_mft read --drive C --output mft.parquet
+uffs-mft read --drive C --output mft.parquet
 
 # Export to CSV
-uffs_mft read --drive C --output mft.csv
+uffs-mft read --drive C --output mft.csv
 
 # Full mode with extension record merging
-uffs_mft read --drive C --output mft.parquet --full
+uffs-mft read --drive C --output mft.parquet --full
 ```
 
 **Options:**
@@ -135,13 +135,13 @@ These commands use the optimized lean index format with caching.
 
 ```bash
 # Build index (or update incrementally if cache exists)
-uffs_mft index-update --drive C
+uffs-mft index-update --drive C
 
 # Force full rebuild (ignore cache)
-uffs_mft index-update --drive C --force-full
+uffs-mft index-update --drive C --force-full
 
 # Custom TTL (default: 600 seconds = 10 minutes)
-uffs_mft index-update --drive C --ttl 3600
+uffs-mft index-update --drive C --ttl 3600
 ```
 
 **How it works:**
@@ -156,13 +156,13 @@ uffs_mft index-update --drive C --ttl 3600
 
 ```bash
 # Index all NTFS drives (uses cache + USN updates)
-uffs_mft index-all
+uffs-mft index-all
 
 # Force fresh rebuild (ignore cache)
-uffs_mft index-all --no-cache
+uffs-mft index-all --no-cache
 
 # Custom TTL
-uffs_mft index-all --ttl 300
+uffs-mft index-all --ttl 300
 ```
 
 **How it works:**
@@ -179,10 +179,10 @@ uffs_mft index-all --ttl 300
 
 ```bash
 # Show status for all cached drives
-uffs_mft cache-status
+uffs-mft cache-status
 
 # Show status for specific drive
-uffs_mft cache-status --drive C
+uffs-mft cache-status --drive C
 ```
 
 Shows cache age, record count, and freshness status.
@@ -191,30 +191,30 @@ Shows cache age, record count, and freshness status.
 
 ```bash
 # Get cached index (refresh if stale)
-uffs_mft cache-get --drive C
+uffs-mft cache-get --drive C
 
 # Force refresh
-uffs_mft cache-get --drive C --force
+uffs-mft cache-get --drive C --force
 ```
 
 #### `cache-clear` - Clear Cached Indices
 
 ```bash
 # Clear all cached indices
-uffs_mft cache-clear
+uffs-mft cache-clear
 
 # Clear specific drive
-uffs_mft cache-clear --drive C
+uffs-mft cache-clear --drive C
 ```
 
 #### `index-save` / `index-load` - Manual Index Management
 
 ```bash
 # Save index to custom location
-uffs_mft index-save --drive C --output my_index.uffs
+uffs-mft index-save --drive C --output my_index.uffs
 
 # Load and inspect saved index
-uffs_mft index-load --input my_index.uffs
+uffs-mft index-load --input my_index.uffs
 ```
 
 ---
@@ -224,7 +224,7 @@ uffs_mft index-load --input my_index.uffs
 #### `usn-info` - Query USN Journal
 
 ```bash
-uffs_mft usn-info --drive C
+uffs-mft usn-info --drive C
 ```
 
 Shows journal ID, first/next USN, and estimated change count.
@@ -233,10 +233,10 @@ Shows journal ID, first/next USN, and estimated change count.
 
 ```bash
 # Read last 100 changes
-uffs_mft usn-read --drive C --limit 100
+uffs-mft usn-read --drive C --limit 100
 
 # Read changes since specific USN
-uffs_mft usn-read --drive C --since 1234567890
+uffs-mft usn-read --drive C --since 1234567890
 ```
 
 ---
@@ -247,22 +247,22 @@ uffs_mft usn-read --drive C --since 1234567890
 
 ```bash
 # Basic benchmark (auto-detects drive type and uses optimal settings)
-uffs_mft benchmark-index-lean --drive C
+uffs-mft benchmark-index-lean --drive C
 
 # With custom concurrency (override auto-detection)
-uffs_mft benchmark-index-lean --drive C --concurrency 64
+uffs-mft benchmark-index-lean --drive C --concurrency 64
 
 # With custom I/O size
-uffs_mft benchmark-index-lean --drive C --io-size-kb 8192
+uffs-mft benchmark-index-lean --drive C --io-size-kb 8192
 
 # Force parallel parsing (default: auto based on drive type)
-uffs_mft benchmark-index-lean --drive C --parallel-parse
+uffs-mft benchmark-index-lean --drive C --parallel-parse
 
 # Disable bitmap optimization (read entire MFT)
-uffs_mft benchmark-index-lean --drive C --no-bitmap
+uffs-mft benchmark-index-lean --drive C --no-bitmap
 
 # Disable placeholder creation (saves ~15% CPU)
-uffs_mft benchmark-index-lean --drive C --no-placeholders
+uffs-mft benchmark-index-lean --drive C --no-placeholders
 ```
 
 **Use this to capture a golden baseline for a drive/configuration or compare a new run with the previous UFFS release.** Measures only MFT read + parse + index build, without cache save overhead.
@@ -284,7 +284,7 @@ uffs_mft benchmark-index-lean --drive C --no-placeholders
 #### `benchmark-index` - Full Index Benchmark
 
 ```bash
-uffs_mft benchmark-index --drive C
+uffs-mft benchmark-index --drive C
 ```
 
 Useful for comparing a current full-index run with saved benchmark artifacts. Includes DataFrame overhead.
@@ -292,7 +292,7 @@ Useful for comparing a current full-index run with saved benchmark artifacts. In
 #### `benchmark-mft` - Raw MFT Read Benchmark
 
 ```bash
-uffs_mft benchmark-mft --drive C
+uffs-mft benchmark-mft --drive C
 ```
 
 Measures raw MFT reading speed without parsing so you can track low-level read regressions against saved baselines.
@@ -301,10 +301,10 @@ Measures raw MFT reading speed without parsing so you can track low-level read r
 
 ```bash
 # Benchmark two NVMe drives in parallel
-uffs_mft benchmark-multi-volume --drives C,F
+uffs-mft benchmark-multi-volume --drives C,F
 
 # Benchmark all drives
-uffs_mft benchmark-multi-volume --drives C,F,S
+uffs-mft benchmark-multi-volume --drives C,F,S
 ```
 
 Tests M4 optimization: single IOCP handling multiple volumes simultaneously.
@@ -313,16 +313,16 @@ Tests M4 optimization: single IOCP handling multiple volumes simultaneously.
 
 ```bash
 # Basic benchmark with phase breakdown
-uffs_mft bench --drive C
+uffs-mft bench --drive C
 
 # Multiple runs for averaging
-uffs_mft bench --drive C --runs 3
+uffs-mft bench --drive C --runs 3
 
 # JSON output
-uffs_mft bench --drive C --json
+uffs-mft bench --drive C --json
 
 # Skip DataFrame building (measure I/O + parse only)
-uffs_mft bench --drive C --no-df
+uffs-mft bench --drive C --no-df
 ```
 
 **Options:**
@@ -335,7 +335,7 @@ uffs_mft bench --drive C --no-df
 #### `bench-all` - Benchmark All Drives
 
 ```bash
-uffs_mft bench-all --output results.json --runs 3
+uffs-mft bench-all --output results.json --runs 3
 ```
 
 ---
@@ -345,7 +345,7 @@ uffs_mft bench-all --output results.json --runs 3
 #### `bitmap-diag` - MFT Bitmap Diagnostics
 
 ```bash
-uffs_mft bitmap-diag --drive C
+uffs-mft bitmap-diag --drive C
 ```
 
 Analyzes MFT bitmap to show in-use vs free record distribution.
@@ -354,16 +354,16 @@ Analyzes MFT bitmap to show in-use vs free record distribution.
 
 ```bash
 # Save raw MFT bytes for offline analysis (compressed)
-uffs_mft save --drive C -o mft_raw.bin
+uffs-mft save --drive C -o mft_raw.bin
 
 # Load and export to CSV (37 columns)
-uffs_mft load mft_raw.bin -o mft.csv
+uffs-mft load mft_raw.bin -o mft.csv
 
 # Load and export to Parquet
-uffs_mft load mft_raw.bin -o mft.parquet
+uffs-mft load mft_raw.bin -o mft.parquet
 
 # Build index only (show tree metrics, no export)
-uffs_mft load mft_raw.bin --build-index
+uffs-mft load mft_raw.bin --build-index
 ```
 
 Useful for debugging or analyzing MFT from another machine.
@@ -391,10 +391,10 @@ The `--forensic` flag enables recovery of deleted, corrupt, and extension record
 
 ```bash
 # Export with forensic records (41 columns)
-uffs_mft load mft_raw.bin -o mft_forensic.csv --forensic
+uffs-mft load mft_raw.bin -o mft_forensic.csv --forensic
 
 # Direct from drive with forensic mode
-uffs_mft read --drive C --output mft_forensic.parquet --forensic
+uffs-mft read --drive C --output mft_forensic.parquet --forensic
 ```
 
 #### Output Columns
@@ -417,10 +417,10 @@ uffs_mft read --drive C --output mft_forensic.parquet --forensic
 
 ```bash
 # Save MFT from suspect drive
-uffs_mft save --drive G -o evidence.bin
+uffs-mft save --drive G -o evidence.bin
 
 # Export with forensic data
-uffs_mft load evidence.bin -o evidence.csv --forensic
+uffs-mft load evidence.bin -o evidence.csv --forensic
 
 # In your analysis tool, filter for deleted files:
 # WHERE is_deleted = TRUE AND name LIKE '%.docx'
@@ -472,7 +472,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Comparison with Windows Tools
 
-You can verify `uffs_mft` output against built-in Windows tools:
+You can verify `uffs-mft` output against built-in Windows tools:
 
 ```powershell
 # Volume geometry and MFT metadata
@@ -484,12 +484,12 @@ defrag C: /A /V
 
 ### Count Differences Explained
 
-| Metric | uffs_mft | Windows defrag |
+| Metric | uffs-mft | Windows defrag |
 |--------|----------|----------------|
 | Directories | Higher | Lower |
 | Files | Higher | Lower |
 
-**Why?** `uffs_mft` parses **all** MFT records including:
+**Why?** `uffs-mft` parses **all** MFT records including:
 - Deleted file entries (not yet overwritten)
 - System metadata files ($MFT, $Bitmap, $LogFile, $Secure, etc.)
 - NTFS internal structures
@@ -498,24 +498,24 @@ Windows `defrag` counts only **active, movable** user files and folders.
 
 ### MFT Fragmentation Note
 
-Windows `defrag /A /V` may report "0 MFT fragments" while `uffs_mft` shows multiple extents. Why the difference? Look at defrag's note:
+Windows `defrag /A /V` may report "0 MFT fragments" while `uffs-mft` shows multiple extents. Why the difference? Look at defrag's note:
 
 > *"File fragments larger than 64MB are not included in the fragmentation statistics."* — Windows defrag
 
 Example: Your MFT is 4.44 GB across 28 extents = **~162 MB per extent average**. Since each extent is >64MB, Windows defrag doesn't count them as fragments!
 
-`uffs_mft` uses `FSCTL_GET_RETRIEVAL_POINTERS` which returns the actual physical extent map — it's technically correct that the MFT is spread across 28 non-contiguous disk regions.
+`uffs-mft` uses `FSCTL_GET_RETRIEVAL_POINTERS` which returns the actual physical extent map — it's technically correct that the MFT is spread across 28 non-contiguous disk regions.
 
-**Bottom line:** Both are correct. `uffs_mft` shows the true physical layout, while `defrag` focuses on performance-impacting fragmentation (small fragments that cause excessive disk seeks). Large extents like these don't significantly impact read performance.
+**Bottom line:** Both are correct. `uffs-mft` shows the true physical layout, while `defrag` focuses on performance-impacting fragmentation (small fragments that cause excessive disk seeks). Large extents like these don't significantly impact read performance.
 
 ## Fast vs Full Mode
 
-`uffs_mft` offers two parsing modes controlled by the `--full` flag:
+`uffs-mft` offers two parsing modes controlled by the `--full` flag:
 
 ### Fast Mode (Default)
 
 ```bash
-uffs_mft read --drive C --output mft.parquet
+uffs-mft read --drive C --output mft.parquet
 ```
 
 - **~15-25% faster** on SSDs, modest improvement on HDDs
@@ -525,7 +525,7 @@ uffs_mft read --drive C --output mft.parquet
 ### Full Mode
 
 ```bash
-uffs_mft read --drive C --output mft.parquet --full
+uffs-mft read --drive C --output mft.parquet --full
 ```
 
 - Complete data for all files
@@ -606,7 +606,7 @@ Tested on Windows 11, 24-core CPU, NVMe drives. Compare current runs against sav
 
 ### Auto-Detection (Default)
 
-By default, `uffs_mft` auto-detects drive type and uses optimal settings:
+By default, `uffs-mft` auto-detects drive type and uses optimal settings:
 
 | Setting | NVMe | SSD | HDD |
 |---------|------|-----|-----|
@@ -621,16 +621,16 @@ Override auto-detection for experimentation:
 
 ```bash
 # Maximum concurrency for fast NVMe
-uffs_mft benchmark-index-lean --drive C --concurrency 64 --io-size-kb 8192
+uffs-mft benchmark-index-lean --drive C --concurrency 64 --io-size-kb 8192
 
 # Conservative settings for older SSD
-uffs_mft benchmark-index-lean --drive D --concurrency 4 --io-size-kb 1024
+uffs-mft benchmark-index-lean --drive D --concurrency 4 --io-size-kb 1024
 
 # HDD: try disabling bitmap (sequential may beat seeking)
-uffs_mft benchmark-index-lean --drive S --no-bitmap
+uffs-mft benchmark-index-lean --drive S --no-bitmap
 
 # Force parallel parsing with custom worker count
-uffs_mft benchmark-index-lean --drive C --parallel-parse --parse-workers 16
+uffs-mft benchmark-index-lean --drive C --parallel-parse --parse-workers 16
 ```
 
 ### Key Tuning Parameters

@@ -12,12 +12,12 @@
 //! ## IOCP Replay Mode (Recommended)
 //!
 //! The most accurate way to test is using an IOCP capture file created on
-//! Windows with `uffs_mft save --iocp`. This captures the exact order in which
+//! Windows with `uffs-mft save --iocp`. This captures the exact order in which
 //! Windows IOCP delivered chunks during a real MFT read.
 //!
 //! ```bash
 //! # On Windows: capture IOCP order
-//! uffs_mft save --drive C --output mft_c.iocp --iocp
+//! uffs-mft save --drive C --output mft_c.iocp --iocp
 //!
 //! # On macOS: replay exact IOCP order
 //! cargo test -p uffs-mft --lib -- test_iocp_replay --ignored --nocapture

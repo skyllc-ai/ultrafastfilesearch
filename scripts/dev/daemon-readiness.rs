@@ -2298,7 +2298,7 @@ fn find_workspace_root() -> std::path::PathBuf {
 ///
 /// Builds every workspace package — not just `uffs-cli` — so the
 /// daemon (`uffsd`, from `uffs-daemon`), the MCP host (`uffsmcp`,
-/// from `uffs-mcp`), and the auxiliary `uffs_mft` binary all get
+/// from `uffs-mcp`), and the auxiliary `uffs-mft` binary all get
 /// rebuilt in lock-step with the CLI.  Building only `uffs-cli` was
 /// the source of a real bug discovered on 2026-05-04: the script
 /// rebuilt `target/release/uffs` to pick up a CLI fix, but

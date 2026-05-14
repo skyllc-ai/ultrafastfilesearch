@@ -74,7 +74,7 @@ const RELEASE_BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
-    ("uffs_mft", "uffs-mft"),
+    ("uffs-mft", "uffs-mft"),
 ];
 
 /// All workspace binaries — release + diagnostic tools.
@@ -85,19 +85,18 @@ const ALL_BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
-    ("uffs_mft", "uffs-mft"),
-    // Diagnostic binaries
-    ("analyze_mft_parents", "uffs-diag"),
-    ("dump_mft_records", "uffs-diag"),
-    ("scan_mft_magic", "uffs-diag"),
-    ("dump_mft_extents", "uffs-diag"),
-    ("cross_check_mft_reference", "uffs-diag"),
-    ("compare_raw_mft", "uffs-diag"),
-    ("inspect_mft_record_flow", "uffs-diag"),
-    ("analyze_diff", "uffs-diag"),
-    ("compare_scan_parity", "uffs-diag"),
-    ("verify_iocp_capture", "uffs-diag"),
-    // ("compare_scan_parity", "uffs-diag"),
+    ("uffs-mft", "uffs-mft"),
+    // Diagnostic binaries (all hyphenated per issue #213 / F1.13).
+    ("analyze-mft-parents", "uffs-diag"),
+    ("dump-mft-records", "uffs-diag"),
+    ("scan-mft-magic", "uffs-diag"),
+    ("dump-mft-extents", "uffs-diag"),
+    ("cross-check-mft-reference", "uffs-diag"),
+    ("compare-raw-mft", "uffs-diag"),
+    ("inspect-mft-record-flow", "uffs-diag"),
+    ("analyze-diff", "uffs-diag"),
+    ("compare-scan-parity", "uffs-diag"),
+    ("verify-iocp-capture", "uffs-diag"),
 ];
 
 struct Target {

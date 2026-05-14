@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Logging initialization for the `uffs_mft` binary.
+//! Logging initialization for the `uffs-mft` binary.
 
 use std::io;
 use std::path::PathBuf;

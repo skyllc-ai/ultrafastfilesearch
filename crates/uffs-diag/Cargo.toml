@@ -6,15 +6,15 @@
 # without requiring live NTFS access.
 #
 # Binaries:
-#   - analyze_mft_parents: Analyze parent/child coverage in Parquet files
-#   - dump_mft_records: Dump raw MFT record headers for specific FRS values
-#   - scan_mft_magic: Scan magic values across all records in a raw MFT
-#   - dump_mft_extents: (Windows-only) Dump $MFT extent list for a drive
-#   - cross_check_mft_reference: Cross-check MFT records against reference CSV
-#   - compare_raw_mft: Compare two raw MFT files record-by-record
-#   - inspect_mft_record_flow: Inspect raw->fixup->parse pipeline for FRS
-#   - analyze_diff: Deep comparison of legacy vs Rust UFFS outputs
-#   - compare_scan_parity: Comprehensive legacy vs Rust scan output parity check
+#   - analyze-mft-parents: Analyze parent/child coverage in Parquet files
+#   - dump-mft-records: Dump raw MFT record headers for specific FRS values
+#   - scan-mft-magic: Scan magic values across all records in a raw MFT
+#   - dump-mft-extents: (Windows-only) Dump $MFT extent list for a drive
+#   - cross-check-mft-reference: Cross-check MFT records against reference CSV
+#   - compare-raw-mft: Compare two raw MFT files record-by-record
+#   - inspect-mft-record-flow: Inspect raw->fixup->parse pipeline for FRS
+#   - analyze-diff: Deep comparison of legacy vs Rust UFFS outputs
+#   - compare-scan-parity: Comprehensive legacy vs Rust scan output parity check
 # ============================================================================
 
 [package]
@@ -38,8 +38,8 @@ categories.workspace = true
 #   developer's machine even if they bypass release-plz.
 #
 # Rationale: `uffs-diag` is a workspace-only diagnostic toolchain.  Its
-# binaries (`analyze_mft_parents`, `dump_mft_records`, `compare_raw_mft`,
-# `compare_scan_parity`, `inspect_mft_record_flow`, …) operate on raw MFT
+# binaries (`analyze-mft-parents`, `dump-mft-records`, `compare-raw-mft`,
+# `compare-scan-parity`, `inspect-mft-record-flow`, …) operate on raw MFT
 # snapshots and Parquet exports — they're internal correctness-validation
 # instruments, not user-facing tools.  Shipping them to crates.io would
 # (a) clutter the crates.io namespace, (b) bind us to API stability we
@@ -58,47 +58,67 @@ categories.workspace = true
 # released its nightly-API patches; it is internal-by-design tooling.
 publish.workspace = true
 
+# Phase R6 of `release-automation-plan.md` step 3: docs.rs build configuration.
+# This crate is `publish = false` (internal tooling), so docs.rs will never
+# build it; this block is preserved for workspace-uniform manifest shape (per
+# Phase 1 follow-up F1.15 / issue #214).  Should this crate ever flip to
+# publishable, the block is already in place.
+#
+# `targets` mirrors `uffs-mft` / `uffs-broker`: the diagnostic tools include
+# Windows-only entry points (`dump-mft-extents`, `scan-mft-magic`) alongside
+# cross-platform analysis tools (`analyze-diff`, `compare-scan-parity`).
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Binaries
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 follow-up F1.13 (issue #213): all 10 diagnostic-tool binaries
+# use hyphenated runtime names to align with the workspace convention.
+# Source-file paths stay snake_case (Cargo accepts `name = "foo-bar"`
+# with `path = "src/bin/foo_bar.rs"`); only the runtime artifact
+# filename flips.  uffs-diag is `publish = false`, so this rename has
+# zero release-artifact blast radius.
 [[bin]]
-name = "analyze_mft_parents"
+name = "analyze-mft-parents"
 path = "src/bin/analyze_mft_parents.rs"
 
 [[bin]]
-name = "dump_mft_records"
+name = "dump-mft-records"
 path = "src/bin/dump_mft_records.rs"
 
 [[bin]]
-name = "scan_mft_magic"
+name = "scan-mft-magic"
 path = "src/bin/scan_mft_magic.rs"
 
 [[bin]]
-name = "dump_mft_extents"
+name = "dump-mft-extents"
 path = "src/bin/dump_mft_extents.rs"
 
 [[bin]]
-name = "cross_check_mft_reference"
+name = "cross-check-mft-reference"
 path = "src/bin/cross_check_mft_reference.rs"
 
 [[bin]]
-name = "compare_raw_mft"
+name = "compare-raw-mft"
 path = "src/bin/compare_raw_mft.rs"
 
 [[bin]]
-name = "inspect_mft_record_flow"
+name = "inspect-mft-record-flow"
 path = "src/bin/inspect_mft_record_flow.rs"
 
 [[bin]]
-name = "analyze_diff"
+name = "analyze-diff"
 path = "src/bin/analyze_diff.rs"
 
 [[bin]]
-name = "compare_scan_parity"
+name = "compare-scan-parity"
 path = "src/bin/compare_scan_parity.rs"
 
 [[bin]]
-name = "verify_iocp_capture"
+name = "verify-iocp-capture"
 path = "src/bin/verify_iocp_capture.rs"
 
 # ─────────────────────────────────────────────────────────────────────────────

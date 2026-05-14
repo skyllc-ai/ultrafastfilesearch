@@ -50,7 +50,7 @@ const BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
-    ("uffs_mft", "uffs-mft"),
+    ("uffs-mft", "uffs-mft"),
 ];
 
 fn main() {

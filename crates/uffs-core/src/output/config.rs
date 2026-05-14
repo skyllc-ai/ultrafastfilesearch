@@ -438,8 +438,8 @@ impl OutputConfig {
     /// `Datetime(TimeUnit::Microseconds)` for backward compatibility with
     /// Polars analytics (date ops, SQL coercion, Parquet round-trips),
     /// but the underlying i64 values are **raw FILETIME** — see
-    /// `uffs-mft::index::dataframe.rs` and
-    /// `uffs-mft::reader::dataframe_build.rs`, which push
+    /// `uffs_mft::index::dataframe.rs` and
+    /// `uffs_mft::reader::dataframe_build.rs`, which push
     /// `rec.stdinfo.created` (FILETIME per the `StandardInfo` doc)
     /// directly into the column with a type cast rather than a value
     /// conversion.

@@ -17,7 +17,7 @@ Download the latest Windows x64 binaries from the
 
 Each release includes:
 - `uffs-windows-x64.exe` — main CLI (starts daemon + MCP)
-- `uffs_mft-windows-x64.exe` — low-level MFT tool
+- `uffs-mft-windows-x64.exe` — low-level MFT tool
 - `CHECKSUMS.txt` — SHA-256 hashes for verification
 
 ### Quick Setup (Windows)

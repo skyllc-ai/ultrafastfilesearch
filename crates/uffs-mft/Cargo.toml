@@ -1,5 +1,5 @@
 # ============================================================================
-# uffs-mft: MFT Reading & Parsing Library
+# uffs_mft: MFT Reading & Parsing Library
 # ============================================================================
 # This crate provides direct NTFS Master File Table (MFT) reading
 # capabilities, outputting data as Polars DataFrames.
@@ -43,7 +43,15 @@ rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [[bin]]
-name = "uffs_mft"
+# Phase 1 follow-up F1.13 (issue #213): hyphenated binary name aligned
+# with the rest of the workspace (`uffs`, `uffsd`, `uffsmcp`, `gen-hooks`,
+# `gen-workflow`).  The Rust library identifier `uffs-mft` (Cargo-forced
+# underscore for valid Rust identifiers) is unchanged — only the
+# runtime artifact filename flips from `uffs-mft` / `uffs-mft.exe` to
+# `uffs-mft` / `uffs-mft.exe`.  Single-shot rename (no deprecation
+# cycle) because the project has no published-API contract yet — see
+# the issue's user-approved rename directive for the rationale.
+name = "uffs-mft"
 path = "src/main.rs"
 
 [dependencies]
@@ -62,7 +70,7 @@ anyhow.workspace = true
 rayon.workspace = true
 zstd.workspace = true
 
-# CLI (for uffs_mft binary)
+# CLI (for uffs-mft binary)
 clap.workspace = true
 indicatif.workspace = true
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Progress helpers for Windows-only `uffs_mft` commands.
+//! Progress helpers for Windows-only `uffs-mft` commands.
 
 #[cfg(windows)]
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// Creates the standard spinner used by long-running `uffs_mft` commands.
+/// Creates the standard spinner used by long-running `uffs-mft` commands.
 #[cfg(windows)]
 pub(crate) fn spinner(message: &str) -> ProgressBar {
     let progress_bar = ProgressBar::new_spinner();

@@ -224,7 +224,7 @@ When you need to add a new dependency:
 
 | Question | Status | Tracked in |
 |---|---|---|
-| Should `uffs-mft::len_to_u16` move to a Layer-0 crate (eliminate `uffs-format → uffs-mft` utility-only dep)? | Deferred to Phase 3 module-layout review | (Phase-2 findings; follow-up issue TBD) |
+| Should `uffs_mft::len_to_u16` move to a Layer-0 crate (eliminate `uffs-format → uffs-mft` utility-only dep)? | Deferred to Phase 3 module-layout review | (Phase-2 findings; follow-up issue TBD) |
 | Should `uffs-core`'s 22-pub-mod surface split into 2-3 sibling crates (e.g., `uffs-query` / `uffs-search-engine` / `uffs-index`)? | Deferred — single consumer (daemon) means cohesion outweighs split cost | (Phase-2 findings) |
 | Should a shared `uffs-test-support` crate extract common dev-deps (proptest, tempfile, fixture helpers) from the 7 + 3 + 3 dev-dep crates? | Open — defer to Phase 13 testing strategy | (Phase-2 findings) |
 
