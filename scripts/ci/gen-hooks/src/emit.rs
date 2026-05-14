@@ -56,7 +56,7 @@ const FOOTER_PRE_COMMIT: &str = include_str!("../templates/footer_fast.sh");
 /// pair.  The `EmitTarget::render` dispatch keeps the rest of the
 /// crate target-agnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmitTarget {
+pub(crate) enum EmitTarget {
     /// `_lint_pre_push.sh` — the workspace pre-push gate (Phase 2).
     PrePush,
     /// `_lint_fast.sh` — the workspace pre-commit gate (Phase 3a).
@@ -65,7 +65,7 @@ pub enum EmitTarget {
 
 impl EmitTarget {
     /// Render the full bash file as a single owned `String`.
-    pub fn render(self, manifest: &Manifest) -> String {
+    pub(crate) fn render(self, manifest: &Manifest) -> String {
         match self {
             Self::PrePush => render_pre_push(manifest),
             Self::PreCommit => render_pre_commit(manifest),
@@ -73,7 +73,7 @@ impl EmitTarget {
     }
 
     /// Default on-disk path for this target's emitted hook.
-    pub const fn default_output_path(self) -> &'static str {
+    pub(crate) const fn default_output_path(self) -> &'static str {
         match self {
             Self::PrePush => "scripts/hooks/_lint_pre_push.sh",
             Self::PreCommit => "scripts/hooks/_lint_fast.sh",
@@ -82,7 +82,7 @@ impl EmitTarget {
 
     /// Manifest-tier name for this target.  Used to filter
     /// `[[gate]]` entries via `Manifest::gates_for_tier`.
-    pub const fn tier(self) -> &'static str {
+    pub(crate) const fn tier(self) -> &'static str {
         match self {
             Self::PrePush => "pre-push",
             Self::PreCommit => "pre-commit",
@@ -182,12 +182,12 @@ fn render_dispatch(manifest: &Manifest) -> String {
     let gates = manifest.gates_for_tier("pre-push");
     let bg: Vec<&Gate> = gates
         .iter()
-        .filter(|g| g.bucket.as_deref() == Some("bg"))
+        .filter(|gate| gate.bucket.as_deref() == Some("bg"))
         .copied()
         .collect();
     let seq: Vec<&Gate> = gates
         .iter()
-        .filter(|g| g.bucket.as_deref() == Some("seq"))
+        .filter(|gate| gate.bucket.as_deref() == Some("seq"))
         .copied()
         .collect();
 
@@ -235,7 +235,7 @@ fn render_dispatch_fast(manifest: &Manifest) -> String {
     // emitted on its own.
     let rust_staged: Vec<&Gate> = gates
         .iter()
-        .filter(|g| g.when == "rust_changed" && g.id != "fmt")
+        .filter(|gate| gate.when == "rust_changed" && gate.id != "fmt")
         .copied()
         .collect();
 
@@ -314,7 +314,7 @@ fn emit_fast_fmt(gate: &Gate) -> String {
 /// the existing hook's terse shape.  An empty input yields an empty
 /// string (no leading newline) so the caller can treat it inline.
 fn emit_fast_rust_staged_block(gates: &[&Gate]) -> String {
-    use std::fmt::Write as _;
+    use core::fmt::Write as _;
     if gates.is_empty() {
         return String::new();
     }
@@ -327,7 +327,7 @@ fn emit_fast_rust_staged_block(gates: &[&Gate]) -> String {
         // `Result<(), fmt::Error>` so the call type-checks under
         // `must_use` without an `expect("...")` that would never
         // fire.
-        let _ = writeln!(out, "    spawn \"{label}\" {cmd}");
+        _ = writeln!(out, "    spawn \"{label}\" {cmd}");
     }
     out.push_str("fi\n");
     out
@@ -396,7 +396,11 @@ fn consumer_label_pre_commit(gate: &Gate) -> &str {
 /// cheaper than evaluating a guard.  Phase 3 may add explicit
 /// per-class guards if the runtime budget changes.
 fn emit_bg(gate: &Gate) -> String {
-    if gate.command.iter().any(|s| s.contains("{{COMMIT_RANGES}}")) {
+    if gate
+        .command
+        .iter()
+        .any(|arg| arg.contains("{{COMMIT_RANGES}}"))
+    {
         return emit_commit_subjects(gate);
     }
 
@@ -531,9 +535,9 @@ fn shell_quote(token: &str) -> String {
     if token.is_empty() {
         return "''".to_owned();
     }
-    let safe = token
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | ',' | '=' | ':'));
+    let safe = token.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '/' | '.' | ',' | '=' | ':')
+    });
     if safe {
         return token.to_owned();
     }
@@ -562,6 +566,12 @@ fn indent_block(text: &str, n: usize) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    clippy::string_slice,
+    reason = "test code uses idiomatic short bindings + ASCII-only fixture substring slicing; \
+              failures panic with full context via assert!/assert_eq! (issue #212)"
+)]
 mod tests {
     use super::*;
     use crate::manifest::Manifest;

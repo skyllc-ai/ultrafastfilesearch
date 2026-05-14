@@ -16,7 +16,7 @@
 // is the Phase-1 `check_gates_drift.sh` script's job and stays
 // authoritative there.
 
-use std::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
 use serde::Deserialize;
@@ -24,12 +24,12 @@ use serde::Deserialize;
 /// Top-level manifest layout.  TOML key names match `gates.toml`
 /// verbatim so `[[gate]]` arrays of tables deserialise straight in.
 #[derive(Debug, Deserialize)]
-pub struct Manifest {
+pub(crate) struct Manifest {
     /// Optional `[manifest]` header table — version + plan-doc
     /// cross-reference.  Surfaced by `--verbose`; Phase 3 will also
     /// gate generator compatibility on `version`.
     #[serde(default, rename = "manifest")]
-    pub header: ManifestMeta,
+    pub(crate) header: ManifestMeta,
 
     /// Optional `[classification]` table — the regex stack used by
     /// `_lint_pre_push.sh` for `RUST_CHANGED` / `DEP_CHANGED` /
@@ -39,14 +39,14 @@ pub struct Manifest {
     /// `--verbose` so contributors can confirm what they parsed.
     /// Phase 3 will wire them through to the preamble.
     #[serde(default)]
-    pub classification: Option<Classification>,
+    pub(crate) classification: Option<Classification>,
 
     /// Every `[[gate]]` table in the manifest.  TOML preserves
     /// declaration order on parse; the generator re-sorts before
     /// emit (see `emit.rs`) so the output is deterministic regardless
     /// of declaration order.
     #[serde(default)]
-    pub gate: Vec<Gate>,
+    pub(crate) gate: Vec<Gate>,
 }
 
 /// `[manifest]` header table.  Captures the manifest's own version
@@ -54,17 +54,17 @@ pub struct Manifest {
 /// optional so an early manifest snapshot without the header still
 /// parses cleanly.
 #[derive(Debug, Deserialize, Default)]
-pub struct ManifestMeta {
+pub(crate) struct ManifestMeta {
     /// Schema version.  Surfaced by `--verbose`; Phase 3 will also
     /// reject manifests whose major bumps this past the generator's
     /// known maximum.
     #[serde(default)]
-    pub version: u32,
+    pub(crate) version: u32,
     /// Path (relative to repo root) of the architecture plan
     /// document this manifest implements.  Surfaced by `--verbose`
     /// and (Phase 2.x) the regen banner.
     #[serde(default)]
-    pub plan_doc: Option<String>,
+    pub(crate) plan_doc: Option<String>,
 }
 
 /// `[classification]` is a free-form map of class-name → regex pattern.
@@ -74,12 +74,12 @@ pub struct ManifestMeta {
 /// the manifest's regex stack drives the preamble's classification
 /// block.
 #[derive(Debug, Deserialize)]
-pub struct Classification {
+pub(crate) struct Classification {
     /// Class-name → regex map.  Class names are short identifiers like
     /// `rust`, `dep`, `infra`, `docs`; the values are anchored regex
     /// patterns matched against `git diff --name-only` output.
     #[serde(flatten)]
-    pub patterns: std::collections::BTreeMap<String, String>,
+    pub(crate) patterns: BTreeMap<String, String>,
 }
 
 /// One `[[gate]]` table.  Field names match `gates.toml` modulo the
@@ -90,50 +90,50 @@ pub struct Classification {
 /// bridges the two without requiring the manifest authors to know
 /// the Rust spelling.
 #[derive(Debug, Deserialize)]
-pub struct Gate {
+pub(crate) struct Gate {
     /// Kebab-case canonical identifier — the `spawn_bg` / `run_seq`
     /// label emitted into the hook (modulo `consumer_names` overrides).
-    pub id: String,
+    pub(crate) id: String,
     /// Human-readable name surfaced by drift-detector messages and
     /// (future) the regen banner.
-    pub label: String,
+    pub(crate) label: String,
     /// Command line as a TOML array.  Token zero is the executable;
     /// subsequent tokens are arguments.  See `emit::format_command`
     /// for the bash-quoting rules.
-    pub command: Vec<String>,
+    pub(crate) command: Vec<String>,
     /// Subset of `{pre-commit, pre-push, pr-fast, tier-2}`.  The
     /// generator filters by membership.
-    pub tiers: Vec<String>,
+    pub(crate) tiers: Vec<String>,
     /// One of `always` / `rust_changed` / `dep_changed` /
     /// `infra_changed` / `code_changed`.  Drives Bucket-2 inner
     /// guards and (future) Bucket-1 conditional emission.
     /// TOML schema name: `gate_when` (preserved via `serde(rename)`).
     #[serde(rename = "gate_when")]
-    pub when: String,
+    pub(crate) when: String,
     /// `true` for hard-fail gates; `false` for soft-skip with
     /// command-v guard.
-    pub hard: bool,
+    pub(crate) hard: bool,
     /// Missing-tool detection key.  Members of `ASSUMED_TOOLS` are
     /// emitted unguarded; everything else gets a `command -v`
     /// guard (or hard-fail-with-hint for `cargo-vet`).
-    pub tool: String,
+    pub(crate) tool: String,
     /// Documentary expected runtime in seconds.  Surfaced by
     /// `--verbose`; Phase 2.x's manifest viewer + Tier-2 budget
     /// pre-flight will also read it.
     #[serde(default)]
-    pub expected_runtime_secs: u32,
+    pub(crate) expected_runtime_secs: u32,
     /// Bucket assignment — `"bg"` (Bucket 1, fire-and-forget) or
     /// `"seq"` (Bucket 2, sequential / fail-fast).  Optional because
     /// it is only meaningful when the gate participates in the
     /// `pre-push` tier; pr-fast-only gates (e.g. the full `tests` run
     /// that is too slow for pre-push) legitimately omit it.
     #[serde(default)]
-    pub bucket: Option<String>,
+    pub(crate) bucket: Option<String>,
     /// Within-bucket ordering hint.  Lower fires first.  Ties
     /// resolve by lexicographic id ordering (see
     /// `Manifest::gates_for_tier`).
     #[serde(default)]
-    pub order: i32,
+    pub(crate) order: i32,
     /// Per-tier consumer-name override.  When set, the generator
     /// emits the override (e.g. `tests`) as the `spawn_bg` /
     /// `run_seq` label instead of the canonical gate id (e.g.
@@ -141,18 +141,18 @@ pub struct Gate {
     /// field shape is consumed by `check_gates_drift.sh` so the
     /// two stay aligned.
     #[serde(default)]
-    pub consumer_names: std::collections::BTreeMap<String, String>,
+    pub(crate) consumer_names: BTreeMap<String, String>,
     /// Free-form Markdown.  The first non-blank line is surfaced by
     /// `--verbose`.  Phase 2.x will also emit it as a comment block
     /// in the rendered hook (see `emit.rs::render_dispatch`).
     #[serde(default)]
-    pub notes: String,
+    pub(crate) notes: String,
 }
 
 impl Manifest {
     /// Lightweight invariant validation — only the things the codegen
     /// itself depends on.  Cross-consumer drift is Phase 1's job.
-    pub fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         // No duplicate ids.
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for gate in &self.gate {
@@ -172,23 +172,23 @@ impl Manifest {
             );
             // `bucket` is required IFF the gate participates in pre-push.
             // pr-fast-only gates (e.g. full `tests`) legitimately omit it.
-            let in_pre_push = gate.tiers.iter().any(|t| t == "pre-push");
+            let in_pre_push = gate.tiers.iter().any(|tier_name| tier_name == "pre-push");
             match (in_pre_push, gate.bucket.as_deref()) {
-                (true, Some(b)) => ensure!(
-                    matches!(b, "bg" | "seq"),
+                (true, Some(bucket)) => ensure!(
+                    matches!(bucket, "bg" | "seq"),
                     "gate `{}` has unknown bucket `{}` (want `bg` or `seq`)",
                     gate.id,
-                    b
+                    bucket
                 ),
                 (true, None) => anyhow::bail!(
                     "gate `{}` is in the `pre-push` tier but has no `bucket` field",
                     gate.id
                 ),
-                (false, Some(b)) => ensure!(
-                    matches!(b, "bg" | "seq"),
+                (false, Some(bucket)) => ensure!(
+                    matches!(bucket, "bg" | "seq"),
                     "gate `{}` has unknown bucket `{}` (want `bg` or `seq`)",
                     gate.id,
-                    b
+                    bucket
                 ),
                 (false, None) => {}
             }
@@ -220,17 +220,17 @@ impl Manifest {
     /// once per emit.  Sorted by `(bucket-as-defined-order, order)` so
     /// Bucket-1 `spawn_bg` lines come before Bucket-2 `run_seq` lines
     /// and within each bucket gates fire in the order the plan declares.
-    pub fn gates_for_tier<'a>(&'a self, tier: &str) -> Vec<&'a Gate> {
+    pub(crate) fn gates_for_tier<'a>(&'a self, tier: &str) -> Vec<&'a Gate> {
         let mut out: Vec<&'a Gate> = self
             .gate
             .iter()
-            .filter(|g| g.tiers.iter().any(|t| t == tier))
+            .filter(|gate| gate.tiers.iter().any(|tier_name| tier_name == tier))
             .collect();
-        out.sort_by_key(|g| {
+        out.sort_by_key(|gate| {
             (
-                bucket_rank(g.bucket.as_deref().unwrap_or("")),
-                g.order,
-                g.id.as_str().to_owned(),
+                bucket_rank(gate.bucket.as_deref().unwrap_or("")),
+                gate.order,
+                gate.id.as_str().to_owned(),
             )
         });
         out
@@ -248,6 +248,13 @@ fn bucket_rank(bucket: &str) -> u8 {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::min_ident_chars,
+    clippy::indexing_slicing,
+    clippy::get_unwrap,
+    reason = "test code uses idiomatic short bindings + positional indexing + .get().unwrap() \
+              against fixed-shape fixtures; failures panic with adequate context (issue #212)"
+)]
 mod tests {
     use super::*;
 

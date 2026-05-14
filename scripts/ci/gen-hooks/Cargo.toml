@@ -52,16 +52,17 @@ toml = { workspace = true }
 # ─────────────────────────────────────────────────────────────────────────────
 # Lints policy
 # ─────────────────────────────────────────────────────────────────────────────
-# This crate intentionally does NOT opt into `[lints] workspace = true`,
-# matching the convention established by `scripts/ci-pipeline`.  The
-# `[workspace.lints]` stack adds restriction-class lints
-# (`print_stderr`, `min_ident_chars`, `indexing_slicing`,
-# `std_instead_of_alloc`) that fight the ergonomics of an operational
-# CLI tool that legitimately writes to stderr.
+# Inherit the full workspace lint stack (matches all 14 product crates).
 #
-# The `just lint-prod` and `just lint-tests` recipes (which the
-# pre-push hook and `pr-fast.yml::clippy` job both run) still apply
-# the strict CLI flag stack — `pedantic`, `nursery`, `cargo`,
-# `unwrap_used`, `expect_used`, `missing_docs_in_private_items`,
-# `-D warnings` — and this crate passes them cleanly without any
-# per-item suppressions.
+# The previous wholesale opt-out (issue #212) was too coarse-grained:
+# only 4 lints in `[workspace.lints.clippy]` are CLI-inappropriate
+# (`print_stderr`, `print_stdout`, `indexing_slicing`, `min_ident_chars`,
+# `std_instead_of_alloc`); the other ~60 deny-level lints (cast_lossless,
+# redundant_clone, manual_memcpy, …) apply just as much to an operational
+# CLI tool as to product code.  Per workspace rule 1 ("targeted allow,
+# keep it minimal, scoped, justify in code comments"), intentional
+# stderr-printing sites carry function-scoped
+# `#[expect(clippy::print_stderr, reason = "…")]` rather than disabling
+# the lint workspace-wide.  See `CLIPPY_POSTURE.md` § CLI-tooling.
+[lints]
+workspace = true

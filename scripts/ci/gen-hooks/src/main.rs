@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
+#![expect(
+    clippy::print_stderr,
+    reason = "operational CLI tool — error/verbose output goes to stderr (issue #212)"
+)]
+
 //! `gen-hooks` — gate-manifest hook generator.
 //!
 //! Phase 2/3a of `docs/architecture/gates-manifest-plan.md`.  Reads
@@ -28,6 +33,13 @@
 //! | 1 | diff detected (with `--check`) |
 //! | 2 | schema error (manifest invalid) or unknown target |
 
+// `BTreeMap`/`BTreeSet` live in `alloc`; the workspace
+// `clippy::std_instead_of_alloc` lint correctly prefers the canonical
+// path over `std::collections::*` re-exports.  Bin crates need the
+// explicit `extern crate alloc;` to make the `alloc::` namespace
+// visible (libraries get it for free via the 2024 edition's prelude).
+extern crate alloc;
+
 /// Per-target hook emission — turns a parsed manifest into the bash
 /// text of `_lint_pre_push.sh`.
 mod emit;
@@ -37,7 +49,7 @@ mod manifest;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::Parser;
 
 use crate::emit::EmitTarget;
@@ -195,7 +207,7 @@ fn emit_verbose_dump(manifest: &Manifest, manifest_path: &std::path::Path, tier:
             .header
             .plan_doc
             .as_deref()
-            .map(|p| format!(", plan: {p}"))
+            .map(|plan| format!(", plan: {plan}"))
             .unwrap_or_default(),
     );
     if let Some(cls) = manifest.classification.as_ref() {
@@ -213,13 +225,13 @@ fn emit_verbose_dump(manifest: &Manifest, manifest_path: &std::path::Path, tier:
         tier
     );
     for gate in &manifest.gate {
-        if !gate.tiers.iter().any(|t| t == tier) {
+        if !gate.tiers.iter().any(|t_name| t_name == tier) {
             continue;
         }
         let first_note = gate
             .notes
             .lines()
-            .find(|l| !l.trim().is_empty())
+            .find(|line| !line.trim().is_empty())
             .unwrap_or("(no notes)");
         eprintln!(
             "  · [{tier}] {id} ({label}) bucket={bucket} when={when} hard={hard} \
