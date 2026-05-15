@@ -33,26 +33,34 @@
 #
 #   In the R6→R7 timeframe, ONE KNOWN-EXPECTED failure remains:
 #
-#     1. Internal crate name reservations not yet pushed.  Until
-#        `uffs-time`, `uffs-text`, `uffs-security`, `uffs-broker` are
-#        reserved on crates.io with stub 0.0.0 versions (R6 step 6,
-#        deliberately deferred to keep this PR scope-bounded), every
-#        published-form dependency on a workspace member fails with
-#        "no matching package named `uffs-X` found".  E.g.
-#        `cargo publish --dry-run -p uffs-broker` fails because
-#        `uffs-security = "0.5.92"` can't resolve.
+#     1. Internal crate name reservations not yet pushed.  Until the
+#        strategic publish set is reserved on crates.io with stub 0.0.0
+#        versions (R6 step 6, deliberately deferred to keep this PR
+#        scope-bounded), any cross-crate published-form dependency would
+#        fail with "no matching package named `uffs-X` found".  In the
+#        post-2026-05-14-scrub state the enumerated dry-run set is just
+#        `uffs-time` + `uffs-text` (both have zero internal deps), so
+#        this class of failure doesn't surface today — but it will
+#        re-appear once the polars-blocked crates (`uffs-mft`,
+#        `uffs-client`, `uffs-mcp`, `uffs-cli`) flip back to publishable.
 #
 #   FORMERLY-LISTED failure 2 (polars git-pin vs crates.io chrono
 #   mismatch) is RESOLVED as of 2026-05-08 via Path A — the 8 polars-
 #   tainted crates (`uffs-polars`, `uffs-mft`, `uffs-format`, `uffs-core`,
-#   `uffs-daemon`, `uffs-client`, `uffs-mcp`, `uffs-cli`) now carry
-#   `publish = false` so this workflow's enumeration step (jq filter
-#   `.publish != []`, see "Enumerate publishable crates" step) skips
-#   them entirely.  Only the 4 polars-free crates above are dry-run.
-#   See deviation log row "R6 → R8 publishability resolution (Path A)"
-#   in `docs/architecture/release-automation-plan.md` for the full
-#   trail; that resolution row also documents how to re-enable the 8
-#   when polars upstream publishes a nightly-API-compatible release.
+#   `uffs-daemon`, `uffs-client`, `uffs-mcp`, `uffs-cli`) carry
+#   `publish = false` (inherited from workspace) so this workflow's
+#   enumeration step (jq filter `.publish != []`) skips them entirely.
+#
+#   2026-05-14 strategic-publish scrub (see
+#   `docs/refactor/crates-io-publishability-deep-dive.md`):  three more
+#   crates dropped from the publishable set after a public-API audit —
+#   `uffs-security` (UFFS-internals dressed as a generic crate),
+#   `uffs-broker` (Windows `[[bin]]` only, no library), and
+#   `uffs-broker-protocol` (1-RTT wire protocol nobody else speaks).
+#   All three are now explicit `publish = false` in their own manifests.
+#   The enumeration step now returns exactly two crates today
+#   (`uffs-time`, `uffs-text`), with four post-polars additions queued
+#   (`uffs-mft`, `uffs-client`, `uffs-mcp`, `uffs-cli`).
 #
 #   For these reasons the workflow currently runs in OBSERVE mode: it
 #   still loops every publishable crate, captures per-crate success or
