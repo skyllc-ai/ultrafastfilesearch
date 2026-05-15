@@ -2,6 +2,12 @@
 
 **Direct NTFS Master File Table (MFT) reader for Windows.**
 
+[![Crates.io](https://img.shields.io/crates/v/uffs-mft.svg)](https://crates.io/crates/uffs-mft)
+[![Documentation](https://docs.rs/uffs-mft/badge.svg)](https://docs.rs/uffs-mft)
+[![License: MPL-2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](../../LICENSE)
+[![Repository](https://img.shields.io/badge/repo-skyllc--ai%2FUltraFastFileSearch-blue)](https://github.com/skyllc-ai/UltraFastFileSearch)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/skyllc-ai/UltraFastFileSearch)
+
 This crate provides ultra-fast, low-level access to the NTFS MFT, bypassing Windows file enumeration APIs entirely. It reads raw disk sectors and parses MFT records in parallel, delivering multi-gigabyte-per-second indexing on fast NVMe volumes while remaining efficient on SSDs and HDDs.
 
 ## 🚀 Performance
