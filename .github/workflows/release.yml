@@ -273,7 +273,12 @@ jobs:
           # symlinks resolve to the active toolchain's cargo.
           #
           # This step mirrors the same defensive repair in
-          # `release-cache-warm.yml`; keep them in sync.
+          # `release-cache-warm.yml`; keep them in sync.  Note that the
+          # repair is *also* re-applied after the Swatinem/rust-cache
+          # restore (next step), because the cache itself can hold a
+          # poisoned `~/.cargo/bin/cargo` that overwrites the freshly
+          # repaired proxy — see "Repair rustup proxy after cache
+          # restore" below.
           rustup default "$(rustup show active-toolchain | awk '{print $1}')"
 
           # Fail-fast smoke check: surface a broken proxy in ~1 s here
@@ -312,6 +317,34 @@ jobs:
           # bit-compatible with what this job needs.
           shared-key: release-${{ matrix.target }}
           cache-on-failure: 'true'
+
+      - name: Repair rustup proxy after cache restore (macOS guard)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # `Swatinem/rust-cache` (above) restores `~/.cargo/bin/` from
+          # a prior run's cache.  On `macos-latest` that cache can
+          # contain a poisoned `cargo` proxy: an earlier run's
+          # `~/.cargo/bin/cargo` was a symlink to `rustup-init` (the
+          # installer) rather than the toolchain proxy, and the cache
+          # captured that bad state.  Restoring it here overwrites the
+          # freshly-repaired proxy from the "Install pinned nightly"
+          # step, so the very next `cargo build` exits with
+          # `error: unexpected argument 'build' found` and a
+          # `rustup_init::run_rustup_inner` backtrace.
+          #
+          # Re-running `rustup default` *after* the cache restore
+          # rewrites the proxy binaries in `~/.cargo/bin` again, so
+          # `cargo build` resolves to the active toolchain's real
+          # cargo even when the restored cache was poisoned.  On the
+          # next successful run, `Swatinem/rust-cache` will save a
+          # clean cache, and the poison clears itself.
+          #
+          # See release pipeline #97 / v0.5.98 for the regression that
+          # motivated this step.  Mirror any change here in
+          # `release-cache-warm.yml`.
+          rustup default "$(rustup show active-toolchain | awk '{print $1}')"
+          cargo --version
 
       - name: Build optimized release binaries
         shell: bash

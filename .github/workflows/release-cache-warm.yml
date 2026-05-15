@@ -194,6 +194,26 @@ jobs:
           # between empty and populated.
           cache-on-failure: 'true'
 
+      - name: Repair rustup proxy after cache restore (macOS guard)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Mirrors `release.yml`'s same-named step — see that workflow
+          # for the full rationale.  Summary: `Swatinem/rust-cache`
+          # restores `~/.cargo/bin/` from a prior run's cache, which on
+          # `macos-latest` can hold a poisoned `cargo` symlink pointing
+          # at `rustup-init` instead of the toolchain proxy.  Re-running
+          # `rustup default` *after* the restore rewrites the proxy so
+          # the subsequent `cargo build` reaches the real cargo.
+          #
+          # Without this step the cache-warm workflow itself would re-
+          # save the poisoned cache on every macOS run, perpetuating
+          # the regression that broke release pipeline #97 / v0.5.98.
+          # Fixing it here lets the next successful warm run save a
+          # clean cache that `release.yml` can consume.
+          rustup default "$(rustup show active-toolchain | awk '{print $1}')"
+          cargo --version
+
       - name: Pre-warm release-mode build cache
         shell: bash
         run: |
