@@ -128,7 +128,12 @@ pub(crate) struct MemberPackage {
     pub(crate) repository: Option<toml::Value>,
 
     /// `readme = ...` — Phase 1 invariant 3.5 requires
-    /// `.workspace = true`.
+    /// `.workspace = true`, with one narrowly scoped exception:
+    /// crates listed in `KnownExceptions::readme_override_ok` may
+    /// instead set the literal value `"README.md"` to point
+    /// crates.io / docs.rs at a per-crate library-focused README
+    /// alongside their `Cargo.toml`.  Any other override pattern
+    /// still fires a finding even for listed crates.
     pub(crate) readme: Option<toml::Value>,
 
     /// `keywords = ...` — Phase 1 invariant 3.5 requires

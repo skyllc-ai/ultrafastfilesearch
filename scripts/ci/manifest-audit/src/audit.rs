@@ -60,6 +60,17 @@ struct KnownExceptions {
     /// `(member, dep_name)` pairs allowed to bypass workspace
     /// inheritance.  Documented in Phase 1 §3.6.
     nonworkspace_dep_ok: BTreeSet<(&'static str, &'static str)>,
+    /// Members allowed to set `readme = "README.md"` directly (not via
+    /// workspace inheritance).  This is the implementation of the
+    /// "deliberately overridden value with a justification comment"
+    /// escape hatch documented in Phase 1 §3.5 — publishable library
+    /// crates that ship their own per-crate `README.md` need to point
+    /// crates.io / docs.rs at that file rather than at the workspace-
+    /// root app-focused README that gets inherited.  The override is
+    /// tightened to the literal value `"README.md"` (same-name pattern,
+    /// alongside the crate's `Cargo.toml`) so an exception listed crate
+    /// can't accidentally point at an arbitrary path.
+    readme_override_ok: BTreeSet<&'static str>,
 }
 
 impl KnownExceptions {
@@ -113,10 +124,21 @@ impl KnownExceptions {
         .into_iter()
         .collect();
 
+        // Per-crate `readme = "README.md"` override allow-list.  Each
+        // listed crate ships its own library-focused `README.md` that
+        // is the right artifact for crates.io / docs.rs to surface
+        // (instead of the inherited workspace-root app README).
+        // Adding an entry here requires the crate to actually have a
+        // `README.md` alongside its `Cargo.toml` — cargo will emit a
+        // packaging error otherwise.
+        let readme_override_ok: BTreeSet<&'static str> =
+            ["uffs-text", "uffs-time"].into_iter().collect();
+
         Self {
             publish_explicit,
             underscore_bin_ok,
             nonworkspace_dep_ok,
+            readme_override_ok,
         }
     }
 }
@@ -160,7 +182,7 @@ pub(crate) fn audit_all(
             "3.4",
             &id,
         ));
-        findings.extend(audit_metadata_fields(member, &id));
+        findings.extend(audit_metadata_fields(member, &id, &exc));
         findings.extend(audit_deps_inherit_workspace(member, &id, &exc));
         findings.extend(audit_lints_inherit_workspace(member, &id));
         findings.extend(audit_no_workspace_policy_blocks(member, &id));
@@ -351,8 +373,14 @@ fn check_inherited(
 }
 
 /// **Invariant 3.5**: every fingerprint metadata field except
-/// `description` must inherit from workspace.
-fn audit_metadata_fields(member: &DiscoveredMember<'_>, id: &str) -> Vec<Finding> {
+/// `description` must inherit from workspace, with one narrowly
+/// scoped exception for `readme` (see [`KnownExceptions::
+/// readme_override_ok`] for the rationale and allow-list).
+fn audit_metadata_fields(
+    member: &DiscoveredMember<'_>,
+    id: &str,
+    exc: &KnownExceptions,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (name, value) in [
         ("version", member.manifest.package.version.as_ref()),
@@ -367,6 +395,20 @@ fn audit_metadata_fields(member: &DiscoveredMember<'_>, id: &str) -> Vec<Finding
             member.manifest.package.documentation.as_ref(),
         ),
     ] {
+        // `readme` is the only field where per-crate override has a
+        // documented legitimate use case: a publishable library crate
+        // that ships its own per-crate `README.md` (see Phase 1 §3.5
+        // "deliberately overridden with justification" escape hatch).
+        // The exception is tightened to the literal `"README.md"`
+        // same-name pattern so a listed crate can't accidentally point
+        // at an arbitrary path.  Any other override pattern still
+        // fires a finding even for listed crates.
+        if name == "readme"
+            && exc.readme_override_ok.contains(id)
+            && value.and_then(toml::Value::as_str) == Some("README.md")
+        {
+            continue;
+        }
         findings.extend(check_inherited(value, name, "3.5", id));
     }
     findings
@@ -606,7 +648,7 @@ workspace = true
         let m = parse_member(MEMBER_CLEAN).unwrap();
         let d = disc("crates/uffs-core/Cargo.toml", &m);
         let exc = KnownExceptions::new();
-        assert!(audit_metadata_fields(&d, "uffs-core").is_empty());
+        assert!(audit_metadata_fields(&d, "uffs-core", &exc).is_empty());
         assert!(audit_deps_inherit_workspace(&d, "uffs-core", &exc).is_empty());
         assert!(audit_lints_inherit_workspace(&d, "uffs-core").is_empty());
         assert!(audit_no_workspace_policy_blocks(&d, "uffs-core").is_empty());
@@ -715,6 +757,84 @@ workspace = true
             ),
             "crates/uffs-core"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Invariant 3.5 — readme override allow-list
+    // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn readme_override_on_allowlisted_crate_is_suppressed() {
+        // `uffs-time` is on the allow-list and uses the conventional
+        // `readme = "README.md"` same-name pattern — must not fire.
+        let text = MEMBER_CLEAN.replace("readme.workspace = true", "readme = \"README.md\"");
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        assert!(
+            findings.is_empty(),
+            "allow-listed readme override should be suppressed; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn readme_override_on_unlisted_crate_still_fires_3_5() {
+        // `uffs-core` is NOT on the allow-list — override must fire.
+        let text = MEMBER_CLEAN.replace("readme.workspace = true", "readme = \"README.md\"");
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-core/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-core", &exc);
+        let readme_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.detail.contains("`readme`"))
+            .collect();
+        assert_eq!(
+            readme_findings.len(),
+            1,
+            "unlisted crate readme override should fire 3.5; got: {findings:?}"
+        );
+        assert_eq!(readme_findings[0].invariant, "3.5");
+    }
+
+    #[test]
+    fn readme_override_to_non_readme_path_still_fires_even_for_listed_crate() {
+        // `uffs-time` is on the allow-list, but the exception is
+        // tightened to the literal `"README.md"`.  An attempt to point
+        // at a different path (e.g. `"docs/intro.md"`) must still fire.
+        let text = MEMBER_CLEAN.replace("readme.workspace = true", "readme = \"docs/intro.md\"");
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        let readme_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.detail.contains("`readme`"))
+            .collect();
+        assert_eq!(
+            readme_findings.len(),
+            1,
+            "non-README.md readme override on listed crate must still fire 3.5; got: {findings:?}"
+        );
+        assert_eq!(readme_findings[0].invariant, "3.5");
+    }
+
+    #[test]
+    fn readme_workspace_inherit_passes_for_every_member() {
+        // The default state (workspace inheritance) must pass for both
+        // allow-listed and non-allow-listed crates.
+        let m = parse_member(MEMBER_CLEAN).unwrap();
+        let exc = KnownExceptions::new();
+        for id in ["uffs-core", "uffs-time", "uffs-text", "uffs-broker"] {
+            let path = format!("crates/{id}/Cargo.toml");
+            let d = disc(&path, &m);
+            let findings = audit_metadata_fields(&d, id, &exc);
+            assert!(
+                !findings.iter().any(|f| f.detail.contains("`readme`")),
+                "`readme.workspace = true` must not fire for `{id}`; got: {findings:?}"
+            );
+        }
     }
 
     #[test]
