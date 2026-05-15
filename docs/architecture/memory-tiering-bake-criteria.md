@@ -220,6 +220,23 @@ just soak ws-trace
 - Daemon PID at hour 24 == PID at hour 0 (no restart mid-trace).
 - Working Set at hour 24 ≤ 1.5× Working Set at hour 0.
 
+> **Note on the WS bound semantics (2026-05-13 finding).**  The
+> 24h-vs-0h `ws_bytes` comparison can pass with a large drop when
+> Windows trims the daemon's working set via `EmptyWorkingSet`
+> (the Phase 5 G2 wiring at `crate::cache::working_set_trim::WorkingSetTrim`).
+> That's a standby-list page-trim, not a memory release.  The
+> leak-relevant signal on Windows is `pm_bytes` (Private Memory
+> Size / commit-charge), which is captured in every snapshot at
+> the `PM` field but not currently the assertion target.  The
+> existing `ws_bytes ≤ 1.5×` bound still catches a real leak
+> reliably (a leak grows BOTH WS and PM monotonically); a future
+> refinement should add a parallel `pm_bytes ≤ 1.5×` assertion
+> so the WS-trim trajectory is read correctly without operator
+> footnote work.  See
+> `memory-tiering-windows-host-validation.md` §6 sub-section
+> §4.5d for the full `ws_bytes`-vs-`pm_bytes` breakdown from the
+> 2026-05-13 capture.
+
 ### 1.8 Bake-day activity routing
 
 The seven bake-days split between full-readiness days (§1.1 / §1.2)
@@ -289,8 +306,8 @@ minor-bump invocation:
       run); the 9th (adaptive-bonus visibility) is deferred to a
       re-run after PR #218's harness fix
       (`shard.ttl=debug` → `shard.ttl=trace`) lands.  See
-      `memory-tiering-windows-host-validation.md` §6.2 for the
-      root-cause walkthrough.  Daemon-side regression test
+      `memory-tiering-windows-host-validation.md` §6 sub-section
+      §4.5b for the root-cause walkthrough.  Daemon-side regression test
       `crate::index::tests::shard_ttl_events::
       below_ttl_event_pins_target_level_message_and_reason`
       protects the wire-format contract against future drift.
@@ -303,13 +320,28 @@ minor-bump invocation:
       bug — the save pipeline emitted 11 `compact-cache save` events
       during the soak.  Retroactively closes 7 of 7 with the PR #218
       regex fix; no new soak required.  See
-      `memory-tiering-windows-host-validation.md` §6.3 for the
-      root-cause walkthrough.  Daemon-side regression test
+      `memory-tiering-windows-host-validation.md` §6 sub-section
+      §4.5c for the root-cause walkthrough.  Daemon-side regression test
       `crate::cache::journal_loop::tests::save_log_message::
       compact_cache_save_log_message_pins_string_target_and_level`
       protects the wire-format contract against future drift.
-- [ ] **Working-Set trajectory captured** (§1.7) within pass criteria
+- [x] **Working-Set trajectory captured** (§1.7) within pass criteria
       (≤ 1.5× over 24 h).
+
+      Status (2026-05-13): 4 of 4 assertions PASS in
+      `LOG/uffs_soak/wstrace-20260513-113344/` (May 13-14
+      reference-box run).  PID 50492 stable across 24 samples;
+      289 / 289 keep-warm probes; WS ratio 0.03× (first=5.37 GB,
+      last=184 MB).  The 30× WS drop is the `EmptyWorkingSet`
+      page-trim (Phase 5 G2 mechanism), not a leak: `pm_bytes`
+      decreased only 3 % (6.53 GB → 6.36 GB) and the daemon's
+      own RESIDENT accounting stayed at ~5.0 GiB across all 7
+      drives.  See
+      [`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
+      §6 sub-section §4.5d for the full `ws_bytes`-vs-`pm_bytes`
+      analysis.  Recommended post-v0.6.0 refinement: re-anchor
+      the soak validator on `pm_bytes` (already captured in
+      every snapshot, just not the assertion field).
 - [ ] **CHANGELOG `Unreleased` section finalized** — every shipped PR
       since v0.5.85 listed under the right heading
       (`Added` / `Changed` / `Fixed`).

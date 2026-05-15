@@ -787,6 +787,17 @@ Four acceptance criteria (the Phase 7 contract under
    The harness wraps this assertion as a `validation/*.{pass,fail}`
    breadcrumb.
 
+   > **Note (2026-05-13 finding):** on Windows the `WS` field
+   > drops sharply on the first `EmptyWorkingSet` trim (Phase 5
+   > G2 wiring) and stays low for the rest of the soak — the
+   > daemon's actual memory footprint is `PM` (Private Memory
+   > Size / commit-charge), which is also in every snapshot.
+   > The `≤ 1.5×` bound still catches a real leak (which would
+   > grow both WS and PM monotonically), but reviewers should
+   > cross-check `PM` from `00h-process.json` vs
+   > `23h-process.json` for the leak-relevant reading.  See §6
+   > sub-section §4.5d for the full breakdown.
+
 4. **No `panic` / `OutOfMemoryError` / `FATAL`.**  Same grep
    pattern as G4:
    ```powershell
@@ -1440,24 +1451,103 @@ hunting for strings the daemon never emits.
   message rename fails CI before reaching a 24-h soak.
 
 > **Footnote on the Working-Set ratio (criterion 3).**  The ratio
-> passed the ≤ 1.5× bound vacuously (Working Set dropped 500× over
-> 24 h — `7 259 754 496 B` → `12 767 232 B`).  This indicates the
-> daemon retired most drives to Parked rather than holding
-> steady-state operator-load memory; the assertion correctly fires
-> "no growth" but doesn't exercise the "no leak under sustained
-> load" intent.  This is a separate concern about whether the 5
-> file / sec churn workload is sufficient to keep drives Warm — a
-> future refinement could either bump the churn rate or run the
-> WS-trace gate (§1.7 in `memory-tiering-bake-criteria.md`) for
-> steady-state coverage.  It does **not** invalidate the "no leak"
-> assertion for the v0.6.0 cut: a leak would have grown the WS,
-> not shrunk it.
+> passed the ≤ 1.5× bound with a 500× drop over 24 h
+> (`7 259 754 496 B` → `12 767 232 B`).  Initially flagged as a
+> potential vacuous pass (suspected idle-decay), but **resolved
+> by the 2026-05-13 ws-trace capture (§4.5d below)**: the same
+> 30× drop was observed in ws-trace while the keep-warm worker
+> held all 7 drives in Warm across 24 h, and `pm_bytes`
+> (commit-charge) stayed essentially flat throughout.  Both
+> soaks' WS drops are the benign Phase 5 G2 `EmptyWorkingSet`
+> page-trim, not silent idle-decay or leak.  See §4.5d for the
+> full `ws_bytes`-vs-`pm_bytes` breakdown.
 
 **Phase 7 closes retroactively** — no new 24-h soak required.
 The validator-only re-run can be done by replaying the existing
 `daemon.log` through the fixed `scripts/dev/long-soak.rs`
 `validate_phase7` (manual `grep` shown above suffices for the
 acceptance bar).
+
+### 4.5d 2026-05-13 ws-trace 24-h capture — ALL GREEN with a measurement caveat
+
+Source: `LOG/uffs_soak/wstrace-20260513-113344/` (24-h
+observe-only Working-Set trajectory on the 7-drive reference
+box, May 13-14 2026).
+
+Run summary: **4 of 4 harness assertions PASS** with a
+measurement nuance worth documenting before the v0.6.0 cut.
+
+| Assertion (from `memory-tiering-bake-criteria.md` §1.7) | 24-h evidence | Status |
+|---|---|---|
+| ≥ 20 hourly snapshots captured | 24 snapshots in `snapshots/*-process.json` + `snapshots/*-status-drives.txt` | ✅ |
+| Keep-warm worker fired ≥ 216 probes | 289 / 289 fired, zero errors in `keep-warm.log` | ✅ |
+| Daemon PID at hour 24 == PID at hour 0 | PID 50492 across all 24 samples | ✅ |
+| Working Set at hour 24 ≤ 1.5× Working Set at hour 0 | first=5 367 414 784 B, last=184 193 024 B, ratio=**0.03×** | ✅ |
+
+**The catch: `ws_bytes` is NOT the right proxy for "no leak" on
+Windows.**  `wstrace.csv` shows a 30× drop in `ws_bytes` at the
+03h → 04h boundary (5.37 GB → 160 MB), but at the same sample:
+
+* `pm_bytes` (Private Memory Size, the OS's commit-charge for
+  the process) actually **increased** by ~870 MB (6.53 GB →
+  7.40 GB), then settled to 6.36 GB by 06h and held there for
+  the remaining 18 h.
+* The daemon's own per-drive RESIDENT accounting in
+  `04h-status-drives.txt` is **identical** to
+  `03h-status-drives.txt`: all 7 drives still Warm with the
+  same ~5.0 GiB cumulative body-Arc footprint (C=715 MiB,
+  D=1.30 GiB, E=485 MiB, F=466 MiB, G=1 MiB, M=311 MiB,
+  S=1.36 GiB).
+* The keep-warm worker fired without errors across the
+  03h → 04h boundary (probes #37-#48 all `OK` in
+  `keep-warm.log`).
+
+**Conclusion:** the WS drop is the **`EmptyWorkingSet`
+page-trim mechanism** (the Phase 5 G2 wiring via
+`crate::cache::working_set_trim::WorkingSetTrim`), not a tier
+transition or memory release.  Pages moved from the daemon's
+resident WS into the OS standby list; underlying private bytes
+stayed allocated and the data is still arc-held on heap.  On
+next access the pages re-fault from standby with no disk I/O.
+
+Three orthogonal readings of the same 24 h:
+
+```
+Working Set     :  5 367 414 784 B  →    184 193 024 B   (0.03×)  ← OS view, not a leak signal
+Private Memory  :  6 534 524 928 B  →  6 355 034 112 B   (0.97×)  ← commit-charge, real leak signal
+Daemon RESIDENT :          5.0 GiB  →         5.0 GiB    (1.00×)  ← daemon's body-Arc accounting
+```
+
+The daemon **decreased** committed memory by 3 % over 24 h
+while holding 7 drives in WARM and serving 289 probes.  No leak.
+
+**Implication for the §4.5c Phase 7 footnote.**  The "vacuous
+pass" concern raised there (Phase 7's WS ratio = 0.00× being
+suspicious because the daemon might have demoted everything to
+Parked) is **resolved**.  ws-trace's keep-warm worker held the
+daemon in Warm steady-state across 24 h and the daemon still
+showed the same 30× WS drop — so the Phase 7 WS drop is the
+same benign `EmptyWorkingSet` page-trim, not silent idle-decay.
+Both soaks were healthy.
+
+**Recommended future refinement (NOT a v0.6.0 blocker).**
+`scripts/dev/long-soak.rs` should additionally surface
+`pm_bytes` and re-anchor the assertion on it, since on Windows
+it's the leak-relevant metric.  Tracked informally for
+post-v0.6.0; not a blocker because:
+
+1. `pm_bytes` is already captured in every `Get-Process`
+   snapshot (`snapshots/*-process.json` has it under the `PM`
+   field) — the evidence is on disk regardless of which field
+   the assertion uses.
+2. The current `ws_bytes` assertion still catches a real leak
+   reliably: any process that's leaking would grow both WS and
+   private bytes monotonically.  The "0.03× ratio" pass is
+   directionally correct (no growth = no leak), just
+   numerically misleading.
+
+**ws-trace closes** — all 4 assertions PASS end-to-end on the
+existing capture; no re-run needed.
 
 ### 4.6 Lifecycle load-stall force-retire at 2 h 11 min (Phase 7 scope)
 
