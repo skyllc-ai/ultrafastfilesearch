@@ -320,8 +320,11 @@ jobs:
               ;;
           esac
 
-          printf '🧹 Looking for stale `%s` issues whose title ends in `— %s` ...\n' \
-            "${label}" "${short_sha}"
+          # Backslash-escape the backticks so the literal ` chars appear
+          # in the output instead of triggering command substitution
+          # in the double-quoted echo string.  (Avoiding `printf '...'`
+          # with backticks-inside-single-quotes silences SC2016.)
+          echo "🧹 Looking for stale \`${label}\` issues whose title ends in \`— ${short_sha}\` ..."
 
           # List open issues with the right label.  We filter client-side
           # by title-suffix match against the short SHA — the search API's
@@ -337,7 +340,7 @@ jobs:
           )
 
           if [[ "${#issue_nums[@]}" -eq 0 ]]; then
-            printf '✅ No stale `%s` issues found for commit %s.\n' "${label}" "${short_sha}"
+            echo "✅ No stale \`${label}\` issues found for commit ${short_sha}."
             exit 0
           fi
 
@@ -350,5 +353,5 @@ jobs:
               --comment "Auto-closed: the originally-failed CI run for commit \`${short_sha}\` was retried by the auto-rerun-transient workflow and **succeeded** — the failure was transient (HTTP 429 / network / runner setup). See the green [rerun](${rerun_url}). No code regression."
           done
 
-          printf '✅ Closed %d stale `%s` issue(s) for commit %s.\n' \
-            "${#issue_nums[@]}" "${label}" "${short_sha}"
+          # `${#arr[@]}` already stringifies as an integer; no %d needed.
+          echo "✅ Closed ${#issue_nums[@]} stale \`${label}\` issue(s) for commit ${short_sha}."

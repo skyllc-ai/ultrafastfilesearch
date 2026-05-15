@@ -221,7 +221,10 @@ jobs:
       - name: No-op summary
         if: steps.diff.outputs.changed == 'false'
         run: |
-          echo "## ✅ No changes this week" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Upstream audit sources produced no new records that affect our dep graph." >> "$GITHUB_STEP_SUMMARY"
-          echo "Next refresh scheduled for next Monday at 08:00 UTC." >> "$GITHUB_STEP_SUMMARY"
+          # Single grouped redirect into $GITHUB_STEP_SUMMARY (SC2129).
+          {
+            echo "## ✅ No changes this week"
+            echo ""
+            echo "Upstream audit sources produced no new records that affect our dep graph."
+            echo "Next refresh scheduled for next Monday at 08:00 UTC."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -117,6 +117,13 @@ jobs:
     name: 🔥 Warm ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
+    # Cache-warming is best-effort by design (see header comment).  A
+    # transient runner-image flake on any single target should not show
+    # the workflow as ❌ in PR checks / branch protection — only the
+    # release pipeline that consumes the warmed cache matters for
+    # release correctness.  Real regressions still surface via the
+    # workflow's run history and the per-job summary table.
+    continue-on-error: true
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     strategy:
@@ -150,7 +157,30 @@ jobs:
           df -h /
 
       - name: Install pinned nightly (from rust-toolchain.toml)
-        run: rustup show
+        shell: bash
+        run: |
+          # `rustup show` reads `rust-toolchain.toml` and installs the
+          # exact channel + components pinned there.
+          rustup show
+
+          # Defensive: on `macos-latest` runner images the
+          # `~/.cargo/bin/cargo` proxy is occasionally a stale symlink
+          # pointing at `rustup-init` (the installer) instead of the
+          # proxy that forwards to the active toolchain's real cargo.
+          # When that happens, every subsequent `cargo build` /
+          # `cargo metadata` exits with `error: unexpected argument
+          # 'build' found` and a `rustup_init::run_rustup_inner`
+          # backtrace.  Forcibly re-setting the default toolchain
+          # rewrites the proxy binaries in `~/.cargo/bin`, so the
+          # symlinks resolve to the active toolchain's cargo.
+          rustup default "$(rustup show active-toolchain | awk '{print $1}')"
+
+          # Fail-fast smoke check: surface a broken proxy in ~1 s here
+          # instead of letting Swatinem/rust-cache's `cargo metadata`
+          # (and then a 30+ min `cargo build`) silently waste runner
+          # minutes before failing on the same root cause.
+          cargo --version
+          rustc --version
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -169,10 +199,31 @@ jobs:
         run: |
           echo "🔥 Warming release cache for ${{ matrix.target }}"
           echo "   RUSTFLAGS=$RUSTFLAGS"
+
           # Identical invocation to `release.yml::build-release-binaries`.
           # If that command's flags ever diverge from this one, the cache
           # produced here will still hit on key but might not match the
           # actual artifact set release.yml needs — keep them aligned.
           # `--locked` per the workspace's §2.8 policy.
-          cargo build --locked --release --target ${{ matrix.target }} --workspace --bins
-          echo "✅ Cache warmed for ${{ matrix.target }}"
+          #
+          # Single auto-retry on failure absorbs GitHub-runner-image
+          # flakes (transient network blips during dep download,
+          # occasional rustup proxy regressions on macos-latest that
+          # the Install-step's repair didn't catch, etc.) without
+          # making release pipeline maintainers babysit re-runs.  The
+          # 10-s sleep lets transient network state recover before the
+          # second attempt.
+          set +e
+          for attempt in 1 2; do
+            cargo build --locked --release --target ${{ matrix.target }} \
+              --workspace --bins
+            rc=$?
+            if [[ $rc -eq 0 ]]; then
+              echo "✅ Cache warmed for ${{ matrix.target }} on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::cargo build for ${{ matrix.target }} failed on attempt $attempt (exit $rc); retrying after 10s..."
+            sleep 10
+          done
+          echo "::error::cargo build for ${{ matrix.target }} failed twice; giving up."
+          exit 1

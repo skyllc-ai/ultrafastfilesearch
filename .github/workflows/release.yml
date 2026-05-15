@@ -110,9 +110,11 @@ jobs:
             exit 1
           fi
 
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=$VERSION" >> $GITHUB_OUTPUT
-          echo "release-name=UFFS $VERSION" >> $GITHUB_OUTPUT
+          {
+            echo "version=$VERSION"
+            echo "tag=$VERSION"
+            echo "release-name=UFFS $VERSION"
+          } >> "$GITHUB_OUTPUT"
 
           echo "✅ Release validation passed"
           echo "📦 Version: $VERSION"
@@ -253,7 +255,36 @@ jobs:
           df -h /
 
       - name: Install pinned nightly (from rust-toolchain.toml)
-        run: rustup show
+        shell: bash
+        run: |
+          # `rustup show` reads `rust-toolchain.toml` and installs the
+          # exact channel + components pinned there.
+          rustup show
+
+          # Defensive: on `macos-latest` runner images the
+          # `~/.cargo/bin/cargo` proxy is occasionally a stale symlink
+          # pointing at `rustup-init` (the installer) instead of the
+          # proxy that forwards to the active toolchain's real cargo.
+          # When that happens, every subsequent `cargo build` /
+          # `cargo metadata` exits with `error: unexpected argument
+          # 'build' found` and a `rustup_init::run_rustup_inner`
+          # backtrace.  Forcibly re-setting the default toolchain
+          # rewrites the proxy binaries in `~/.cargo/bin`, so the
+          # symlinks resolve to the active toolchain's cargo.
+          #
+          # This step mirrors the same defensive repair in
+          # `release-cache-warm.yml`; keep them in sync.
+          rustup default "$(rustup show active-toolchain | awk '{print $1}')"
+
+          # Fail-fast smoke check: surface a broken proxy in ~1 s here
+          # instead of letting Swatinem/rust-cache's `cargo metadata`
+          # (and then a 30+ min `cargo build`) silently waste runner
+          # minutes before failing on the same root cause.  On the
+          # production release pipeline this matters even more: a 30+
+          # min late failure on a tag-dispatched run delays the
+          # release by a full re-run cycle.
+          cargo --version
+          rustc --version
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -339,7 +370,19 @@ jobs:
         shell: bash
         run: |
           echo "📐 Release binary sizes:"
-          ls -lh target/${{ matrix.target }}/release/ 2>/dev/null | grep -E 'uffs|uffsd|uffsmcp|uffs-mft' || true
+          # Glob over the shipping-set names instead of `ls | grep` (SC2010);
+          # `nullglob` keeps the loop silent when a target dir hasn't built.
+          shopt -s nullglob
+          for bin in target/${{ matrix.target }}/release/uffs \
+                     target/${{ matrix.target }}/release/uffsd \
+                     target/${{ matrix.target }}/release/uffsmcp \
+                     target/${{ matrix.target }}/release/uffs-mft \
+                     target/${{ matrix.target }}/release/uffs.exe \
+                     target/${{ matrix.target }}/release/uffsd.exe \
+                     target/${{ matrix.target }}/release/uffsmcp.exe \
+                     target/${{ matrix.target }}/release/uffs-mft.exe; do
+            [[ -f "$bin" ]] && ls -lh "$bin"
+          done
 
       - name: Package binaries
         shell: bash
@@ -363,12 +406,14 @@ jobs:
             done
           fi
 
-          # Create checksums
+          # Create checksums.  Using `./*` guards against a future file
+          # named like `-foo` being parsed as an option by sha256sum /
+          # shasum (SC2035).
           cd release-artifacts
           if command -v sha256sum >/dev/null; then
-            sha256sum * > checksums.txt
+            sha256sum ./* > checksums.txt
           else
-            shasum -a 256 * > checksums.txt
+            shasum -a 256 ./* > checksums.txt
           fi
 
           echo "📦 Packaged binaries:"
@@ -612,8 +657,9 @@ jobs:
           # Regenerate AFTER SBOMs are placed so the manifest is complete.
           # The SLSA attestation runs next and covers every file in this
           # directory, so there is no window where CHECKSUMS.txt is stale
-          # relative to what ships.
-          sha256sum * > CHECKSUMS.txt
+          # relative to what ships.  `./*` guards against future filenames
+          # that could be parsed as options by sha256sum (SC2035).
+          sha256sum ./* > CHECKSUMS.txt
 
           echo "📦 Final release assets (SBOMs + checksums included):"
           ls -la
@@ -787,22 +833,27 @@ jobs:
       - name: Create release summary
         shell: bash
         run: |
-          echo "## 🎉 Release ${{ needs.release-preparation.outputs.version }} Created!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Release Details:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ needs.release-preparation.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: ${{ needs.release-preparation.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered by**: ${{ inputs.triggered_by || 'tag-push' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit**: ${{ inputs.commit_sha || github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚀 Artifacts Built:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Windows x86_64 (primary — live NTFS MFT)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ macOS ARM64 (offline MFT analysis)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Linux x86_64 (offline MFT analysis)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔗 Links:" >> $GITHUB_STEP_SUMMARY
-          echo "- [📦 Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ needs.release-preparation.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [📋 Full Changelog](https://github.com/${{ github.repository }}/commits/${{ needs.release-preparation.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+          # Single grouped redirect into $GITHUB_STEP_SUMMARY (SC2129),
+          # with the variable quoted to survive any future path with
+          # spaces in the runner-tmp directory (SC2086).
+          {
+            echo "## 🎉 Release ${{ needs.release-preparation.outputs.version }} Created!"
+            echo ""
+            echo "### 📦 Release Details:"
+            echo "- **Version**: ${{ needs.release-preparation.outputs.version }}"
+            echo "- **Tag**: ${{ needs.release-preparation.outputs.tag }}"
+            echo "- **Triggered by**: ${{ inputs.triggered_by || 'tag-push' }}"
+            echo "- **Commit**: ${{ inputs.commit_sha || github.sha }}"
+            echo ""
+            echo "### 🚀 Artifacts Built:"
+            echo "- ✅ Windows x86_64 (primary — live NTFS MFT)"
+            echo "- ✅ macOS ARM64 (offline MFT analysis)"
+            echo "- ✅ Linux x86_64 (offline MFT analysis)"
+            echo ""
+            echo "### 🔗 Links:"
+            echo "- [📦 Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ needs.release-preparation.outputs.tag }})"
+            echo "- [📋 Full Changelog](https://github.com/${{ github.repository }}/commits/${{ needs.release-preparation.outputs.version }})"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Failure Notification — opens a GitHub Issue on release failure

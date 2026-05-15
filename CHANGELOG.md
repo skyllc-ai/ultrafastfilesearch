@@ -578,6 +578,97 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
+### Fixed — `release-cache-warm.yml` macOS runner-image flake + workspace-wide actionlint cleanup
+
+The `release-cache-warm.yml` workflow had a ~50 % failure rate
+on its `aarch64-apple-darwin` matrix leg over the past week.
+Every failure shared the same fingerprint: `cargo build` exited
+with `error: unexpected argument 'build' found` and a
+`rustup_init::run_rustup_inner` stack backtrace.
+
+**Root cause.**  On `macos-latest` runner images the
+`~/.cargo/bin/cargo` proxy is occasionally a stale symlink
+pointing at `rustup-init` (the installer binary) instead of the
+proxy that forwards to the active toolchain's real cargo.
+`rustup show` succeeded because it invoked rustup directly; the
+very next step's `cargo build` hit the broken proxy and fell
+through to the installer's argument parser, which has never
+heard of `build`.  Linux + Windows runners were unaffected.
+
+**Three changes to `release-cache-warm.yml::warm`, sized to the problem:**
+
+- **Toolchain-install repair (also mirrored into `release.yml::build-release-binaries`).**
+  The Install-step now appends a forced
+  `rustup default "$(rustup show active-toolchain | awk '{print $1}')"`
+  after `rustup show`, which rewrites the proxy binaries in
+  `~/.cargo/bin` so the symlinks resolve to the active
+  toolchain's real cargo.  A `cargo --version` /
+  `rustc --version` smoke check at the end of the step
+  surfaces a still-broken proxy in ~1 s instead of letting
+  Swatinem/rust-cache's `cargo metadata` and a 30+ min
+  `cargo build` silently waste runner minutes before failing
+  on the same root cause.  The same repair is mirrored into
+  `release.yml` because that workflow's tag-dispatched runs
+  would hit the same broken proxy on a freshly-flaky runner
+  image — and on the production release pipeline a 30+ min
+  late failure delays the release by a full re-run cycle.
+
+- **Single auto-retry on the cargo-build step.**  Even with the
+  proxy repair, GitHub-hosted runners have transient
+  network blips during dep download and occasional sccache
+  flakes.  A 2-attempt bash loop with a 10-s sleep between
+  attempts absorbs those without requiring maintainers to
+  manually re-run the workflow.  Release.yml is NOT given a
+  retry — it's the production critical path and we want it
+  to fail loudly so the release pipeline's
+  `notify-failure` issue-opener fires.
+
+- **`continue-on-error: true` at the warm-job level.**  The
+  workflow's own header comment already documented that
+  cache-warming is best-effort by design.  `continue-on-error`
+  makes that intent explicit to GitHub: a transient single-
+  platform runner-image flake no longer paints the workflow
+  ❌ in PR checks / branch protection.  Real regressions
+  still surface via the workflow's run history + the per-job
+  summary table.
+
+**Adjacent actionlint cleanup, same PR.**  While auditing the
+two release workflows, every other workflow in
+`.github/workflows/` was actionlint-scanned and the
+pre-existing shellcheck warnings (all info / style level —
+none of them latent bugs) were resolved:
+
+- **`release.yml`**: 5 clusters — SC2086 (unquoted
+  `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes), SC2129
+  (individual redirects grouped with `{ ... } >> "$out"`),
+  SC2010 (`ls | grep` replaced with an explicit glob loop
+  over the shipping-set binary names), SC2035 (`sha256sum *`
+  / `shasum -a 256 *` switched to `./*` form to guard
+  against future filenames starting with `-`).
+
+- **`auto-rerun-transient.yml`**: 3 × SC2016 — false
+  positives where literal backticks inside a single-quoted
+  `printf` format string looked like command-substitution
+  markers to shellcheck.  Rewritten as `echo` with
+  backslash-escaped backticks, which is more idiomatic for
+  "print this template string" and silences the warning
+  without a per-line suppression directive.
+
+- **`cargo-vet-refresh.yml`**: 1 × SC2129 — individual
+  `echo … >> "$GITHUB_STEP_SUMMARY"` writes grouped into a
+  single `{ … } >> "$GITHUB_STEP_SUMMARY"` block.
+
+- **`dependabot-review.yml`**: 3 × SC2129 — same
+  group-redirect fix in three locations (the delta-summary
+  table, the newly-resolved-crates block, and the
+  dropped-crates block).
+
+Verification: `actionlint .github/workflows/*.yml` is now
+clean across every workflow (zero warnings, zero errors).
+All script behavior is byte-identical to before; bash test
+runs of the rewritten echo / grouped-redirect blocks produce
+the same output as the originals.
+
 ### Fixed — Phase 6 + Phase 7 24-h soak harness (PR #218)
 
 Two harness-side bugs surfaced by the 2026-05-09 / 2026-05-10

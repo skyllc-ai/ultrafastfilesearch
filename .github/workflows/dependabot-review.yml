@@ -118,15 +118,18 @@ jobs:
 
           # Surface the raw numbers regardless — useful for a
           # retroactive audit even when the delta is within bounds.
-          echo "## 📊 Dependency graph delta" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| --- | ---: |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Crates on main (HEAD~1) | \`$N_BEFORE\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Crates on PR (HEAD)     | \`$N_AFTER\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Net change              | \`$DIFF\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Alert threshold         | \`> $GROWTH_THRESHOLD\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
+          # Single grouped redirect into $GITHUB_STEP_SUMMARY (SC2129).
+          {
+            echo "## 📊 Dependency graph delta"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | ---: |"
+            echo "| Crates on main (HEAD~1) | \`$N_BEFORE\` |"
+            echo "| Crates on PR (HEAD)     | \`$N_AFTER\` |"
+            echo "| Net change              | \`$DIFF\` |"
+            echo "| Alert threshold         | \`> $GROWTH_THRESHOLD\` |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if (( DIFF > GROWTH_THRESHOLD )); then
             # `::warning::` emits a PR-level annotation that shows up
@@ -170,18 +173,24 @@ jobs:
           # Drop the header if empty — no point cluttering the summary.
           ADDED=$(comm -13 "$BEFORE_FILE" "$AFTER_FILE")
           if [[ -n "$ADDED" ]]; then
-            echo "### 🆕 Newly-resolved crate names" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$ADDED" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Single grouped redirect into $GITHUB_STEP_SUMMARY (SC2129).
+            {
+              echo "### 🆕 Newly-resolved crate names"
+              echo ""
+              echo '```'
+              echo "$ADDED"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
           REMOVED=$(comm -23 "$BEFORE_FILE" "$AFTER_FILE")
           if [[ -n "$REMOVED" ]]; then
-            echo "### ♻️  Dropped crate names" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$REMOVED" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Single grouped redirect into $GITHUB_STEP_SUMMARY (SC2129).
+            {
+              echo "### ♻️  Dropped crate names"
+              echo ""
+              echo '```'
+              echo "$REMOVED"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
