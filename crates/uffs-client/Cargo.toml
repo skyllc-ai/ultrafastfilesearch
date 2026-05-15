@@ -15,8 +15,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme.workspace = true
-keywords.workspace = true
-categories.workspace = true
+# Per-crate keywords + categories override (Phase 1 §3.5 escape hatch
+# via `KnownExceptions::keywords_override_ok` / `categories_override_ok`
+# in `scripts/ci/manifest-audit/src/audit.rs`).  This is the thin
+# client crate that surfaces UFFS to every consumer (CLI, TUI, GUI,
+# MCP).  Workspace defaults (app-app-app) don't surface the IPC /
+# RPC / daemon-lifecycle nature that makes this crate independently
+# useful.  See issue #241 for the full discoverability rationale.
+keywords = ["ipc", "rpc", "client", "uffs", "daemon"]
+categories = ["api-bindings", "filesystem"]
 
 # Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
 # Despite the "thin-client invariant: zero polars" intent above, this

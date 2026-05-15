@@ -71,6 +71,32 @@ struct KnownExceptions {
     /// alongside the crate's `Cargo.toml`) so an exception listed crate
     /// can't accidentally point at an arbitrary path.
     readme_override_ok: BTreeSet<&'static str>,
+    /// Members allowed to set `keywords = [...]` directly (not via
+    /// workspace inheritance).  Same Phase 1 §3.5 "deliberately
+    /// overridden with justification" escape hatch as `readme`.
+    /// Publishable library crates benefit from per-crate keywords
+    /// tailored to their specific domain (e.g. `uffs-time` is a
+    /// generic NTFS FILETIME helper that wants `["ntfs", "filetime",
+    /// "datetime", ...]` rather than the workspace-app defaults
+    /// `["mft", "ntfs", "file-search", "windows", "polars"]` which
+    /// describe the *application*, not the library).  The override
+    /// is required to be a **non-empty TOML array** — an empty array
+    /// still fires (cargo treats `keywords = []` as legal but it
+    /// defeats the discoverability purpose of an override).  Per-
+    /// keyword shape (max 5, max 20 chars, `^[a-zA-Z][a-zA-Z0-9_-]*$`)
+    /// is *not* re-validated here because `cargo publish --dry-run`
+    /// in the weekly `crates-io-dry-run.yml` workflow enforces it
+    /// authoritatively against crates.io's own validator.
+    keywords_override_ok: BTreeSet<&'static str>,
+    /// Members allowed to set `categories = [...]` directly (not via
+    /// workspace inheritance).  Same rationale as `keywords_override_ok`
+    /// — publishable library crates want category slugs that match
+    /// their library role (e.g. `uffs-time` → `["date-and-time"]`)
+    /// rather than the workspace-app defaults (`["filesystem",
+    /// "command-line-utilities"]`).  Same non-empty-array requirement.
+    /// Slug validity (must be on `https://crates.io/category_slugs`)
+    /// is enforced authoritatively by `cargo publish --dry-run`.
+    categories_override_ok: BTreeSet<&'static str>,
 }
 
 impl KnownExceptions {
@@ -134,11 +160,32 @@ impl KnownExceptions {
         let readme_override_ok: BTreeSet<&'static str> =
             ["uffs-text", "uffs-time"].into_iter().collect();
 
+        // Per-crate `keywords` + `categories` override allow-list.
+        // The four library crates listed below ship a public surface
+        // distinct enough from the workspace-app role that
+        // discoverability on crates.io demands tailored metadata —
+        // see issue #241 (publish-readiness umbrella) and the per-
+        // crate `Cargo.toml` `keywords =` / `categories =` lines for
+        // the concrete choices.  Crates NOT listed here (`uffs-mft`,
+        // `uffs-cli`) inherit the workspace defaults because their
+        // role aligns 1:1 with the app's role (`uffs-mft` ships the
+        // app's MFT reader; `uffs-cli` IS the app's CLI).
+        let keywords_override_ok: BTreeSet<&'static str> =
+            ["uffs-client", "uffs-mcp", "uffs-text", "uffs-time"]
+                .into_iter()
+                .collect();
+        let categories_override_ok: BTreeSet<&'static str> =
+            ["uffs-client", "uffs-mcp", "uffs-text", "uffs-time"]
+                .into_iter()
+                .collect();
+
         Self {
             publish_explicit,
             underscore_bin_ok,
             nonworkspace_dep_ok,
             readme_override_ok,
+            keywords_override_ok,
+            categories_override_ok,
         }
     }
 }
@@ -373,9 +420,16 @@ fn check_inherited(
 }
 
 /// **Invariant 3.5**: every fingerprint metadata field except
-/// `description` must inherit from workspace, with one narrowly
-/// scoped exception for `readme` (see [`KnownExceptions::
-/// readme_override_ok`] for the rationale and allow-list).
+/// `description` must inherit from workspace, with three narrowly
+/// scoped exceptions:
+///
+/// * `readme` — see [`KnownExceptions::readme_override_ok`].
+/// * `keywords` — see [`KnownExceptions::keywords_override_ok`].
+/// * `categories` — see [`KnownExceptions::categories_override_ok`].
+///
+/// All three exceptions implement the same Phase 1 §3.5 "deliberately
+/// overridden with justification" escape hatch for publishable
+/// library crates whose role is distinct from the workspace-app role.
 fn audit_metadata_fields(
     member: &DiscoveredMember<'_>,
     id: &str,
@@ -395,23 +449,43 @@ fn audit_metadata_fields(
             member.manifest.package.documentation.as_ref(),
         ),
     ] {
-        // `readme` is the only field where per-crate override has a
-        // documented legitimate use case: a publishable library crate
-        // that ships its own per-crate `README.md` (see Phase 1 §3.5
-        // "deliberately overridden with justification" escape hatch).
-        // The exception is tightened to the literal `"README.md"`
-        // same-name pattern so a listed crate can't accidentally point
-        // at an arbitrary path.  Any other override pattern still
-        // fires a finding even for listed crates.
+        // `readme` override: tightened to the literal `"README.md"`
+        // same-name pattern so a listed crate can't accidentally
+        // point at an arbitrary path.  Any other override pattern
+        // still fires a finding even for listed crates.
         if name == "readme"
             && exc.readme_override_ok.contains(id)
             && value.and_then(toml::Value::as_str) == Some("README.md")
         {
             continue;
         }
+        // `keywords` / `categories` overrides: tightened to non-empty
+        // TOML arrays.  An empty array still fires (defeats the
+        // discoverability purpose of overriding).  Per-keyword shape
+        // (max 5, max 20 chars, regex) and per-category slug-set
+        // validity are enforced authoritatively by `cargo publish
+        // --dry-run` in the weekly `crates-io-dry-run.yml` workflow —
+        // re-implementing them here would duplicate the source of
+        // truth and risk drifting from crates.io's validator.
+        if (name == "keywords" && exc.keywords_override_ok.contains(id)
+            || name == "categories" && exc.categories_override_ok.contains(id))
+            && is_non_empty_array(value)
+        {
+            continue;
+        }
         findings.extend(check_inherited(value, name, "3.5", id));
     }
     findings
+}
+
+/// True when `value` is a non-empty TOML array.  Used by the
+/// `keywords` / `categories` override allow-list to ensure listed
+/// crates can't accidentally set `keywords = []` (which would defeat
+/// the override's discoverability purpose).
+fn is_non_empty_array(value: Option<&toml::Value>) -> bool {
+    value
+        .and_then(toml::Value::as_array)
+        .is_some_and(|array| !array.is_empty())
 }
 
 /// **Invariant 3.6**: every dep should use workspace inheritance,
@@ -847,5 +921,152 @@ workspace = true
             member_id_from_path("scripts/ci/gen-hooks/Cargo.toml"),
             "gen-hooks"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Invariant 3.5 — keywords / categories override allow-list
+    // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn keywords_override_on_allowlisted_crate_is_suppressed() {
+        // `uffs-time` is on the keywords allow-list and uses a
+        // well-formed non-empty array — must not fire.
+        let text = MEMBER_CLEAN.replace(
+            "keywords.workspace = true",
+            r#"keywords = ["ntfs", "filetime", "datetime"]"#,
+        );
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        assert!(
+            !findings.iter().any(|f| f.detail.contains("`keywords`")),
+            "allow-listed keywords override should be suppressed; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn categories_override_on_allowlisted_crate_is_suppressed() {
+        let text = MEMBER_CLEAN.replace(
+            "categories.workspace = true",
+            r#"categories = ["date-and-time"]"#,
+        );
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        assert!(
+            !findings.iter().any(|f| f.detail.contains("`categories`")),
+            "allow-listed categories override should be suppressed; got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn keywords_override_on_unlisted_crate_still_fires_3_5() {
+        // `uffs-core` is NOT on the keywords allow-list — override
+        // must fire even with a well-formed array.
+        let text = MEMBER_CLEAN.replace("keywords.workspace = true", r#"keywords = ["something"]"#);
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-core/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-core", &exc);
+        let kw_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.detail.contains("`keywords`"))
+            .collect();
+        assert_eq!(
+            kw_findings.len(),
+            1,
+            "unlisted crate keywords override must fire 3.5; got: {findings:?}"
+        );
+        assert_eq!(kw_findings[0].invariant, "3.5");
+    }
+
+    #[test]
+    fn empty_keywords_array_on_allowlisted_crate_still_fires_3_5() {
+        // `uffs-time` is on the allow-list but the override is
+        // tightened to **non-empty** arrays.  `keywords = []` is
+        // legal TOML but defeats the discoverability purpose of an
+        // override; it must still fire.
+        let text = MEMBER_CLEAN.replace("keywords.workspace = true", "keywords = []");
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        let kw_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.detail.contains("`keywords`"))
+            .collect();
+        assert_eq!(
+            kw_findings.len(),
+            1,
+            "empty keywords array on listed crate must still fire 3.5; got: {findings:?}"
+        );
+        assert_eq!(kw_findings[0].invariant, "3.5");
+    }
+
+    #[test]
+    fn empty_categories_array_on_allowlisted_crate_still_fires_3_5() {
+        let text = MEMBER_CLEAN.replace("categories.workspace = true", "categories = []");
+        let m = parse_member(&text).unwrap();
+        let d = disc("crates/uffs-time/Cargo.toml", &m);
+        let exc = KnownExceptions::new();
+        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
+        let cat_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.detail.contains("`categories`"))
+            .collect();
+        assert_eq!(
+            cat_findings.len(),
+            1,
+            "empty categories array on listed crate must still fire 3.5; got: {findings:?}"
+        );
+        assert_eq!(cat_findings[0].invariant, "3.5");
+    }
+
+    #[test]
+    fn keywords_and_categories_workspace_inherit_passes_for_every_member() {
+        // The default state (workspace inheritance) must pass for
+        // both allow-listed and non-allow-listed crates.
+        let m = parse_member(MEMBER_CLEAN).unwrap();
+        let exc = KnownExceptions::new();
+        for id in [
+            "uffs-core",
+            "uffs-time",
+            "uffs-text",
+            "uffs-client",
+            "uffs-mcp",
+            "uffs-mft",
+            "uffs-cli",
+            "uffs-broker",
+        ] {
+            let path = format!("crates/{id}/Cargo.toml");
+            let d = disc(&path, &m);
+            let findings = audit_metadata_fields(&d, id, &exc);
+            assert!(
+                !findings
+                    .iter()
+                    .any(|f| f.detail.contains("`keywords`") || f.detail.contains("`categories`")),
+                "`keywords.workspace = true` / `categories.workspace = true` must not fire for \
+                 `{id}`; got: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_non_empty_array_distinguishes_shapes() {
+        // Empty array → false.
+        let empty = toml::Value::Array(Vec::new());
+        assert!(!is_non_empty_array(Some(&empty)));
+        // Non-empty array → true.
+        let one = toml::Value::Array(vec![toml::Value::String("a".to_owned())]);
+        assert!(is_non_empty_array(Some(&one)));
+        // None → false.
+        assert!(!is_non_empty_array(None));
+        // Workspace-inheritance shape (table with `workspace = true`) → false.
+        let mut table = toml::value::Table::new();
+        table.insert("workspace".to_owned(), toml::Value::Boolean(true));
+        let inherit_value = toml::Value::Table(table);
+        assert!(!is_non_empty_array(Some(&inherit_value)));
     }
 }

@@ -17,8 +17,17 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme.workspace = true
-keywords.workspace = true
-categories.workspace = true
+# Per-crate keywords + categories override (Phase 1 §3.5 escape hatch
+# via `KnownExceptions::keywords_override_ok` / `categories_override_ok`
+# in `scripts/ci/manifest-audit/src/audit.rs`).  This crate ships
+# NTFS-compatible case folding (and, in the future, Unicode
+# normalisation / collation / search tokenisation) — useful to anyone
+# building filename comparison logic that must agree with NTFS's own
+# ordering bit-for-bit, not just to UFFS.  Workspace defaults skew
+# heavily towards the app role and would mis-categorise this library.
+# See issue #241 for the full discoverability rationale.
+keywords = ["unicode", "ntfs", "case-folding", "i18n", "filename"]
+categories = ["text-processing"]
 # Explicitly publishable — overrides the workspace default `publish = false`
 # set in root `Cargo.toml`'s `[workspace.package]`.  Member of the 5-crate
 # publishable subset (`uffs-broker`, `uffs-broker-protocol`, `uffs-security`,

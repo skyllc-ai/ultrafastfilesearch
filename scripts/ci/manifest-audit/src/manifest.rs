@@ -137,11 +137,22 @@ pub(crate) struct MemberPackage {
     pub(crate) readme: Option<toml::Value>,
 
     /// `keywords = ...` — Phase 1 invariant 3.5 requires
-    /// `.workspace = true`.
+    /// `.workspace = true`, with one narrowly scoped exception:
+    /// crates listed in `KnownExceptions::keywords_override_ok` may
+    /// instead set a **non-empty TOML array** of crates.io-shaped
+    /// keywords to tailor discoverability for their library role.
+    /// An empty array still fires (defeats the override's purpose).
+    /// Per-keyword shape rules (max 5, max 20 chars, regex) are
+    /// enforced authoritatively by `cargo publish --dry-run`.
     pub(crate) keywords: Option<toml::Value>,
 
     /// `categories = ...` — Phase 1 invariant 3.5 requires
-    /// `.workspace = true`.
+    /// `.workspace = true`, with the same narrow exception as
+    /// `keywords`: crates listed in
+    /// `KnownExceptions::categories_override_ok` may instead set a
+    /// **non-empty TOML array** of crates.io category slugs.  Slug
+    /// validity (`https://crates.io/category_slugs`) is enforced
+    /// authoritatively by `cargo publish --dry-run`.
     pub(crate) categories: Option<toml::Value>,
 
     /// `documentation = ...` — Phase 1 invariant 3.5 requires
