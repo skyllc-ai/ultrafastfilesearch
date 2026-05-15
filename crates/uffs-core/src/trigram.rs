@@ -39,9 +39,9 @@
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use uffs_text::case_fold::CaseFold;
-use uffs_text::trigram_key::pack_char_trigram;
 
 use crate::compact::CompactRecord;
+use crate::trigram_key::pack_char_trigram;
 
 /// Trigram inverted index in CSR (Compressed Sparse Row) layout.
 ///
