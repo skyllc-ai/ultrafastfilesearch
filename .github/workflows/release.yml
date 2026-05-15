@@ -121,6 +121,114 @@ jobs:
           echo "🏷️ Tag: $VERSION"
           echo "🚀 Triggered by: ${{ inputs.triggered_by || 'tag-push' }}"
 
+      - name: Pre-flight — verify Actions token can create releases
+        # Belt-and-suspenders guard against a silent repo-level
+        # permissions clamp.
+        #
+        # The workflow's top-level `permissions:` block (and the
+        # `create-github-release` job's per-job override) both declare
+        # `contents: write`, which softprops/action-gh-release needs
+        # in order to POST the v* git tag and release row.  However,
+        # the repository-level toggle at "Settings → Actions →
+        # General → Workflow permissions" can clamp every job's
+        # GITHUB_TOKEN to read-only at runtime regardless of what
+        # the workflow declares.  When that happens, the build
+        # matrix burns ~30 minutes and then `create-github-release`
+        # dies with the cryptic:
+        #
+        #   HTTP 403 — Resource not accessible by integration
+        #
+        # The failure mode is silent until that step is reached.
+        # See release pipeline #98 / v0.5.99 — three platforms built
+        # for 32 min each, then the publish step failed in 1 s with
+        # the 403, and we had to drop the run and re-dispatch after
+        # flipping the setting.
+        #
+        # This step exercises the EXACT REST path that the failing
+        # action uses, but with a throwaway draft release that is
+        # immediately deleted.  A read-only-clamped token fails the
+        # `gh release create --draft` call in ~1 s with the same 403,
+        # at which point we surface a precise actionable error
+        # pointing at the toggle that needs flipping.
+        #
+        # Why a draft release and not a direct `actions/permissions`
+        # API probe: reading `/repos/.../actions/permissions/workflow`
+        # requires the `administration: read` scope, which neither
+        # this workflow nor the repo-default GITHUB_TOKEN carries.
+        # The synthetic create-draft-then-delete probe uses the
+        # `contents: write` scope this job already declares, so it
+        # works without widening the workflow's permission surface.
+        #
+        # Draft releases do not create the underlying git tag (only
+        # published releases do), so cleanup is just the release-row
+        # delete — no orphaned tags can leak even if the cleanup
+        # step itself fails.  The throwaway tag name includes both
+        # `run_id` and `run_attempt` so concurrent / retried
+        # invocations cannot collide.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TEST_TAG="preflight-permcheck-run${{ github.run_id }}-attempt${{ github.run_attempt }}"
+          echo "Probing release-create permissions with synthetic draft: $TEST_TAG"
+
+          if ! gh release create "$TEST_TAG" \
+                 --repo "${{ github.repository }}" \
+                 --draft \
+                 --notes "Preflight permissions check; auto-deleted within seconds." \
+                 --title "permcheck (auto-deleted)" 2>/tmp/perm-err.log; then
+              ERR=$(cat /tmp/perm-err.log)
+              echo "::error title=Workflow permissions block release publish::Failed to create a draft release as a preflight permissions probe — see annotation below."
+              cat <<EOF
+          ❌ Pre-flight permissions probe FAILED.
+
+          The probe attempted to create a draft release ($TEST_TAG)
+          and \`gh release create\` returned:
+
+          ${ERR}
+
+          Most common cause: the repository's "Workflow permissions"
+          setting is "Read repository contents and packages
+          permissions", which clamps the per-job GITHUB_TOKEN to
+          read-only at runtime regardless of what the workflow file
+          declares.  softprops/action-gh-release in the
+          create-github-release job would fail with HTTP 403
+          ("Resource not accessible by integration") after the build
+          matrix (~30 min).  Catching it here saves the ~30 min.
+
+          To fix, flip the toggle to "Read and write permissions":
+            https://github.com/${{ github.repository }}/settings/actions
+
+          Or via CLI (requires repo admin):
+            gh api -X PUT /repos/${{ github.repository }}/actions/permissions/workflow \\
+              -f default_workflow_permissions=write
+
+          If the repo-level setting is already "Read and write" but
+          the probe still fails, the organization's default at
+            https://github.com/organizations/<org>/settings/actions
+          may be set to read-only and is cascading down to every repo.
+          Fix it at the org level (or have an org admin do it), then
+          re-dispatch this workflow.
+
+          Regression history: pipeline #98 / v0.5.99.
+          EOF
+              exit 1
+          fi
+
+          # Cleanup: delete the draft release row.  Best-effort — if
+          # delete fails, the draft is orphaned but harmless (drafts
+          # do not create git tags, are not surfaced on the public
+          # /releases page, and the unique tag name per
+          # run_id+attempt prevents cross-run collisions).
+          if ! gh release delete "$TEST_TAG" \
+                 --repo "${{ github.repository }}" --yes; then
+              echo "::warning::Failed to clean up preflight draft release $TEST_TAG; orphan is harmless but visible to repo admins via /releases?per_page=100."
+          fi
+
+          echo "✅ Workflow permissions allow release publish"
+
       - name: Check if tag or release already exists (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -565,6 +673,36 @@ jobs:
     runs-on: ubuntu-latest
     needs: [release-preparation, build-release-binaries]
     timeout-minutes: 15
+    # Explicit per-job permissions matrix.  Documents the intent at the
+    # point of use rather than relying on inheritance from the workflow-
+    # level `permissions:` block ~520 lines up.  Note: a per-job block
+    # only NARROWS the workflow-level grant — it cannot grant a scope
+    # the workflow level didn't already declare.  More importantly, BOTH
+    # are still clamped at runtime by the repo-level "Settings → Actions
+    # → General → Workflow permissions" toggle.  If that toggle is set
+    # to "Read repository contents and packages permissions", every
+    # scope below is silently downgraded to read regardless of what is
+    # written here.  The `Pre-flight — verify Actions token …` step in
+    # `release-preparation` fails fast in that case so we don't burn
+    # ~30 min of build time before discovering it.
+    #
+    #   contents: write       — softprops/action-gh-release creates the
+    #                            v* git tag AND the release row via the
+    #                            REST API.  Without this scope, the
+    #                            create-release step fails with HTTP
+    #                            403 "Resource not accessible by
+    #                            integration" (see release pipeline
+    #                            #98 / v0.5.99 for the regression).
+    #   id-token: write       — OIDC token issuance for the SLSA
+    #                            build-provenance attestation via
+    #                            Sigstore Fulcio.
+    #   attestations: write   — posts the resulting attestation to
+    #                            this repo via GitHub's Attestations
+    #                            API.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
