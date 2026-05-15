@@ -261,42 +261,49 @@ This capture closes the validation half of the v0.6.0 Definition of Done
 
 **Remaining items for the v0.6.0 cut (updated 2026-05-15):**
 
-1. **Phase 6 24-h Windows-host soak.**  One re-run pending
-   against the post-PR-218 harness fix (`shard.ttl=debug` →
-   `shard.ttl=trace`, which makes the catch-all `below-ttl`
-   events carrying the bonused `warm_ttl_sec` field visible to
-   the validator).  Pre-fix soak
-   (`LOG/uffs_soak/phase6-20260509-213122/`) verified 8 of 9
-   contracts end-to-end; criterion 3 (adaptive-bonus visibility)
-   was filtered out by the pre-fix log level, not a daemon-side
-   issue.  Daemon-side regression test
-   `crate::index::tests::shard_ttl_events::
-   below_ttl_event_pins_target_level_message_and_reason`
-   protects the wire-format contract against future drift.
+All 24-h-soak gates are now closed.  The remaining work is
+the bake period and the release-mechanics checklist:
 
-   **Phase 7 + ws-trace closed retroactively** (2026-05-13):
-   - **Phase 7**
-     (`LOG/uffs_soak/phase7-20260510-214412/`) — 11
-     `compact-cache save` events captured during the 24-h soak;
-     the pre-fix validator regex did not match the daemon's
-     actual log message.  PR #218 fixed the regex; closes 7 of
-     7 assertions on the existing log, no re-run needed.
-   - **ws-trace**
-     (`LOG/uffs_soak/wstrace-20260513-113344/`) — 4 of 4
-     assertions PASS.  Working Set dropped 30× via
-     `EmptyWorkingSet` page-trim while `pm_bytes` stayed flat
-     (−3 % over 24 h) and all 7 drives held Warm; no leak.
-
-   See
-   [`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
-   §6 sub-sections §4.5b (Phase 6) · §4.5c (Phase 7) · §4.5d
-   (ws-trace) for the full per-soak capture analysis.
-2. One-week bake on `main` per the criteria in
+1. One-week bake on `main` per the criteria in
    [`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md).
-3. CHANGELOG `Unreleased` → `0.6.0` finalize.
-4. Release notes drafted (this file is the primary input).
-5. Manual review of the diff `v0.5.85..v0.6.0`.
-6. `just ship` with `build/update_all_versions.rs minor`.
+2. CHANGELOG `Unreleased` → `0.6.0` finalize.
+3. Release notes drafted (this file is the primary input).
+4. Manual review of the diff `v0.5.85..v0.6.0`.
+5. `just ship` with `build/update_all_versions.rs minor`.
+
+**24-h-soak gate closures (paper trail):**
+
+- **Phase 6** — `LOG/uffs_soak/phase6-20260514-122946/`,
+  closed 2026-05-15.  9 of 9 assertions PASS end-to-end against
+  the post-PR-218 harness fix.  C held its `min_tier=Warm`
+  floor across 24 h (0 to=Parked events, 2 870 `min-tier-clamp`
+  debug events); the six peer drives each fired 2
+  `Warm → Parked` transitions; adaptive-bonus criterion
+  end-to-end verified (`C.max_warm_ttl=3 786 s` vs peer
+  max=300 s, 12.6×).  Daemon-side regression test
+  `crate::index::tests::shard_ttl_events::
+  below_ttl_event_pins_target_level_message_and_reason`
+  protects the wire-format contract against future drift.
+- **Phase 7** — `LOG/uffs_soak/phase7-20260510-214412/`,
+  closed retroactively 2026-05-13 via PR #218's validator
+  regex fix.  11 `compact-cache save` events captured during
+  the 24-h soak; no re-run needed (pure regex change against
+  the existing log).  Daemon-side regression test
+  `crate::cache::journal_loop::tests::save_log_message::
+  compact_cache_save_log_message_pins_string_target_and_level`
+  pins the literal log-message string.
+- **ws-trace** — `LOG/uffs_soak/wstrace-20260513-113344/`,
+  closed 2026-05-13.  4 of 4 assertions PASS.  Working Set
+  dropped 30× via `EmptyWorkingSet` page-trim while
+  `pm_bytes` stayed flat (−3 % over 24 h) and all 7 drives
+  held Warm; no leak.  Resolves the §4.5c "vacuous pass"
+  footnote.
+
+See
+[`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
+§6 sub-sections §4.5b (Phase 6 deferral root-cause) · §4.5c
+(Phase 7) · §4.5d (ws-trace) · §4.5e (Phase 6 closing capture)
+for the full per-soak capture analysis.
 
 The bake period now begins.  No new operator-surface features land on
 `main` until `v0.6.0` ships.
@@ -321,7 +328,10 @@ canonical paper trail for the **Phase 8 row flip**.
 | Date closed | 2026-05-05 |
 | Outstanding | None at the operator-surface level. (Phase 9 = "Hot-cold record split" remains explicitly **deferred** per the master-plan §3 Phase 9 GO / NO-GO rule — post-Phase-4 measurement decision, not a v0.6.0 blocker.) |
 
-The remaining gate work for v0.6.0 is the **Phase 6 24-h
-Windows-host soak re-run** (one more capture against the
-post-PR-218 harness fix) and the bake period.  Phase 7 and
-ws-trace are closed; Phase 8 has been closed since 2026-05-05.
+The remaining gate work for v0.6.0 is the **one-week `main` bake**
+per [`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md).
+Phase 6 closed 2026-05-15
+(`LOG/uffs_soak/phase6-20260514-122946/`, 9 of 9 assertions
+PASS), Phase 7 closed retroactively 2026-05-13 via PR #218's
+validator-regex fix, ws-trace closed 2026-05-13, and Phase 8
+has been closed since 2026-05-05.  No 24-h soaks remain.

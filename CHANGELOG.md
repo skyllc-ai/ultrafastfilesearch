@@ -731,6 +731,74 @@ hunting for the wrong things.
   ticks Phase 7 retroactively; Phase 6 stays open pending one
   more 24-h run with the trace-level harness fix.
 
+### Verified — Phase 6 24-h Windows-host soak closes end-to-end (2026-05-14/15)
+
+The last remaining v0.6.0 24-h-soak gate now closes against a
+live Windows-host capture.  `LOG/uffs_soak/phase6-20260514-122946/`
+ran for 24 h on the 7-drive reference box (2026-05-14 12:29:46Z
+→ 2026-05-15 12:29:46Z) against the post-PR-218 harness fix and
+the validator reported **9 of 9 assertions PASS** end-to-end.
+
+The §4.5b adaptive-bonus deferral (recorded in the 2026-05-11
+docs against the May 9-10 reference run, where the
+`RUST_LOG=shard.ttl=debug` filter dropped every `below-ttl`
+TRACE event carrying the bonused `warm_ttl_sec` field) now has
+direct end-to-end evidence:
+
+- **Drive C `min_tier=Warm` floor.**  0 `to=Parked` events on
+  letter=C across 24 h; **2 870** `Demote target clamped by
+  per-drive min_tier` debug events — proving the floor was
+  actively applied thousands of times, not merely coincidentally
+  not-tripped.
+- **Peer-drive demotion.**  D / E / F / G / M / S each fired
+  exactly 2 `Warm → Parked` transitions, confirming the
+  controller drives non-floor drives through the demote ladder
+  on the configured `warm_ttl_base_secs`.
+- **Adaptive TTL bonus.**  `C.max_warm_ttl = 3 786 s` vs
+  peer `max(warm_ttl_sec) = 300 s` — a **12.6× bonus** on the
+  high-rate drive, matching the `+600·log2(rate)` formula in
+  `crate::cache::policy::warm_ttl`.
+
+Memory trajectory across the 24-h window also validates the
+tiering machinery doing real work:
+
+```
+                          00h           23h         post-load
+Working Set (WS) :   6 746 800 128 →    22 888 448 →    69 238 784  (308× WS trim, 3× post-load re-page)
+Private Memory   :   8 293 457 920 → 1 791 188 992 → 1 669 558 272  (78 % real release as drives demoted)
+Virtual Memory   :  28 172 120 064 → 28 168 974 336 → 28 168 974 336 (flat — no address-space leak)
+NPM (non-paged)  :          26 736 →        26 328 →        26 328  (flat)
+```
+
+The 78 % private-memory release is materially different from
+the §4.5d ws-trace soak (where `pm_bytes` stayed within 3 % for
+24 h because the keep-warm worker held all 7 drives Warm).
+Here the controller actively demoted the 6 peer drives, which
+unloaded cold shards from memory and produced the real
+private-bytes release — exactly the intended tiering behavior
+under sustained idle.  The end-of-soak synthetic-load window
+on drive C re-paged recently-needed shards back into WS without
+re-allocating private memory (PM actually continued to fall
+slightly), confirming the page-cache vs. private-bytes split is
+healthy.
+
+No `panic` / `OutOfMemoryError` / `FATAL` log lines across the
+24-h window.  Full breakdown in
+[`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+§6 sub-section §4.5e.
+
+With this closure, **all three v0.6.0 24-h-soak gates are
+green**:
+
+| Gate | Source | Result | Closed |
+|---|---|---|---|
+| Phase 6 (`min_tier=Warm` floor + adaptive bonus) | `phase6-20260514-122946/` | 9 / 9 PASS | 2026-05-15 |
+| Phase 7 (USN-journal churn) | `phase7-20260510-214412/` | 7 / 7 PASS (regex fix) | 2026-05-13 |
+| ws-trace (Working-Set trajectory) | `wstrace-20260513-113344/` | 4 / 4 PASS | 2026-05-13 |
+
+Only the one-week `main` bake remains per
+[`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md).
+
 ### Verified — Phase 7 + ws-trace 24-h Windows-host soaks (2026-05-13/14)
 
 Two of the three v0.6.0 24-h Windows-host soak gates close

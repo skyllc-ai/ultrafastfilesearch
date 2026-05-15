@@ -665,8 +665,10 @@ daemon's tracing fields, update these patterns in the same commit.
    should exceed the peers' by the `600·log2(rate)` bonus from
    the §5.2 formula (`crate::cache::policy::warm_ttl`).  Per-tick
    evidence requires `shard.ttl=trace` in `RUST_LOG` (see the
-   Setup block above and the 2026-05-11 finding in §6 sub-section
-   §4.5b).
+   Setup block above, the 2026-05-11 deferral analysis in §6
+   sub-section §4.5b, and the 2026-05-14 end-to-end closing
+   capture in §6 sub-section §4.5e — C.max_warm_ttl=3 786 s vs
+   peer max=300 s).
 
 #### Reset
 
@@ -1405,8 +1407,9 @@ The pre-2026-05-13 runbook `RUST_LOG` was
 `crate::cache::shard::tests::decay_ema_integrates_new_queries_into_rate_estimate`
 from PR #146; the field shape is pinned by the new regression
 test above).  **Direct end-to-end evidence of the adaptive bonus
-engaging during a synthetic-load window requires one more 24-h
-run with the harness fix on the Windows host.**
+engaging during a synthetic-load window** was captured in
+the post-PR-218 re-run on 2026-05-14 — see §4.5e below for the
+closing capture.
 
 ### 4.5c 2026-05-11 Phase 7 24-h capture — retroactively ALL GREEN
 
@@ -1548,6 +1551,84 @@ post-v0.6.0; not a blocker because:
 
 **ws-trace closes** — all 4 assertions PASS end-to-end on the
 existing capture; no re-run needed.
+
+### 4.5e 2026-05-14 Phase 6 24-h re-run — ALL GREEN end-to-end
+
+Source: `LOG/uffs_soak/phase6-20260514-122946/` (24-h run on the
+7-drive reference box, 2026-05-14 12:29:46Z → 2026-05-15
+12:29:46Z, against the post-PR-218 harness fix).
+
+Run summary: **9 of 9 harness assertions PASS** — the §4.5b
+deferred adaptive-bonus criterion now has direct end-to-end
+evidence.
+
+| Contract (from §2 above) | 24-h evidence | Status |
+|---|---|---|
+| 1. `C` never demotes below `Warm` | 0 `to=Parked` events for letter=C; **2 870** `Demote target clamped by per-drive min_tier` debug events | ✅ end-to-end verified |
+| 2. Peer drives demote `Warm → Parked` normally | D / E / F / G / M / S each fired **2** Warm→Parked transitions | ✅ end-to-end verified |
+| 3. Adaptive TTL bonus (`+600·log2(rate)`) engages under load | C.max_warm_ttl=**3 786 s** vs max(peers.max_warm_ttl)=**300 s** — bonus = **12.6× peer baseline** | ✅ **end-to-end verified** (was §4.5b ⚠️) |
+
+**Why this re-run was needed.**  The §4.5b deferral was a
+harness-side log-level filter: the `RUST_LOG=shard.ttl=debug`
+filter dropped every `below-ttl` TRACE event, which is the only
+event class that carries the bonused `warm_ttl_sec` field
+during the synthetic-load window (drive C sits in Warm/Hot
+with `idle_secs ≈ 0`, so the demote-eval ladder never reaches
+either DEBUG arm).  PR #218 raised the harness filter to
+`shard.ttl=trace`; this re-run is the first 24-h soak captured
+against that fix.
+
+**Memory trajectory.**  In addition to the 9 contract
+assertions, the hourly process snapshots show the tiering
+machinery doing real work:
+
+```
+                          00h           23h         post-load
+Working Set (WS) :  6 746 800 128  →  22 888 448  →  69 238 784  (308× WS trim, 3× post-load)
+Private Memory   :  8 293 457 920  → 1 791 188 992 → 1 669 558 272 (78 % drop, real release)
+Virtual Memory   : 28 172 120 064  → 28 168 974 336 → 28 168 974 336 (flat — no address-space leak)
+NPM (non-paged)  :         26 736  →        26 328 →         26 328 (flat)
+```
+
+This is materially different from §4.5d's ws-trace
+trajectory, where `pm_bytes` stayed within 3 % over 24 h
+because the keep-warm worker held all 7 drives in Warm.  Here
+the controller actively demoted the 6 peer drives Warm → Parked
+twice each, which unloaded cold shards from memory and produced
+the **78 % private-memory release** — exactly the intended
+tiering-machinery behavior under sustained idle.
+
+The synthetic-load window at end-of-soak then re-paged
+recently-needed shards back into WS (22 MiB → 66 MiB, 3×)
+without growing private memory (which actually continued to
+fall slightly), confirming the page-cache vs. private-bytes
+split is healthy: the daemon brings pages back from standby
+on access rather than re-allocating.
+
+**Operational signals (informational, not gate criteria).**
+
+* `daemon.log` size: 530 454 lines / 78 MiB.  Bulk of the
+  volume is the expected `journal_loop=info` per-tick TRACE on
+  drives whose USN journal isn't active (M and G — non-system
+  drives with no journal enabled, a benign Win32 error 1179
+  surfaced as `WARN Journal poll failed; retrying next tick`).
+  The PR-#218 `shard.ttl=trace` filter added an additional
+  ~23 k events as predicted in §4.5b.
+* `0` `panic` / `OutOfMemoryError` / `FATAL` log lines across
+  24 h — same clean-run shape as §4.5c Phase 7.
+* All 24 hourly snapshots captured (`snapshots/00h-process.json`
+  through `snapshots/23h-process.json` plus
+  `snapshots/post-load-process.json`).
+* All 9 `validation/*.pass` breadcrumb files written.
+
+**Phase 6 closes** — 9 of 9 assertions PASS end-to-end against
+the live Windows host; no further re-runs needed.  The
+`bake-criteria.md` §3 Phase-6 checkbox can now be ticked.
+Combined with §4.5c (Phase 7 closes retroactively), §4.5d
+(ws-trace closes), and the existing Phase 8 closure from
+2026-05-05, this exhausts the v0.6.0 24-h-soak gate slate.
+Only the one-week `main` bake remains per
+[`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md).
 
 ### 4.6 Lifecycle load-stall force-retire at 2 h 11 min (Phase 7 scope)
 

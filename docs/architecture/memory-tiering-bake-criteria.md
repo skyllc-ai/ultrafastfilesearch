@@ -298,16 +298,22 @@ minor-bump invocation:
       "Consecutive" excludes weekends — 7 weekdays with at least one
       Mac and one Windows check each (full readiness on no-soak days,
       lightweight smoke on soak days).
-- [ ] **Phase 6 24-h soak captured** (§1.5) and `summary.txt` shows all
+- [x] **Phase 6 24-h soak captured** (§1.5) and `summary.txt` shows all
       assertions PASS — closes the master-plan §5.1 Phase 6 row.
 
-      Status (2026-05-13): 8 of 9 assertions PASS end-to-end in
-      `LOG/uffs_soak/phase6-20260509-213122/` (May 9-10 reference-box
-      run); the 9th (adaptive-bonus visibility) is deferred to a
-      re-run after PR #218's harness fix
-      (`shard.ttl=debug` → `shard.ttl=trace`) lands.  See
-      `memory-tiering-windows-host-validation.md` §6 sub-section
-      §4.5b for the root-cause walkthrough.  Daemon-side regression test
+      Status (2026-05-15): **9 of 9 assertions PASS end-to-end** in
+      `LOG/uffs_soak/phase6-20260514-122946/` (2026-05-14 reference-box
+      re-run against the post-PR-218 harness fix).  Drive C held its
+      `min_tier=Warm` floor across 24 h (0 to=Parked events, 2 870
+      `min-tier-clamp` debug events); the six peer drives each fired
+      2 `Warm → Parked` transitions; the adaptive-bonus criterion
+      that was deferred in the 2026-05-09 reference run is now
+      end-to-end verified (`C.max_warm_ttl = 3 786 s` vs peer max
+      300 s — 12.6× bonus).  See
+      `memory-tiering-windows-host-validation.md` §6 sub-sections
+      §4.5b (2026-05-11 deferral root-cause walkthrough) and §4.5e
+      (2026-05-14 closing capture with per-snapshot memory
+      trajectory).  Daemon-side regression test
       `crate::index::tests::shard_ttl_events::
       below_ttl_event_pins_target_level_message_and_reason`
       protects the wire-format contract against future drift.
