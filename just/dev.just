@@ -143,6 +143,128 @@ tier-compare *ARGS:
 soak *ARGS:
     @rust-script scripts/dev/long-soak.rs {{ ARGS }}
 
+# Daily bake-period check — the operator-facing wrapper around
+# `just readiness` + the §1.3 tracing-log audit from
+# docs/architecture/memory-tiering-bake-criteria.md.
+#
+# Runs the same command on both platforms:
+#   just bake-day
+#
+# Each invocation:
+#   1. Creates $HOME/uffs_bake/ if missing.
+#   2. Runs `just readiness`, tee'd to $HOME/uffs_bake/<date>-<platform>.log.
+#   3. Asserts exit 0 + the `150/150 steps passed` final line.
+#   4. Greps the log for red-flag patterns (panic / OutOfMemoryError / FATAL
+#      / abort / `BackgroundIoPriority...begin failed`).
+#   5. Prints a PASS/FAIL summary plus a copy-pasteable row for §4 of the
+#      bake-criteria doc, with the other platform's column marked
+#      `(pending)` so a Mac + Windows run on the same day merges cleanly.
+#
+# Exit 0 on green, 1 on any failure.  Re-runs are idempotent — the day's
+# log is overwritten so the latest pass-attempt is always the recorded one.
+[unix]
+bake-day:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    DATE=$(date +%Y-%m-%d)
+    case "$(uname)" in
+        Darwin) PLATFORM=mac ;;
+        Linux)  PLATFORM=linux ;;
+        *)      PLATFORM=$(uname | tr '[:upper:]' '[:lower:]') ;;
+    esac
+    BAKE_DIR="$HOME/uffs_bake"
+    LOG="$BAKE_DIR/${DATE}-${PLATFORM}.log"
+    mkdir -p "$BAKE_DIR"
+    printf "\033[0;34m🎂 Bake-day check — %s — %s\033[0m\n" "$PLATFORM" "$DATE"
+    printf "\033[0;34m   Log: %s\033[0m\n\n" "$LOG"
+    just readiness 2>&1 | tee "$LOG"
+    READINESS_EXIT=${PIPESTATUS[0]}
+    PASS=1
+    REASONS=()
+    if [ "$READINESS_EXIT" -ne 0 ]; then
+        PASS=0
+        REASONS+=("readiness exit $READINESS_EXIT")
+    fi
+    if ! grep -F -q '150/150 steps passed' "$LOG"; then
+        PASS=0
+        REASONS+=("missing '150/150 steps passed' line")
+    fi
+    RED_FLAGS=$(grep -E '\b(panic|OutOfMemoryError|FATAL|abort)\b' "$LOG" || true)
+    BG_IO_FAIL=$(grep -E 'BackgroundIoPriority.*begin failed' "$LOG" || true)
+    if [ -n "$RED_FLAGS" ]; then
+        PASS=0
+        REASONS+=("red-flag patterns found")
+        printf "\n\033[1;31m❌ Red-flag patterns:\033[0m\n%s\n" "$RED_FLAGS"
+    fi
+    if [ -n "$BG_IO_FAIL" ]; then
+        PASS=0
+        REASONS+=("BackgroundIoPriority begin failed")
+        printf "\n\033[1;31m❌ BackgroundIoPriority:\033[0m\n%s\n" "$BG_IO_FAIL"
+    fi
+    printf "\n\033[0;34m── Bake-day summary ─────────────────────────────────\033[0m\n"
+    if [ "$PASS" -eq 1 ]; then
+        printf "\033[1;32m✅ %s %s — ALL GREEN (150/150)\033[0m\n" "$PLATFORM" "$DATE"
+        RESULT="150/150 ✅"
+    else
+        REASONS_STR=$(IFS=', '; echo "${REASONS[*]}")
+        printf "\033[1;31m❌ %s %s — FAILED: %s\033[0m\n" "$PLATFORM" "$DATE" "$REASONS_STR"
+        printf "\033[1;31m   Full log: %s\033[0m\n" "$LOG"
+        RESULT="FAIL"
+    fi
+    printf "\n\033[0;34m── Paste row into docs/architecture/memory-tiering-bake-criteria.md §4 ─\033[0m\n"
+    printf "|  ?  | %s | full readiness | %s | full readiness | (pending) |       |\n" "$DATE" "$RESULT"
+    [ "$PASS" -eq 1 ]
+
+[windows]
+bake-day:
+    #!powershell
+    $ErrorActionPreference = 'Continue'
+    $Date = Get-Date -Format 'yyyy-MM-dd'
+    $Platform = 'windows'
+    $BakeDir = Join-Path $HOME 'uffs_bake'
+    $Log = Join-Path $BakeDir "$Date-$Platform.log"
+    New-Item -ItemType Directory -Path $BakeDir -Force | Out-Null
+    Write-Host "🎂 Bake-day check — $Platform — $Date" -ForegroundColor Blue
+    Write-Host "   Log: $Log`n" -ForegroundColor Blue
+    just readiness *>&1 | Tee-Object -FilePath $Log
+    $ReadinessExit = $LASTEXITCODE
+    $Pass = $true
+    $Reasons = @()
+    if ($ReadinessExit -ne 0) {
+        $Pass = $false
+        $Reasons += "readiness exit $ReadinessExit"
+    }
+    if (-not (Select-String -Path $Log -SimpleMatch -Pattern '150/150 steps passed' -Quiet)) {
+        $Pass = $false
+        $Reasons += "missing '150/150 steps passed' line"
+    }
+    $RedFlags = Select-String -Path $Log -Pattern '\b(panic|OutOfMemoryError|FATAL|abort)\b'
+    $BgIoFail = Select-String -Path $Log -Pattern 'BackgroundIoPriority.*begin failed'
+    if ($RedFlags) {
+        $Pass = $false
+        $Reasons += "red-flag patterns found"
+        Write-Host "`n❌ Red-flag patterns:" -ForegroundColor Red
+        $RedFlags | ForEach-Object { Write-Host $_.Line }
+    }
+    if ($BgIoFail) {
+        $Pass = $false
+        $Reasons += "BackgroundIoPriority begin failed"
+        Write-Host "`n❌ BackgroundIoPriority:" -ForegroundColor Red
+        $BgIoFail | ForEach-Object { Write-Host $_.Line }
+    }
+    Write-Host "`n── Bake-day summary ─────────────────────────────────" -ForegroundColor Blue
+    if ($Pass) {
+        Write-Host "✅ $Platform $Date — ALL GREEN (150/150)" -ForegroundColor Green
+        $Result = '150/150 ✅'
+    } else {
+        Write-Host "❌ $Platform $Date — FAILED: $($Reasons -join ', ')" -ForegroundColor Red
+        Write-Host "   Full log: $Log" -ForegroundColor Red
+        $Result = 'FAIL'
+    }
+    Write-Host "`n── Paste row into docs/architecture/memory-tiering-bake-criteria.md §4 ─" -ForegroundColor Blue
+    Write-Host "|  ?  | $Date | full readiness | (pending) | full readiness | $Result |       |"
+    if (-not $Pass) { exit 1 }
+
 # Install cross-compilation targets for GitHub Actions compatibility.
 setup-cross:
     @printf "\033[0;34m Installing cross-compilation targets...\033[0m\n"
