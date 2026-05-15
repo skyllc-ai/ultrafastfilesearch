@@ -39,6 +39,15 @@
 //! site.  Future sub-phases may push [`Filetime`] deeper into the index
 //! / query layers.
 
+// On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
+// (e.g. `#[cfg(feature = "...")]` or `#[cfg(target_os = "...")]`) render
+// with their cfg badge on the rendered docs.  Gated behind `cfg(docsrs)`
+// so local `cargo doc` (which doesn't pass `--cfg docsrs`) never exercises
+// the nightly-only feature.  See `[package.metadata.docs.rs]` in Cargo.toml
+// for the cfg wiring.  The previously-used `doc_auto_cfg` feature was
+// merged into `doc_cfg` in Rust 1.92 (rust-lang/rust#138907); the unified
+// `doc_cfg` feature preserves the automatic cfg-badge inference behaviour.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 
 /// Number of 100-nanosecond intervals per second.
