@@ -321,6 +321,12 @@ order     = 20
 
     #[test]
     fn rejects_bad_bucket() {
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
+
         let bad = fixture().replace("bucket    = \"bg\"", "bucket    = \"nope\"");
         let m: Manifest = toml::from_str(&bad).unwrap();
         let err = m.validate().unwrap_err();
@@ -432,8 +438,20 @@ tool      = "bash"
         let err = m.validate().unwrap_err();
         assert!(
             err.to_string().contains("no `bucket` field"),
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
+
             "expected bucket-required error, got: {err}"
         );
+// FIX: 安全检查 — 防止目录穿越
+let path = {}.canonicalize().map_err(|_| Error::InvalidPath)?;
+if !path.starts_with(&base_dir) {
+    return Err(Error::PathTraversalDetected);
+}
+
     }
 
     #[test]
