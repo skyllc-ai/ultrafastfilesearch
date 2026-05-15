@@ -632,12 +632,58 @@ hunting for the wrong things.
 
 - **Runbook + bake-criteria updates** —
   [`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
-  §2, §3, and §6 (new §6.2 + §6.3 capture sub-sections) now reflect
-  the post-2026-05-13 grep patterns + the 2026-05-11 capture
+  §2, §3, and §6 (new §4.5b + §4.5c capture sub-sections under
+  the §6 "Reference captures" parent) now reflect the
+  post-2026-05-13 grep patterns + the 2026-05-11 capture
   findings.
   [`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
   ticks Phase 7 retroactively; Phase 6 stays open pending one
   more 24-h run with the trace-level harness fix.
+
+### Verified — Phase 7 + ws-trace 24-h Windows-host soaks (2026-05-13/14)
+
+Two of the three v0.6.0 24-h Windows-host soak gates close
+retroactively from existing capture data, with daemon-side
+regression tests pinning the wire-format contracts so future
+log-message renames fail CI before reaching another 24-h soak.
+
+- **Phase 7 USN-journal churn soak** —
+  `LOG/uffs_soak/phase7-20260510-214412/` retroactively closes
+  7 of 7 assertions with the PR #218 regex fix: the save
+  pipeline emitted 11 `compact-cache save` events during the
+  24-h soak; the pre-fix validator regex did not match the
+  daemon's actual INFO line.  No new soak required.
+
+- **ws-trace 24-h Working-Set trajectory** —
+  `LOG/uffs_soak/wstrace-20260513-113344/` passes 4 of 4
+  assertions: PID 50492 stable across 24 hourly samples,
+  289 / 289 keep-warm probes fired, WS ratio 0.03× (first
+  =5.37 GB, last=184 MB).  The 30× WS drop is the
+  `EmptyWorkingSet` page-trim (Phase 5 G2 wiring), **not a
+  leak**: `pm_bytes` decreased only 3 % (6.53 GB → 6.36 GB)
+  while all 7 drives held Warm and the daemon's own RESIDENT
+  accounting stayed at ~5.0 GiB across all 24 snapshots.  This
+  resolves the "vacuous pass" concern raised in the Phase 7
+  §4.5c footnote: both soaks' WS drops are the same benign
+  page-trim, not silent idle-decay.
+
+- **Doc pass landed under this entry** — new §4.5d in
+  [`memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+  carries the full `ws_bytes`-vs-`pm_bytes` breakdown plus the
+  recommended post-v0.6.0 refinement (re-anchor the soak
+  validator on `pm_bytes`; the field is already captured in
+  every snapshot).  The matching pass criteria in
+  [`memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
+  §1.7 ticks `[x]` retroactively and carries an inline note on
+  the WS-bound semantics so future operators see the WS-vs-PM
+  nuance up front.
+
+- **Remaining v0.6.0 gate work** is the **Phase 6 24-h soak
+  re-run** (one more capture with the post-PR-218
+  `shard.ttl=trace` harness fix) plus the one-week `main` bake.
+  Phase 8 closed 2026-05-05; Phase 7 and ws-trace close
+  2026-05-13.  No new operator-surface features land on `main`
+  until v0.6.0 ships.
 
 ## [0.5.96] - 2026-05-08
 

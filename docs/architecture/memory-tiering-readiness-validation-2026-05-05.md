@@ -259,14 +259,38 @@ This capture closes the validation half of the v0.6.0 Definition of Done
 - ✅ Pin contract semantics validated on both.
 - ✅ Cross-platform RPC cost ladder traced and documented.
 
-**Remaining items for the v0.6.0 cut:**
+**Remaining items for the v0.6.0 cut (updated 2026-05-15):**
 
-1. **Phase 6 + Phase 7 24-h Windows-host soaks.**  Run via the
-   `just soak phase6` / `just soak phase7` recipes documented in
+1. **Phase 6 24-h Windows-host soak.**  One re-run pending
+   against the post-PR-218 harness fix (`shard.ttl=debug` →
+   `shard.ttl=trace`, which makes the catch-all `below-ttl`
+   events carrying the bonused `warm_ttl_sec` field visible to
+   the validator).  Pre-fix soak
+   (`LOG/uffs_soak/phase6-20260509-213122/`) verified 8 of 9
+   contracts end-to-end; criterion 3 (adaptive-bonus visibility)
+   was filtered out by the pre-fix log level, not a daemon-side
+   issue.  Daemon-side regression test
+   `crate::index::tests::shard_ttl_events::
+   below_ttl_event_pins_target_level_message_and_reason`
+   protects the wire-format contract against future drift.
+
+   **Phase 7 + ws-trace closed retroactively** (2026-05-13):
+   - **Phase 7**
+     (`LOG/uffs_soak/phase7-20260510-214412/`) — 11
+     `compact-cache save` events captured during the 24-h soak;
+     the pre-fix validator regex did not match the daemon's
+     actual log message.  PR #218 fixed the regex; closes 7 of
+     7 assertions on the existing log, no re-run needed.
+   - **ws-trace**
+     (`LOG/uffs_soak/wstrace-20260513-113344/`) — 4 of 4
+     assertions PASS.  Working Set dropped 30× via
+     `EmptyWorkingSet` page-trim while `pm_bytes` stayed flat
+     (−3 % over 24 h) and all 7 drives held Warm; no leak.
+
+   See
    [`memory-tiering-windows-host-validation.md`](memory-tiering-windows-host-validation.md)
-   §2 + §3.  These close the last two operator-gate items left in the
-   master plan §5.1 status table (Phase 6 `min_tier="Warm"` 24-h soak,
-   Phase 7 USN-journal continuous-churn 24-h soak).
+   §6 sub-sections §4.5b (Phase 6) · §4.5c (Phase 7) · §4.5d
+   (ws-trace) for the full per-soak capture analysis.
 2. One-week bake on `main` per the criteria in
    [`memory-tiering-bake-criteria.md`](memory-tiering-bake-criteria.md).
 3. CHANGELOG `Unreleased` → `0.6.0` finalize.
@@ -297,6 +321,7 @@ canonical paper trail for the **Phase 8 row flip**.
 | Date closed | 2026-05-05 |
 | Outstanding | None at the operator-surface level. (Phase 9 = "Hot-cold record split" remains explicitly **deferred** per the master-plan §3 Phase 9 GO / NO-GO rule — post-Phase-4 measurement decision, not a v0.6.0 blocker.) |
 
-The remaining gate work for v0.6.0 is the **Phase 6 + Phase 7 24-h
-Windows-host soaks** described above and the bake period.  Phase 8 is
-no longer a blocker.
+The remaining gate work for v0.6.0 is the **Phase 6 24-h
+Windows-host soak re-run** (one more capture against the
+post-PR-218 harness fix) and the bake period.  Phase 7 and
+ws-trace are closed; Phase 8 has been closed since 2026-05-05.
