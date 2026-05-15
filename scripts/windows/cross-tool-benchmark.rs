@@ -204,7 +204,14 @@ struct Row { tool: Tool, phase: Phase, sink: OutputSink, drive: String, pat: Str
 struct Cfg { uffs: PathBuf, uffs_cpp: Option<PathBuf>, es: Option<PathBuf>,
              drives: Vec<String>, rounds: usize,
              tools: Vec<Tool>, sinks: Vec<OutputSink>, skip_cold: bool,
-             patterns: Option<Vec<String>> }
+             patterns: Option<Vec<String>>,
+             /// Optional summary CSV output path.  When `Some`, the post-run
+             /// summary (one row per Tool × Phase × Sink × Drive × Pattern
+             /// combination, with p50/p95/rows/bad/verdict) is written to
+             /// this path after the stdout tables.  Distinct from the daemon's
+             /// own intermediate `uffs_bench_out.csv` in the cwd, which holds
+             /// the raw per-query row dumps and is overwritten every round.
+             out: Option<PathBuf> }
 impl Cfg {
     fn skip_pattern(&self, label: &str) -> bool {
         self.patterns.as_ref().map_or(false, |ps| !ps.iter().any(|p| p == &label.to_lowercase()))
@@ -651,6 +658,7 @@ fn parse_args() -> Cfg {
     let mut skip_cold = false;
     let mut uffs_bin: Option<PathBuf> = None;
     let mut patterns_filter: Option<Vec<String>> = None;
+    let mut out: Option<PathBuf> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -661,8 +669,13 @@ fn parse_args() -> Cfg {
             "--patterns" => { i += 1; patterns_filter = Some(args[i].split(',').map(|s| s.trim().to_lowercase()).collect()); }
             "--skip-cold" => { skip_cold = true; }
             "--uffs-bin" => { i += 1; uffs_bin = Some(PathBuf::from(&args[i])); }
+            "--out" => { i += 1; out = Some(PathBuf::from(&args[i])); }
             "--help" | "-h" => { print_help(); std::process::exit(0); }
-            _ => {}
+            other => {
+                if other.starts_with('-') {
+                    eprintln!("warning: unknown flag {other:?} ignored (use --help for the supported list)");
+                }
+            }
         }
         i += 1;
     }
@@ -690,7 +703,7 @@ fn parse_args() -> Cfg {
         .map(OutputSink::parse_list)
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| vec![OutputSink::File]);
-    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter }
+    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter, out }
 }
 
 fn print_help() {
@@ -710,6 +723,12 @@ fn print_help() {
     eprintln!("                        ext_rare, ext_dll, ext_regex_alt, substring");
     eprintln!("  --skip-cold           Skip UFFS COLD and WARM phases");
     eprintln!("  --uffs-bin <path>     Path to uffs.exe (Rust)");
+    eprintln!("  --out <path>          Write the post-run summary table to CSV at <path>.");
+    eprintln!("                        Columns: tool,phase,sink,drive,pattern,p50_ms,");
+    eprintln!("                        p95_ms,rows,bad,verdict,rounds_ok,rounds_total.");
+    eprintln!("                        Distinct from the daemon's intermediate");
+    eprintln!("                        uffs_bench_out.csv in the cwd (raw per-query rows,");
+    eprintln!("                        overwritten every round).");
     eprintln!("  --help                This message");
 }
 
@@ -734,7 +753,10 @@ fn main() {
     println!("║  Rounds:       {} per pattern per tool", cfg.rounds);
     let sinks_str: Vec<&'static str> = cfg.sinks.iter().map(|s| s.label()).collect();
     println!("║  Sinks (HOT):  {}  (COLD/WARM are always file)", sinks_str.join(", "));
-    println!("║  Bench file:   {}", bench_out_path());
+    println!("║  Daemon bench file:  {}  (raw per-query rows, overwritten every round)", bench_out_path());
+    if let Some(ref p) = cfg.out {
+        println!("║  Summary CSV:        {}  (written post-run via --out)", p.display());
+    }
     println!("║  Columns:      path-only (fair: all tools write ~same bytes/row)");
     println!("║  Limit:        none (all results, fair for C++)");
     println!("║  Timeout:      {} s → DNF", TIMEOUT.as_secs());
@@ -925,6 +947,26 @@ fn main() {
 
     // ── Summary table ────────────────────────────────────────────────────────
     print_summary(&cfg, &all_rows);
+
+    // ── Optional CSV sink for the summary (one row per Tool × Phase × Sink ×
+    //    Drive × Pattern combination).  Distinct from the daemon's intermediate
+    //    `uffs_bench_out.csv`, which holds the raw per-query row dumps and is
+    //    overwritten every round.  The two never collide: this file lives at
+    //    whatever path the operator passes via `--out`, the other is fixed at
+    //    `<cwd>/uffs_bench_out.csv`.
+    if let Some(ref path) = cfg.out {
+        match write_summary_csv(&cfg, &all_rows, path) {
+            Ok(()) => {
+                println!();
+                println!("Summary CSV written: {}  ({} rows)", path.display(), all_rows.len());
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("ERROR: failed to write summary CSV to {}: {}", path.display(), e);
+                std::process::exit(2);
+            }
+        }
+    }
 }
 
 
@@ -1027,4 +1069,71 @@ fn find_p50(rows: &[Row], tool: Tool, phase: Phase, sink: OutputSink, drive: &st
             if s.is_empty() { "—".to_string() } else { fms(p50(&s)) }
         })
         .unwrap_or_else(|| "SKIP".to_string())
+}
+
+
+// ── Summary CSV writer ───────────────────────────────────────────────────────
+/// Write the post-run summary as CSV at `path`.  One row per Tool × Phase ×
+/// Sink × Drive × Pattern combination.  Columns mirror the stdout summary
+/// table but are emitted as plain integer milliseconds (no human-friendly
+/// `ms` / `s` formatting) so the file is trivially regress-able by downstream
+/// tooling (`pandas`, `polars`, `awk`, …).
+///
+/// Null-sink rows (where the child process redirected output to a real NUL
+/// device) report `0` for `rows` and `bad` since nothing is counted by design;
+/// the stdout summary distinguishes these with a literal `—` placeholder, but
+/// CSV consumers prefer numeric columns.  Verdict carries the same value
+/// either way, so the distinction is recoverable when the consumer cares.
+///
+/// `rounds_ok` counts entries with `t.ok == true`; `rounds_total` is the full
+/// run vec length (which may be `< cfg.rounds` for runs short-circuited via
+/// `is_fast_deterministic_fail`).
+fn write_summary_csv(_cfg: &Cfg, rows: &[Row], path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let mut f = std::fs::File::create(path)?;
+    writeln!(
+        f,
+        "tool,phase,sink,drive,pattern,p50_ms,p95_ms,rows,bad,verdict,rounds_ok,rounds_total"
+    )?;
+    for row in rows {
+        let s = sw(&row.runs);
+        let any_dnf = row.runs.iter().any(|r| r.dnf);
+        let all_ok = row.runs.iter().all(|r| r.ok);
+        let any_bad = row.runs.iter().any(|r| r.bad_rows > 0);
+        let verdict = if any_dnf { "DNF" }
+            else if any_bad { "WRONG" }
+            else if all_ok { "PASS" }
+            else { "ERROR" };
+        let p50_ms = if s.is_empty() { 0 } else { p50(&s) };
+        let p95_ms = if s.is_empty() { 0 } else { p95(&s) };
+        let first_ok = row.runs.iter().find(|r| r.ok);
+        let (rows_count, bad_count) = if matches!(row.sink, OutputSink::Null) {
+            (0u64, 0u64)
+        } else {
+            (first_ok.map_or(0, |r| r.rows), first_ok.map_or(0, |r| r.bad_rows))
+        };
+        let rounds_ok = row.runs.iter().filter(|r| r.ok).count();
+        let rounds_total = row.runs.len();
+        writeln!(
+            f,
+            "{},{},{},{},{},{},{},{},{},{},{},{}",
+            row.tool.label(),
+            row.phase.label(),
+            row.sink.label(),
+            row.drive,
+            row.pat,
+            p50_ms,
+            p95_ms,
+            rows_count,
+            bad_count,
+            verdict,
+            rounds_ok,
+            rounds_total,
+        )?;
+    }
+    Ok(())
 }

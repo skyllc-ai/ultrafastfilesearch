@@ -731,6 +731,81 @@ hunting for the wrong things.
   ticks Phase 7 retroactively; Phase 6 stays open pending one
   more 24-h run with the trace-level harness fix.
 
+### Verified — v0.5.35 baseline CLI hot-path bench (2026-05-15)
+
+Plan §1 goal-4 ("no regression on CLI hot path vs the v0.5.35
+baseline") verified end-to-end on the Windows 7-drive reference
+box.  Current v0.5.96 (post-Phase-8 tiered architecture) is
+**universally faster** than v0.5.35 across every benchmarked
+pattern, with the largest result set (`*.dll`, 44 529 rows)
+showing a **2.7× speedup**:
+
+```
+Drive D, 7.07 M records, 30 rounds, HOT phase, p50 / p95 wall_ms:
+
+                              v0.5.35      v0.5.96       Δ p50
+    exact      (3 rows)       20 / 23   →  18 / 19      −10 %
+    prefix     (8 732)        46 / 50   →  40 / 46      −13 %
+    ext_rare   (11)           18 / 20   →  17 / 18       −6 %
+    ext_dll    (44 529)       94 / 100  →  35 / 40      −63 %  (2.7×)
+    substring  (12 458)       50 / 54   →  43 / 47      −14 %
+```
+
+Row-count parity preserved exactly across both versions on every
+pattern (no result-set drift — the post-v0.5.35 path-resolver
+fast path + Phase 3.2 single-buffer multi-column render path
+both preserve the same filter semantics and column ordering).
+The dramatic `ext_dll` win is dominated by those two surfaces:
+both are big-N row-materialisation gains, exactly where 44 K
+paths-into-CSV land in the wall-clock budget.
+
+Capture command (run twice with `~/bin/uffs.exe` swapped between
+the two binaries via `~/bin/uffs.exe daemon kill` +
+`Remove-Item $env:LOCALAPPDATA\uffs\cache` between runs):
+
+```powershell
+rust-script scripts\windows\cross-tool-benchmark.rs `
+    --skip-cold --drives D --rounds 30 `
+    --patterns exact,prefix,ext_rare,ext_dll,substring `
+    --tools uffs `
+    --uffs-bin "$HOME\bin\uffs.exe"
+```
+
+Raw artefact: `LOG/memory output` (manual stdout paste).  The
+**`--out <path>` flag was added to the bench script in this
+release** so future captures can persist the summary table as a
+structured CSV (columns: `tool,phase,sink,drive,pattern,p50_ms,
+p95_ms,rows,bad,verdict,rounds_ok,rounds_total`) — see the
+`Added — cross-tool benchmark script: --out summary CSV flag`
+entry below.
+
+### Added — cross-tool benchmark script: `--out` summary CSV flag
+
+`scripts/windows/cross-tool-benchmark.rs` learned a new
+`--out <path>` flag that writes the post-run summary as a
+plain-CSV at the supplied path (creating intermediate
+directories as needed).  Columns mirror the stdout summary
+table but emit integer milliseconds and integer row counts so
+the file is trivially regress-able by `pandas` / `polars` /
+`awk`:
+
+```
+tool,phase,sink,drive,pattern,p50_ms,p95_ms,rows,bad,verdict,rounds_ok,rounds_total
+UFFS,HOT,file,D,exact,18,19,3,0,PASS,30,30
+UFFS,HOT,file,D,prefix,40,46,8732,0,PASS,30,30
+…
+```
+
+The new flag is distinct from the existing
+`<cwd>/uffs_bench_out.csv` daemon-side file (raw per-query row
+dumps, overwritten every round) and never collides with it.
+The banner block prints both paths up front so operators see
+exactly where each artefact lands.  Unknown CLI flags now warn
+on stderr (`warning: unknown flag "--foo" ignored`) instead of
+silently swallowing — caught during the 2026-05-15 v0.5.35
+baseline bench where a typo-`--out` in pre-flag-support runs
+left the operator hunting a non-existent CSV file.
+
 ### Verified — Phase 6 24-h Windows-host soak closes end-to-end (2026-05-14/15)
 
 The last remaining v0.6.0 24-h-soak gate now closes against a
