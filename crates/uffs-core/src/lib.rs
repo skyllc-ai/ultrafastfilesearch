@@ -140,6 +140,12 @@ pub mod search;
 pub(crate) mod slot_pool;
 pub mod tree;
 pub mod trigram;
+// Internal helper module — pack/unpack 3 folded `u16` codepoints into a `u64`
+// trigram key.  Relocated from `uffs-text::trigram_key` on 2026-05-14 to keep
+// the `uffs-text` publish surface scoped to the NTFS case-folding engine.
+// `pub(crate)` because these packers are UFFS-index-specific and have no
+// meaning outside this crate's `trigram` / `compact_cache` submodules.
+mod trigram_key;
 
 // ============================================================================
 // Public API re-exports
