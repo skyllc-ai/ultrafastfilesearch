@@ -454,8 +454,12 @@ pub fn load_iocp_capture<P: AsRef<Path>>(file_path: P) -> Result<IocpCaptureData
 
     let data = if header.is_compressed() {
         let mut data = Vec::with_capacity(crate::index::frs_to_usize(header.total_data_size));
-        let cursor = std::io::Cursor::new(&compressed);
-        let mut decoder = zstd::stream::Decoder::new(cursor)?;
+        // `&[u8]` implements `Read` directly — no need for an intermediate
+        // `Cursor` wrapper.  This also sidesteps the (over-eager on recent
+        // nightlies) `clippy::std_instead_of_core` lint that suggests
+        // `core::io::Cursor`, which is still gated behind unstable
+        // `feature(core_io)`.
+        let mut decoder = zstd::stream::Decoder::new(compressed.as_slice())?;
         decoder.read_to_end(&mut data)?;
         data
     } else {

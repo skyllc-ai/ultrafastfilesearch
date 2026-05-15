@@ -26,7 +26,7 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
-use std::io::{BufReader, Cursor, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::sync::Mutex;
 
 use crate::connect_sync::UffsClientSync;
@@ -81,8 +81,12 @@ impl Write for CapturingWriter {
 /// JSON-RPC response.  The returned [`CapturingWriter`] snapshots
 /// whatever the client writes — tests use it to assert the request
 /// shape when that matters.
-fn client_with_canned_response(response_body: &[u8]) -> (UffsClientSync, CapturingWriter) {
-    let reader: Box<dyn Read + Send> = Box::new(Cursor::new(response_body.to_vec()));
+fn client_with_canned_response(response_body: &'static [u8]) -> (UffsClientSync, CapturingWriter) {
+    // `&[u8]` already implements `Read` (stdlib blanket impl) — no need for
+    // an intermediate owning wrapper.  All callers pass byte-string literals
+    // (`b""`, `br#"..."#`), which are `&'static [u8]`, so the `'static` bound
+    // on `Box<dyn Read + Send>` is satisfied without an owning Vec.
+    let reader: Box<dyn Read + Send> = Box::new(response_body);
     let writer = CapturingWriter::new();
     let writer_box: Box<dyn Write + Send> = Box::new(writer.clone());
     let client = UffsClientSync::from_parts_for_test(BufReader::new(reader), writer_box);
