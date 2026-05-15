@@ -516,18 +516,24 @@ mod tests {
         use windows::core::PCWSTR;
 
         // Unique pipe path per-process + per-call so concurrent
-        // cargo test runs do not collide on the same name.
-        let pipe_name = format!(
+        // cargo test runs do not collide on the same name.  Build it
+        // through `PipeName::parse` so this test doubles as a
+        // regression pin: if `PipeName`'s invariants ever drift (e.g.
+        // a prefix tweak or a length-cap shrink), this fixture starts
+        // failing here instead of silently producing a path Win32
+        // would refuse.
+        let pipe_name = uffs_security::pipe::PipeName::parse(format!(
             "\\\\.\\pipe\\uffs-test-blackhole-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|dur| dur.as_nanos())
                 .unwrap_or_default(),
-        );
+        ))
+        .expect("test-blackhole pipe path is a valid PipeName");
 
         // ── Server thread: accept once, never respond ───────────
-        let server_name = pipe_name.clone();
+        let server_name = pipe_name.as_str().to_owned();
         let server = thread::spawn(move || {
             let wide: Vec<u16> = format!("{server_name}\0").encode_utf16().collect();
             // SAFETY: standard Win32 FFI.  The handle is closed
@@ -583,7 +589,7 @@ mod tests {
                 match std::fs::OpenOptions::new()
                     .read(true)
                     .write(true)
-                    .open(&pipe_name)
+                    .open(pipe_name.as_str())
                 {
                     Ok(file) => {
                         opened = Some(file);

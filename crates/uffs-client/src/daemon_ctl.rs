@@ -57,8 +57,8 @@ pub fn socket_path() -> PathBuf {
 /// Returns an error if the user SID cannot be resolved, which should
 /// only happen on a severely broken Windows session.
 #[cfg(windows)]
-pub fn pipe_name() -> std::io::Result<String> {
-    uffs_security::pipe::pipe_name_for_current_user()
+pub fn pipe_name() -> std::io::Result<uffs_security::pipe::PipeName> {
+    uffs_security::pipe::PipeName::for_current_user()
 }
 
 /// Commit C — deep health check: is the check enabled?
@@ -209,7 +209,11 @@ pub(crate) fn keepalive_send_blocking(sock_path: &std::path::Path) {
         let Ok(name) = pipe_name() else {
             return;
         };
-        if let Ok(mut pipe) = OpenOptions::new().read(true).write(true).open(&name) {
+        if let Ok(mut pipe) = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name.as_str())
+        {
             let msg = r#"{"jsonrpc":"2.0","id":0,"method":"keepalive"}"#;
             drop(pipe.write_all(msg.as_bytes()));
             drop(pipe.write_all(b"\n"));

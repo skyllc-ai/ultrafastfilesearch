@@ -33,8 +33,10 @@
 //!
 //! # API surface
 //!
-//! * [`pipe_name_for_current_user`] — deterministic per-user pipe name (same
-//!   value computed on both the daemon and client side).
+//! * [`PipeName`] — validated newtype wrapping a Windows named-pipe path of the
+//!   form `\\.\pipe\<name>`.  The canonical constructor
+//!   [`PipeName::for_current_user`] computes the deterministic per-user pipe
+//!   path; [`PipeName::parse`] validates an arbitrary string.
 //! * [`current_user_sid_string`] — linked-or-current token user SID as a Win32
 //!   SDDL-compatible string (`"S-1-5-21-..."`).
 //! * [`OwnerOnlySd`] — RAII wrapper for a `SECURITY_DESCRIPTOR` granting
@@ -46,6 +48,7 @@
 
 #![cfg(windows)]
 
+use core::fmt;
 use std::io;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
@@ -64,23 +67,151 @@ const SDDL_REVISION_1: u32 = 1;
 
 // ── Public API ──────────────────────────────────────────────────────────
 
-/// Deterministic per-user pipe name.
+/// A validated Windows named-pipe path of the form `\\.\pipe\<name>`.
 ///
-/// Computed as `\\.\pipe\uffs-<fnv1a64-of-user-sid>` so that both the
-/// daemon and client, running as the same user, produce the same pipe
-/// path without any shared state.  The FNV-1a hash is used purely for
-/// short, collision-resistant naming; **security comes from the DACL**,
-/// not from the name.
+/// Centralises the producer + consumer surface for the per-user UFFS
+/// daemon pipe so every call site is statically guaranteed to be talking
+/// about *a* validated pipe path — not an arbitrary `String`.  Eliminates
+/// the swap risk between pipe names and the many other strings that flow
+/// through the IPC layer (executable paths, user SIDs, JSON-RPC payloads,
+/// drive letters cast to strings, …).
 ///
-/// # Errors
+/// # Invariants
 ///
-/// Returns [`io::Error`] if the user SID cannot be resolved.  This should
-/// not happen on a normally functioning Windows session; if it does, the
-/// caller should log and exit rather than fall back to an insecure name.
-pub fn pipe_name_for_current_user() -> io::Result<String> {
-    let sid = current_user_sid_string()?;
-    let hash = fnv1a_64(sid.as_bytes());
-    Ok(format!(r"\\.\pipe\uffs-{hash:016x}"))
+/// Every `PipeName` value upholds, by construction:
+///
+/// 1. Starts with the Win32 named-pipe prefix `\\.\pipe\`.
+/// 2. Has at least one character after the prefix (the pipe's *name*).
+/// 3. Total length is within the Win32 named-pipe-path limit
+///    ([`PipeName::MAX_TOTAL_LEN`]).
+///
+/// # Construction
+///
+/// * [`PipeName::for_current_user`] — the canonical per-user UFFS daemon pipe
+///   path (`\\.\pipe\uffs-<fnv1a64-of-user-sid>`), computed deterministically
+///   so client and daemon agree without shared state.
+/// * [`PipeName::parse`] — validate an arbitrary owned-or-borrowed string
+///   (useful for test fixtures and reading a peer-supplied path).
+///
+/// `PipeName` deliberately does **not** implement `From<String>` /
+/// `From<&str>`: the only ways in are the two validated constructors
+/// above, which is what makes the type a real correctness improvement.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PipeName(String);
+
+/// Error returned by [`PipeName::parse`] when the input is not a valid
+/// Windows named-pipe path.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum PipeNameError {
+    /// The input did not start with the required `\\.\pipe\` prefix.
+    BadPrefix {
+        /// The original (now-rejected) input, captured verbatim so the
+        /// error message can quote it for the operator.
+        raw: String,
+    },
+    /// The input had the prefix but nothing after it — a pipe path
+    /// without a name is not a valid Win32 pipe identifier.
+    Empty,
+    /// The input exceeded [`PipeName::MAX_TOTAL_LEN`]; Win32 would
+    /// refuse to create or open it anyway.
+    TooLong {
+        /// Length of the rejected input, in `char`s (`s.chars().count()`).
+        len: usize,
+    },
+}
+
+impl fmt::Display for PipeNameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BadPrefix { raw } => write!(
+                f,
+                "Windows named-pipe path must start with `\\\\.\\pipe\\` (got: `{raw}`)",
+            ),
+            Self::Empty => f.write_str(
+                "Windows named-pipe path must have at least one character after `\\\\.\\pipe\\`",
+            ),
+            Self::TooLong { len } => write!(
+                f,
+                "Windows named-pipe path is {len} chars; Win32 limit is {} chars",
+                PipeName::MAX_TOTAL_LEN,
+            ),
+        }
+    }
+}
+
+impl core::error::Error for PipeNameError {}
+
+impl PipeName {
+    /// Required Win32 named-pipe path prefix (local machine, `pipe`
+    /// device namespace).
+    pub const PREFIX: &'static str = r"\\.\pipe\";
+
+    /// Maximum total path length Win32 will accept for a named pipe.
+    /// Documented by the `CreateNamedPipeW` MSDN reference as 256 chars
+    /// including the prefix.
+    pub const MAX_TOTAL_LEN: usize = 256;
+
+    /// Compute the canonical per-user UFFS daemon pipe path.
+    ///
+    /// The result is deterministic per user: both daemon and client,
+    /// running as the same Windows user, produce the same path without
+    /// any shared state.  The FNV-1a hash is used purely for short,
+    /// collision-resistant naming — **security comes from the DACL**,
+    /// not from the name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::Error`] if the user SID cannot be resolved.  This
+    /// should not happen on a normally functioning Windows session; if
+    /// it does, the caller should log and exit rather than fall back to
+    /// an insecure name.
+    pub fn for_current_user() -> io::Result<Self> {
+        let sid = current_user_sid_string()?;
+        let hash = fnv1a_64(sid.as_bytes());
+        Ok(Self(format!(r"\\.\pipe\uffs-{hash:016x}")))
+    }
+
+    /// Validate `input` and wrap it as a [`PipeName`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipeNameError`] when any of the [`PipeName`]
+    /// invariants does not hold.
+    pub fn parse<Input: Into<String>>(input: Input) -> Result<Self, PipeNameError> {
+        let raw: String = input.into();
+        if !raw.starts_with(Self::PREFIX) {
+            return Err(PipeNameError::BadPrefix { raw });
+        }
+        if raw.len() == Self::PREFIX.len() {
+            return Err(PipeNameError::Empty);
+        }
+        let len = raw.chars().count();
+        if len > Self::MAX_TOTAL_LEN {
+            return Err(PipeNameError::TooLong { len });
+        }
+        Ok(Self(raw))
+    }
+
+    /// Borrow the pipe path as a `&str` — for passing to Win32 FFI
+    /// (`ServerOptions::create_with_security_attributes_raw`,
+    /// `ClientOptions::open`, `tracing` fields, …).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PipeName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PipeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Resolve the user SID of the interactive human user, as an SDDL string.
@@ -478,8 +609,8 @@ mod tests {
 
     #[test]
     fn pipe_name_is_stable_across_calls() {
-        let first = pipe_name_for_current_user().expect("SID resolvable in tests");
-        let second = pipe_name_for_current_user().expect("SID resolvable in tests");
+        let first = PipeName::for_current_user().expect("SID resolvable in tests");
+        let second = PipeName::for_current_user().expect("SID resolvable in tests");
         assert_eq!(
             first, second,
             "pipe name must be deterministic for a given user"
@@ -488,16 +619,69 @@ mod tests {
 
     #[test]
     fn pipe_name_has_expected_shape() {
-        let name = pipe_name_for_current_user().expect("SID resolvable in tests");
+        let name = PipeName::for_current_user().expect("SID resolvable in tests");
+        let raw = name.as_str();
         assert!(
-            name.starts_with(r"\\.\pipe\uffs-"),
-            "unexpected prefix: {name}"
+            raw.starts_with(r"\\.\pipe\uffs-"),
+            "unexpected prefix: {raw}"
         );
         assert_eq!(
-            name.len(),
+            raw.len(),
             r"\\.\pipe\uffs-".len() + 16,
-            "expected 16 hex chars of FNV-1a: {name}"
+            "expected 16 hex chars of FNV-1a: {raw}"
         );
+    }
+
+    #[test]
+    fn parse_accepts_valid_path() {
+        let pn = PipeName::parse(r"\\.\pipe\uffs-test").expect("valid path");
+        assert_eq!(pn.as_str(), r"\\.\pipe\uffs-test");
+        assert_eq!(format!("{pn}"), r"\\.\pipe\uffs-test");
+    }
+
+    #[test]
+    fn parse_rejects_missing_prefix() {
+        let raw = "uffs-no-prefix";
+        match PipeName::parse(raw) {
+            Err(PipeNameError::BadPrefix { raw: returned }) => {
+                assert_eq!(returned, raw, "BadPrefix must echo the rejected input");
+            }
+            other => panic!("expected BadPrefix, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_empty_name_after_prefix() {
+        match PipeName::parse(PipeName::PREFIX) {
+            Err(PipeNameError::Empty) => {}
+            other => panic!("expected Empty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_overlong_path() {
+        // Build prefix + 257 ASCII chars → total 266 chars, well over the
+        // 256-char Win32 named-pipe path limit.
+        let mut raw = String::from(PipeName::PREFIX);
+        raw.extend(core::iter::repeat_n('x', PipeName::MAX_TOTAL_LEN));
+        match PipeName::parse(raw) {
+            Err(PipeNameError::TooLong { len }) => {
+                assert!(
+                    len > PipeName::MAX_TOTAL_LEN,
+                    "TooLong must report the actual length: got {len}"
+                );
+            }
+            other => panic!("expected TooLong, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_current_user_round_trips_through_parse() {
+        // Anything `for_current_user` produces must, by contract, also be
+        // accepted by `parse` — they're two doors on the same invariant.
+        let name = PipeName::for_current_user().expect("SID resolvable in tests");
+        let reparsed = PipeName::parse(name.as_str()).expect("self-round-trip");
+        assert_eq!(reparsed, name);
     }
 
     #[test]

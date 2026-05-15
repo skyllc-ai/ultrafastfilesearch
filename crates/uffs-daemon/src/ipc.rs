@@ -483,7 +483,7 @@ pub(crate) async fn run_pipe_server(
     index: Arc<IndexManager>,
     lifecycle: LifecycleHandle,
 ) -> anyhow::Result<()> {
-    let pipe_name = uffs_security::pipe::pipe_name_for_current_user()
+    let pipe_name = uffs_security::pipe::PipeName::for_current_user()
         .map_err(|sid_err| anyhow::anyhow!("pipe name resolution failed: {sid_err}"))?;
 
     // DACL: allow the linked-token user only.  Kept alive for the entire
@@ -568,7 +568,7 @@ pub(crate) async fn run_pipe_server(
 /// instance (enables `FIRST_PIPE_INSTANCE` squat protection).
 #[cfg(windows)]
 fn create_pipe_server(
-    pipe_name: &str,
+    pipe_name: &uffs_security::pipe::PipeName,
     sd: &uffs_security::pipe::OwnerOnlySd,
     first: bool,
 ) -> anyhow::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
@@ -592,7 +592,10 @@ fn create_pipe_server(
     // owned by `sd` (outlives this call).
     #[expect(unsafe_code, reason = "Win32 FFI — create named-pipe server")]
     let server = unsafe {
-        opts.create_with_security_attributes_raw(pipe_name, core::ptr::from_mut(&mut sa).cast())
+        opts.create_with_security_attributes_raw(
+            pipe_name.as_str(),
+            core::ptr::from_mut(&mut sa).cast(),
+        )
     }?;
 
     Ok(server)
