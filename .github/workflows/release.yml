@@ -370,9 +370,11 @@ jobs:
         shell: bash
         run: |
           echo "📐 Release binary sizes:"
-          # Glob over the shipping-set names instead of `ls | grep` (SC2010);
-          # `nullglob` keeps the loop silent when a target dir hasn't built.
-          shopt -s nullglob
+          # Iterate the explicit shipping-set names (avoids `ls | grep`, SC2010).
+          # Use `if … then … fi` rather than `[[ -f $bin ]] && ls …` so a missing
+          # file on the final iteration does not propagate exit-1 out of the
+          # loop under `bash -e` (e.g. uffs-mft.exe is absent on non-Windows
+          # targets, which broke release pipeline #96 / v0.5.97).
           for bin in target/${{ matrix.target }}/release/uffs \
                      target/${{ matrix.target }}/release/uffsd \
                      target/${{ matrix.target }}/release/uffsmcp \
@@ -381,7 +383,9 @@ jobs:
                      target/${{ matrix.target }}/release/uffsd.exe \
                      target/${{ matrix.target }}/release/uffsmcp.exe \
                      target/${{ matrix.target }}/release/uffs-mft.exe; do
-            [[ -f "$bin" ]] && ls -lh "$bin"
+            if [[ -f "$bin" ]]; then
+              ls -lh "$bin"
+            fi
           done
 
       - name: Package binaries
