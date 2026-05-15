@@ -34,6 +34,13 @@
 //!   `uffs-cli`.
 //! - **§3.7** N/A — no `pub trait` declarations in this crate.
 
+// On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
+// (`#[cfg(feature = "async")]`, `#[cfg(windows)]`, etc.) render with their
+// cfg badge.  Gated behind `cfg(docsrs)` so local `cargo doc` never
+// exercises the nightly-only feature.  Post-Rust-1.92 the `doc_auto_cfg`
+// feature was merged into `doc_cfg` (rust-lang/rust#138907).
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 // Suppress unused crate warnings for deps used in sub-modules
 use serde as _;
 use uffs_security as _;

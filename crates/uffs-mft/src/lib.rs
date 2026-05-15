@@ -90,6 +90,12 @@
 //! No `pub trait` declarations live in this crate, so the
 //! sealed-trait decision (§3.7) is **N/A**.
 
+// On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
+// (`#[cfg(windows)]`, `#[cfg(feature = "...")]`, etc.) render with their
+// cfg badge.  Gated behind `cfg(docsrs)` so local `cargo doc` never
+// exercises the nightly-only feature.  Post-Rust-1.92 the `doc_auto_cfg`
+// feature was merged into `doc_cfg` (rust-lang/rust#138907).
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(clippy::all, clippy::pedantic)]
 #![expect(
     clippy::module_name_repetitions,
