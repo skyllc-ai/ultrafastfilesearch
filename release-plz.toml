@@ -313,28 +313,50 @@ pr_branch_prefix = "release-plz-"
 # Per-package overrides (Phases R6 + R4 of release-automation-plan.md)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# UFFS has 17 workspace members.  Twelve are publishable to crates.io;
-# the rest are internal-only (one diagnostic crate + three CI tools +
-# one out-of-band fuzz harness in a separate workspace):
+# UFFS has 17 workspace members.  The strategic publish set (per
+# 2026-05-14 scrub, see `docs/refactor/crates-io-publishability-deep-
+# dive.md`) is six crates: two ready today, four blocked by the
+# in-workspace polars `git/rev` pin.  The remaining crates are
+# never-publish or reserve-only.
 #
-#   Publishable to crates.io (12) — `changelog_path` override below
-#   points each at the workspace-root CHANGELOG.md (R4 workspace-style
-#   changelog decision):
-#     uffs-polars, uffs-security, uffs-text, uffs-time,
-#     uffs-mft, uffs-format, uffs-core, uffs-daemon, uffs-client,
-#     uffs-mcp, uffs-broker, uffs-cli
+#   Ready to publish today (2) — `changelog_path` blocks below:
+#     uffs-time, uffs-text
 #
-#   Workspace-only diagnostic crate (1) — skipped by release-plz via
-#   crate-level `publish = false` in its own Cargo.toml:
-#     crates/uffs-diag         (uffs-diag)
-#     release-plz follows cargo's `package.publish = false` convention
-#     and excludes such packages from version-bump / changelog / tag
-#     operations entirely.  No `[[package]]` block needed here.
+#   Publishable post-polars-resolution (4) — currently carry
+#   `release = false` below because (a) they transitively depend on
+#   `uffs-polars` which can't yet resolve against crates.io polars
+#   0.53.0, and (b) `cargo package --workspace` (release-plz's hard-
+#   coded baseline step) trips on the same chain.  Flip to
+#   `changelog_path` when polars upstream publishes a compatible
+#   release.
+#     uffs-mft, uffs-client, uffs-cli, uffs-mcp
 #
-#   Internal tools (3) — `release = false` below (release-plz-specific
-#   exclusion; `cargo publish` is also blocked by their crate-level
-#   `publish = false`, but `release = false` is the surgical fix to
-#   keep them out of release-plz's per-package iteration):
+#   Reserve-name-only (post-polars decision deferred, 2):
+#     uffs-core, uffs-daemon
+#
+#   Never publish — internal architecture or implementation detail.
+#   Split into two sub-camps depending on whether release-plz needs
+#   an explicit skip directive:
+#
+#     (a) Polars chain (`uffs-polars`, `uffs-format`) — `publish = false`
+#         via workspace inheritance, AND `release = false` block below
+#         because release-plz's hardcoded `cargo package -p` baseline
+#         step trips on the polars chrono mismatch unless every chain
+#         member is excluded from iteration (R6→R8 deviation, 2026-05-08).
+#     (b) Explicit-`publish = false` crates (`uffs-security`, `uffs-broker`,
+#         `uffs-broker-protocol`, `uffs-diag`) — auto-skipped by release-
+#         plz following cargo's convention.  No `[[package]]` block needed.
+#         Rationale per crate:
+#           uffs-security     UFFS-internals dressed as a generic crate
+#                              — see crate manifest comment
+#           uffs-broker       Windows `[[bin]]` only; standalone install
+#                              is meaningless without the daemon pairing
+#           uffs-broker-protocol  1-RTT wire protocol nobody else speaks
+#           uffs-diag         developer diagnostic tooling
+#
+#   Internal CI tools (3) — `release = false` below as the surgical
+#   release-plz-specific exclusion (their `publish = false` is the
+#   actual `cargo publish` block):
 #     scripts/ci-pipeline      (uffs-ci-pipeline)
 #     scripts/ci/gen-hooks     (uffs-gen-hooks)
 #     scripts/ci/gen-workflow  (uffs-gen-workflow)
@@ -350,10 +372,10 @@ pr_branch_prefix = "release-plz-"
 #
 # `changelog_path = "CHANGELOG.md"` (R4) — `changelog_path` cannot be
 # set at workspace level (release-plz docs explicitly forbid it), so
-# each of the 12 publishable crates gets its own `[[package]]` block
-# with the same value pointing at the workspace-root file.  Path is
-# relative to the root Cargo.toml.  When release-plz writes per-crate
-# changelog entries, all 12 land in the same file — under the same
+# each publish-ready crate gets its own `[[package]]` block with the
+# same value pointing at the workspace-root file.  Path is relative
+# to the root Cargo.toml.  When release-plz writes per-crate changelog
+# entries, all of them land in the same file — under the same
 # `## [{{ version }}] - {{ date }}` section since UFFS releases all
 # crates lockstep at one shared workspace version.
 #
@@ -384,16 +406,32 @@ release = false
 # scans top-down in dependency order, not alphabetic.  Mirrors the
 # layering documented in `docs/architecture/engine/`.
 #
-# Phase R6→R8 deviation row 5 (2026-05-08): the 8 polars-tainted
-# crates below carry `release = false` instead of `changelog_path` so
-# release-plz skips them entirely — they cannot ship to crates.io
-# while polars upstream's published 0.53.0 release lacks the nightly-
-# API patches that our in-workspace polars `git/rev` pin carries.  The
-# 4 polars-free crates (`uffs-time`, `uffs-text`, `uffs-security`,
-# `uffs-broker`) remain release-eligible.  Re-enable the 8 (flip
-# `release = false` back to `changelog_path = "CHANGELOG.md"`) when
-# polars publishes a compatible release on crates.io.  See the
-# deviation log in `docs/architecture/release-automation-plan.md`.
+# Two camps below:
+#
+#  1. `changelog_path` blocks — crates that release-plz must consider
+#     for version-bump and changelog generation.  Today this is the
+#     two ready-now crates (`uffs-time`, `uffs-text`); when polars
+#     upstream publishes a compatible release, the four post-polars
+#     crates (`uffs-mft`, `uffs-client`, `uffs-mcp`, `uffs-cli`) flip
+#     from `release = false` to `changelog_path = "CHANGELOG.md"`.
+#
+#  2. `release = false` blocks — crates that need an explicit skip in
+#     release-plz's iteration even though `publish = false` already
+#     blocks `cargo publish`.  Used for:
+#       • Polars-blocked crates (R6→R8 deviation row, 2026-05-08): the
+#         polars subtree below cannot resolve `chrono` against
+#         crates.io polars 0.53.0 today, so `cargo package` fails.
+#         `release = false` keeps release-plz from invoking that step.
+#         Re-enable when polars publishes a compatible release.
+#       • Reserve-name-only crates (`uffs-core`, `uffs-daemon` —
+#         deferred publish decision per the 2026-05-14 scrub).
+#
+# Crates with `publish = false` in their own Cargo.toml (`uffs-polars`,
+# `uffs-format`, `uffs-security`, `uffs-broker`, `uffs-broker-protocol`,
+# `uffs-diag`) are auto-skipped by release-plz following cargo's
+# convention — no `[[package]]` block needed for them.  Only crates
+# that EITHER are publish-ready OR need the explicit `release = false`
+# release-plz-specific knob appear below.
 
 [[package]]
 name = "uffs-time"
@@ -403,20 +441,22 @@ changelog_path = "CHANGELOG.md"
 name = "uffs-text"
 changelog_path = "CHANGELOG.md"
 
-[[package]]
-name = "uffs-security"
-changelog_path = "CHANGELOG.md"
-
+# Polars facade and CSV formatter (`publish = false` via workspace
+# inheritance — never publish per the 2026-05-14 scrub).  Listed
+# explicitly with `release = false` to mirror the existing pattern
+# established by the R6→R8 deviation row: the polars chain trips
+# release-plz's hardcoded per-package `cargo package -p` baseline step
+# unless every chain member is explicitly excluded from iteration.
 [[package]]
 name = "uffs-polars"
 release = false
 
 [[package]]
-name = "uffs-mft"
+name = "uffs-format"
 release = false
 
 [[package]]
-name = "uffs-format"
+name = "uffs-mft"
 release = false
 
 [[package]]
@@ -434,10 +474,6 @@ release = false
 [[package]]
 name = "uffs-daemon"
 release = false
-
-[[package]]
-name = "uffs-broker"
-changelog_path = "CHANGELOG.md"
 
 [[package]]
 name = "uffs-cli"
