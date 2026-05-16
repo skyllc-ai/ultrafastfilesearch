@@ -109,7 +109,7 @@ fn extension_table_serialization() {
     record3.first_name.name = IndexNameRef::new(name3_offset, 11, true, ext_id3);
 
     // Serialize
-    let serialized = index.serialize(12345, 67890, 100);
+    let serialized = index.serialize(12345, 67890, crate::usn::Usn::new(100));
 
     // Deserialize
     let (deserialized, header) =
@@ -119,7 +119,7 @@ fn extension_table_serialization() {
     assert_eq!(header.volume, crate::platform::DriveLetter::C);
     assert_eq!(header.volume_serial, 12345);
     assert_eq!(header.usn_journal_id, 67890);
-    assert_eq!(header.next_usn, 100);
+    assert_eq!(header.next_usn, crate::usn::Usn::new(100));
 
     // Verify extension table was preserved
     assert_eq!(deserialized.extensions.len(), index.extensions.len());

@@ -76,7 +76,7 @@ pub(crate) async fn cmd_index_save(
     let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
         |_| {
             println!("⚠️  USN Journal not available, saving without checkpoint");
-            (0, 0)
+            (0, uffs_mft::usn::Usn::ZERO)
         },
         |info| (info.journal_id, info.next_usn),
     );
@@ -285,7 +285,7 @@ pub(crate) async fn cmd_cache_get(
     let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
         |_| {
             println!("⚠️  USN Journal not available");
-            (0, 0)
+            (0, uffs_mft::usn::Usn::ZERO)
         },
         |info| (info.journal_id, info.next_usn),
     );
@@ -584,7 +584,7 @@ async fn do_full_index_build(drive: uffs_mft::platform::DriveLetter) -> Result<(
     let (usn_journal_id, next_usn) = query_usn_journal(drive).map_or_else(
         |_| {
             println!("⚠️  USN Journal not available");
-            (0, 0)
+            (0, uffs_mft::usn::Usn::ZERO)
         },
         |info| (info.journal_id, info.next_usn),
     );

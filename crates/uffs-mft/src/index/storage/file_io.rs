@@ -42,7 +42,7 @@ impl MftIndex {
         path: &std::path::Path,
         volume_serial: u64,
         usn_journal_id: u64,
-        next_usn: i64,
+        next_usn: crate::usn::Usn,
     ) -> std::io::Result<()> {
         let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
         let t_save_total = std::time::Instant::now();

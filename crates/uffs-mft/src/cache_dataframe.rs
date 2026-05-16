@@ -155,8 +155,10 @@ fn spawn_cache_save(
 
     let handle = VolumeHandle::open(drive)?;
     let volume_serial = handle.volume_data().volume_serial_number;
-    let (usn_journal_id, next_usn) =
-        query_usn_journal(drive).map_or((0, 0), |info| (info.journal_id, info.next_usn));
+    let (usn_journal_id, next_usn) = query_usn_journal(drive)
+        .map_or((0, crate::usn::Usn::ZERO), |info| {
+            (info.journal_id, info.next_usn)
+        });
 
     if let Err(err) =
         save_to_cache_background(index, drive, volume_serial, usn_journal_id, next_usn)

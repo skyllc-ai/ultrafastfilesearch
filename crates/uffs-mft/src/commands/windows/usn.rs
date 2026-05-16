@@ -52,10 +52,15 @@ pub(crate) async fn cmd_usn_info(drive: uffs_mft::platform::DriveLetter) -> Resu
                 bytes_to_mb_f64(info.allocation_delta)
             );
             println!();
+            // Rough estimate: USN records average ~64 bytes, so the
+            // record count is approximately the raw byte-distance
+            // divided by 64.  Subtract through `.raw()` because
+            // `Usn - Usn` has no clean type (the result is an i64
+            // *count*, not another USN value).
             println!(
                 "📊 Journal contains ~{} changes",
-                (info.next_usn - info.first_usn) / 64
-            ); // Rough estimate
+                (info.next_usn.raw() - info.first_usn.raw()) / 64
+            );
         }
         Err(e) => {
             eprintln!("❌ Failed to query USN Journal: {e}");
@@ -91,7 +96,10 @@ pub(crate) async fn cmd_usn_read(
         }
     };
 
-    let start = start_usn.unwrap_or(info.first_usn);
+    // CLI surface keeps the raw `Option<i64>` so existing `--start-usn`
+    // invocations (e.g. `--start-usn 12345`) parse unchanged; the wrap
+    // happens at this single call-boundary.
+    let start = start_usn.map_or(info.first_usn, uffs_mft::usn::Usn::new);
     println!(
         "Reading from USN {} (journal ID: 0x{:016X})",
         start, info.journal_id

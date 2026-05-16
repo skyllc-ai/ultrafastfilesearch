@@ -266,8 +266,10 @@ impl MultiDriveMftReader {
         let volume_data = handle.volume_data();
         let volume_serial = volume_data.volume_serial_number;
 
-        let (usn_journal_id, next_usn) =
-            query_usn_journal(drive).map_or((0, 0), |info| (info.journal_id, info.next_usn));
+        let (usn_journal_id, next_usn) = query_usn_journal(drive)
+            .map_or((0, crate::usn::Usn::ZERO), |info| {
+                (info.journal_id, info.next_usn)
+            });
 
         if let Err(error) = save_to_cache(&index, drive, volume_serial, usn_journal_id, next_usn) {
             info!(drive = %drive, error = %error, "⚠️ Failed to save to cache");
@@ -350,7 +352,7 @@ impl MultiDriveMftReader {
         drive: crate::platform::DriveLetter,
         index: MftIndex,
         journal_id: u64,
-        start_usn: i64,
+        start_usn: crate::usn::Usn,
     ) -> MftIndex {
         let (records, next_usn) = match read_usn_journal(drive, journal_id, start_usn) {
             Ok(result) => result,
@@ -384,16 +386,16 @@ impl MultiDriveMftReader {
         mut index: MftIndex,
         records: &[crate::usn::UsnRecord],
         journal_id: u64,
-        start_usn: i64,
-        next_usn: i64,
+        start_usn: crate::usn::Usn,
+        next_usn: crate::usn::Usn,
     ) -> MftIndex {
         let changes_map = aggregate_changes(records);
         let changes: Vec<_> = changes_map.into_values().collect();
         info!(
             drive = %drive,
             usn_records = changes.len(),
-            from_usn = start_usn,
-            to_usn = next_usn,
+            from_usn = %start_usn,
+            to_usn = %next_usn,
             "🔧 Applying USN changes"
         );
 

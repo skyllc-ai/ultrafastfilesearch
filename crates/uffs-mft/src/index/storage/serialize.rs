@@ -24,7 +24,12 @@ impl MftIndex {
     /// * `usn_journal_id` - USN Journal ID at time of serialization
     /// * `next_usn` - Next USN to read from (checkpoint)
     #[must_use]
-    pub fn serialize(&self, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Vec<u8> {
+    pub fn serialize(
+        &self,
+        volume_serial: u64,
+        usn_journal_id: u64,
+        next_usn: crate::usn::Usn,
+    ) -> Vec<u8> {
         let header = IndexHeader::new(self, volume_serial, usn_journal_id, next_usn);
 
         // Exact capacity estimate — avoids reallocations during serialization.
@@ -53,7 +58,7 @@ impl MftIndex {
         buffer.extend_from_slice(&u32::from(header.volume.as_byte()).to_le_bytes());
         buffer.extend_from_slice(&header.volume_serial.to_le_bytes());
         buffer.extend_from_slice(&header.usn_journal_id.to_le_bytes());
-        buffer.extend_from_slice(&header.next_usn.to_le_bytes());
+        buffer.extend_from_slice(&header.next_usn.raw().to_le_bytes());
         buffer.extend_from_slice(&header.created_at.to_le_bytes());
         buffer.extend_from_slice(&header.record_count.to_le_bytes());
         buffer.extend_from_slice(&header.names_size.to_le_bytes());
