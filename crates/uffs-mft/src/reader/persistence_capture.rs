@@ -49,7 +49,7 @@ impl MftReader {
                 vcn: 0,
                 cluster_count: volume_data.mft_valid_data_length
                     / u64::from(volume_data.bytes_per_cluster),
-                lcn: volume_data.mft_start_lcn.cast_signed(),
+                lcn: crate::platform::Lcn::new(volume_data.mft_start_lcn.cast_signed()),
             }]
         });
         let extent_map = MftExtentMap::new(extents, volume_data.bytes_per_cluster, record_size);
@@ -323,7 +323,7 @@ fn plan_iocp_capture_chunks(
             vcn: 0,
             cluster_count: volume_data.mft_valid_data_length
                 / u64::from(volume_data.bytes_per_cluster),
-            lcn: volume_data.mft_start_lcn.cast_signed(),
+            lcn: crate::platform::Lcn::new(volume_data.mft_start_lcn.cast_signed()),
         }]
     });
 

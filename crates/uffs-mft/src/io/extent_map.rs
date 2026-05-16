@@ -76,7 +76,7 @@ impl MftExtentMap {
             extents: vec![MftExtent {
                 vcn: 0,
                 cluster_count,
-                lcn: mft_start_lcn.cast_signed(),
+                lcn: crate::platform::Lcn::new(mft_start_lcn.cast_signed()),
             }],
             bytes_per_cluster,
             bytes_per_record,
@@ -105,7 +105,7 @@ impl MftExtentMap {
         let extent = self.find_extent(vcn)?;
 
         // Check for sparse extent
-        if extent.lcn < 0 {
+        if extent.lcn.is_hole() {
             return None;
         }
 
@@ -118,7 +118,7 @@ impl MftExtentMap {
 
         // Physical offset = LCN * bytes_per_cluster + offset within extent + offset in
         // cluster
-        let physical = extent.lcn.cast_unsigned() * u64::from(self.bytes_per_cluster)
+        let physical = extent.lcn.raw_unsigned() * u64::from(self.bytes_per_cluster)
             + cluster_byte_offset
             + offset_in_cluster;
 
@@ -187,7 +187,7 @@ fn log_extent_layout(
     let num_extents = extents.len();
 
     if num_extents > 1 {
-        let sparse_extents = extents.iter().filter(|ext| ext.lcn < 0).count();
+        let sparse_extents = extents.iter().filter(|ext| ext.lcn.is_hole()).count();
         info!(
             extents = num_extents,
             sparse_extents,
@@ -210,13 +210,13 @@ fn log_extent_layout(
 /// Log per-extent details at debug level.
 fn log_extent_details(extents: &[MftExtent]) {
     for (idx, ext) in extents.iter().enumerate() {
-        let sparse_label = if ext.lcn < 0 { " (SPARSE)" } else { "" };
+        let sparse_label = if ext.lcn.is_hole() { " (SPARSE)" } else { "" };
         debug!(
             extent = idx,
             vcn = ext.vcn,
-            lcn = ext.lcn,
+            lcn = %ext.lcn,
             clusters = ext.cluster_count,
-            is_sparse = ext.lcn < 0,
+            is_sparse = ext.lcn.is_hole(),
             "  Extent {idx}: VCN {} → LCN {}, {} clusters{sparse_label}",
             ext.vcn,
             ext.lcn,
@@ -249,12 +249,12 @@ mod tests {
             MftExtent {
                 vcn: 0,
                 cluster_count: 10,
-                lcn: 100,
+                lcn: crate::platform::Lcn::new(100),
             },
             MftExtent {
                 vcn: 10,
                 cluster_count: 10,
-                lcn: 500,
+                lcn: crate::platform::Lcn::new(500),
             },
         ];
         let map = MftExtentMap::new(extents, 4096, 1024);

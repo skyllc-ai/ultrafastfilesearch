@@ -540,7 +540,7 @@ impl VolumeHandle {
                 vcn: 0,
                 cluster_count: self.volume_data.mft_valid_data_length
                     / u64::from(self.volume_data.bytes_per_cluster),
-                lcn: self.volume_data.mft_start_lcn.cast_signed(),
+                lcn: super::Lcn::new(self.volume_data.mft_start_lcn.cast_signed()),
             }]);
         };
 
@@ -674,7 +674,7 @@ impl VolumeHandle {
                             extent_index = i,
                             vcn = ext.vcn,
                             cluster_count = ext.cluster_count,
-                            lcn = ext.lcn,
+                            lcn = %ext.lcn,
                             "MFT bitmap extent sample"
                         );
                     }
@@ -730,7 +730,7 @@ impl VolumeHandle {
         }
 
         for (i, extent) in extents.iter().enumerate() {
-            let byte_offset = extent.lcn * i64::from(bytes_per_cluster);
+            let byte_offset = extent.lcn.raw() * i64::from(bytes_per_cluster);
             let extent_bytes = frs_to_usize(extent.cluster_count * u64::from(bytes_per_cluster));
 
             if extent_bytes == 0 {

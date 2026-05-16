@@ -80,7 +80,7 @@ pub fn generate_read_chunks(
     );
 
     for (extent_idx, extent) in extent_map.extents().enumerate() {
-        if extent.lcn < 0 {
+        if extent.lcn.is_hole() {
             sparse_extents += 1;
             trace!(extent_idx, vcn = extent.vcn, "Skipping sparse extent");
             continue;
@@ -133,7 +133,7 @@ fn split_extent_into_chunks(
 ) {
     let extent_start_frs = extent.vcn * u64::from(records_per_cluster);
     let extent_records = extent.cluster_count * u64::from(records_per_cluster);
-    let extent_disk_offset = extent.lcn.cast_unsigned() * u64::from(cluster_size);
+    let extent_disk_offset = extent.lcn.raw_unsigned() * u64::from(cluster_size);
     let records_per_chunk = (chunk_size / record_size as usize) as u64;
 
     let mut chunk_start = 0_u64;
@@ -255,7 +255,7 @@ pub fn generate_precise_read_chunks(
     let mut total_records_skipped = 0_u64;
 
     for extent in extent_map.extents() {
-        if extent.lcn < 0 {
+        if extent.lcn.is_hole() {
             continue;
         }
 
@@ -314,7 +314,7 @@ fn split_extent_into_precise_chunks(
     let rpc = u64::from(records_per_cluster);
     let extent_start_frs = extent.vcn * rpc;
     let extent_end_frs = extent_start_frs + extent.cluster_count * rpc;
-    let extent_disk_offset = extent.lcn.cast_unsigned() * u64::from(cluster_size);
+    let extent_disk_offset = extent.lcn.raw_unsigned() * u64::from(cluster_size);
     let records_per_io = max_io_size / record_size as usize;
 
     for &(range_start_cluster, range_cluster_count) in cluster_ranges {

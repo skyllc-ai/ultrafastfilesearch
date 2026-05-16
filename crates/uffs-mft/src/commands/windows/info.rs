@@ -133,7 +133,7 @@ pub(crate) async fn cmd_info(
                 debug!(
                     extent = i,
                     vcn = ext.vcn,
-                    lcn = ext.lcn,
+                    lcn = %ext.lcn,
                     clusters = ext.cluster_count,
                     "  Extent {}: VCN {} → LCN {}, {} clusters",
                     i,

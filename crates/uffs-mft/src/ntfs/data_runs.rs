@@ -21,21 +21,35 @@ pub struct DataRun {
     /// Number of clusters in this run.
     pub cluster_count: u64,
     /// Logical Cluster Number - physical location on disk.
-    /// A value of 0 indicates a sparse (unallocated) run.
-    pub lcn: i64,
+    ///
+    /// `Lcn::ZERO` indicates a sparse (unallocated) run — the
+    /// data-run encoding's "no LCN offset emitted" sentinel, which
+    /// leaves the running LCN total unchanged.  Distinct from the
+    /// retrieval-pointer `LCN_HOLE = -1` convention used by
+    /// [`crate::platform::MftExtent`].
+    pub lcn: crate::platform::Lcn,
 }
 
 impl DataRun {
     /// Returns true if this is a sparse (unallocated) run.
     #[must_use]
     pub const fn is_sparse(&self) -> bool {
-        self.lcn == 0
+        self.lcn.is_zero()
     }
 
     /// Returns the byte offset of this run on the volume.
+    ///
+    /// Defensive: negative LCNs (which the data-run encoding
+    /// shouldn't produce, but a corrupt buffer could) and sparse
+    /// runs both yield `0`, matching the historic `nonneg_to_u64`
+    /// clamp.
     #[must_use]
     pub fn byte_offset(&self, bytes_per_cluster: u32) -> u64 {
-        crate::index::nonneg_to_u64(self.lcn) * u64::from(bytes_per_cluster)
+        if self.lcn.is_hole() {
+            0
+        } else {
+            self.lcn.raw_unsigned() * u64::from(bytes_per_cluster)
+        }
     }
 
     /// Returns the size of this run in bytes.
@@ -83,7 +97,14 @@ pub fn parse_data_runs(data: &[u8], lowest_vcn: i64) -> Vec<DataRun> {
         runs.push(DataRun {
             vcn: current_vcn,
             cluster_count: run_length,
-            lcn: if offset_size > 0 { current_lcn } else { 0 },
+            // A run with no encoded LCN offset is sparse; emit
+            // `Lcn::ZERO` so `is_sparse()` keeps returning true
+            // without consulting `offset_size` downstream.
+            lcn: if offset_size > 0 {
+                crate::platform::Lcn::new(current_lcn)
+            } else {
+                crate::platform::Lcn::ZERO
+            },
         });
 
         if let Ok(len_i64) = i64::try_from(run_length) {
@@ -163,4 +184,108 @@ pub fn extract_data_runs_from_attribute(attr_data: &[u8]) -> Vec<DataRun> {
     };
 
     parse_data_runs(mapping_pairs_data, nr_data.lowest_vcn)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code — relaxed linting for test clarity"
+)]
+mod tests {
+    use super::{DataRun, parse_data_runs};
+    use crate::platform::Lcn;
+
+    #[test]
+    fn is_sparse_matches_only_zero_sentinel() {
+        // Data-run sparse encoding is `Lcn::ZERO` (no offset emitted),
+        // *not* the retrieval-pointer `LCN_HOLE = -1`.  Keep the two
+        // conventions surgically separated post-migration.
+        assert!(
+            DataRun {
+                vcn: 0,
+                cluster_count: 4,
+                lcn: Lcn::ZERO,
+            }
+            .is_sparse()
+        );
+        for lcn in [Lcn::HOLE, Lcn::new(1), Lcn::new(-2), Lcn::new(i64::MAX)] {
+            assert!(
+                !DataRun {
+                    vcn: 0,
+                    cluster_count: 4,
+                    lcn,
+                }
+                .is_sparse(),
+                "{lcn} must not register as a sparse data run",
+            );
+        }
+    }
+
+    #[test]
+    fn byte_offset_clamps_holes_and_yields_lcn_times_bpc_otherwise() {
+        // Defensive clamp: a negative LCN in a data run (corrupt
+        // buffer) and a sparse-marker `Lcn::ZERO` both produce a
+        // zero byte offset, matching the historic `nonneg_to_u64`
+        // discipline.  Non-sparse runs reproduce the kernel's
+        // unsigned `lcn * bpc` exactly.
+        let bpc = 4096_u32;
+        for hole in [Lcn::HOLE, Lcn::new(-2), Lcn::new(i64::MIN)] {
+            assert_eq!(
+                DataRun {
+                    vcn: 0,
+                    cluster_count: 1,
+                    lcn: hole,
+                }
+                .byte_offset(bpc),
+                0,
+                "hole {hole}"
+            );
+        }
+        assert_eq!(
+            DataRun {
+                vcn: 0,
+                cluster_count: 1,
+                lcn: Lcn::ZERO,
+            }
+            .byte_offset(bpc),
+            0
+        );
+        assert_eq!(
+            DataRun {
+                vcn: 0,
+                cluster_count: 1,
+                lcn: Lcn::new(42),
+            }
+            .byte_offset(bpc),
+            42 * u64::from(bpc)
+        );
+    }
+
+    #[test]
+    fn parse_data_runs_marks_sparse_runs_with_zero_lcn() {
+        // Two-run NTFS mapping pairs:
+        //   header 0x21 → length-size=1, offset-size=2 → length=8,
+        //   lcn delta = +0x0010 → first run @ LCN 16, 8 clusters.
+        //   header 0x02 → length-size=2, offset-size=0 → length=4,
+        //   no LCN delta → sparse run; lcn must be `Lcn::ZERO`,
+        //   VCN advances past the previous run.
+        //   header 0x00 → terminator.
+        let buf = [
+            0x21_u8, 0x08, 0x10, 0x00, // run 1
+            0x02, 0x04, 0x00, // run 2 (sparse)
+            0x00, // terminator
+        ];
+        let runs = parse_data_runs(&buf, 0);
+        assert_eq!(runs.len(), 2, "expected exactly two parsed runs");
+
+        assert_eq!(runs[0].vcn, 0);
+        assert_eq!(runs[0].cluster_count, 8);
+        assert_eq!(runs[0].lcn, Lcn::new(16));
+        assert!(!runs[0].is_sparse());
+
+        assert_eq!(runs[1].vcn, 8, "VCN must advance past run 1");
+        assert_eq!(runs[1].cluster_count, 4);
+        assert_eq!(runs[1].lcn, Lcn::ZERO, "sparse run must carry Lcn::ZERO");
+        assert!(runs[1].is_sparse());
+    }
 }

@@ -23,6 +23,14 @@ mod bitmap;
 /// case and rejects non-ASCII-letter input at the parse boundary.
 pub mod drive_letter;
 mod extents;
+/// Logical Cluster Number newtype — signed cluster identifier used
+/// by `FSCTL_GET_RETRIEVAL_POINTERS` and the on-disk data-run decoder.
+///
+/// Phase 4 sub-phase 5d: replaces raw `i64` LCN fields on `MftExtent`
+/// and `DataRun` with a [`Lcn`] newtype that enforces sparse / hole
+/// detection through [`Lcn::is_hole`] / [`Lcn::is_zero`] instead of
+/// open-coded `< 0` / `== 0` checks at every call site.
+pub mod lcn;
 mod system;
 /// `$UpCase` table reading from live NTFS volume.
 pub mod upcase;
@@ -32,6 +40,7 @@ mod volume;
 pub use bitmap::MftBitmap;
 pub use drive_letter::{DriveLetter, DriveLetterError};
 pub use extents::MftExtent;
+pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
 pub use system::DriveType;

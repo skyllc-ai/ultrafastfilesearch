@@ -454,13 +454,13 @@ fn read_clusters(
             ))
         })?;
 
-        if run.lcn == 0 {
+        if run.is_sparse() {
             // Sparse — already zeroed.
             offset += run_byte_len;
             continue;
         }
 
-        let disk_byte = run.lcn * bpc.cast_signed();
+        let disk_byte = run.lcn.raw() * bpc.cast_signed();
         let run_bytes = run_byte_len;
         let read_len = run_bytes.min(UPCASE_SIZE_BYTES - offset);
 

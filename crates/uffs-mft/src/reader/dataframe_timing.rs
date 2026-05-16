@@ -248,7 +248,7 @@ impl MftReader {
                     vcn: 0,
                     cluster_count: volume_data.mft_valid_data_length
                         / u64::from(volume_data.bytes_per_cluster),
-                    lcn: volume_data.mft_start_lcn.cast_signed(),
+                    lcn: crate::platform::Lcn::new(volume_data.mft_start_lcn.cast_signed()),
                 }]
             });
 

@@ -22,18 +22,23 @@ pub struct MftExtent {
     /// Number of clusters in this extent.
     pub cluster_count: u64,
     /// Logical Cluster Number (physical location on disk).
-    /// Negative values indicate sparse/unallocated regions.
-    pub lcn: i64,
+    /// Negative values (per [`super::Lcn::is_hole`]) indicate sparse /
+    /// unallocated regions; the kernel emits `LCN_HOLE = -1` for those.
+    pub lcn: super::Lcn,
 }
 
 impl MftExtent {
     /// Returns the byte offset of this extent on the volume.
+    ///
+    /// Sparse extents (negative LCNs) yield `0`; the caller is
+    /// expected to filter these out via [`MftExtent::lcn`]
+    /// `.is_hole()` before doing seek arithmetic.
     #[must_use]
     pub fn byte_offset(&self, bytes_per_cluster: u32) -> u64 {
-        if self.lcn < 0 {
+        if self.lcn.is_hole() {
             0
         } else {
-            self.lcn.cast_unsigned() * u64::from(bytes_per_cluster)
+            self.lcn.raw_unsigned() * u64::from(bytes_per_cluster)
         }
     }
 
@@ -178,9 +183,73 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
         extents.push(MftExtent {
             vcn: prev_vcn,
             cluster_count,
-            lcn,
+            lcn: super::Lcn::new(lcn),
         });
 
         prev_vcn = next_vcn;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Lcn;
+    use super::MftExtent;
+
+    #[test]
+    fn byte_offset_returns_zero_for_sparse_extents() {
+        // Pin the sparse-extent guard preserved by the `Lcn::is_hole()`
+        // migration: any negative LCN (not just `LCN_HOLE = -1`) yields
+        // `0` regardless of `bytes_per_cluster`, matching the historic
+        // `lcn < 0` discipline so seek arithmetic never underflows.
+        for sparse in [Lcn::HOLE, Lcn::new(-2), Lcn::new(i64::MIN)] {
+            let extent = MftExtent {
+                vcn: 0,
+                cluster_count: 8,
+                lcn: sparse,
+            };
+            for bpc in [512_u32, 4096, 65_536] {
+                assert_eq!(extent.byte_offset(bpc), 0, "sparse {sparse} @ bpc={bpc}");
+            }
+        }
+    }
+
+    #[test]
+    fn byte_offset_matches_lcn_times_bytes_per_cluster() {
+        // Non-sparse extents must reproduce the kernel's
+        // `LcnPosition * bytes_per_cluster` byte offset exactly — the
+        // newtype migration only changes how we *spell* the arithmetic,
+        // never the resulting wire bytes.
+        // Stay well below `u64::MAX / bpc` so the test mirrors what
+        // production code actually evaluates: NTFS volume sizes never
+        // approach `i64::MAX` clusters, and `byte_offset` (debug-mode)
+        // would itself panic on an unrealistic boundary.
+        let cases: [(i64, u32, u64); 4] = [
+            (0, 4096, 0),
+            (1, 4096, 4096),
+            (1_234_567, 4096, 1_234_567_u64 * 4096),
+            (1_000_000_000_000, 4096, 1_000_000_000_000_u64 * 4096),
+        ];
+        for (raw, bpc, expected) in cases {
+            let extent = MftExtent {
+                vcn: 0,
+                cluster_count: 1,
+                lcn: Lcn::new(raw),
+            };
+            assert_eq!(extent.byte_offset(bpc), expected, "lcn={raw} bpc={bpc}");
+        }
+    }
+
+    #[test]
+    fn byte_size_independent_of_lcn() {
+        // `byte_size` is purely `cluster_count * bytes_per_cluster`; the
+        // LCN newtype must not bleed into that calculation.
+        for lcn in [Lcn::ZERO, Lcn::HOLE, Lcn::new(42), Lcn::new(i64::MAX)] {
+            let extent = MftExtent {
+                vcn: 0,
+                cluster_count: 10,
+                lcn,
+            };
+            assert_eq!(extent.byte_size(4096), 10 * 4096);
+        }
     }
 }

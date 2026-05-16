@@ -131,7 +131,7 @@ pub(crate) async fn cmd_benchmark_mft(drive: uffs_mft::platform::DriveLetter) ->
     // Read each extent
     for extent in &extents {
         // Skip sparse extents
-        if extent.lcn < 0 {
+        if extent.lcn.is_hole() {
             continue;
         }
 
@@ -139,11 +139,11 @@ pub(crate) async fn cmd_benchmark_mft(drive: uffs_mft::platform::DriveLetter) ->
         //
         // NTFS exposes `LcnPosition` (extent LCN) as `i64` on the FFI
         // side even though valid extents are non-negative.  The
-        // `extent.lcn < 0` guard above filters sparse extents, so
-        // `i64::cast_unsigned` is the documented exact-bit-pattern
-        // reinterpret (Rust 1.87 stable) without a `cast_sign_loss`
-        // expect.
-        let lcn_u64 = extent.lcn.cast_unsigned();
+        // `extent.lcn.is_hole()` guard above filters sparse extents, so
+        // `Lcn::raw_unsigned` is the documented exact-bit-pattern
+        // reinterpret (delegating to `i64::cast_unsigned`, Rust 1.87
+        // stable) without a `cast_sign_loss` expect.
+        let lcn_u64 = extent.lcn.raw_unsigned();
         let extent_byte_offset = lcn_u64 * u64::from(bytes_per_cluster);
         let extent_byte_size = extent.cluster_count * u64::from(bytes_per_cluster);
 
