@@ -13,6 +13,12 @@ criteria = "safe-to-deploy"
 version = "3.1.1"
 notes = "Reviewed v3.1.1 source. Scope: ANSI terminal coloring. One unsafe block in control.rs (Windows Console FFI via windows-sys: GetStdHandle / GetConsoleMode / SetConsoleMode) — standard Win32 terminal setup, properly cfg(windows)-gated. No network I/O, no filesystem writes, no process spawning. Only std types plus windows-sys on Windows. Dev-deps (rspec, insta, ansiterm) are standard testing crates. MPL-2.0 licensed, same as our workspace."
 
+[[audits.hashbrown]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.17.0 -> 0.17.1"
+notes = "Reviewed 0.17.0 -> 0.17.1 source diff (6 files, +106/-28). (1) CHANGELOG / Cargo.toml{,.orig} / README — version bump (drops redundant 'authors' field) + markdown line-wrap reformat. (2) src/control/group/lsx.rs — 3-line LoongArch SX SIMD micro-opt inside an existing unsafe block: lsx_vslt_b(self.0, zero) -> lsx_vslti_b::<0>(self.0) and lsx_vor_v(special, lsx_vreplgr2vr_b(imm)) -> lsx_vori_b::<imm>(special). Replaces materialized-zero compare with the immediate-compare intrinsic. No new unsafe blocks, no new intrinsics outside the 0.17.0 set, no behavior change to SwissTable special-tag construction. LoongArch is not a shipping target for UFFS (x86_64 + aarch64 only). (3) src/rustc_entry.rs — additive: new HashMap::rustc_try_insert (PR #722) returning Result<&mut V, RustcOccupiedError> for collision-aware insertion, plus the RustcOccupiedError struct. Built on the existing self.table.find / self.table.insert_entry primitives; no new unsafe, no FFI / FS / network / process surfaces. The 'rustc_*' prefix marks it for upstream rustc consumption (hashbrown backs std::collections::HashMap). MIT OR Apache-2.0 (unchanged)."
+
 [[audits.hermit-abi]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
