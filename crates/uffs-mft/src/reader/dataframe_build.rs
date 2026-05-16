@@ -62,8 +62,10 @@ impl MftReader {
             let name_count = parsed.name_count();
             let stream_count = parsed.stream_count();
 
-            frs_vec.push(parsed.frs);
-            parent_frs_vec.push(parsed.parent_frs);
+            // Polars-bound `Vec<u64>` columns — downcast typed FRS values at the push
+            // boundary.
+            frs_vec.push(parsed.frs.raw());
+            parent_frs_vec.push(parsed.parent_frs.raw());
             name_vec.push(parsed.name);
             size_vec.push(parsed.size);
             allocated_size_vec.push(parsed.allocated_size);
@@ -436,8 +438,9 @@ impl MftReader {
 
                 for name_info in &names {
                     for stream_info in &streams {
-                        frs_vec.push(parsed.frs);
-                        parent_frs_vec.push(name_info.parent_frs);
+                        // Polars-bound `Vec<u64>` columns — typed → raw at the push boundary.
+                        frs_vec.push(parsed.frs.raw());
+                        parent_frs_vec.push(name_info.parent_frs.raw());
                         name_vec.push(name_info.name.clone());
                         let (size, alloc) = if stream_info.name.is_empty() {
                             (parsed.size, parsed.allocated_size)
@@ -474,8 +477,9 @@ impl MftReader {
                     }
                 }
             } else {
-                frs_vec.push(parsed.frs);
-                parent_frs_vec.push(parsed.parent_frs);
+                // Polars-bound `Vec<u64>` columns — typed → raw at the push boundary.
+                frs_vec.push(parsed.frs.raw());
+                parent_frs_vec.push(parsed.parent_frs.raw());
                 name_vec.push(parsed.name);
                 size_vec.push(parsed.size);
                 allocated_size_vec.push(parsed.allocated_size);
@@ -626,8 +630,10 @@ impl MftReader {
             let name_count = parsed.name_count();
             let stream_count = parsed.stream_count();
 
-            frs_vec.push(parsed.frs);
-            parent_frs_vec.push(parsed.parent_frs);
+            // Polars-bound `Vec<u64>` columns — downcast typed FRS values at the push
+            // boundary.
+            frs_vec.push(parsed.frs.raw());
+            parent_frs_vec.push(parsed.parent_frs.raw());
             name_vec.push(parsed.name);
             size_vec.push(parsed.size);
             allocated_size_vec.push(parsed.allocated_size);

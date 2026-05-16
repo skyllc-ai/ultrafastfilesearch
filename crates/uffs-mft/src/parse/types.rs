@@ -22,13 +22,13 @@ use crate::ntfs::{ExtendedStandardInfo, NameInfo, StreamInfo};
 )]
 pub struct ParsedRecord {
     /// File Record Segment number.
-    pub frs: u64,
+    pub frs: crate::frs::Frs,
     /// Sequence number (incremented when FRS is reused).
     pub sequence_number: u16,
     /// Log File Sequence Number - correlates with `$LogFile` journal.
     pub lsn: u64,
     /// Primary parent directory FRS (from best name).
-    pub parent_frs: u64,
+    pub parent_frs: crate::frs::ParentFrs,
     /// Primary file name (Win32 or Win32+DOS preferred).
     pub name: String,
     /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS).
@@ -71,9 +71,9 @@ pub struct ParsedRecord {
     /// True if this is an extension record (not a base record).
     /// Only populated when parsing with `ParseOptions::include_extensions`.
     pub is_extension: bool,
-    /// Base FRS for extension records (0 for base records).
+    /// Base FRS for extension records (`Frs::ZERO` for base records).
     /// Only meaningful when `is_extension` is true.
-    pub base_frs: u64,
+    pub base_frs: crate::frs::Frs,
 }
 
 impl ParsedRecord {
@@ -127,9 +127,9 @@ impl ParsedRecord {
 #[derive(Debug, Clone, Default)]
 pub struct ExtensionAttributes {
     /// The base FRS this extension belongs to.
-    pub base_frs: u64,
+    pub base_frs: crate::frs::Frs,
     /// The extension's own FRS.
-    pub extension_frs: u64,
+    pub extension_frs: crate::frs::Frs,
     /// File names found in this extension.
     pub names: Vec<NameInfo>,
     /// Streams found in this extension.

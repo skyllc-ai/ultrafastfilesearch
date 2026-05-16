@@ -77,11 +77,23 @@ impl MftIndex {
                 continue;
             }
 
+            // Parse → index typed-to-raw boundary.  The parse layer
+            // (sub-phase 5d.1) hands us typed `Frs` / `ParentFrs`
+            // values; the index storage (`FileRecord.frs`,
+            // `ChildInfo.child_frs`, `LinkInfo.parent_frs`, …) is
+            // still `u64`.  Sub-phase 5d.2 will migrate the index
+            // side; until then we demote once at loop entry so the
+            // body keeps a single typed→raw boundary point with a
+            // clear citation.
+            let parsed_frs = parsed.frs.raw();
+            let parsed_parent_frs = parsed.parent_frs.raw();
+            let parsed_base_frs = parsed.base_frs.raw();
+
             // === Collect stats (cheap - just incrementing counters) ===
             index.stats.record_count += 1;
             index.stats.total_name_bytes += parsed.name.len() as u64;
-            if parsed.frs > index.stats.max_frs {
-                index.stats.max_frs = parsed.frs;
+            if parsed_frs > index.stats.max_frs {
+                index.stats.max_frs = parsed_frs;
             }
             if parsed.is_directory {
                 index.stats.dir_count += 1;
@@ -95,11 +107,11 @@ impl MftIndex {
                 index.stats.ads_count += 1;
             }
             // System metafile detection
-            if parsed.frs <= SYSTEM_METAFILE_MAX_FRS && parsed.frs != ROOT_FRS_LOCAL {
+            if parsed_frs <= SYSTEM_METAFILE_MAX_FRS && parsed_frs != ROOT_FRS_LOCAL {
                 index.stats.system_metafile_count += 1;
             }
             // Child of system metafile detection
-            if parsed.parent_frs <= SYSTEM_METAFILE_MAX_FRS && parsed.parent_frs != ROOT_FRS_LOCAL {
+            if parsed_parent_frs <= SYSTEM_METAFILE_MAX_FRS && parsed_parent_frs != ROOT_FRS_LOCAL {
                 index.stats.system_child_count += 1;
             }
 
@@ -114,7 +126,7 @@ impl MftIndex {
             // Get or create the record and set all basic fields in a block scope
             // to end the mutable borrow before adding additional names/streams
             {
-                let record = index.get_or_create(parsed.frs);
+                let record = index.get_or_create(parsed_frs);
 
                 // Set sequence number, LSN, and namespace (raw MFT fields)
                 record.sequence_number = parsed.sequence_number;
@@ -135,7 +147,7 @@ impl MftIndex {
                 // Set name info (offset and extension_id were computed before borrowing record)
                 record.first_name.name =
                     IndexNameRef::new(name_offset, name_len, is_ascii, extension_id);
-                record.first_name.parent_frs = parsed.parent_frs;
+                record.first_name.parent_frs = parsed_parent_frs;
                 // Note: name_count is set AFTER filtering additional names to avoid
                 // counting duplicates. See the code after this block.
 
@@ -148,7 +160,7 @@ impl MftIndex {
                     parsed.is_corrupt,
                     parsed.is_extension,
                 );
-                record.base_frs = parsed.base_frs;
+                record.base_frs = parsed_base_frs;
 
                 // Set size and flags
                 // For directories, use parsed.size/allocated_size which includes
@@ -189,11 +201,14 @@ impl MftIndex {
                 .iter()
                 .filter(|n| !(n.name == parsed.name && n.parent_frs == parsed.parent_frs))
                 .collect();
+            // (`n.parent_frs == parsed.parent_frs` compares two `ParentFrs`
+            // values — the typed equality is a structural compile-time win
+            // over the prior raw `u64` comparison.)
 
             // Update name_count to reflect actual stored names (1 primary + additional)
             // This must be done AFTER filtering to avoid counting duplicates
             let actual_name_count = len_to_u16((1 + additional_names.len()).max(1));
-            index.get_or_create(parsed.frs).name_count = actual_name_count;
+            index.get_or_create(parsed_frs).name_count = actual_name_count;
 
             if !additional_names.is_empty() {
                 let mut prev_link_idx = NO_ENTRY;
@@ -209,12 +224,13 @@ impl MftIndex {
                         next_entry: prev_link_idx,
                         name: IndexNameRef::new(extra_offset, extra_len, extra_ascii, extra_ext_id),
                         _pad0: [0; 4],
-                        parent_frs: extra_name.parent_frs,
+                        // `LinkInfo.parent_frs` is still `u64` (migrated in 5d.2).
+                        parent_frs: extra_name.parent_frs.raw(),
                     });
                     prev_link_idx = link_idx;
                 }
                 // Link first_name to the chain
-                let record = index.get_or_create(parsed.frs);
+                let record = index.get_or_create(parsed_frs);
                 record.first_name.next_entry = prev_link_idx;
             }
 
@@ -283,7 +299,7 @@ impl MftIndex {
             // named) This is used for user-facing output (DataFrame export)
             let actual_stream_count = len_to_u16((1 + named_streams.len()).max(1));
 
-            let record = index.get_or_create(parsed.frs);
+            let record = index.get_or_create(parsed_frs);
             record.total_stream_count = total_stream_count;
             record.stream_count = actual_stream_count;
             record.internal_streams_size = internal_streams_size;
@@ -326,7 +342,7 @@ impl MftIndex {
                     prev_stream_idx = stream_idx;
                 }
                 // Link first_stream to the chain
-                let file_record = index.get_or_create(parsed.frs);
+                let file_record = index.get_or_create(parsed_frs);
                 file_record.first_stream.next_entry = prev_stream_idx;
             }
 
@@ -336,8 +352,13 @@ impl MftIndex {
             // Each child entry stores its name_index so we can calculate proportional
             // shares.
             for (name_idx, name_info) in parsed.names.iter().enumerate() {
-                let parent_frs = name_info.parent_frs;
-                if parent_frs == parsed.frs || parent_frs == u64::from(NO_ENTRY) {
+                // Per-name boundary: `NameInfo.parent_frs` is typed
+                // (`ParentFrs`); the parent walker below indexes the
+                // `frs_to_idx` Vec by `usize` and stores `u64` in
+                // `ChildInfo` / `FileRecord` — all 5d.2-scope u64
+                // surfaces.
+                let parent_frs = name_info.parent_frs.raw();
+                if parent_frs == parsed_frs || parent_frs == u64::from(NO_ENTRY) {
                     continue;
                 }
 
@@ -369,7 +390,7 @@ impl MftIndex {
                 index.children.push(ChildInfo {
                     next_entry: old_first_child,
                     _pad0: [0; 4],
-                    child_frs: parsed.frs,
+                    child_frs: parsed_frs,
                     name_index: len_to_u16(name_idx),
                     _pad1: [0; 6],
                 });
@@ -377,18 +398,18 @@ impl MftIndex {
 
             // Handle case where names is empty (shouldn't happen, but be safe)
             if parsed.names.is_empty()
-                && parsed.parent_frs != parsed.frs
-                && parsed.parent_frs != u64::from(NO_ENTRY)
+                && parsed_parent_frs != parsed_frs
+                && parsed_parent_frs != u64::from(NO_ENTRY)
             {
                 let parent_idx = {
-                    let parent_frs_usize = frs_to_usize(parsed.parent_frs);
+                    let parent_frs_usize = frs_to_usize(parsed_parent_frs);
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
                     if index.frs_to_idx[parent_frs_usize] == NO_ENTRY {
                         let new_idx = len_to_u32(index.records.len());
                         index.frs_to_idx[parent_frs_usize] = new_idx;
-                        index.records.push(FileRecord::new(parsed.parent_frs));
+                        index.records.push(FileRecord::new(parsed_parent_frs));
                     }
                     index.frs_to_idx[parent_frs_usize]
                 };
@@ -401,7 +422,7 @@ impl MftIndex {
                 index.children.push(ChildInfo {
                     next_entry: old_first_child,
                     _pad0: [0; 4],
-                    child_frs: parsed.frs,
+                    child_frs: parsed_frs,
                     name_index: 0,
                     _pad1: [0; 6],
                 });

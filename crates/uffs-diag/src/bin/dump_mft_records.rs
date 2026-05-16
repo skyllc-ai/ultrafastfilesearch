@@ -321,8 +321,10 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
     let merged_records = record_merger.merge();
     println!("  merged.len(): {}", merged_records.len());
 
-    // Find the base record in merged results
-    if let Some(record) = merged_records.iter().find(|rec| rec.frs == base_frs) {
+    // Find the base record in merged results.  `base_frs` is the
+    // CLI-parsed `u64`; lift to the typed `Frs` for the equality check.
+    let base_frs_typed = uffs_mft::Frs::new(base_frs);
+    if let Some(record) = merged_records.iter().find(|rec| rec.frs == base_frs_typed) {
         println!("\n=== FRS {base_frs} after merge ===");
         println!("  name: {:?}", record.name);
         println!("  parent_frs: {}", record.parent_frs);

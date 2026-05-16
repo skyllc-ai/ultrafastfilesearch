@@ -6,6 +6,7 @@
 use tracing::{debug, info, warn};
 
 use super::ParsedRecord;
+use crate::frs::{Frs, ParentFrs};
 use crate::ntfs::ExtendedStandardInfo;
 
 /// Creates a placeholder record for a missing parent directory.
@@ -26,10 +27,12 @@ use crate::ntfs::ExtendedStandardInfo;
 #[must_use]
 pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
     ParsedRecord {
-        frs,
+        frs: Frs::new(frs),
         sequence_number: 0,
         lsn: 0,
-        parent_frs: 5, // Assume root as parent (FRS 5 is root directory)
+        // Synthetic placeholders default their parent to the NTFS root
+        // directory so path resolution terminates cleanly.
+        parent_frs: ParentFrs::ROOT,
         name: format!("<dir:{frs}>"),
         namespace: 1, // Win32 namespace
         names: Vec::new(),
@@ -47,7 +50,8 @@ pub fn create_placeholder_record(frs: u64) -> ParsedRecord {
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,
-        base_frs: 0,
+        // Base records carry the documented "no base record" sentinel.
+        base_frs: Frs::ZERO,
     }
 }
 
@@ -108,8 +112,12 @@ pub fn add_missing_parent_placeholders_to_vec(records: &mut Vec<ParsedRecord>) -
 fn insert_missing_parents(records: &mut Vec<ParsedRecord>) -> usize {
     use rustc_hash::FxHashSet;
 
-    let known_frs: FxHashSet<u64> = records.iter().map(|rec| rec.frs).collect();
-    let referenced: FxHashSet<u64> = records.iter().map(|rec| rec.parent_frs).collect();
+    // Hash-set bookkeeping is keyed on the raw `u64` view because we need
+    // to compare own-FRS values against parent-FRS values for set
+    // membership, and the two newtypes are intentionally non-coercible.
+    // The `.raw()` boundary is the standard down-cast for this case.
+    let known_frs: FxHashSet<u64> = records.iter().map(|rec| rec.frs.raw()).collect();
+    let referenced: FxHashSet<u64> = records.iter().map(|rec| rec.parent_frs.raw()).collect();
 
     let missing: Vec<u64> = referenced
         .difference(&known_frs)

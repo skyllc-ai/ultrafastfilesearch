@@ -47,7 +47,7 @@ pub fn parse_record_forensic(
             return ParseResult::Skip;
         }
         return ParseResult::Base(ParsedRecord {
-            frs,
+            frs: crate::frs::Frs::new(frs),
             name: format!("<CORRUPT:{frs}>"),
             is_corrupt: true,
             ..Default::default()
