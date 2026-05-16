@@ -4,6 +4,7 @@
 //! Search result modeling for direct `MftIndex` search.
 
 use uffs_mft::index::{FileRecord, MftIndex};
+use uffs_mft::{Frs, ParentFrs};
 
 /// Result of a search on `MftIndex`.
 ///
@@ -22,10 +23,16 @@ pub struct SearchResult {
     /// Allocated size on disk (0 for resident files, cluster-aligned for
     /// non-resident).
     pub allocated_size: u64,
-    /// File Reference Segment number.
-    pub frs: u64,
-    /// Parent FRS (for this specific hard link).
-    pub parent_frs: u64,
+    /// File Reference Segment number (typed [`Frs`]).
+    ///
+    /// Consumers that need a raw `u64` (e.g. CSV / JSON / polars
+    /// columnar output) demote via [`Frs::raw`] or `u64::from(frs)`
+    /// at their own final-wire boundary.
+    pub frs: Frs,
+    /// Parent FRS for this specific hard link (typed [`ParentFrs`]).
+    ///
+    /// Same `.raw()` / `u64::from(...)` demotion contract as `frs`.
+    pub parent_frs: ParentFrs,
     /// Whether this is a directory.
     pub is_directory: bool,
     /// Stream name (empty for default `$DATA` stream).
@@ -63,11 +70,12 @@ impl SearchResult {
             path: None, // Path resolution is expensive, done on demand
             size: record.first_stream.size.length,
             allocated_size: record.first_stream.size.allocated,
-            // `SearchResult` is the consumer-facing DTO and keeps raw
-            // `u64` for wire-format / DataFrame parity; demote the typed
-            // index fields at this construction boundary only.
-            frs: record.frs.raw(),
-            parent_frs: record.first_name.parent_frs.raw(),
+            // Typed FRS values flow through unchanged — the DTO
+            // carries the typed contract so consumers can't transpose
+            // own ↔ parent at compile time; demotion to raw `u64`
+            // happens at any final-wire (CSV / JSON / polars) site.
+            frs: record.frs,
+            parent_frs: record.first_name.parent_frs,
             is_directory,
             stream_name: String::new(),
             name_index: 0,
@@ -128,9 +136,10 @@ impl SearchResult {
             path: None,
             size: stream_info.size.length,
             allocated_size: stream_info.size.allocated,
-            // Same DTO-boundary demotion as `from_record_default`.
-            frs: record.frs.raw(),
-            parent_frs: name_info.parent_frs.raw(),
+            // Typed FRS flows through unchanged (same contract as
+            // `from_record`).
+            frs: record.frs,
+            parent_frs: name_info.parent_frs,
             is_directory,
             stream_name: stream_name.to_owned(),
             name_index: name_idx,

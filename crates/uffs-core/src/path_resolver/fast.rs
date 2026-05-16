@@ -2,6 +2,26 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Fast Vec-backed path resolution.
+//!
+//! # FRS wire-boundary policy (Phase 4 sub-phase 5d.4)
+//!
+//! Every public method on [`FastPathResolver`] takes either a
+//! [`uffs_polars::DataFrame`] with `frs: u64` / `parent_frs: u64`
+//! columns or a single `frs: u64` parameter that is read out of a
+//! polars column.  The polars column **is** the FRS wire boundary by
+//! deliberate Phase-4 doctrine — every typed `Frs` / `ParentFrs`
+//! value in the workspace ultimately demotes to a raw `u64` at the
+//! polars / CSV / JSON edge.
+//!
+//! As a result the internal [`FastEntry.parent_frs`], the
+//! [`FastPathResolver::path_cache`] key, and the
+//! [`FastPathResolver::max_frs`] field stay raw `u64`: they live one
+//! `for row_idx in 0..df.height()` loop downstream of the polars
+//! lift, and lifting them into the typed domain only to immediately
+//! demote on the lookup-by-`u64` path would add ceremony without
+//! type-safety win.  Callers that have a typed [`uffs_mft::Frs`]
+//! demote via `frs.raw()` at the [`FastPathResolver::resolve`] /
+//! [`FastPathResolver::resolve_cached`] boundary.
 
 use core::mem::size_of;
 

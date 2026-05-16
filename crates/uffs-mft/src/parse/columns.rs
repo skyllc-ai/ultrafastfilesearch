@@ -2,6 +2,22 @@
 // Copyright (c) 2025-2026 SKY, LLC.
 
 //! Column-oriented accumulation helpers for parsed MFT records.
+//!
+//! # FRS wire-boundary policy (Phase 4 sub-phase 5d.4)
+//!
+//! The `frs: Vec<u64>` / `parent_frs: Vec<u64>` fields are the
+//! columnar staging buffers that feed
+//! [`crate::reader::dataframe_build`] and ultimately become
+//! `polars::Series::new("frs", _)` columns.  They are deliberately
+//! raw `u64` because the polars column type is the FRS wire boundary
+//! by Phase-4 doctrine — every typed [`crate::Frs`] / [`crate::ParentFrs`]
+//! value in the workspace demotes to raw `u64` at the polars / CSV /
+//! JSON edge.
+//!
+//! Callers with typed FRS values demote via `frs.raw()` /
+//! `u64::from(frs)` once per record before pushing into the column
+//! vectors; see [`ParsedColumns::push_record`] for the canonical
+//! lift site (`self.frs.push(record.frs.raw())`).
 
 use tracing::{debug, info, warn};
 
