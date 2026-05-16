@@ -344,9 +344,14 @@ mod tests {
     /// `FileChange::default()` because the sink doesn't inspect them
     /// — only `IndexManager::handle_journal_save` does (covered in
     /// `cache::shard::tests` and the patch end-to-end suite).
+    ///
+    /// Takes a raw `u64` because FRS values are most naturally
+    /// written as integer literals in test fixtures; lifts to the
+    /// typed `Frs` at this single construction boundary so the rest
+    /// of the test surface keeps the typed contract.
     fn make_change(frs: u64) -> FileChange {
         FileChange {
-            frs,
+            frs: frs.into(),
             ..FileChange::default()
         }
     }
@@ -355,6 +360,9 @@ mod tests {
     /// dropping the `lock_pending()` guard before returning so the
     /// caller's assertions don't hold the mutex (satisfies
     /// `clippy::significant_drop_tightening` in tests).
+    ///
+    /// Demotes typed `Frs` → raw `u64` at the snapshot boundary so
+    /// assertion literals stay as integer arrays.
     fn pending_frs_for_letter(
         sink: &RegistryPatchSink,
         letter: uffs_mft::platform::DriveLetter,
@@ -362,7 +370,7 @@ mod tests {
         let guard = sink.lock_pending();
         guard
             .get(&letter)
-            .map(|buf| buf.iter().map(|change| change.frs).collect())
+            .map(|buf| buf.iter().map(|change| change.frs.raw()).collect())
     }
 
     /// Pin: `accept` appends to the per-letter pending buffer and
@@ -443,7 +451,10 @@ mod tests {
         assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
         assert!(matches!(reason, SaveReason::EventsExceeded));
         assert_eq!(
-            changes.iter().map(|change| change.frs).collect::<Vec<_>>(),
+            changes
+                .iter()
+                .map(|change| change.frs.raw())
+                .collect::<Vec<_>>(),
             [10, 11],
             "Save must carry the buffered changes in send order",
         );
@@ -549,7 +560,7 @@ mod tests {
         assert_eq!(
             c_changes
                 .iter()
-                .map(|change| change.frs)
+                .map(|change| change.frs.raw())
                 .collect::<Vec<_>>(),
             [1],
         );
@@ -571,7 +582,7 @@ mod tests {
         assert_eq!(
             d_changes
                 .iter()
-                .map(|change| change.frs)
+                .map(|change| change.frs.raw())
                 .collect::<Vec<_>>(),
             [2, 3],
             "'D's buffer must be preserved across 'C's drain",

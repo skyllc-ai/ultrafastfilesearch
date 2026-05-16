@@ -125,29 +125,29 @@ fn apply_usn_patch_handles_create_delete_rename_skip() {
     let changes = vec![
         // Delete FRS 10 ("foo.txt").
         FileChange {
-            frs: 10,
+            frs: 10_u64.into(),
             deleted: true,
             ..FileChange::default()
         },
         // Rename FRS 11 ("bar.rs" → "bar2.rs"), parent unchanged.
         FileChange {
-            frs: 11,
-            parent_frs: 5,
+            frs: 11_u64.into(),
+            parent_frs: 5_u64.into(),
             filename: "bar2.rs".to_owned(),
             renamed: true,
             ..FileChange::default()
         },
         // Create FRS 13 ("new.txt", parent=root).
         FileChange {
-            frs: 13,
-            parent_frs: 5,
+            frs: 13_u64.into(),
+            parent_frs: 5_u64.into(),
             filename: "new.txt".to_owned(),
             created: true,
             ..FileChange::default()
         },
         // Skip: FRS 99 doesn't map to any compact record.
         FileChange {
-            frs: 99,
+            frs: 99_u64.into(),
             deleted: true,
             ..FileChange::default()
         },
@@ -180,7 +180,7 @@ fn apply_usn_patch_handles_create_delete_rename_skip() {
 fn apply_usn_patch_marks_deleted_record_with_zero_name_len() {
     let mut drive = make_synthetic_drive();
     let changes = vec![FileChange {
-        frs: 10,
+        frs: 10_u64.into(),
         deleted: true,
         ..FileChange::default()
     }];
@@ -207,8 +207,8 @@ fn apply_usn_patch_marks_deleted_record_with_zero_name_len() {
 fn apply_usn_patch_renamed_record_has_new_name_in_blob() {
     let mut drive = make_synthetic_drive();
     let changes = vec![FileChange {
-        frs: 11,
-        parent_frs: 5,
+        frs: 11_u64.into(),
+        parent_frs: 5_u64.into(),
         filename: "bar2.rs".to_owned(),
         renamed: true,
         ..FileChange::default()
@@ -246,8 +246,8 @@ fn apply_usn_patch_created_record_appended_with_correct_parent() {
     let initial_record_count = drive.records.len();
 
     let changes = vec![FileChange {
-        frs: 13,
-        parent_frs: 5,
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
         filename: "new.txt".to_owned(),
         created: true,
         ..FileChange::default()
@@ -315,7 +315,7 @@ fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
     );
 
     let changes = vec![FileChange {
-        frs: 10,
+        frs: 10_u64.into(),
         deleted: true,
         ..FileChange::default()
     }];
@@ -375,8 +375,8 @@ fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
     );
 
     apply_usn_patch(&mut drive, &[FileChange {
-        frs: 13,
-        parent_frs: 5,
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
         filename: "n1.txt".to_owned(),
         created: true,
         ..FileChange::default()
@@ -399,7 +399,7 @@ fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
 
     // ── 2. Delete existing FRS 10 → expect slot reset to u32::MAX.
     apply_usn_patch(&mut drive, &[FileChange {
-        frs: 10,
+        frs: 10_u64.into(),
         deleted: true,
         ..FileChange::default()
     }]);
@@ -415,7 +415,7 @@ fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
 
     // ── 3. Reuse round-trip: delete FRS 13, then create FRS 13 again.
     apply_usn_patch(&mut drive, &[FileChange {
-        frs: 13,
+        frs: 13_u64.into(),
         deleted: true,
         ..FileChange::default()
     }]);
@@ -431,8 +431,8 @@ fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
 
     let pre_recreate_records = drive.records.len();
     apply_usn_patch(&mut drive, &[FileChange {
-        frs: 13,
-        parent_frs: 5,
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
         filename: "n2.txt".to_owned(),
         created: true,
         ..FileChange::default()
@@ -453,8 +453,8 @@ fn apply_usn_patch_keeps_frs_to_compact_in_lockstep() {
 
     // ── 4. Out-of-range create grows the mapping.
     apply_usn_patch(&mut drive, &[FileChange {
-        frs: 200,
-        parent_frs: 5,
+        frs: 200_u64.into(),
+        parent_frs: 5_u64.into(),
         filename: "far.txt".to_owned(),
         created: true,
         ..FileChange::default()

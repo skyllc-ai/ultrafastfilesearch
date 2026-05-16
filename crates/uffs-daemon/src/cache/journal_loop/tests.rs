@@ -270,9 +270,12 @@ fn null_cursor_store() -> Arc<dyn CursorStore> {
 
 /// Helper: small fake change so the queue is exercising a
 /// non-trivial batch shape (not just `vec![]`).
+///
+/// Lifts the raw `u64` test literal into the typed [`uffs_mft::Frs`]
+/// at this single construction boundary.
 fn one_change(frs: u64) -> FileChange {
     FileChange {
-        frs,
+        frs: frs.into(),
         deleted: true,
         ..FileChange::default()
     }

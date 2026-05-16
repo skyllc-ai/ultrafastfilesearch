@@ -317,9 +317,16 @@ pub fn read_usn_journal(
                         .collect();
                     String::from_utf16_lossy(&name_u16)
                 });
+            // On-disk → typed boundary.  NTFS file references are 64-bit
+            // values whose low 48 bits encode the FRS; the high 16 bits
+            // are the sequence number, which downstream consumers don't
+            // need.  Mask, then lift into the typed `Frs` / `ParentFrs`
+            // domain at this single parser-boundary site.
+            let frs_raw = header.file_reference_number & 0x0000_FFFF_FFFF_FFFF;
+            let parent_frs_raw = header.parent_file_reference_number & 0x0000_FFFF_FFFF_FFFF;
             all_records.push(UsnRecord {
-                frs: header.file_reference_number & 0x0000_FFFF_FFFF_FFFF,
-                parent_frs: header.parent_file_reference_number & 0x0000_FFFF_FFFF_FFFF,
+                frs: crate::frs::Frs::new(frs_raw),
+                parent_frs: crate::frs::ParentFrs::new(parent_frs_raw),
                 usn: super::Usn::new(header.usn),
                 reason: header.reason,
                 file_attributes: header.file_attributes,

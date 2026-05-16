@@ -34,6 +34,8 @@
 use core::fmt;
 use std::collections::HashMap;
 
+use crate::frs::{Frs, ParentFrs};
+
 /// Monotonically-increasing per-volume Update Sequence Number from the
 /// NTFS USN journal.
 ///
@@ -147,10 +149,11 @@ pub struct UsnJournalInfo {
 /// A single USN Journal change record.
 #[derive(Debug, Clone)]
 pub struct UsnRecord {
-    /// File Reference Number (FRS)
-    pub frs: u64,
-    /// Parent directory FRS
-    pub parent_frs: u64,
+    /// File Reference Number (typed [`Frs`] — fixed at the on-disk
+    /// parser boundary in `usn::windows::read_usn_journal`).
+    pub frs: Frs,
+    /// Parent directory FRS (typed [`ParentFrs`]).
+    pub parent_frs: ParentFrs,
     /// USN of this record
     pub usn: Usn,
     /// Reason flags (bitmask of `USN_REASON_*`)
@@ -263,10 +266,11 @@ impl UsnRecord {
 )]
 #[derive(Debug, Clone, Default)]
 pub struct FileChange {
-    /// File Reference Number
-    pub frs: u64,
-    /// Parent directory FRS (latest)
-    pub parent_frs: u64,
+    /// File Reference Number (typed [`Frs`]).
+    pub frs: Frs,
+    /// Parent directory FRS — latest seen across the aggregated
+    /// `UsnRecord` stream (typed [`ParentFrs`]).
+    pub parent_frs: ParentFrs,
     /// Filename (latest)
     pub filename: String,
     /// Was the file created?
@@ -282,9 +286,13 @@ pub struct FileChange {
 }
 
 /// Aggregates multiple USN records into per-file changes.
+///
+/// Keyed by the typed [`Frs`] — `Frs` derives `Hash + Eq + Copy` so
+/// dropping it into a `HashMap` key is bit-identical to keying on the
+/// raw `u64` it wraps.
 #[must_use]
-pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<u64, FileChange> {
-    let mut changes: HashMap<u64, FileChange> = HashMap::new();
+pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<Frs, FileChange> {
+    let mut changes: HashMap<Frs, FileChange> = HashMap::new();
     for record in records {
         let entry = changes.entry(record.frs).or_insert_with(|| FileChange {
             frs: record.frs,

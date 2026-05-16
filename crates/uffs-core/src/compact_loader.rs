@@ -507,7 +507,12 @@ pub fn apply_usn_patch(
     let mut stats = PatchStats::default();
 
     for change in changes {
-        let frs_usize = uffs_mft::frs_to_usize(change.frs);
+        // Typed `Frs` → raw `u64` lift at the frs_to_compact CSR lookup
+        // boundary.  The mapping table is `Vec<u32>` indexed by
+        // `usize`, so demoting once per change keeps the inner index
+        // arithmetic on raw values without leaking raw FRS into the
+        // outer `FileChange` API.
+        let frs_usize = uffs_mft::frs_to_usize(change.frs.raw());
         let compact_idx = drive
             .frs_to_compact
             .get(frs_usize)
@@ -552,7 +557,10 @@ pub fn apply_usn_patch(
                     .as_mut_vec()
                     .extend_from_slice(change.filename.as_bytes());
 
-                let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs);
+                // Typed `ParentFrs` → raw `u64` lift at the
+                // frs_to_compact CSR lookup boundary (same rationale as
+                // the `change.frs.raw()` lift above).
+                let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs.raw());
                 let parent_compact = drive
                     .frs_to_compact
                     .get(parent_frs_usize)
@@ -618,7 +626,8 @@ pub fn apply_usn_patch(
                     rec.name_len = uffs_mft::len_to_u16(change.filename.len());
                 }
 
-                let new_parent_frs = uffs_mft::frs_to_usize(change.parent_frs);
+                // Typed `ParentFrs` → raw lift on the rename path.
+                let new_parent_frs = uffs_mft::frs_to_usize(change.parent_frs.raw());
                 let new_parent_compact = drive
                     .frs_to_compact
                     .get(new_parent_frs)

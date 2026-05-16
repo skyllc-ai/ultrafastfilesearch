@@ -548,7 +548,7 @@ fn apply_usn_patch_to_body_returns_none_on_parked() {
     let shard = ShardEntry::new_parked(uffs_mft::platform::DriveLetter::C, stats, parked_body);
 
     let changes = vec![FileChange {
-        frs: 10,
+        frs: 10_u64.into(),
         deleted: true,
         ..FileChange::default()
     }];
@@ -592,7 +592,7 @@ fn apply_usn_patch_to_body_lands_delete_on_new_arc() {
     // delete-on-warm path through the full `apply_usn_patch_to_body`
     // surface without re-specifying the mapping.
     let changes = vec![FileChange {
-        frs: 10,
+        frs: 10_u64.into(),
         deleted: true,
         ..FileChange::default()
     }];

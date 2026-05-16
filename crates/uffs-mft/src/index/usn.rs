@@ -44,8 +44,13 @@ impl MftIndex {
         let mut frs_to_read: Vec<u64> = Vec::new();
 
         for change in changes {
-            let frs = change.frs;
-            let frs_usize = frs_to_usize(frs);
+            // `change.frs` is typed `Frs`; lift to raw `u64` once at the
+            // `frs_to_idx` / `frs_to_read` boundary because both the
+            // index lookup table is `Vec<u32>` keyed by `usize` and the
+            // returned `frs_to_read` feeds the kernel-loop arithmetic
+            // input of `read_targeted_frs_records(&[u64])`.
+            let frs_raw = change.frs.raw();
+            let frs_usize = frs_to_usize(frs_raw);
             let idx = self.frs_to_idx.get(frs_usize).copied().unwrap_or(NO_ENTRY);
 
             if change.deleted {
@@ -62,7 +67,7 @@ impl MftIndex {
             {
                 // Collect FRS for targeted MFT read — the read will
                 // overwrite or create the full record with correct data.
-                frs_to_read.push(frs);
+                frs_to_read.push(frs_raw);
             } else {
                 stats.skipped += 1;
             }
