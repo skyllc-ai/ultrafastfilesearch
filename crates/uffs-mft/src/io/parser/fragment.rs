@@ -312,7 +312,8 @@ pub fn parse_record_to_fragment(
             next_entry: NO_ENTRY,
             name: link_name_ref,
             _pad0: [0; 4],
-            parent_frs: link_parent,
+            // Typed `ParentFrs` slot — lift parser-local raw `u64`.
+            parent_frs: crate::frs::ParentFrs::new(link_parent),
         });
         link_indices.push(link_idx);
     }
@@ -346,9 +347,11 @@ pub fn parse_record_to_fragment(
         stream_indices.push(stream_idx);
     }
 
-    // Create parent placeholder if needed (within this fragment)
+    // Create parent placeholder if needed (within this fragment).
+    // Boundary: lift parser-local raw `u64` to typed `Frs` once.
+    let frs_typed = crate::frs::Frs::new(frs);
     if parent_frs != frs && parent_frs != 0 {
-        fragment.get_or_create(parent_frs);
+        fragment.get_or_create(crate::frs::Frs::new(parent_frs));
         // ^ side effect only: ensures parent placeholder exists
     }
 
@@ -357,7 +360,7 @@ pub fn parse_record_to_fragment(
     // that were processed BEFORE this base record in the same fragment.
     // We must preserve those extension names/streams and chain them to base record
     // data.
-    let record = fragment.get_or_create(frs);
+    let record = fragment.get_or_create(frs_typed);
 
     // Save any existing extension data BEFORE overwriting
     // Copy the entire first_name LinkInfo so we can add it as a link later
@@ -389,7 +392,8 @@ pub fn parse_record_to_fragment(
         next_entry: NO_ENTRY,
         name: name_ref,
         _pad0: [0; 4],
-        parent_frs,
+        // Typed `ParentFrs` slot — lift raw `u64` parser local.
+        parent_frs: crate::frs::ParentFrs::new(parent_frs),
     };
 
     // Chain the base record's additional links together
@@ -449,7 +453,7 @@ pub fn parse_record_to_fragment(
     // Now set first_name.next_entry on the record.
     // (Separate borrow scope because we mutate fragment.links/streams above
     // and need a fresh &mut record.)
-    let rec_for_name = fragment.get_or_create(frs);
+    let rec_for_name = fragment.get_or_create(frs_typed);
     rec_for_name.first_name.next_entry = first_name_next_entry;
 
     // Chain streams: base ADS -> extension ADS (must be done before borrowing
@@ -460,7 +464,7 @@ pub fn parse_record_to_fragment(
     }
 
     // Now get record and update counts and first_stream chain
-    let rec_for_counts = fragment.get_or_create(frs);
+    let rec_for_counts = fragment.get_or_create(frs_typed);
 
     // Calculate total name count
     // Base: 1 (first_name) + additional_count
@@ -500,7 +504,8 @@ pub fn parse_record_to_fragment(
                 // Create placeholder parent
                 let new_idx = len_to_u32(frag.records.len());
                 frag.frs_to_idx[p_frs_usize] = new_idx;
-                frag.records.push(crate::index::FileRecord::new(p_frs));
+                frag.records
+                    .push(crate::index::FileRecord::new(crate::frs::Frs::new(p_frs)));
             }
             frag.frs_to_idx[p_frs_usize]
         };
@@ -514,7 +519,8 @@ pub fn parse_record_to_fragment(
         frag.children.push(ChildInfo {
             next_entry: old_first_child,
             _pad0: [0; 4],
-            child_frs: frs,
+            // Typed `Frs` slot — reuse cached typed FRS.
+            child_frs: frs_typed,
             name_index: name_idx,
             _pad1: [0; 6],
         });
@@ -574,8 +580,10 @@ fn store_nameless_record(
         stream_indices.push(stream_idx);
     }
 
-    // Now create the record and set up streams
-    let record = fragment.get_or_create(frs);
+    // Now create the record and set up streams.  Boundary: lift
+    // parser-local raw `u64` to typed `Frs`.
+    let frs_typed = crate::frs::Frs::new(frs);
+    let record = fragment.get_or_create(frs_typed);
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,
@@ -589,7 +597,7 @@ fn store_nameless_record(
             let next_idx = stream_indices[i + 1];
             fragment.streams[current_idx].next_entry = next_idx;
         }
-        let rec_for_stream = fragment.get_or_create(frs);
+        let rec_for_stream = fragment.get_or_create(frs_typed);
         rec_for_stream.first_stream.next_entry = stream_indices[0];
         rec_for_stream.stream_count = 1 + len_to_u16(additional_stream_count);
     }

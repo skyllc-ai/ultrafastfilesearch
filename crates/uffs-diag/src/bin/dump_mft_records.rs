@@ -358,8 +358,9 @@ fn test_merge(raw_path: &str, base_frs: u64, ext_frs: u64) -> Result<()> {
     println!("  records.len(): {}", index.records.len());
     println!("  children.len(): {}", index.children_count());
 
-    // Find the record in the index
-    if let Some(record) = index.find(base_frs) {
+    // Find the record in the index. Lift the CLI-parsed raw `u64` to
+    // a typed `Frs` at the typed-API boundary.
+    if let Some(record) = index.find(uffs_mft::Frs::new(base_frs)) {
         println!("\n=== FRS {base_frs} in MftIndex ===");
         println!("  frs: {}", record.frs);
         println!("  name: {:?}", index.get_name(record.first_name.name));

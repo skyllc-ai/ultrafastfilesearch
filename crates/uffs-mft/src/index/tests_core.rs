@@ -40,16 +40,16 @@ fn index_basic_operations() {
     let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     // Add a record
-    let record = index.get_or_create(100);
+    let record = index.get_or_create(100.into());
     record.stdinfo.set_directory(true);
 
     // Find it
-    let found = index.find(100);
+    let found = index.find(100_u64.into());
     assert!(found.is_some());
     assert!(found.unwrap().is_directory());
 
     // Not found
-    assert!(index.find(999).is_none());
+    assert!(index.find(999_u64.into()).is_none());
 }
 
 #[test]

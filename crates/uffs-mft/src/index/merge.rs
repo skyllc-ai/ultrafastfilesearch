@@ -146,8 +146,11 @@ impl MftIndex {
         let mut deferred_merges: Vec<(u32, FileRecord)> = Vec::new();
 
         for mut record in records {
+            // `record.frs` is typed `Frs`; the `frs_to_idx` lookup table is
+            // `Vec<u32>` indexed by `usize`, so demote via `.raw()` at the
+            // indexing boundary only.
             let frs = record.frs;
-            let frs_usize = usize::try_from(frs).unwrap_or(usize::MAX);
+            let frs_usize = usize::try_from(frs.raw()).unwrap_or(usize::MAX);
 
             Self::adjust_name_ref(
                 &mut record.first_name.name,

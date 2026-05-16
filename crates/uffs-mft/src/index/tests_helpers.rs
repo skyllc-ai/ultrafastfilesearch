@@ -31,7 +31,7 @@ pub(super) fn push_index_name(index: &mut MftIndex, name: &str) -> IndexNameRef 
 
 /// Resolve a record index from an FRS for test assertions.
 pub(super) fn record_idx(index: &MftIndex, frs: u64) -> usize {
-    index.frs_to_idx_opt(frs).unwrap()
+    index.frs_to_idx_opt(frs.into()).unwrap()
 }
 
 /// Count the number of child edges currently attached to a directory.

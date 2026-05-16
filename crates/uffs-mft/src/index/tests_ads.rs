@@ -15,9 +15,9 @@ fn create_index_with_ads() -> MftIndex {
 
     // Create a file record (FRS 100)
     let name_ref = push_index_name(&mut index, "test.pdf");
-    let ri = index.get_or_create(100);
+    let ri = index.get_or_create(100.into());
     ri.first_name.name = name_ref;
-    ri.first_name.parent_frs = 5;
+    ri.first_name.parent_frs = Into::into(5);
     ri.set_has_default_data();
     ri.first_stream.size.length = 1024;
     ri.first_stream.size.allocated = 4096;
@@ -46,7 +46,7 @@ fn create_index_with_ads() -> MftIndex {
     });
 
     // Chain ADS to the record's stream list
-    let rec_idx = index.frs_to_idx_opt(100).unwrap();
+    let rec_idx = index.frs_to_idx_opt(100.into()).unwrap();
     let rec = &mut index.records[rec_idx];
     rec.first_stream.next_entry = ads_si;
     rec.stream_count += 1;
@@ -58,7 +58,7 @@ fn create_index_with_ads() -> MftIndex {
 #[test]
 fn ads_stream_count_includes_ads() {
     let index = create_index_with_ads();
-    let ri = index.frs_to_idx_opt(100).unwrap();
+    let ri = index.frs_to_idx_opt(100.into()).unwrap();
     let rec = &index.records[ri];
 
     // File should have 2 streams: default $DATA + Zone.Identifier ADS
@@ -72,7 +72,7 @@ fn ads_stream_count_includes_ads() {
 #[test]
 fn ads_stream_iterable_via_iter_streams() {
     let index = create_index_with_ads();
-    let ri = index.frs_to_idx_opt(100).unwrap();
+    let ri = index.frs_to_idx_opt(100.into()).unwrap();
     let rec = &index.records[ri];
 
     let streams: Vec<(u16, &IndexStreamInfo)> = index.iter_streams(rec).collect();
@@ -99,7 +99,7 @@ fn ads_stream_iterable_via_iter_streams() {
 #[test]
 fn ads_stream_accessible_via_get_stream_at() {
     let index = create_index_with_ads();
-    let ri = index.frs_to_idx_opt(100).unwrap();
+    let ri = index.frs_to_idx_opt(100.into()).unwrap();
     let rec = &index.records[ri];
 
     // Index 0: default $DATA

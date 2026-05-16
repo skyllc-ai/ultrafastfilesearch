@@ -6,7 +6,8 @@
 //!
 //! Extracted from `paths.rs` to keep it under the 800 LOC threshold.
 
-use super::{FileRecord, MftIndex, NO_ENTRY, ROOT_FRS};
+use super::{FileRecord, MftIndex, NO_ENTRY};
+use crate::frs::{Frs, ParentFrs};
 
 // ============================================================================
 // PathResolver - Ultra-fast path validity and on-demand materialization
@@ -77,7 +78,7 @@ impl PathResolver {
 
     /// Check if a record with the given FRS is valid.
     #[must_use]
-    pub fn is_valid(&self, index: &MftIndex, frs: u64) -> bool {
+    pub fn is_valid(&self, index: &MftIndex, frs: Frs) -> bool {
         index
             .frs_to_idx_opt(frs)
             .is_some_and(|idx| self.is_valid_idx(idx))
@@ -158,13 +159,13 @@ impl PathResolver {
             chain.push(current_idx);
 
             let parent_frs = record.first_name.parent_frs;
-            if parent_frs == ROOT_FRS
-                || parent_frs == record.frs
-                || parent_frs == u64::from(NO_ENTRY)
+            if parent_frs.is_root()
+                || parent_frs.as_frs() == record.frs
+                || parent_frs == ParentFrs::new(u64::from(NO_ENTRY))
             {
                 break;
             }
-            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs.as_frs()) else {
                 break;
             };
             current_idx = parent_idx;
@@ -243,13 +244,13 @@ impl PathResolver {
             chain.push(current_idx);
 
             let parent_frs = record.first_name.parent_frs;
-            if parent_frs == ROOT_FRS
-                || parent_frs == record.frs
-                || parent_frs == u64::from(NO_ENTRY)
+            if parent_frs.is_root()
+                || parent_frs.as_frs() == record.frs
+                || parent_frs == ParentFrs::new(u64::from(NO_ENTRY))
             {
                 break;
             }
-            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs.as_frs()) else {
                 break;
             };
             current_idx = parent_idx;
@@ -303,13 +304,13 @@ impl PathResolver {
             chain.push(current_idx);
 
             let parent_frs = record.first_name.parent_frs;
-            if parent_frs == ROOT_FRS
-                || parent_frs == record.frs
-                || parent_frs == u64::from(NO_ENTRY)
+            if parent_frs.is_root()
+                || parent_frs.as_frs() == record.frs
+                || parent_frs == ParentFrs::new(u64::from(NO_ENTRY))
             {
                 break;
             }
-            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+            let Some(parent_idx) = index.frs_to_idx_opt(parent_frs.as_frs()) else {
                 break;
             };
             current_idx = parent_idx;
@@ -365,9 +366,9 @@ impl PathResolver {
         };
 
         let parent_frs = link.parent_frs;
-        let parent_path = if let Some(pidx) = index.frs_to_idx_opt(parent_frs) {
+        let parent_path = if let Some(pidx) = index.frs_to_idx_opt(parent_frs.as_frs()) {
             self.materialize_path(index, pidx)
-        } else if parent_frs == ROOT_FRS {
+        } else if parent_frs.is_root() {
             // Normalize root to "X:\\" (not "X:") so hardlink paths keep
             // standard absolute-drive semantics.
             let mut root_path = String::with_capacity(3);
@@ -398,8 +399,11 @@ impl PathResolver {
     /// Mark system metafiles (FRS 0-15 except root) as invalid.
     fn mark_system_metafiles_invalid(&mut self, index: &MftIndex) {
         for (idx, record) in index.records.iter().enumerate() {
-            if record.frs <= SYSTEM_METAFILE_MAX_FRS
-                && record.frs != ROOT_FRS
+            // System metafiles are FRS 0-15 except root — typed comparison
+            // uses `.raw()` only at the numeric range check.
+            let frs_raw = record.frs.raw();
+            if frs_raw <= SYSTEM_METAFILE_MAX_FRS
+                && !record.frs.is_root()
                 && let Some(state) = self.state.get_mut(idx)
             {
                 *state = path_state::INVALID;
@@ -433,6 +437,7 @@ impl PathResolver {
                     && let Some(state) = self.state.get_mut(child_idx)
                     && *state == path_state::UNSEEN
                 {
+                    // typed `Frs` flows through `frs_to_idx_opt` directly.
                     *state = path_state::INVALID;
                     self.invalid_count += 1;
                     queue.push_back(child_idx);
@@ -471,17 +476,19 @@ impl PathResolver {
 
                 let parent_frs = record.first_name.parent_frs;
 
-                if parent_frs == ROOT_FRS {
+                if parent_frs.is_root() {
                     break path_state::VALID;
                 }
-                if parent_frs == record.frs || parent_frs == u64::from(NO_ENTRY) {
-                    if record.frs == ROOT_FRS {
+                if parent_frs.as_frs() == record.frs
+                    || parent_frs == ParentFrs::new(u64::from(NO_ENTRY))
+                {
+                    if record.frs.is_root() {
                         break path_state::VALID;
                     }
                     break path_state::INVALID;
                 }
 
-                let Some(parent_idx) = index.frs_to_idx_opt(parent_frs) else {
+                let Some(parent_idx) = index.frs_to_idx_opt(parent_frs.as_frs()) else {
                     break path_state::INVALID;
                 };
                 current_idx = parent_idx;
@@ -557,7 +564,7 @@ impl<'a> PathCache<'a> {
 
     /// Get the path for a record (materializes on demand).
     #[must_use]
-    pub fn get(&self, frs: u64) -> Option<String> {
+    pub fn get(&self, frs: Frs) -> Option<String> {
         let idx = self.index.frs_to_idx_opt(frs)?;
         self.resolver
             .is_valid_idx(idx)
@@ -566,13 +573,13 @@ impl<'a> PathCache<'a> {
 
     /// Check if a record is valid (has a path, not illegal).
     #[must_use]
-    pub fn is_valid(&self, frs: u64) -> bool {
+    pub fn is_valid(&self, frs: Frs) -> bool {
         self.resolver.is_valid(self.index, frs)
     }
 
     /// Check if a record is illegal (filtered out).
     #[must_use]
-    pub fn is_illegal(&self, frs: u64) -> bool {
+    pub fn is_illegal(&self, frs: Frs) -> bool {
         self.index
             .frs_to_idx_opt(frs)
             .is_some_and(|idx| !self.resolver.is_valid_idx(idx))

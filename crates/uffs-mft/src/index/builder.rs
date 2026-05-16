@@ -8,6 +8,7 @@ use super::{
     InternalStreamInfo, LinkInfo, MftIndex, NO_ENTRY, SizeInfo, StandardInfo, frs_to_usize,
     len_to_u16, len_to_u32,
 };
+use crate::frs::ParentFrs;
 
 // ============================================================================
 // Building MftIndex from ParsedRecords (Cross-Platform)
@@ -77,23 +78,26 @@ impl MftIndex {
                 continue;
             }
 
-            // Parse → index typed-to-raw boundary.  The parse layer
-            // (sub-phase 5d.1) hands us typed `Frs` / `ParentFrs`
-            // values; the index storage (`FileRecord.frs`,
-            // `ChildInfo.child_frs`, `LinkInfo.parent_frs`, …) is
-            // still `u64`.  Sub-phase 5d.2 will migrate the index
-            // side; until then we demote once at loop entry so the
-            // body keeps a single typed→raw boundary point with a
-            // clear citation.
-            let parsed_frs = parsed.frs.raw();
-            let parsed_parent_frs = parsed.parent_frs.raw();
-            let parsed_base_frs = parsed.base_frs.raw();
+            // Sub-phase 5d.2: typed `Frs` / `ParentFrs` from the parse
+            // layer flow directly into the typed `FileRecord.frs`,
+            // `FileRecord.base_frs`, `LinkInfo.parent_frs`, and
+            // `ChildInfo.child_frs` fields below.  The historic
+            // typed→raw boundary that lived here in sub-phase 5d.1 is
+            // gone — only numeric-comparison and `Vec` resize sites
+            // call `.raw()` now.
+            let parsed_frs = parsed.frs;
+            let parsed_parent_frs = parsed.parent_frs;
+            let parsed_base_frs = parsed.base_frs;
 
             // === Collect stats (cheap - just incrementing counters) ===
+            // `MftStats::max_frs` is a raw `u64` DTO field (5d.3 surface);
+            // `.raw()` once here at the numeric-comparison boundary.
+            let parsed_frs_raw = parsed_frs.raw();
+            let parsed_parent_frs_raw = parsed_parent_frs.raw();
             index.stats.record_count += 1;
             index.stats.total_name_bytes += parsed.name.len() as u64;
-            if parsed_frs > index.stats.max_frs {
-                index.stats.max_frs = parsed_frs;
+            if parsed_frs_raw > index.stats.max_frs {
+                index.stats.max_frs = parsed_frs_raw;
             }
             if parsed.is_directory {
                 index.stats.dir_count += 1;
@@ -107,11 +111,13 @@ impl MftIndex {
                 index.stats.ads_count += 1;
             }
             // System metafile detection
-            if parsed_frs <= SYSTEM_METAFILE_MAX_FRS && parsed_frs != ROOT_FRS_LOCAL {
+            if parsed_frs_raw <= SYSTEM_METAFILE_MAX_FRS && parsed_frs_raw != ROOT_FRS_LOCAL {
                 index.stats.system_metafile_count += 1;
             }
             // Child of system metafile detection
-            if parsed_parent_frs <= SYSTEM_METAFILE_MAX_FRS && parsed_parent_frs != ROOT_FRS_LOCAL {
+            if parsed_parent_frs_raw <= SYSTEM_METAFILE_MAX_FRS
+                && parsed_parent_frs_raw != ROOT_FRS_LOCAL
+            {
                 index.stats.system_child_count += 1;
             }
 
@@ -192,18 +198,16 @@ impl MftIndex {
                 }
             } // End record borrow here
 
-            // Store additional names (hardlinks) in the links vector
-            // Skip the name that matches first_name (the primary/best name)
-            // Note: parsed.name is the BEST name (selected by PrimaryNameTracker),
-            // which may not be parsed.names[0]. We must filter by matching name+parent.
+            // Store additional names (hardlinks) in the links vector.
+            // Skip the name that matches first_name (the primary/best name).
+            // Note: `parsed.name` is the BEST name (selected by `PrimaryNameTracker`),
+            // which may not be `parsed.names[0]`.  Filter by matching name+parent;
+            // the parent comparison is now structural typed-`ParentFrs` equality.
             let additional_names: Vec<_> = parsed
                 .names
                 .iter()
                 .filter(|n| !(n.name == parsed.name && n.parent_frs == parsed.parent_frs))
                 .collect();
-            // (`n.parent_frs == parsed.parent_frs` compares two `ParentFrs`
-            // values — the typed equality is a structural compile-time win
-            // over the prior raw `u64` comparison.)
 
             // Update name_count to reflect actual stored names (1 primary + additional)
             // This must be done AFTER filtering to avoid counting duplicates
@@ -224,8 +228,8 @@ impl MftIndex {
                         next_entry: prev_link_idx,
                         name: IndexNameRef::new(extra_offset, extra_len, extra_ascii, extra_ext_id),
                         _pad0: [0; 4],
-                        // `LinkInfo.parent_frs` is still `u64` (migrated in 5d.2).
-                        parent_frs: extra_name.parent_frs.raw(),
+                        // `LinkInfo.parent_frs` is typed `ParentFrs` (5d.2).
+                        parent_frs: extra_name.parent_frs,
                     });
                     prev_link_idx = link_idx;
                 }
@@ -347,24 +351,21 @@ impl MftIndex {
             }
 
             // Build parent-child relationships for all hard links.
-            // Each $FILE_NAME attribute gets its own child edge so tree metrics
-            // can attribute proportional shares correctly.
-            // Each child entry stores its name_index so we can calculate proportional
-            // shares.
+            // Each `$FILE_NAME` attribute gets its own child edge so tree
+            // metrics can attribute proportional shares correctly.
+            // Each child entry stores its name_index so we can calculate
+            // proportional shares.
+            let no_entry_parent = ParentFrs::new(u64::from(NO_ENTRY));
             for (name_idx, name_info) in parsed.names.iter().enumerate() {
-                // Per-name boundary: `NameInfo.parent_frs` is typed
-                // (`ParentFrs`); the parent walker below indexes the
-                // `frs_to_idx` Vec by `usize` and stores `u64` in
-                // `ChildInfo` / `FileRecord` — all 5d.2-scope u64
-                // surfaces.
-                let parent_frs = name_info.parent_frs.raw();
-                if parent_frs == parsed_frs || parent_frs == u64::from(NO_ENTRY) {
+                let parent_frs = name_info.parent_frs;
+                if parent_frs.as_frs() == parsed_frs || parent_frs == no_entry_parent {
                     continue;
                 }
 
-                // Ensure parent exists
+                // Ensure parent exists — `frs_to_idx` is `Vec<u32>` indexed
+                // by `usize`, so `.raw()` only at the indexing boundary.
                 let parent_idx = {
-                    let parent_frs_usize = frs_to_usize(parent_frs);
+                    let parent_frs_usize = frs_to_usize(parent_frs.raw());
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
@@ -372,7 +373,7 @@ impl MftIndex {
                         // Create placeholder parent
                         let new_idx = len_to_u32(index.records.len());
                         index.frs_to_idx[parent_frs_usize] = new_idx;
-                        index.records.push(FileRecord::new(parent_frs));
+                        index.records.push(FileRecord::new(parent_frs.as_frs()));
                     }
                     index.frs_to_idx[parent_frs_usize]
                 };
@@ -396,20 +397,22 @@ impl MftIndex {
                 });
             }
 
-            // Handle case where names is empty (shouldn't happen, but be safe)
+            // Handle case where names is empty (shouldn't happen, but be safe).
             if parsed.names.is_empty()
-                && parsed_parent_frs != parsed_frs
-                && parsed_parent_frs != u64::from(NO_ENTRY)
+                && parsed_parent_frs.as_frs() != parsed_frs
+                && parsed_parent_frs != no_entry_parent
             {
                 let parent_idx = {
-                    let parent_frs_usize = frs_to_usize(parsed_parent_frs);
+                    let parent_frs_usize = frs_to_usize(parsed_parent_frs.raw());
                     if parent_frs_usize >= index.frs_to_idx.len() {
                         index.frs_to_idx.resize(parent_frs_usize + 1, NO_ENTRY);
                     }
                     if index.frs_to_idx[parent_frs_usize] == NO_ENTRY {
                         let new_idx = len_to_u32(index.records.len());
                         index.frs_to_idx[parent_frs_usize] = new_idx;
-                        index.records.push(FileRecord::new(parsed_parent_frs));
+                        index
+                            .records
+                            .push(FileRecord::new(parsed_parent_frs.as_frs()));
                     }
                     index.frs_to_idx[parent_frs_usize]
                 };

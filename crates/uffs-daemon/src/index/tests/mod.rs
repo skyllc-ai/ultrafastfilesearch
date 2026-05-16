@@ -72,21 +72,21 @@ fn build_test_drive() -> uffs_core::compact::DriveCompactIndex {
 
     // Root directory
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Subdirectory "Projects"
     let dir_name = "Projects";
     let dir_off = idx.add_name(dir_name);
     let dir_ext = idx.intern_extension(dir_name);
-    let dir = idx.get_or_create(100);
+    let dir = idx.get_or_create(100.into());
     dir.stdinfo.set_directory(true);
     dir.stdinfo.flags = 0x10; // directory flag
     dir.first_name.name =
         IndexNameRef::new(dir_off, uffs_mft::len_to_u16(dir_name.len()), true, dir_ext);
-    dir.first_name.parent_frs = ROOT_FRS;
+    dir.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Files with different extensions and sizes
     let files: &[(&str, u64, u64, u64)] = &[
@@ -100,9 +100,9 @@ fn build_test_drive() -> uffs_core::compact::DriveCompactIndex {
     for &(name, frs, size, allocated) in files {
         let off = idx.add_name(name);
         let ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(off, uffs_mft::len_to_u16(name.len()), true, ext);
-        rec.first_name.parent_frs = 100; // under Projects
+        rec.first_name.parent_frs = Into::into(100); // under Projects
         rec.first_stream.size = SizeInfo {
             length: size,
             allocated,
@@ -135,17 +135,17 @@ fn spec(kind: &str) -> AggregateSpecWire {
 fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::D);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let file = "alpha.txt";
     let off = idx.add_name(file);
     let ext = idx.intern_extension(file);
-    let rec = idx.get_or_create(200);
+    let rec = idx.get_or_create(200.into());
     rec.first_name.name = IndexNameRef::new(off, uffs_mft::len_to_u16(file.len()), true, ext);
-    rec.first_name.parent_frs = ROOT_FRS;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
     rec.first_stream.size = SizeInfo {
         length: 42,
         allocated: 512,
@@ -164,17 +164,17 @@ fn build_test_drive_d() -> uffs_core::compact::DriveCompactIndex {
 fn build_test_drive_e() -> uffs_core::compact::DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::E);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let file = "beta.bin";
     let off = idx.add_name(file);
     let ext = idx.intern_extension(file);
-    let rec = idx.get_or_create(300);
+    let rec = idx.get_or_create(300.into());
     rec.first_name.name = IndexNameRef::new(off, uffs_mft::len_to_u16(file.len()), true, ext);
-    rec.first_name.parent_frs = ROOT_FRS;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
     rec.first_stream.size = SizeInfo {
         length: 84,
         allocated: 1024,

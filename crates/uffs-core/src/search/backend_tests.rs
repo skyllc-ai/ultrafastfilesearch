@@ -382,21 +382,21 @@ fn build_two_drive_backend() -> MultiDriveBackend {
     ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         let f_off = idx.add_name(file_name);
         let f_ext = idx.intern_extension(file_name);
-        let file_rec = idx.get_or_create(200);
+        let file_rec = idx.get_or_create(200.into());
         file_rec.first_name.name = IndexNameRef::new(
             f_off,
             u16::try_from(file_name.len()).expect("name too long"),
             true,
             f_ext,
         );
-        file_rec.first_name.parent_frs = ROOT_FRS;
+        file_rec.first_name.parent_frs = Into::into(ROOT_FRS);
         file_rec.first_stream.size = SizeInfo {
             length: file_size,
             allocated: file_size.next_multiple_of(512),
@@ -631,10 +631,10 @@ fn build_siblings_fixture() -> DriveIndex {
 
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Insertion order (FRS 200, 201, 202) is deliberately non-alphabetical
     // so tree-walk `sort_indices_by_name` on the root's children has to
@@ -644,14 +644,14 @@ fn build_siblings_fixture() -> DriveIndex {
     for (frs, name) in [(200, "gamma.txt"), (201, "alpha.txt"), (202, "beta.txt")] {
         let n_off = idx.add_name(name);
         let n_ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             n_off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             n_ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -680,21 +680,21 @@ fn build_two_drive_index() -> DriveIndex {
     ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         let f_off = idx.add_name(file_name);
         let f_ext = idx.intern_extension(file_name);
-        let file_rec = idx.get_or_create(200);
+        let file_rec = idx.get_or_create(200.into());
         file_rec.first_name.name = IndexNameRef::new(
             f_off,
             u16::try_from(file_name.len()).expect("name too long"),
             true,
             f_ext,
         );
-        file_rec.first_name.parent_frs = ROOT_FRS;
+        file_rec.first_name.parent_frs = Into::into(ROOT_FRS);
         file_rec.first_stream.size = SizeInfo {
             length: file_size,
             allocated: file_size.next_multiple_of(512),
@@ -937,10 +937,10 @@ fn build_dbt_triple_fixture() -> DriveIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Three candidates for a `*.dbt` query.  `frs` values are arbitrary
     // but must be distinct.
@@ -961,14 +961,14 @@ fn build_dbt_triple_fixture() -> DriveIndex {
     ] {
         let off = idx.add_name(name);
         let ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.stdinfo.flags = 0x20;
     }
 
@@ -1155,10 +1155,10 @@ fn build_no_dbt_fixture() -> DriveIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Dotless directory literally named `dbt`.  `intern_extension`
     // assigns this `extension_id = 0` (no dot), so the resolved-ID
@@ -1168,14 +1168,14 @@ fn build_no_dbt_fixture() -> DriveIndex {
     let dbt_name = "dbt";
     let dbt_off = idx.add_name(dbt_name);
     let dbt_ext = idx.intern_extension(dbt_name);
-    let dbt_rec = idx.get_or_create(300);
+    let dbt_rec = idx.get_or_create(300.into());
     dbt_rec.first_name.name = IndexNameRef::new(
         dbt_off,
         u16::try_from(dbt_name.len()).expect("name too long"),
         true,
         dbt_ext,
     );
-    dbt_rec.first_name.parent_frs = ROOT_FRS;
+    dbt_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     dbt_rec.stdinfo.flags = 0x10; // DIRECTORY
     dbt_rec.stdinfo.set_directory(true);
 
@@ -1184,14 +1184,14 @@ fn build_no_dbt_fixture() -> DriveIndex {
     let txt_name = "notes.txt";
     let txt_off = idx.add_name(txt_name);
     let txt_ext = idx.intern_extension(txt_name);
-    let txt_rec = idx.get_or_create(301);
+    let txt_rec = idx.get_or_create(301.into());
     txt_rec.first_name.name = IndexNameRef::new(
         txt_off,
         u16::try_from(txt_name.len()).expect("name too long"),
         true,
         txt_ext,
     );
-    txt_rec.first_name.parent_frs = ROOT_FRS;
+    txt_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     txt_rec.stdinfo.flags = 0x20;
 
     let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
@@ -1668,14 +1668,14 @@ fn build_nested_fixture() -> DriveIndex {
     fn make_file(idx: &mut MftIndex, frs: u64, name: &str, parent: u64) {
         let n_off = idx.add_name(name);
         let n_ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             n_off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             n_ext,
         );
-        rec.first_name.parent_frs = parent;
+        rec.first_name.parent_frs = Into::into(parent);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -1686,23 +1686,23 @@ fn build_nested_fixture() -> DriveIndex {
     fn make_dir(idx: &mut MftIndex, frs: u64, name: &str, parent: u64) {
         let n_off = idx.add_name(name);
         let n_ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             n_off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             n_ext,
         );
-        rec.first_name.parent_frs = parent;
+        rec.first_name.parent_frs = Into::into(parent);
         rec.stdinfo.set_directory(true);
     }
 
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Root-level entries (non-alphabetical FRS order).
     make_file(&mut idx, 202, "zeta.txt", ROOT_FRS);
@@ -2386,24 +2386,24 @@ fn build_bloom_skip_fixture() -> DriveIndex {
     ] {
         let mut idx = MftIndex::new(letter);
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         for i in 0_u32..FILES_PER_DRIVE {
             let file_name = format!("file_{i:03}.{ext}");
             let n_off = idx.add_name(&file_name);
             let n_ext = idx.intern_extension(&file_name);
             let frs = u64::from(200_u32.saturating_add(i));
-            let rec = idx.get_or_create(frs);
+            let rec = idx.get_or_create(frs.into());
             rec.first_name.name = IndexNameRef::new(
                 n_off,
                 u16::try_from(file_name.len()).expect("name too long"),
                 true,
                 n_ext,
             );
-            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_name.parent_frs = Into::into(ROOT_FRS);
             rec.first_stream.size = SizeInfo {
                 length: 100,
                 allocated: 512,

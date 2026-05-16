@@ -140,7 +140,7 @@ impl MftIndex {
         // Also check root specifically for treesize=0 (belt-and-suspenders).
         // Root should always have treesize > 0 if there are any files on the volume.
         let root_looks_bad = self
-            .frs_to_idx_opt(5)
+            .frs_to_idx_opt(crate::frs::Frs::ROOT)
             .and_then(|root_idx| self.records.get(root_idx))
             .is_some_and(|root| {
                 root.stdinfo.is_directory() && (root.descendants == 0 || root.treesize == 0)
@@ -187,9 +187,13 @@ impl MftIndex {
             .enumerate()
             .filter(|(_, rec)| rec.stdinfo.is_directory() && rec.descendants == 0)
             .map(|(idx, rec)| {
+                // Tuple is logged via `tracing::warn!`; the macro
+                // requires `tracing::Value`, which the typed
+                // newtype does not impl.  Demote with `.raw()` at the
+                // tuple boundary so the warning carries the bare FRS.
                 (
                     idx,
-                    rec.frs,
+                    rec.frs.raw(),
                     rec.first_child,
                     rec.name_count,
                     rec.total_stream_count,

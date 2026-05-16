@@ -63,8 +63,11 @@ impl SearchResult {
             path: None, // Path resolution is expensive, done on demand
             size: record.first_stream.size.length,
             allocated_size: record.first_stream.size.allocated,
-            frs: record.frs,
-            parent_frs: record.first_name.parent_frs,
+            // `SearchResult` is the consumer-facing DTO and keeps raw
+            // `u64` for wire-format / DataFrame parity; demote the typed
+            // index fields at this construction boundary only.
+            frs: record.frs.raw(),
+            parent_frs: record.first_name.parent_frs.raw(),
             is_directory,
             stream_name: String::new(),
             name_index: 0,
@@ -125,8 +128,9 @@ impl SearchResult {
             path: None,
             size: stream_info.size.length,
             allocated_size: stream_info.size.allocated,
-            frs: record.frs,
-            parent_frs: name_info.parent_frs,
+            // Same DTO-boundary demotion as `from_record_default`.
+            frs: record.frs.raw(),
+            parent_frs: name_info.parent_frs.raw(),
             is_directory,
             stream_name: stream_name.to_owned(),
             name_index: name_idx,

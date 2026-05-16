@@ -222,7 +222,8 @@ fn merge_extension_into_fragment(
             next_entry: NO_ENTRY,
             name: name_ref,
             _pad0: [0; 4],
-            parent_frs: *parent_frs,
+            // Typed `ParentFrs` slot — lift parser-local raw `u64`.
+            parent_frs: crate::frs::ParentFrs::new(*parent_frs),
         });
         link_indices.push(link_idx);
     }
@@ -252,10 +253,11 @@ fn merge_extension_into_fragment(
         stream_indices.push(stream_idx);
     }
 
-    // Ensure parent directories exist
+    // Ensure parent directories exist.  Boundary: lift parser-local raw
+    // `u64` to typed `Frs` at the typed-API call site.
     for (_, parent_frs) in names {
         if *parent_frs != base_frs && *parent_frs != 0 {
-            fragment.get_or_create(*parent_frs);
+            fragment.get_or_create(crate::frs::Frs::new(*parent_frs));
             // ^ side effect: ensures parent placeholder exists
         }
     }
@@ -269,8 +271,10 @@ fn merge_extension_into_fragment(
     }
 
     // Get the first_name.next_entry, first_stream.next_entry, and first_name
-    // validity before we start modifying things
-    let record = fragment.get_or_create(base_frs);
+    // validity before we start modifying things.  Lift parser-local raw `u64`
+    // to typed `Frs` once for all the typed-API call sites in this function.
+    let base_frs_typed = crate::frs::Frs::new(base_frs);
+    let record = fragment.get_or_create(base_frs_typed);
     let first_name_valid = record.first_name.name.is_valid();
     let first_name_next = record.first_name.next_entry;
     let first_stream_next = record.first_stream.next_entry;
@@ -293,10 +297,10 @@ fn merge_extension_into_fragment(
         if let Some(end_idx) = stream_chain_end {
             fragment.streams[u32_as_usize(end_idx)].next_entry = stream_indices[0];
         } else {
-            let rec_for_stream = fragment.get_or_create(base_frs);
+            let rec_for_stream = fragment.get_or_create(base_frs_typed);
             rec_for_stream.first_stream.next_entry = stream_indices[0];
         }
-        let rec_for_count = fragment.get_or_create(base_frs);
+        let rec_for_count = fragment.get_or_create(base_frs_typed);
         rec_for_count.stream_count += len_to_u16(stream_indices.len());
         rec_for_count.total_stream_count += len_to_u16(stream_indices.len());
     }
@@ -337,29 +341,32 @@ fn attach_links(
         return;
     }
 
+    // Boundary: lift parser-local raw `u64` to typed `Frs` once for all
+    // the typed-API call sites in this function.
+    let base_frs_typed = crate::frs::Frs::new(base_frs);
     if first_name_valid {
         // Base record already has a name — chain extension names as additional hard
         // links
         if let Some(end_idx) = link_chain_end {
             fragment.links[u32_as_usize(end_idx)].next_entry = link_indices[0];
         } else {
-            let rec_for_link_chain = fragment.get_or_create(base_frs);
+            let rec_for_link_chain = fragment.get_or_create(base_frs_typed);
             rec_for_link_chain.first_name.next_entry = link_indices[0];
         }
-        let rec_for_link_count = fragment.get_or_create(base_frs);
+        let rec_for_link_count = fragment.get_or_create(base_frs_typed);
         rec_for_link_count.name_count += len_to_u16(link_indices.len());
     } else {
         // Copy the first extension name directly into first_name
         // This matches established behavior (ntfs_index.hpp lines 559-567)
         let first_link_name = fragment.links[u32_as_usize(link_indices[0])].name;
         let first_link_parent = fragment.links[u32_as_usize(link_indices[0])].parent_frs;
-        let rec_for_first_name = fragment.get_or_create(base_frs);
+        let rec_for_first_name = fragment.get_or_create(base_frs_typed);
         rec_for_first_name.first_name.name = first_link_name;
         rec_for_first_name.first_name.parent_frs = first_link_parent;
 
         // Chain remaining links (if any) to first_name.next_entry
         if link_indices.len() > 1 {
-            let rec_for_extra_links = fragment.get_or_create(base_frs);
+            let rec_for_extra_links = fragment.get_or_create(base_frs_typed);
             rec_for_extra_links.first_name.next_entry = link_indices[1];
             rec_for_extra_links.name_count += len_to_u16(link_indices.len().saturating_sub(1));
         }
@@ -376,7 +383,10 @@ fn build_parent_child_entries(
     base_frs: u64,
     names: &[(String, u64)],
 ) {
-    let record = fragment.get_or_create(base_frs);
+    // Boundary: lift parser-local raw `u64` to typed `Frs` once for the
+    // typed-API and `ChildInfo` writes below.
+    let base_frs_typed = crate::frs::Frs::new(base_frs);
+    let record = fragment.get_or_create(base_frs_typed);
     let existing_name_count = record.name_count;
 
     for (name_idx, (_, parent_frs)) in names.iter().enumerate() {
@@ -394,7 +404,9 @@ fn build_parent_child_entries(
             if fragment.frs_to_idx[p_frs_usize] == NO_ENTRY {
                 let new_idx = len_to_u32(fragment.records.len());
                 fragment.frs_to_idx[p_frs_usize] = new_idx;
-                fragment.records.push(crate::index::FileRecord::new(p_frs));
+                fragment
+                    .records
+                    .push(crate::index::FileRecord::new(crate::frs::Frs::new(p_frs)));
             }
             fragment.frs_to_idx[p_frs_usize]
         };
@@ -413,7 +425,8 @@ fn build_parent_child_entries(
         fragment.children.push(ChildInfo {
             next_entry: old_first_child,
             _pad0: [0; 4],
-            child_frs: base_frs,
+            // Typed `Frs` slot — reuse cached typed FRS.
+            child_frs: base_frs_typed,
             name_index: effective_name_idx,
             _pad1: [0; 6],
         });

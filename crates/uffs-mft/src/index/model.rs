@@ -7,6 +7,7 @@ use super::{
     ExtensionIndex, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo,
     MftStats,
 };
+use crate::frs::Frs;
 use crate::platform::DriveLetter;
 
 /// Directory child entry.
@@ -14,6 +15,9 @@ use crate::platform::DriveLetter;
 /// 24 bytes per entry (with explicit padding).  Derives `bytemuck::Pod`
 /// so the entire children array can be serialized/deserialized as a single
 /// `memcpy` (v11+).
+///
+/// The [`Frs`] newtype is `#[repr(transparent)]` over `u64`, so the on-disk
+/// layout is byte-identical to the historic `u64` `child_frs` field.
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct ChildInfo {
@@ -25,8 +29,9 @@ pub struct ChildInfo {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad0: [u8; 4],
-    /// FRS of the child file or directory.
-    pub child_frs: u64,
+    /// FRS of the child file or directory (typed [`Frs`]; bit-identical
+    /// to `u64` on disk).
+    pub child_frs: Frs,
     /// Which name index to use for hard links.
     pub name_index: u16,
     /// Explicit tail padding for struct alignment (8-byte boundary).

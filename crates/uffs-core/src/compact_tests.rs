@@ -27,25 +27,25 @@ fn fixture_index() -> MftIndex {
 
     // Root (FRS 5)
     let root_name = push_name(&mut idx, ".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = root_name;
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Docs directory (FRS 100)
     let docs_name = push_name(&mut idx, "Docs");
-    let docs = idx.get_or_create(100);
+    let docs = idx.get_or_create(100.into());
     docs.stdinfo.set_directory(true);
     docs.first_name.name = docs_name;
-    docs.first_name.parent_frs = ROOT_FRS;
+    docs.first_name.parent_frs = Into::into(ROOT_FRS);
     docs.descendants = 3;
     docs.treesize = 500;
 
     // file.txt (FRS 200) — simple single-name, single-stream
     let file_name = push_name(&mut idx, "file.txt");
-    let file = idx.get_or_create(200);
+    let file = idx.get_or_create(200.into());
     file.first_name.name = file_name;
-    file.first_name.parent_frs = 100;
+    file.first_name.parent_frs = Into::into(100);
     file.first_stream.size = SizeInfo {
         length: 120,
         allocated: 128,
@@ -64,12 +64,12 @@ fn fixture_index() -> MftIndex {
         next_entry: NO_ENTRY,
         name: hl_alt_name,
         _pad0: [0; 4],
-        parent_frs: ROOT_FRS,
+        parent_frs: Into::into(ROOT_FRS),
     });
 
-    let hl = idx.get_or_create(201);
+    let hl = idx.get_or_create(201.into());
     hl.first_name.name = hl_primary;
-    hl.first_name.parent_frs = 100;
+    hl.first_name.parent_frs = Into::into(100);
     hl.first_name.next_entry = link_idx;
     hl.name_count = 2;
     hl.first_stream.size = SizeInfo {
@@ -93,9 +93,9 @@ fn fixture_index() -> MftIndex {
         _pad0: [0; 3],
     });
 
-    let ads = idx.get_or_create(202);
+    let ads = idx.get_or_create(202.into());
     ads.first_name.name = ads_name;
-    ads.first_name.parent_frs = 100;
+    ads.first_name.parent_frs = Into::into(100);
     ads.first_stream.size = SizeInfo {
         length: 300,
         allocated: 512,
@@ -105,9 +105,9 @@ fn fixture_index() -> MftIndex {
 
     // $MFT system metafile (FRS 0) — should be filterable
     let mft_name = push_name(&mut idx, "$MFT");
-    let mft_rec = idx.get_or_create(0);
+    let mft_rec = idx.get_or_create(0.into());
     mft_rec.first_name.name = mft_name;
-    mft_rec.first_name.parent_frs = ROOT_FRS;
+    mft_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     mft_rec.first_stream.size = SizeInfo {
         length: 500_000,
         allocated: 512_000,
@@ -373,16 +373,16 @@ fn fixture_index_with_ads() -> MftIndex {
 
     // Root (FRS 5)
     let root_name = push_name(&mut idx, ".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = root_name;
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // file.pdf (FRS 100) — has a Zone.Identifier ADS
     let file_name = push_name(&mut idx, "file.pdf");
-    let file = idx.get_or_create(100);
+    let file = idx.get_or_create(100.into());
     file.first_name.name = file_name;
-    file.first_name.parent_frs = ROOT_FRS;
+    file.first_name.parent_frs = Into::into(ROOT_FRS);
     file.first_stream.size = SizeInfo {
         length: 50_000,
         allocated: 51_200,
@@ -409,7 +409,7 @@ fn fixture_index_with_ads() -> MftIndex {
     });
 
     // Chain ADS to the record's stream list
-    let file_idx = idx.frs_to_idx_opt(100).unwrap();
+    let file_idx = idx.frs_to_idx_opt(100.into()).unwrap();
     let file_mut = idx.records.get_mut(file_idx).expect("record must exist");
     file_mut.first_stream.next_entry = ads_si;
     file_mut.stream_count = 2;
@@ -501,16 +501,16 @@ fn ads_on_directory_strips_directory_flag() {
 
     // Create root (FRS 5)
     let root_name = push_name(&mut idx, ".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = root_name;
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Create a directory (FRS 200) with DIRECTORY | ARCHIVE flags
     let dir_name = push_name(&mut idx, "Airlink 430W");
-    let dir_rec = idx.get_or_create(200);
+    let dir_rec = idx.get_or_create(200.into());
     dir_rec.first_name.name = dir_name;
-    dir_rec.first_name.parent_frs = ROOT_FRS;
+    dir_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     dir_rec.stdinfo.set_directory(true);
     dir_rec.stdinfo.flags |= StandardInfo::IS_ARCHIVE;
 
@@ -529,7 +529,7 @@ fn ads_on_directory_strips_directory_flag() {
         _pad0: [0; 3],
     });
 
-    let dir_idx = idx.frs_to_idx_opt(200).unwrap();
+    let dir_idx = idx.frs_to_idx_opt(200.into()).unwrap();
     let dir_mut = idx.records.get_mut(dir_idx).expect("record must exist");
     dir_mut.first_stream.next_entry = ads_si;
     dir_mut.stream_count = 2;

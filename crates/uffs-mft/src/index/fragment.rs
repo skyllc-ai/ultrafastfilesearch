@@ -7,6 +7,7 @@ use super::{
     ChildInfo, ExtensionTable, FileRecord, IndexStreamInfo, InternalStreamInfo, LinkInfo, NO_ENTRY,
     frs_to_usize, len_to_u32,
 };
+use crate::frs::Frs;
 
 // ============================================================================
 // MftIndexFragment - Partial index for parallel parsing
@@ -84,8 +85,8 @@ impl MftIndexFragment {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
-    pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs_to_usize(frs);
+    pub fn get_or_create(&mut self, frs: Frs) -> &mut FileRecord {
+        let frs_usize = frs_to_usize(frs.raw());
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {

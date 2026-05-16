@@ -71,7 +71,7 @@ fn extension_index_query_performance() {
         // Create record with extension
         let name = format!("file{i}.ext{}", i % 10);
         let offset = index.add_name(&name);
-        let rec = index.get_or_create(frs);
+        let rec = index.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
         rec.first_stream.size.length = 1024;
@@ -118,16 +118,16 @@ fn full_postprocessing_performance() {
 
     // Add root directory
     let root_frs = 5;
-    let root_rec = index.get_or_create(root_frs);
+    let root_rec = index.get_or_create(root_frs.into());
     root_rec.stdinfo.set_directory(true);
-    root_rec.first_name.parent_frs = root_frs; // Self-parent
+    root_rec.first_name.parent_frs = Into::into(root_frs); // Self-parent
 
     // Add 100 directories
     for dir_i in 0..100 {
         let dir_frs = 100 + dir_i;
-        let rec = index.get_or_create(dir_frs);
+        let rec = index.get_or_create(dir_frs.into());
         rec.stdinfo.set_directory(true);
-        rec.first_name.parent_frs = root_frs;
+        rec.first_name.parent_frs = Into::into(root_frs);
     }
 
     // Add 1000 files per directory (100K total)
@@ -135,8 +135,8 @@ fn full_postprocessing_performance() {
         let dir_frs = 100 + dir_i;
         for file_i in 0..1000 {
             let file_frs = 10_000 + dir_i * 1000 + file_i;
-            let rec = index.get_or_create(file_frs);
-            rec.first_name.parent_frs = dir_frs;
+            let rec = index.get_or_create(file_frs.into());
+            rec.first_name.parent_frs = Into::into(dir_frs);
             rec.first_stream.size.length = 1024;
         }
     }

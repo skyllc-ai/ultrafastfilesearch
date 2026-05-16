@@ -297,7 +297,11 @@ impl MftIndex {
                 let fn_mft_changed = if version >= 4 { read_i64!() } else { 0 };
 
                 records.push(FileRecord {
-                    frs,
+                    // Legacy v3-v9 deserialization boundary: raw `u64` from
+                    // disk is lifted into typed `Frs` at the struct-literal
+                    // construction site.  v10+ Pod paths above are
+                    // bit-identical via `repr(transparent)`.
+                    frs: crate::frs::Frs::new(frs),
                     sequence_number,
                     namespace,
                     forensic_flags,
@@ -305,7 +309,7 @@ impl MftIndex {
                     lsn,
                     reparse_tag,
                     _pad1: [0; 4],
-                    base_frs,
+                    base_frs: crate::frs::Frs::new(base_frs),
                     stdinfo: StandardInfo {
                         created,
                         modified,
@@ -330,7 +334,7 @@ impl MftIndex {
                             meta: link_name_meta,
                         },
                         _pad0: [0; 4],
-                        parent_frs: link_parent_frs,
+                        parent_frs: crate::frs::ParentFrs::new(link_parent_frs),
                     },
                     first_stream: IndexStreamInfo {
                         size: SizeInfo {
@@ -420,7 +424,7 @@ impl MftIndex {
                         meta: name_meta,
                     },
                     _pad0: [0; 4],
-                    parent_frs,
+                    parent_frs: crate::frs::ParentFrs::new(parent_frs),
                 });
             }
             links
@@ -526,7 +530,7 @@ impl MftIndex {
                 children.push(ChildInfo {
                     next_entry,
                     _pad0: [0; 4],
-                    child_frs,
+                    child_frs: crate::frs::Frs::new(child_frs),
                     name_index,
                     _pad1: [0; 6],
                 });

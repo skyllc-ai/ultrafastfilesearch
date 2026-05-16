@@ -335,8 +335,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
                 if name_len == 0 {
                     // Default stream — mark that unnamed $DATA exists
-                    // (distinguishes "empty $DATA" from "no $DATA")
-                    let rec = index.get_or_create(frs);
+                    // (distinguishes "empty $DATA" from "no $DATA").
+                    // Boundary: lift parser-local raw `u64` to typed `Frs`.
+                    let rec = index.get_or_create(crate::frs::Frs::new(frs));
                     rec.set_has_default_data();
                     default_size = size;
                     default_allocated = allocated;
@@ -662,8 +663,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 alloc_total: internal_alloc_total,
             } = build_internal_stream_chain(index, internal_streams);
 
-            // Snapshot and setup record using helper
-            let record = index.get_or_create(frs);
+            // Snapshot and setup record using helper.  Lift parser-local raw
+            // `u64` to typed `Frs` once for all the typed-API call sites.
+            let frs_typed = crate::frs::Frs::new(frs);
+            let record = index.get_or_create(frs_typed);
             let ext = ExtensionSnapshot {
                 stream_head: record.first_stream.next_entry,
                 stream_count: record.stream_count.saturating_sub(1),
@@ -694,10 +697,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             // Chain ADS streams and set counts
             if !stream_indices.is_empty() {
                 chain_streams(index, &stream_indices);
-                let rec_chain = index.get_or_create(frs);
+                let rec_chain = index.get_or_create(frs_typed);
                 rec_chain.first_stream.next_entry = stream_indices[0];
             }
-            let rec_counts = index.get_or_create(frs);
+            let rec_counts = index.get_or_create(frs_typed);
             rec_counts.stream_count = 1 + len_to_u16(additional_stream_count);
             rec_counts.total_stream_count =
                 1 + len_to_u16(additional_stream_count) + len_to_u16(internal_stream_count);
@@ -753,15 +756,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         alloc_total: internal_alloc_total,
     } = build_internal_stream_chain(index, internal_streams);
 
-    // Ensure parent exists (create placeholder if needed) - do this before getting
-    // our record
+    // Ensure parent exists (create placeholder if needed) - do this before
+    // getting our record.  Lift parser-local raw `u64` to typed `Frs`.
     if parent_frs != frs && parent_frs != 0 {
-        index.get_or_create(parent_frs);
+        index.get_or_create(crate::frs::Frs::new(parent_frs));
         // ^ side effect: ensures parent placeholder exists
     }
 
     // Snapshot and setup record
-    let record = index.get_or_create(frs);
+    let record = index.get_or_create(crate::frs::Frs::new(frs));
     let ext = ExtensionSnapshot {
         stream_head: record.first_stream.next_entry,
         stream_count: record.stream_count.saturating_sub(1),
@@ -793,7 +796,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         next_entry: NO_ENTRY,
         name: name_ref,
         _pad0: [0; 4],
-        parent_frs,
+        // Typed `ParentFrs` slot — lift raw `u64` parser local.
+        parent_frs: crate::frs::ParentFrs::new(parent_frs),
     };
     record.name_count = 1 + len_to_u16(additional_count);
     record.stream_count = 1 + len_to_u16(additional_stream_count);

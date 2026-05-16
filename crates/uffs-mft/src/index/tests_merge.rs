@@ -20,27 +20,33 @@ fn extension_before_base_in_same_fragment() {
         next_entry: link0_idx + 1,
         name: name2_ref,
         _pad0: [0; 4],
-        parent_frs: 5,
+        parent_frs: Into::into(5),
     });
     let link1_idx = u32::try_from(fragment.links.len()).unwrap();
     fragment.links.push(LinkInfo {
         next_entry: NO_ENTRY,
         name: name3_ref,
         _pad0: [0; 4],
-        parent_frs: 6,
+        parent_frs: Into::into(6),
     });
 
-    let record = fragment.get_or_create(100);
+    let record = fragment.get_or_create(100.into());
     record.first_name.name = name2_ref;
-    record.first_name.parent_frs = 5;
+    record.first_name.parent_frs = Into::into(5);
     record.first_name.next_entry = link1_idx;
     record.name_count = 2;
 
-    assert!(fragment.get_or_create(100).first_name.name.is_valid());
-    assert_eq!(fragment.get_or_create(100).name_count, 2);
+    assert!(
+        fragment
+            .get_or_create(100.into())
+            .first_name
+            .name
+            .is_valid()
+    );
+    assert_eq!(fragment.get_or_create(100.into()).name_count, 2);
 
     let name1_ref = push_fragment_name(&mut fragment, "name1.txt");
-    let record = fragment.get_or_create(100);
+    let record = fragment.get_or_create(100.into());
     let existing_first_name = record.first_name;
     let existing_name_valid = existing_first_name.name.is_valid();
     let existing_name_count = if existing_name_valid {
@@ -53,7 +59,7 @@ fn extension_before_base_in_same_fragment() {
         next_entry: NO_ENTRY,
         name: name1_ref,
         _pad0: [0; 4],
-        parent_frs: 5,
+        parent_frs: Into::into(5),
     };
 
     let first_name_next_entry = if existing_name_valid {
@@ -64,11 +70,11 @@ fn extension_before_base_in_same_fragment() {
         NO_ENTRY
     };
 
-    let record = fragment.get_or_create(100);
+    let record = fragment.get_or_create(100.into());
     record.first_name.next_entry = first_name_next_entry;
     record.name_count = 1 + existing_name_count;
 
-    let record = fragment.get_or_create(100);
+    let record = fragment.get_or_create(100.into());
     assert_eq!(record.name_count, 3);
     assert!(record.first_name.name.is_valid());
 
@@ -91,30 +97,42 @@ fn cross_fragment_merge_extension_placeholder() {
     let mut fragment_a = MftIndexFragment::with_capacity(10);
     let ext_name_ref = push_fragment_name(&mut fragment_a, "hardlink.txt");
 
-    let record_a = fragment_a.get_or_create(100);
+    let record_a = fragment_a.get_or_create(100.into());
     record_a.first_name.name = ext_name_ref;
-    record_a.first_name.parent_frs = 5;
+    record_a.first_name.parent_frs = Into::into(5);
     record_a.first_name.next_entry = NO_ENTRY;
     record_a.name_count = 1;
 
-    assert!(fragment_a.get_or_create(100).first_name.name.is_valid());
-    assert_eq!(fragment_a.get_or_create(100).stdinfo.created, 0);
-    assert!(!fragment_a.get_or_create(100).has_base_data());
+    assert!(
+        fragment_a
+            .get_or_create(100.into())
+            .first_name
+            .name
+            .is_valid()
+    );
+    assert_eq!(fragment_a.get_or_create(100.into()).stdinfo.created, 0);
+    assert!(!fragment_a.get_or_create(100.into()).has_base_data());
 
     let mut fragment_b = MftIndexFragment::with_capacity(10);
     let base_name_ref = push_fragment_name(&mut fragment_b, "original.txt");
 
-    let record_b = fragment_b.get_or_create(100);
+    let record_b = fragment_b.get_or_create(100.into());
     record_b.first_name.name = base_name_ref;
-    record_b.first_name.parent_frs = 5;
+    record_b.first_name.parent_frs = Into::into(5);
     record_b.first_name.next_entry = NO_ENTRY;
     record_b.name_count = 1;
     record_b.stdinfo.created = 132_456_789_012_345_678;
     record_b.stdinfo.modified = 132_456_789_012_345_678;
 
-    assert!(fragment_b.get_or_create(100).first_name.name.is_valid());
-    assert_ne!(fragment_b.get_or_create(100).stdinfo.created, 0);
-    assert!(fragment_b.get_or_create(100).has_base_data());
+    assert!(
+        fragment_b
+            .get_or_create(100.into())
+            .first_name
+            .name
+            .is_valid()
+    );
+    assert_ne!(fragment_b.get_or_create(100.into()).stdinfo.created, 0);
+    assert!(fragment_b.get_or_create(100.into()).has_base_data());
 
     let mut index = MftIndex::new(crate::platform::DriveLetter::D);
     index.merge_fragments(vec![fragment_a, fragment_b]);
@@ -138,21 +156,21 @@ fn cross_fragment_merge_multiple_extension_names() {
         next_entry: NO_ENTRY,
         name: ext_hardlink_c,
         _pad0: [0; 4],
-        parent_frs: 10,
+        parent_frs: Into::into(10),
     });
 
-    let record_a = fragment_a.get_or_create(100);
+    let record_a = fragment_a.get_or_create(100.into());
     record_a.first_name.name = ext_hardlink_b;
-    record_a.first_name.parent_frs = 5;
+    record_a.first_name.parent_frs = Into::into(5);
     record_a.first_name.next_entry = link_c_idx;
     record_a.name_count = 2;
 
     let mut fragment_b = MftIndexFragment::with_capacity(10);
     let base_original = push_fragment_name(&mut fragment_b, "original_a.txt");
 
-    let record_b = fragment_b.get_or_create(100);
+    let record_b = fragment_b.get_or_create(100.into());
     record_b.first_name.name = base_original;
-    record_b.first_name.parent_frs = 5;
+    record_b.first_name.parent_frs = Into::into(5);
     record_b.first_name.next_entry = NO_ENTRY;
     record_b.name_count = 1;
     record_b.stdinfo.created = 132_456_789_012_345_678;
@@ -180,9 +198,9 @@ fn cross_fragment_merge_base_first() {
     let mut fragment_a = MftIndexFragment::with_capacity(10);
     let base_original = push_fragment_name(&mut fragment_a, "original_a.txt");
 
-    let record_a = fragment_a.get_or_create(100);
+    let record_a = fragment_a.get_or_create(100.into());
     record_a.first_name.name = base_original;
-    record_a.first_name.parent_frs = 5;
+    record_a.first_name.parent_frs = Into::into(5);
     record_a.first_name.next_entry = NO_ENTRY;
     record_a.name_count = 1;
     record_a.stdinfo.created = 132_456_789_012_345_678;
@@ -197,12 +215,12 @@ fn cross_fragment_merge_base_first() {
         next_entry: NO_ENTRY,
         name: ext_hardlink_c,
         _pad0: [0; 4],
-        parent_frs: 10,
+        parent_frs: Into::into(10),
     });
 
-    let record_b = fragment_b.get_or_create(100);
+    let record_b = fragment_b.get_or_create(100.into());
     record_b.first_name.name = ext_hardlink_b;
-    record_b.first_name.parent_frs = 5;
+    record_b.first_name.parent_frs = Into::into(5);
     record_b.first_name.next_entry = link_c_idx;
     record_b.name_count = 2;
 
@@ -229,30 +247,30 @@ fn rebuild_children_from_names_basic() {
     let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
-    let root_rec = index.get_or_create(root_frs);
+    let root_rec = index.get_or_create(root_frs.into());
     root_rec.stdinfo.set_directory(true);
-    root_rec.first_name.parent_frs = root_frs;
+    root_rec.first_name.parent_frs = Into::into(root_frs);
     root_rec.first_child = NO_ENTRY;
 
     let dir1_frs = 100_u64;
     let dir1_name = push_index_name(&mut index, "dir1");
-    let rec = index.get_or_create(dir1_frs);
+    let rec = index.get_or_create(dir1_frs.into());
     rec.stdinfo.set_directory(true);
     rec.first_name.name = dir1_name;
-    rec.first_name.parent_frs = root_frs;
+    rec.first_name.parent_frs = Into::into(root_frs);
     rec.first_child = NO_ENTRY;
 
     let file1_frs = 200_u64;
     let file1_name = push_index_name(&mut index, "file1.txt");
-    let rec = index.get_or_create(file1_frs);
+    let rec = index.get_or_create(file1_frs.into());
     rec.first_name.name = file1_name;
-    rec.first_name.parent_frs = dir1_frs;
+    rec.first_name.parent_frs = Into::into(dir1_frs);
 
     let file2_frs = 201_u64;
     let file2_name = push_index_name(&mut index, "file2.txt");
-    let rec = index.get_or_create(file2_frs);
+    let rec = index.get_or_create(file2_frs.into());
     rec.first_name.name = file2_name;
-    rec.first_name.parent_frs = root_frs;
+    rec.first_name.parent_frs = Into::into(root_frs);
 
     assert_eq!(
         index.records[record_idx(&index, root_frs)].first_child,
@@ -288,17 +306,17 @@ fn rebuild_children_from_names_hardlinks() {
     let file_frs = 200_u64;
 
     let dir1_name = push_index_name(&mut index, "dir1");
-    let dir1_rec = index.get_or_create(dir1_frs);
+    let dir1_rec = index.get_or_create(dir1_frs.into());
     dir1_rec.stdinfo.set_directory(true);
     dir1_rec.first_name.name = dir1_name;
-    dir1_rec.first_name.parent_frs = dir1_frs;
+    dir1_rec.first_name.parent_frs = Into::into(dir1_frs);
     dir1_rec.first_child = NO_ENTRY;
 
     let dir2_name = push_index_name(&mut index, "dir2");
-    let dir2_rec = index.get_or_create(dir2_frs);
+    let dir2_rec = index.get_or_create(dir2_frs.into());
     dir2_rec.stdinfo.set_directory(true);
     dir2_rec.first_name.name = dir2_name;
-    dir2_rec.first_name.parent_frs = dir2_frs;
+    dir2_rec.first_name.parent_frs = Into::into(dir2_frs);
     dir2_rec.first_child = NO_ENTRY;
 
     let file_name = push_index_name(&mut index, "file.txt");
@@ -307,13 +325,13 @@ fn rebuild_children_from_names_hardlinks() {
         next_entry: NO_ENTRY,
         name: link_name,
         _pad0: [0; 4],
-        parent_frs: dir1_frs,
+        parent_frs: Into::into(dir1_frs),
     });
     let link_idx = len_to_u32(index.links.len() - 1);
 
-    let file_rec = index.get_or_create(file_frs);
+    let file_rec = index.get_or_create(file_frs.into());
     file_rec.first_name.name = file_name;
-    file_rec.first_name.parent_frs = dir2_frs;
+    file_rec.first_name.parent_frs = Into::into(dir2_frs);
     file_rec.first_name.next_entry = link_idx;
     file_rec.name_count = 2;
 
@@ -329,11 +347,11 @@ fn rebuild_children_from_names_hardlinks() {
     index.rebuild_children_from_names();
 
     let child1 = &index.children[index.records[record_idx(&index, dir1_frs)].first_child as usize];
-    assert_eq!(child1.child_frs, file_frs);
+    assert_eq!(child1.child_frs, file_frs.into());
     assert_eq!(child1.name_index, 0);
 
     let child2 = &index.children[index.records[record_idx(&index, dir2_frs)].first_child as usize];
-    assert_eq!(child2.child_frs, file_frs);
+    assert_eq!(child2.child_frs, file_frs.into());
     assert_eq!(child2.name_index, 1);
 }
 
@@ -343,9 +361,9 @@ fn rebuild_children_from_names_skips_root_self_reference() {
     let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
-    let rec = index.get_or_create(root_frs);
+    let rec = index.get_or_create(root_frs.into());
     rec.stdinfo.set_directory(true);
-    rec.first_name.parent_frs = root_frs;
+    rec.first_name.parent_frs = Into::into(root_frs);
     rec.first_child = NO_ENTRY;
 
     index.rebuild_children_from_names();
@@ -363,18 +381,18 @@ fn tree_metrics_empty_directory_descendants() {
     let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
-    let root_rec = index.get_or_create(root_frs);
+    let root_rec = index.get_or_create(root_frs.into());
     root_rec.stdinfo.set_directory(true);
-    root_rec.first_name.parent_frs = root_frs;
+    root_rec.first_name.parent_frs = Into::into(root_frs);
 
     let empty_dir_frs = 100_u64;
     let empty_dir_name = push_index_name(&mut index, "EmptyDir");
-    let rec = index.get_or_create(empty_dir_frs);
+    let rec = index.get_or_create(empty_dir_frs.into());
     rec.stdinfo.set_directory(true);
     rec.first_name.name = empty_dir_name;
-    rec.first_name.parent_frs = root_frs;
+    rec.first_name.parent_frs = Into::into(root_frs);
 
-    index.add_child_entry(root_frs, empty_dir_frs, 0);
+    index.add_child_entry(Into::into(root_frs), Into::into(empty_dir_frs), 0);
     index.compute_tree_metrics();
 
     assert_eq!(
@@ -390,17 +408,17 @@ fn tree_metrics_internal_streams_two_channel() {
     let mut index = MftIndex::new(crate::platform::DriveLetter::C);
 
     let root_frs = 5_u64;
-    let root_rec = index.get_or_create(root_frs);
+    let root_rec = index.get_or_create(root_frs.into());
     root_rec.stdinfo.set_directory(true);
-    root_rec.first_name.parent_frs = root_frs;
+    root_rec.first_name.parent_frs = Into::into(root_frs);
 
     let dir_frs = 100_u64;
     let dir_name = push_index_name(&mut index, "DirWithInternal");
     let dir_idx_for_internal = {
-        let rec = index.get_or_create(dir_frs);
+        let rec = index.get_or_create(dir_frs.into());
         rec.stdinfo.set_directory(true);
         rec.first_name.name = dir_name;
-        rec.first_name.parent_frs = root_frs;
+        rec.first_name.parent_frs = Into::into(root_frs);
         rec.total_stream_count = 2;
         usize::try_from(index.frs_to_idx[usize::try_from(dir_frs).unwrap()]).unwrap()
     };
@@ -418,16 +436,16 @@ fn tree_metrics_internal_streams_two_channel() {
 
     let file_frs = 200_u64;
     let file_name = push_index_name(&mut index, "file.txt");
-    let rec = index.get_or_create(file_frs);
+    let rec = index.get_or_create(file_frs.into());
     rec.first_name.name = file_name;
-    rec.first_name.parent_frs = dir_frs;
+    rec.first_name.parent_frs = Into::into(dir_frs);
     rec.first_stream.size = SizeInfo {
         length: 1000,
         allocated: 4096,
     };
 
-    index.add_child_entry(root_frs, dir_frs, 0);
-    index.add_child_entry(dir_frs, file_frs, 0);
+    index.add_child_entry(Into::into(root_frs), Into::into(dir_frs), 0);
+    index.add_child_entry(Into::into(dir_frs), Into::into(file_frs), 0);
     crate::tree_metrics::compute_tree_metrics(&mut index, false, false);
 
     let dir_idx = record_idx(&index, dir_frs);

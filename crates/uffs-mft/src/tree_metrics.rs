@@ -131,7 +131,7 @@ const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
 fn compute_name_info_checked(
     name_index: u32,
     total_names: u32,
-    child_frs: u64,
+    child_frs: crate::frs::Frs,
     debug: bool,
 ) -> u32 {
     if total_names <= 1 {
@@ -139,9 +139,12 @@ fn compute_name_info_checked(
     }
     // Check for out-of-range name_index (parity risk)
     if name_index >= total_names {
+        // `tracing::Value` is not impl'd on the typed `Frs` newtype, so
+        // demote with `.raw()` only at the logging-field boundary.
+        let child_frs_raw = child_frs.raw();
         // Always log in release mode too - this is a parity diagnostic
         tracing::warn!(
-            child_frs,
+            child_frs = child_frs_raw,
             name_index,
             total_names,
             "[TRIP] name_index out of range; clamping (parity risk)"
@@ -149,7 +152,7 @@ fn compute_name_info_checked(
         if debug {
             // Extra verbose output in debug mode
             tracing::debug!(
-                child_frs,
+                child_frs = child_frs_raw,
                 name_index,
                 total_names,
                 "[TRIP] compute_name_info_checked: clamping name_index to total_names-1"
@@ -242,9 +245,7 @@ impl TreeTraversal<'_> {
 
     /// Start DFS from the NTFS root directory (FRS 5).
     fn traverse_from_root(&mut self) {
-        const ROOT_FRS: u64 = 5;
-
-        if let Some(root_idx) = self.index.frs_to_idx_opt(ROOT_FRS) {
+        if let Some(root_idx) = self.index.frs_to_idx_opt(crate::frs::Frs::ROOT) {
             tracing::debug!(root_idx, "[TRIP] starting from ROOT (FRS=5)");
             let _: Agg = self.preprocess(root_idx, 0, 1);
             tracing::debug!("[TRIP] ROOT traversal done");
@@ -565,8 +566,11 @@ pub(crate) fn compute_tree_metrics(index: &mut MftIndex, debug: bool, skip_orpha
 fn warn_unstamped_directories(index: &MftIndex) {
     for (idx, rec) in index.records.iter().enumerate() {
         if rec.stdinfo.is_directory() && rec.descendants == 0 {
+            // `tracing::Value` is not implemented for the typed `Frs`
+            // newtype; demote with `.raw()` only at this logging
+            // boundary so the warning preserves its u64 field shape.
             tracing::warn!(
-                frs = rec.frs,
+                frs = rec.frs.raw(),
                 idx = idx,
                 first_child = rec.first_child,
                 name_count = rec.name_count,

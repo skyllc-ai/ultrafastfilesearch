@@ -7,7 +7,8 @@
 //! extraction to `index/path_resolver.rs` in Wave 5 — see
 //! `docs/architecture/FILE_SIZE_REFACTOR_WAVES.md`.
 
-use super::{FileRecord, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY, ROOT_FRS};
+use super::{FileRecord, IndexStreamInfo, LinkInfo, MftIndex, NO_ENTRY};
+use crate::frs::{Frs, ParentFrs};
 
 // ============================================================================
 // Name/Stream Iteration (for hard link and ADS expansion)
@@ -215,21 +216,24 @@ impl MftIndex {
             components.push(name.to_owned());
         }
 
-        // Walk up the parent chain from this name's parent
-        let mut current_frs = name_info.parent_frs;
+        // Walk up the parent chain from this name's parent.
+        // `name_info.parent_frs` is typed `ParentFrs`; demote with
+        // `.as_frs()` only at the `find()` call site.
+        let no_entry_parent = ParentFrs::new(u64::from(NO_ENTRY));
+        let mut current_parent = name_info.parent_frs;
 
-        while current_frs != u64::from(NO_ENTRY) && current_frs != ROOT_FRS {
-            if let Some(parent_record) = self.find(current_frs) {
+        while current_parent != no_entry_parent && !current_parent.is_root() {
+            if let Some(parent_record) = self.find(current_parent.as_frs()) {
                 let parent_name = self.record_name(parent_record);
                 if !parent_name.is_empty() && parent_name != "." {
                     components.push(parent_name.to_owned());
                 }
 
-                let parent_frs = parent_record.first_name.parent_frs;
-                if parent_frs == u64::from(NO_ENTRY) || parent_frs == current_frs {
+                let next_parent = parent_record.first_name.parent_frs;
+                if next_parent == no_entry_parent || next_parent == current_parent {
                     break;
                 }
-                current_frs = parent_frs;
+                current_parent = next_parent;
             } else {
                 break;
             }
@@ -271,26 +275,27 @@ impl MftIndex {
     ///
     /// This is done on-demand (not stored) to save memory.
     #[must_use]
-    pub fn build_path(&self, frs: u64) -> String {
+    pub fn build_path(&self, frs: Frs) -> String {
         let mut components = Vec::new();
         let mut current_frs = frs;
+        let no_entry_parent = ParentFrs::new(u64::from(NO_ENTRY));
 
-        // Walk up the parent chain
+        // Walk up the parent chain.
         while let Some(record) = self.find(current_frs) {
             let name = self.record_name(record);
             if !name.is_empty() && name != "." {
                 components.push(name.to_owned());
             }
 
-            // Move to parent
+            // Move to parent.
             let parent_frs = record.first_name.parent_frs;
-            if parent_frs == u64::from(NO_ENTRY) || parent_frs == current_frs {
+            if parent_frs == no_entry_parent || parent_frs.as_frs() == current_frs {
                 break; // Root or self-reference
             }
-            if parent_frs == ROOT_FRS {
+            if parent_frs.is_root() {
                 break; // Reached root
             }
-            current_frs = parent_frs;
+            current_frs = parent_frs.as_frs();
         }
 
         // Reverse and join with a standard drive-qualified backslash path.

@@ -6,6 +6,7 @@
 //! `StandardInfo` lives in sibling module `standard_info.rs`.
 
 use super::standard_info::StandardInfo;
+use crate::frs::{Frs, ParentFrs};
 
 // ============================================================================
 // Constants
@@ -14,7 +15,8 @@ use super::standard_info::StandardInfo;
 /// Sentinel value indicating "no entry" in linked-list fields.
 pub const NO_ENTRY: u32 = u32::MAX;
 
-/// Root directory FRS in NTFS
+/// Root directory FRS in NTFS — raw `u64` for external consumers (DTOs, wire
+/// format, fixtures).  Internal code should prefer the typed [`Frs::ROOT`].
 pub const ROOT_FRS: u64 = 5;
 
 // ============================================================================
@@ -340,9 +342,8 @@ impl IndexNameRef {
 ///
 /// Most files have only one name, stored inline in `FileRecord::first_name`.
 /// Files with multiple hard links form a linked list via `next_entry`.
-///
-/// Uses `u64` for `parent_frs` so the index can represent the full NTFS FRS
-/// range.
+/// [`ParentFrs`] is `#[repr(transparent)]` over `u64`, so on-disk layout
+/// is byte-identical to the historic `u64` field.
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct LinkInfo {
@@ -356,8 +357,8 @@ pub struct LinkInfo {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad0: [u8; 4],
-    /// Parent directory FRS (u64 to support all valid NTFS volumes)
-    pub parent_frs: u64,
+    /// Parent directory FRS (typed [`ParentFrs`]; `u64`-equivalent on disk).
+    pub parent_frs: ParentFrs,
 }
 
 // ============================================================================
@@ -476,8 +477,8 @@ pub struct InternalStreamInfo {
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct FileRecord {
-    /// FRS (File Record Segment) number - primary key
-    pub frs: u64,
+    /// FRS number — primary key (typed [`Frs`]; `u64`-equivalent on disk).
+    pub frs: Frs,
     /// Sequence number (incremented when FRS is reused, forensic value)
     pub sequence_number: u16,
     /// Primary filename namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS)
@@ -503,8 +504,8 @@ pub struct FileRecord {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad1: [u8; 4],
-    /// Base FRS for extension records (0 for base records).
-    pub base_frs: u64,
+    /// Base FRS for extension records ([`Frs::ZERO`] for base records).
+    pub base_frs: Frs,
     /// Timestamps and bit-packed attributes from `$STANDARD_INFORMATION`
     pub stdinfo: StandardInfo,
     /// Number of hard links (usually 1)
@@ -560,9 +561,9 @@ pub struct FileRecord {
 }
 
 impl FileRecord {
-    /// Create a new record for the given FRS
+    /// Create a new record for the given FRS.
     #[must_use]
-    pub fn new(frs: u64) -> Self {
+    pub fn new(frs: Frs) -> Self {
         Self {
             frs,
             name_count: 1,         // Every file has at least one name
@@ -577,7 +578,7 @@ impl FileRecord {
                     meta: 0,
                 },
                 _pad0: [0; 4],
-                parent_frs: u64::from(NO_ENTRY),
+                parent_frs: ParentFrs::new(u64::from(NO_ENTRY)),
             },
             first_stream: IndexStreamInfo {
                 next_entry: NO_ENTRY,
@@ -600,7 +601,7 @@ impl FileRecord {
     /// attribute, including the first, producing correct-by-construction
     /// values that match the unified parser's expectations.
     #[must_use]
-    pub(crate) fn new_unified(frs: u64) -> Self {
+    pub(crate) fn new_unified(frs: Frs) -> Self {
         Self {
             frs,
             forensic_flags: 0b10_0000, // bit 5: is_unified
@@ -616,7 +617,7 @@ impl FileRecord {
                     meta: 0,
                 },
                 _pad0: [0; 4],
-                parent_frs: u64::from(NO_ENTRY),
+                parent_frs: ParentFrs::new(u64::from(NO_ENTRY)),
             },
             first_stream: IndexStreamInfo {
                 size: SizeInfo::default(),

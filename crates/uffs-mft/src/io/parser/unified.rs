@@ -124,8 +124,10 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
 
     // Get or create the base record (zero-based counts).
     // Cache the record index so we don't repeat the frs→idx lookup for
-    // every attribute in this record.
-    let base_ri = u32_as_usize(index.ensure_record(frs_base));
+    // every attribute in this record.  Boundary: lift parser-local raw
+    // `u64` to typed `Frs` for the typed index API.
+    let frs_base_typed = crate::frs::Frs::new(frs_base);
+    let base_ri = u32_as_usize(index.ensure_record(frs_base_typed));
 
     // ── Attribute loop ─────────────────────────────────────────────────
     let mut offset = usize::from(header.first_attribute_offset);
@@ -211,14 +213,18 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                             );
 
                             index.records[base_ri].first_name.name = name_ref;
-                            index.records[base_ri].first_name.parent_frs = parent_frs;
+                            // Typed `ParentFrs` slot — lift parser-local raw `u64`.
+                            index.records[base_ri].first_name.parent_frs =
+                                crate::frs::ParentFrs::new(parent_frs);
 
                             // Build parent-child relationship.
                             // name_index = name_count BEFORE increment
                             let name_index = index.records[base_ri].name_count;
 
                             if parent_frs != frs_base && parent_frs != u64::from(NO_ENTRY) {
-                                let parent_ri = u32_as_usize(index.ensure_record(parent_frs));
+                                let parent_ri = u32_as_usize(
+                                    index.ensure_record(crate::frs::Frs::new(parent_frs)),
+                                );
                                 let child_idx = len_to_u32(index.children.len());
                                 let old_fc = index.records[parent_ri].first_child;
                                 index.records[parent_ri].first_child = child_idx;
@@ -226,7 +232,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                                 index.children.push(ChildInfo {
                                     next_entry: old_fc,
                                     _pad0: [0; 4],
-                                    child_frs: frs_base,
+                                    // Typed `Frs` slot — reuse cached typed FRS.
+                                    child_frs: frs_base_typed,
                                     name_index,
                                     _pad1: [0; 6],
                                 });

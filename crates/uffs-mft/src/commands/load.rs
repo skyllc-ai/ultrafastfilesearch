@@ -290,7 +290,7 @@ pub(crate) fn cmd_load(
         }
 
         // Show root directory specifically
-        if let Some(root) = index.records.iter().find(|r| r.frs == 5) {
+        if let Some(root) = index.records.iter().find(|r| r.frs.is_root()) {
             println!();
             println!("📁 ROOT DIRECTORY (FRS 5):");
             println!(

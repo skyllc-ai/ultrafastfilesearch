@@ -14,7 +14,9 @@ use crate::index::{IndexNameRef, IndexStreamInfo, MftIndex, NO_ENTRY, SizeInfo};
 /// Test helper to create a `FileRecord` with specified `first_stream` size
 fn create_test_record(frs: u64, length: u64, allocated: u64) -> crate::index::FileRecord {
     crate::index::FileRecord {
-        frs,
+        // Test helper takes raw `u64` for ergonomic callers; lift to typed
+        // `Frs` at the index-field boundary.
+        frs: frs.into(),
         first_stream: IndexStreamInfo {
             size: SizeInfo { length, allocated },
             next_entry: NO_ENTRY,

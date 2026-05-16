@@ -140,7 +140,9 @@ pub(crate) fn add_link_to_index(index: &mut MftIndex, link_name: &str, link_pare
         next_entry: NO_ENTRY,
         name: link_name_ref,
         _pad0: [0; 4],
-        parent_frs: link_parent,
+        // Parser locals are still raw `u64`; lift to typed `ParentFrs`
+        // at the typed index-struct construction boundary.
+        parent_frs: crate::frs::ParentFrs::new(link_parent),
     });
     link_idx
 }
@@ -157,7 +159,9 @@ pub(crate) fn add_child_entry(
         return;
     }
 
-    // Ensure parent exists
+    // Ensure parent exists.  `frs_to_idx` is `Vec<u32>` indexed by `usize`,
+    // so `parent_frs` stays raw here; typed `Frs` is built only when
+    // writing to a typed index field.
     let parent_idx = {
         let p_frs_usize = frs_to_usize(parent_frs);
         if p_frs_usize >= index.frs_to_idx.len() {
@@ -168,7 +172,9 @@ pub(crate) fn add_child_entry(
             index.frs_to_idx[p_frs_usize] = new_idx;
             index
                 .records
-                .push(crate::index::FileRecord::new(parent_frs));
+                .push(crate::index::FileRecord::new(crate::frs::Frs::new(
+                    parent_frs,
+                )));
         }
         index.frs_to_idx[p_frs_usize]
     };
@@ -182,7 +188,8 @@ pub(crate) fn add_child_entry(
     index.children.push(ChildInfo {
         next_entry: old_first_child,
         _pad0: [0; 4],
-        child_frs,
+        // Lift parser-local raw `u64` to typed `Frs` at the boundary.
+        child_frs: crate::frs::Frs::new(child_frs),
         name_index: name_idx,
         _pad1: [0; 6],
     });
@@ -222,16 +229,19 @@ pub(crate) fn merge_extension_streams(
     first_internal: u32,
     ext: &ExtensionSnapshot,
 ) {
+    // Lift parser-local raw `u64` to typed `Frs` once for all the typed
+    // `get_or_create` calls below.
+    let frs_typed = crate::frs::Frs::new(frs);
     // Merge user-visible streams
     if ext.stream_count > 0 {
         let tail = base_stream_tail.unwrap_or(NO_ENTRY);
         if tail != NO_ENTRY {
             index.streams[u32_as_usize(tail)].next_entry = ext.stream_head;
         } else {
-            let record = index.get_or_create(frs);
+            let record = index.get_or_create(frs_typed);
             record.first_stream.next_entry = ext.stream_head;
         }
-        let record = index.get_or_create(frs);
+        let record = index.get_or_create(frs_typed);
         record.stream_count += ext.stream_count;
         record.total_stream_count += ext.stream_count;
     }
@@ -245,10 +255,10 @@ pub(crate) fn merge_extension_streams(
             }
             index.internal_streams[u32_as_usize(tail)].next_entry = ext.internal_head;
         } else {
-            let record = index.get_or_create(frs);
+            let record = index.get_or_create(frs_typed);
             record.first_internal_stream = ext.internal_head;
         }
-        let record = index.get_or_create(frs);
+        let record = index.get_or_create(frs_typed);
         record.internal_streams_size += ext.internal_size;
         record.internal_streams_allocated += ext.internal_alloc;
         record.total_stream_count += ext.total_extra.saturating_sub(ext.stream_count);
@@ -264,14 +274,15 @@ pub(crate) fn merge_extension_names(
     ext: &ExtensionSnapshot,
 ) {
     if ext.name_count > 0 {
+        let frs_typed = crate::frs::Frs::new(frs);
         let tail = base_name_tail.unwrap_or(NO_ENTRY);
         if tail != NO_ENTRY {
             index.links[u32_as_usize(tail)].next_entry = ext.name_next;
         } else {
-            let record = index.get_or_create(frs);
+            let record = index.get_or_create(frs_typed);
             record.first_name.next_entry = ext.name_next;
         }
-        let record = index.get_or_create(frs);
+        let record = index.get_or_create(frs_typed);
         record.name_count += ext.name_count;
     }
 }

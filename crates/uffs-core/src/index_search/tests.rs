@@ -44,24 +44,24 @@ fn build_index_query_fixture() -> Result<MftIndex, TestError> {
     let mut index = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_name = push_name_ref(&mut index, ".")?;
-    let root = index.get_or_create(ROOT_FRS);
+    let root = index.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = root_name;
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let docs_frs = 100_u64;
     let docs_name = push_name_ref(&mut index, "Docs")?;
-    let docs = index.get_or_create(docs_frs);
+    let docs = index.get_or_create(docs_frs.into());
     docs.stdinfo.set_directory(true);
     docs.first_name.name = docs_name;
-    docs.first_name.parent_frs = ROOT_FRS;
+    docs.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let links_frs = 101_u64;
     let links_name = push_name_ref(&mut index, "Links")?;
-    let links = index.get_or_create(links_frs);
+    let links = index.get_or_create(links_frs.into());
     links.stdinfo.set_directory(true);
     links.first_name.name = links_name;
-    links.first_name.parent_frs = ROOT_FRS;
+    links.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let primary_name = push_file_name_ref(&mut index, "alpha.txt")?;
     let hard_link_name = push_file_name_ref(&mut index, "alpha_link.txt")?;
@@ -72,7 +72,7 @@ fn build_index_query_fixture() -> Result<MftIndex, TestError> {
         next_entry: NO_ENTRY,
         name: hard_link_name,
         _pad0: [0; 4],
-        parent_frs: links_frs,
+        parent_frs: Into::into(links_frs),
     });
 
     let ads_idx = u32::try_from(index.streams.len())?;
@@ -87,9 +87,9 @@ fn build_index_query_fixture() -> Result<MftIndex, TestError> {
         _pad0: [0; 3],
     });
 
-    let alpha = index.get_or_create(200);
+    let alpha = index.get_or_create(200.into());
     alpha.first_name.name = primary_name;
-    alpha.first_name.parent_frs = docs_frs;
+    alpha.first_name.parent_frs = Into::into(docs_frs);
     alpha.first_name.next_entry = hard_link_idx;
     alpha.name_count = 2;
     alpha.first_stream.size = SizeInfo {
@@ -102,9 +102,9 @@ fn build_index_query_fixture() -> Result<MftIndex, TestError> {
     alpha.total_stream_count = 2;
 
     let beta_name = push_file_name_ref(&mut index, "beta.bin")?;
-    let beta = index.get_or_create(201);
+    let beta = index.get_or_create(201.into());
     beta.first_name.name = beta_name;
-    beta.first_name.parent_frs = docs_frs;
+    beta.first_name.parent_frs = Into::into(docs_frs);
     beta.first_stream.size = SizeInfo {
         length: 20,
         allocated: 64,
@@ -179,10 +179,10 @@ fn extensions() {
 fn extension_index_integration() {
     let mut index = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_name_offset = index.add_name(".");
-    let root = index.get_or_create(ROOT_FRS);
+    let root = index.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_name_offset, 1, true, 0);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let files = [
         ("readme.txt", 1000),
@@ -198,10 +198,10 @@ fn extension_index_integration() {
         let offset = index.add_name(name);
         let ext_id = index.intern_extension(name);
 
-        let rec = index.get_or_create(frs);
+        let rec = index.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: *size,
             allocated: *size,

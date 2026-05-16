@@ -347,18 +347,18 @@ mod tests {
 
         // Root directory.
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         let add_file = |index: &mut MftIndex, frs: u64, name: &str, size: u64| {
             let off = index.add_name(name);
             let ext = index.intern_extension(name);
-            let rec = index.get_or_create(frs);
+            let rec = index.get_or_create(frs.into());
             rec.first_name.name =
                 IndexNameRef::new(off, uffs_mft::len_to_u16(name.len()), true, ext);
-            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_name.parent_frs = Into::into(ROOT_FRS);
             rec.first_stream.size = SizeInfo {
                 length: size,
                 allocated: size,
@@ -591,20 +591,20 @@ mod tests {
 
         // Root.
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         // 10 unique files — all different names and sizes.
         for i in 0..10_u64 {
             let name = format!("file_{i}.dat");
             let off = idx.add_name(&name);
             let ext = idx.intern_extension(&name);
-            let rec = idx.get_or_create(100 + i);
+            let rec = idx.get_or_create((100 + i).into());
             rec.first_name.name =
                 IndexNameRef::new(off, uffs_mft::len_to_u16(name.len()), true, ext);
-            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_name.parent_frs = Into::into(ROOT_FRS);
             rec.first_stream.size = SizeInfo {
                 length: (i + 1) * 100,
                 allocated: (i + 1) * 512,
@@ -638,20 +638,20 @@ mod tests {
         let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         // Two zero-byte files with same name — should NOT be duplicates.
         for i in 0..2_u64 {
             let name = "empty.txt";
             let off = idx.add_name(name);
             let ext = idx.intern_extension(name);
-            let rec = idx.get_or_create(100 + i);
+            let rec = idx.get_or_create((100 + i).into());
             rec.first_name.name =
                 IndexNameRef::new(off, uffs_mft::len_to_u16(name.len()), true, ext);
-            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_name.parent_frs = Into::into(ROOT_FRS);
             rec.first_stream.size = SizeInfo {
                 length: 0,
                 allocated: 0,
@@ -680,22 +680,22 @@ mod tests {
         let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::T);
 
         let root_off = idx.add_name(".");
-        let root = idx.get_or_create(ROOT_FRS);
+        let root = idx.get_or_create(ROOT_FRS.into());
         root.stdinfo.set_directory(true);
         root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-        root.first_name.parent_frs = ROOT_FRS;
+        root.first_name.parent_frs = Into::into(ROOT_FRS);
 
         // Two directories with same name — should NOT be duplicates.
         for i in 0..2_u64 {
             let name = "subdir";
             let off = idx.add_name(name);
             let ext = idx.intern_extension(name);
-            let rec = idx.get_or_create(100 + i);
+            let rec = idx.get_or_create((100 + i).into());
             rec.stdinfo.set_directory(true);
             rec.stdinfo.flags = 0x10; // directory
             rec.first_name.name =
                 IndexNameRef::new(off, uffs_mft::len_to_u16(name.len()), true, ext);
-            rec.first_name.parent_frs = ROOT_FRS;
+            rec.first_name.parent_frs = Into::into(ROOT_FRS);
             rec.first_stream.size = SizeInfo {
                 length: 4096,
                 allocated: 4096,

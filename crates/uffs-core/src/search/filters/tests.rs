@@ -41,22 +41,22 @@ fn test_drive_with_rs_file() -> DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let name = "readme.rs";
     let off = idx.add_name(name);
     let ext = idx.intern_extension(name);
-    let rec = idx.get_or_create(100);
+    let rec = idx.get_or_create(100.into());
     rec.first_name.name = IndexNameRef::new(
         off,
         u16::try_from(name.len()).expect("name too long"),
         true,
         ext,
     );
-    rec.first_name.parent_frs = ROOT_FRS;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
     rec.stdinfo.flags = 0x20;
 
     let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);

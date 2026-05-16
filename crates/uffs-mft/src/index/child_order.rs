@@ -4,6 +4,7 @@
 //! Directory child-link maintenance and stable child ordering helpers.
 
 use super::{ChildInfo, FileRecord, MftIndex, NO_ENTRY, frs_to_usize, len_to_u16, len_to_u32};
+use crate::frs::{Frs, ParentFrs};
 
 impl MftIndex {
     /// Add a child entry to a parent directory.
@@ -12,18 +13,25 @@ impl MftIndex {
     /// Used for building parent-child relationships for tree metrics.
     ///
     /// # Arguments
-    /// * `parent_frs` - FRS of the parent directory
-    /// * `child_frs` - FRS of the child file/directory
+    /// * `parent_frs` - typed parent-directory FRS (closes the historic
+    ///   `(parent_frs, own_frs)` swap hazard at the type system).
+    /// * `child_frs` - typed FRS of the child file/directory.
     /// * `name_index` - Which hardlink this is (0 for primary, 1+ for
     ///   additional)
     ///
     /// If the parent record does not exist yet, this creates a placeholder
-    /// record so child entries are preserved even when chunks are processed
+    /// record so child edges are preserved even when chunks are processed
     /// out of order.
-    pub(crate) fn add_child_entry(&mut self, parent_frs: u64, child_frs: u64, name_index: u16) {
+    pub(crate) fn add_child_entry(
+        &mut self,
+        parent_frs: ParentFrs,
+        child_frs: Frs,
+        name_index: u16,
+    ) {
         // Create a parent placeholder if it does not exist yet so
         // child edges are not dropped during out-of-order processing.
-        let parent_frs_usize = frs_to_usize(parent_frs);
+        let parent_frs_as_frs = parent_frs.as_frs();
+        let parent_frs_usize = frs_to_usize(parent_frs_as_frs.raw());
 
         // Expand lookup table if needed
         if parent_frs_usize >= self.frs_to_idx.len() {
@@ -37,7 +45,7 @@ impl MftIndex {
         let parent_idx = if *frs_slot == NO_ENTRY {
             let new_idx = len_to_u32(self.records.len());
             *frs_slot = new_idx;
-            self.records.push(FileRecord::new(parent_frs));
+            self.records.push(FileRecord::new(parent_frs_as_frs));
             new_idx as usize
         } else {
             *frs_slot as usize
@@ -99,6 +107,8 @@ impl MftIndex {
         for (parent_frs, child_frs, name_index) in edges {
             self.add_child_entry(parent_frs, child_frs, name_index);
         }
+        // typed `(ParentFrs, Frs, u16)` edges flow through without further
+        // conversion — see `collect_parent_child_edges` below.
         tracing::debug!(
             children = self.children.len(),
             "[TRIP] MftIndex::rebuild_children_from_names EXIT"
@@ -107,9 +117,9 @@ impl MftIndex {
 
     /// Walk every record's link chain and collect `(parent_frs, child_frs,
     /// name_index)` edges for child-list reconstruction.
-    fn collect_parent_child_edges(&self) -> Vec<(u64, u64, u16)> {
-        let no_entry_frs: u64 = u64::from(NO_ENTRY);
-        let mut edges: Vec<(u64, u64, u16)> =
+    fn collect_parent_child_edges(&self) -> Vec<(ParentFrs, Frs, u16)> {
+        let no_entry_parent = ParentFrs::new(u64::from(NO_ENTRY));
+        let mut edges: Vec<(ParentFrs, Frs, u16)> =
             Vec::with_capacity(self.records.len().saturating_mul(2));
 
         for rec in &self.records {
@@ -121,8 +131,10 @@ impl MftIndex {
                 let parent_frs = current_link.parent_frs;
 
                 // Skip missing/placeholder parents and self-references
-                // (root has parent == self).
-                if parent_frs != no_entry_frs && parent_frs != child_frs {
+                // (root has parent == self).  The typed parent-vs-own
+                // boundary is enforced via `ParentFrs::as_frs()` for
+                // the self-reference comparison.
+                if parent_frs != no_entry_parent && parent_frs.as_frs() != child_frs {
                     // Remap list index → parse index (link chain is stored
                     // in reverse encounter order).
                     let parse_index = len_to_u16(name_count - 1 - name_index);

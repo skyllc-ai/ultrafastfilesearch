@@ -96,15 +96,15 @@ fn extension_table_serialization() {
     index.extensions.record_file(ext_id3, 512);
 
     // Now create records and set their fields
-    let record1 = index.get_or_create(100);
+    let record1 = index.get_or_create(100.into());
     record1.stdinfo.set_directory(false);
     record1.first_name.name = IndexNameRef::new(name1_offset, 8, true, ext_id1);
 
-    let record2 = index.get_or_create(101);
+    let record2 = index.get_or_create(101.into());
     record2.stdinfo.set_directory(false);
     record2.first_name.name = IndexNameRef::new(name2_offset, 7, true, ext_id2);
 
-    let record3 = index.get_or_create(102);
+    let record3 = index.get_or_create(102.into());
     record3.stdinfo.set_directory(false);
     record3.first_name.name = IndexNameRef::new(name3_offset, 11, true, ext_id3);
 
@@ -174,23 +174,23 @@ fn extension_index_build() {
     let ext_none = index.intern_extension(name5);
 
     // Create records
-    let rec1 = index.get_or_create(100);
+    let rec1 = index.get_or_create(100.into());
     rec1.first_name.name =
         IndexNameRef::new(offset1, u16::try_from(name1.len()).unwrap(), true, ext_txt);
 
-    let rec2 = index.get_or_create(101);
+    let rec2 = index.get_or_create(101.into());
     rec2.first_name.name =
         IndexNameRef::new(offset2, u16::try_from(name2.len()).unwrap(), true, ext_txt);
 
-    let rec3 = index.get_or_create(102);
+    let rec3 = index.get_or_create(102.into());
     rec3.first_name.name =
         IndexNameRef::new(offset3, u16::try_from(name3.len()).unwrap(), true, ext_rs);
 
-    let rec4 = index.get_or_create(103);
+    let rec4 = index.get_or_create(103.into());
     rec4.first_name.name =
         IndexNameRef::new(offset4, u16::try_from(name4.len()).unwrap(), true, ext_rs);
 
-    let rec5 = index.get_or_create(104);
+    let rec5 = index.get_or_create(104.into());
     rec5.first_name.name =
         IndexNameRef::new(offset5, u16::try_from(name5.len()).unwrap(), true, ext_none);
 
@@ -250,7 +250,7 @@ fn extension_index_with_hard_links() {
     let link_idx = u32::try_from(index.links.len()).unwrap();
 
     // Create record with primary name
-    let rec = index.get_or_create(100);
+    let rec = index.get_or_create(100.into());
     rec.first_name.name =
         IndexNameRef::new(offset1, u16::try_from(name1.len()).unwrap(), true, ext_txt);
     rec.name_count = 2;
@@ -261,7 +261,7 @@ fn extension_index_with_hard_links() {
         next_entry: NO_ENTRY,
         name: IndexNameRef::new(offset2, u16::try_from(name2.len()).unwrap(), true, ext_rs),
         _pad0: [0; 4],
-        parent_frs: 5, // same parent
+        parent_frs: Into::into(5_u64), // same parent
     });
 
     // Build extension index
@@ -361,7 +361,7 @@ fn extension_table_top_by_bytes() {
         let offset = index.add_name(name);
         let ext_id = index.intern_extension(name);
 
-        let rec = index.get_or_create(frs);
+        let rec = index.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
         rec.first_stream.size = SizeInfo {
@@ -416,7 +416,7 @@ fn extension_table_top_by_count() {
         let offset = index.add_name(name);
         let ext_id = index.intern_extension(name);
 
-        let rec = index.get_or_create(frs);
+        let rec = index.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
         rec.first_stream.size = SizeInfo {
@@ -469,7 +469,7 @@ fn byte_tracking_accuracy() {
         let offset = index.add_name(name);
         let ext_id = index.intern_extension(name);
 
-        let rec = index.get_or_create(frs);
+        let rec = index.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
         rec.first_stream.size = SizeInfo {
@@ -555,7 +555,7 @@ fn extension_index_performance() {
         };
 
         let offset = index.add_name(&name);
-        let rec = index.get_or_create(i);
+        let rec = index.get_or_create(i.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
     }

@@ -554,10 +554,11 @@ pub(super) fn parse_extension_to_index(
         .map(|(name, size, alloc)| add_stream_to_index(index, name, *size, *alloc))
         .collect();
 
-    // Ensure parent directories exist for the new names
+    // Ensure parent directories exist for the new names.  Parser-local
+    // raw `u64` lifts to typed `Frs` at the typed-API boundary.
     for (_, parent_frs) in &names {
         if *parent_frs != base_frs && *parent_frs != 0 {
-            let _ = index.get_or_create(*parent_frs);
+            let _ = index.get_or_create(crate::frs::Frs::new(*parent_frs));
         }
     }
 
@@ -565,13 +566,13 @@ pub(super) fn parse_extension_to_index(
     let base_frs_usize = frs_to_usize(base_frs);
     if base_frs_usize >= index.frs_to_idx.len() {
         // Base record doesn't exist yet - create a placeholder
-        let _ = index.get_or_create(base_frs);
+        let _ = index.get_or_create(crate::frs::Frs::new(base_frs));
     }
 
     let record_idx = index.frs_to_idx[base_frs_usize];
     if record_idx == NO_ENTRY {
         // Base record doesn't exist - create it
-        let _ = index.get_or_create(base_frs);
+        let _ = index.get_or_create(crate::frs::Frs::new(base_frs));
     }
 
     // Now get the record and chain the new links/streams
@@ -771,7 +772,9 @@ pub(super) fn parse_extension_to_index(
                     // Create placeholder parent
                     let new_idx = len_to_u32(index.records.len());
                     index.frs_to_idx[p_frs_usize] = new_idx;
-                    index.records.push(crate::index::FileRecord::new(p_frs));
+                    index
+                        .records
+                        .push(crate::index::FileRecord::new(crate::frs::Frs::new(p_frs)));
                 }
                 index.frs_to_idx[p_frs_usize]
             };
@@ -796,7 +799,7 @@ pub(super) fn parse_extension_to_index(
             index.children.push(ChildInfo {
                 next_entry: old_first_child,
                 _pad0: [0; 4],
-                child_frs: base_frs,
+                child_frs: crate::frs::Frs::new(base_frs),
                 name_index: effective_name_idx,
                 _pad1: [0; 6],
             });

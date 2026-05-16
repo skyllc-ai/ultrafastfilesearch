@@ -7,6 +7,7 @@ use super::{
     ChildInfo, ExtensionIndex, ExtensionTable, FileRecord, IndexNameRef, IndexStreamInfo, LinkInfo,
     MftIndex, MftStats, NO_ENTRY, frs_to_usize, len_to_u32,
 };
+use crate::frs::Frs;
 use crate::platform::DriveLetter;
 
 /// Returns the current Unix-microsecond timestamp for `build_epoch`.
@@ -131,9 +132,12 @@ impl MftIndex {
         for record in &self.records {
             stats.record_count += 1;
 
-            // Track max FRS
-            if record.frs > stats.max_frs {
-                stats.max_frs = record.frs;
+            // Track max FRS — `MftStats::max_frs` is still raw `u64` (DTO
+            // surface scheduled for 5d.3); cross the typed -> raw boundary
+            // explicitly via `Frs::raw()`.
+            let frs_raw = record.frs.raw();
+            if frs_raw > stats.max_frs {
+                stats.max_frs = frs_raw;
             }
 
             // Get file size from first stream
@@ -189,14 +193,15 @@ impl MftIndex {
                 stats.ads_count += 1;
             }
 
-            // System metafile detection
-            if record.frs <= SYSTEM_METAFILE_MAX_FRS && record.frs != ROOT_FRS_LOCAL {
+            // System metafile detection (typed -> raw at the numeric
+            // comparison boundary).
+            if frs_raw <= SYSTEM_METAFILE_MAX_FRS && frs_raw != ROOT_FRS_LOCAL {
                 stats.system_metafile_count += 1;
             }
 
-            // Child of system metafile detection
-            let parent_frs = record.first_name.parent_frs;
-            if parent_frs <= SYSTEM_METAFILE_MAX_FRS && parent_frs != ROOT_FRS_LOCAL {
+            // Child of system metafile detection.
+            let parent_frs_raw = record.first_name.parent_frs.raw();
+            if parent_frs_raw <= SYSTEM_METAFILE_MAX_FRS && parent_frs_raw != ROOT_FRS_LOCAL {
                 stats.system_child_count += 1;
             }
 
@@ -215,8 +220,8 @@ impl MftIndex {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
-    pub fn get_or_create(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs_to_usize(frs);
+    pub fn get_or_create(&mut self, frs: Frs) -> &mut FileRecord {
+        let frs_usize = frs_to_usize(frs.raw());
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {
@@ -246,8 +251,8 @@ impl MftIndex {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
-    pub fn get_or_create_unified(&mut self, frs: u64) -> &mut FileRecord {
-        let frs_usize = frs_to_usize(frs);
+    pub fn get_or_create_unified(&mut self, frs: Frs) -> &mut FileRecord {
+        let frs_usize = frs_to_usize(frs.raw());
 
         // Expand lookup table if needed
         if frs_usize >= self.frs_to_idx.len() {
@@ -293,8 +298,8 @@ impl MftIndex {
         clippy::indexing_slicing,
         reason = "bounds checked: resize ensures frs_usize < len"
     )]
-    pub(crate) fn ensure_record(&mut self, frs: u64) -> u32 {
-        let frs_usize = frs_to_usize(frs);
+    pub(crate) fn ensure_record(&mut self, frs: Frs) -> u32 {
+        let frs_usize = frs_to_usize(frs.raw());
 
         if frs_usize >= self.frs_to_idx.len() {
             self.frs_to_idx.resize(frs_usize + 1, NO_ENTRY);
@@ -311,11 +316,11 @@ impl MftIndex {
         }
     }
 
-    /// Find a record by FRS (returns None if not present)
+    /// Find a record by FRS (returns None if not present).
     #[inline]
     #[must_use]
-    pub fn find(&self, frs: u64) -> Option<&FileRecord> {
-        let frs_usize = frs_to_usize(frs);
+    pub fn find(&self, frs: Frs) -> Option<&FileRecord> {
+        let frs_usize = frs_to_usize(frs.raw());
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None
@@ -444,8 +449,8 @@ impl MftIndex {
     /// Convert FRS to record index (returns None if not present).
     #[inline]
     #[must_use]
-    pub fn frs_to_idx_opt(&self, frs: u64) -> Option<usize> {
-        let frs_usize = frs_to_usize(frs);
+    pub fn frs_to_idx_opt(&self, frs: Frs) -> Option<usize> {
+        let frs_usize = frs_to_usize(frs.raw());
         let idx = *self.frs_to_idx.get(frs_usize)?;
         if idx == NO_ENTRY {
             None

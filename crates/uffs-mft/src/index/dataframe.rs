@@ -130,10 +130,12 @@ impl MftIndex {
             };
         // Extract data from records
         for rec in &self.records {
-            frs.push(rec.frs);
+            // Polars-bound `Vec<u64>` columns: demote at the push site.
+            // `frs` column is still `u64` on the DataFrame surface (5d.4).
+            frs.push(rec.frs.raw());
             seq.push(rec.sequence_number);
             lsn.push(rec.lsn);
-            parent.push(rec.first_name.parent_frs);
+            parent.push(rec.first_name.parent_frs.raw());
             name.push(self.record_name(rec).to_owned());
             ns.push(rec.namespace);
             size.push(rec.first_stream.size.length);
@@ -176,7 +178,7 @@ impl MftIndex {
                 is_deleted.push(rec.is_deleted());
                 is_corrupt.push(rec.is_corrupt());
                 is_extension.push(rec.is_extension());
-                base_frs_col.push(rec.base_frs);
+                base_frs_col.push(rec.base_frs.raw());
             }
             // Tree metrics (pre-computed via compute_tree_metrics())
             // Use the tree_metrics() method as the single source of truth (Fix #3)
@@ -185,6 +187,7 @@ impl MftIndex {
             treesize.push(ts);
             tree_allocated.push(ta);
             path.push(self.build_path(rec.frs));
+            // typed `Frs` flows directly into `build_path` (5d.2).
         }
         // Build DataFrame
         let dt = DataType::Datetime(TimeUnit::Microseconds, None);

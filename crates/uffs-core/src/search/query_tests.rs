@@ -17,15 +17,15 @@ fn build_test_drive() -> DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     let dir_name = "Projects";
     let dir_off = idx.add_name(dir_name);
     let dir_ext = idx.intern_extension(dir_name);
-    let dir = idx.get_or_create(100);
+    let dir = idx.get_or_create(100.into());
     dir.stdinfo.set_directory(true);
     dir.stdinfo.flags = 0x10;
     dir.first_name.name = IndexNameRef::new(
@@ -34,21 +34,21 @@ fn build_test_drive() -> DriveCompactIndex {
         true,
         dir_ext,
     );
-    dir.first_name.parent_frs = ROOT_FRS;
+    dir.first_name.parent_frs = Into::into(ROOT_FRS);
     dir.descendants = 2;
     dir.treesize = 700;
 
     let f1_name = "readme.txt";
     let f1_off = idx.add_name(f1_name);
     let f1_ext = idx.intern_extension(f1_name);
-    let f1 = idx.get_or_create(200);
+    let f1 = idx.get_or_create(200.into());
     f1.first_name.name = IndexNameRef::new(
         f1_off,
         u16::try_from(f1_name.len()).expect("name too long"),
         true,
         f1_ext,
     );
-    f1.first_name.parent_frs = 100;
+    f1.first_name.parent_frs = Into::into(100);
     f1.first_stream.size = SizeInfo {
         length: 400,
         allocated: 512,
@@ -60,14 +60,14 @@ fn build_test_drive() -> DriveCompactIndex {
     let f2_name = "data.csv";
     let f2_off = idx.add_name(f2_name);
     let f2_ext = idx.intern_extension(f2_name);
-    let f2 = idx.get_or_create(201);
+    let f2 = idx.get_or_create(201.into());
     f2.first_name.name = IndexNameRef::new(
         f2_off,
         u16::try_from(f2_name.len()).expect("name too long"),
         true,
         f2_ext,
     );
-    f2.first_name.parent_frs = 100;
+    f2.first_name.parent_frs = Into::into(100);
     f2.first_stream.size = SizeInfo {
         length: 300,
         allocated: 512,
@@ -78,14 +78,14 @@ fn build_test_drive() -> DriveCompactIndex {
     let sys_name = "$MFT";
     let sys_off = idx.add_name(sys_name);
     let sys_ext = idx.intern_extension(sys_name);
-    let sys = idx.get_or_create(0);
+    let sys = idx.get_or_create(0.into());
     sys.first_name.name = IndexNameRef::new(
         sys_off,
         u16::try_from(sys_name.len()).expect("name too long"),
         true,
         sys_ext,
     );
-    sys.first_name.parent_frs = ROOT_FRS;
+    sys.first_name.parent_frs = Into::into(ROOT_FRS);
     sys.first_stream.size = SizeInfo {
         length: 1_000_000,
         allocated: 1_048_576,
@@ -100,23 +100,23 @@ fn build_test_drive() -> DriveCompactIndex {
 fn build_large_drive(count: usize) -> DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
     for i in 0..count {
         let frs = (i as u64) + 100;
         let name = format!("f{i:05}.txt");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -366,16 +366,16 @@ fn build_ads_on_dir_drive() -> DriveCompactIndex {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // A directory with an ADS
     let dir_name = "MyFolder";
     let dir_off = idx.add_name(dir_name);
     let dir_ext = idx.intern_extension(dir_name);
-    let dir_rec = idx.get_or_create(100);
+    let dir_rec = idx.get_or_create(100.into());
     dir_rec.stdinfo.set_directory(true);
     dir_rec.stdinfo.flags |= StandardInfo::IS_ARCHIVE;
     dir_rec.first_name.name = IndexNameRef::new(
@@ -384,7 +384,7 @@ fn build_ads_on_dir_drive() -> DriveCompactIndex {
         true,
         dir_ext,
     );
-    dir_rec.first_name.parent_frs = ROOT_FRS;
+    dir_rec.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Add ADS stream
     let stream_name = "metadata";
@@ -407,7 +407,7 @@ fn build_ads_on_dir_drive() -> DriveCompactIndex {
         _pad0: [0; 3],
     });
 
-    let dir_idx = idx.frs_to_idx_opt(100).expect("dir idx");
+    let dir_idx = idx.frs_to_idx_opt(100.into()).expect("dir idx");
     let dir_mut = idx.records.get_mut(dir_idx).expect("dir record");
     dir_mut.first_stream.next_entry = si;
     dir_mut.stream_count = 2;
@@ -505,22 +505,22 @@ fn build_flag_test_drive(
 
     // Root directory.
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // File WITH the flag.
     let f1_off = idx.add_name(flagged_name);
     let f1_ext = idx.intern_extension(flagged_name);
-    let f1 = idx.get_or_create(100);
+    let f1 = idx.get_or_create(100.into());
     f1.first_name.name = IndexNameRef::new(
         f1_off,
         u16::try_from(flagged_name.len()).expect("name"),
         true,
         f1_ext,
     );
-    f1.first_name.parent_frs = ROOT_FRS;
+    f1.first_name.parent_frs = Into::into(ROOT_FRS);
     f1.first_stream.size = SizeInfo {
         length: 100,
         allocated: 512,
@@ -532,14 +532,14 @@ fn build_flag_test_drive(
     // File WITHOUT the flag — same timestamps.
     let f2_off = idx.add_name(unflagged_name);
     let f2_ext = idx.intern_extension(unflagged_name);
-    let f2 = idx.get_or_create(101);
+    let f2 = idx.get_or_create(101.into());
     f2.first_name.name = IndexNameRef::new(
         f2_off,
         u16::try_from(unflagged_name.len()).expect("name"),
         true,
         f2_ext,
     );
-    f2.first_name.parent_frs = ROOT_FRS;
+    f2.first_name.parent_frs = Into::into(ROOT_FRS);
     f2.first_stream.size = SizeInfo {
         length: 100,
         allocated: 512,
@@ -599,28 +599,28 @@ fn top_n_sort_by_directory_flag() {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // A directory.
     let dir_off = idx.add_name("mydir");
     let dir_ext = idx.intern_extension("mydir");
-    let dir_rec = idx.get_or_create(100);
+    let dir_rec = idx.get_or_create(100.into());
     dir_rec.stdinfo.set_directory(true);
     dir_rec.stdinfo.flags = 0x0010; // directory
     dir_rec.first_name.name = IndexNameRef::new(dir_off, 5, true, dir_ext);
-    dir_rec.first_name.parent_frs = ROOT_FRS;
+    dir_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     dir_rec.stdinfo.modified = 5_000_000;
 
     // A file with the same timestamp.
     let file_off = idx.add_name("myfile.txt");
     let file_ext = idx.intern_extension("myfile.txt");
-    let file_rec = idx.get_or_create(101);
+    let file_rec = idx.get_or_create(101.into());
     file_rec.stdinfo.flags = 0x0020; // archive, NOT directory
     file_rec.first_name.name = IndexNameRef::new(file_off, 10, true, file_ext);
-    file_rec.first_name.parent_frs = ROOT_FRS;
+    file_rec.first_name.parent_frs = Into::into(ROOT_FRS);
     file_rec.first_stream.size = SizeInfo {
         length: 50,
         allocated: 512,
@@ -731,10 +731,10 @@ fn build_mixed_drive(n_files: usize, n_dirs: usize) -> DriveCompactIndex {
 
     // Root directory (FRS 5).
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // Files first (FRS 100..).
     for i in 0..n_files {
@@ -742,10 +742,10 @@ fn build_mixed_drive(n_files: usize, n_dirs: usize) -> DriveCompactIndex {
         let name = format!("file_{i:04}.dat");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -761,12 +761,12 @@ fn build_mixed_drive(n_files: usize, n_dirs: usize) -> DriveCompactIndex {
         let name = format!("dir_{i:04}");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.stdinfo.set_directory(true);
         rec.stdinfo.flags = 0x10; // directory flag
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.stdinfo.modified = 5_000_000; // same timestamp
         rec.stdinfo.created = 5_000_000;
     }
@@ -834,10 +834,10 @@ fn heap_eviction_directory_asc_files_come_last() {
 fn heap_eviction_hidden_desc() {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // 20 normal files (no hidden flag).
     for i in 0_u64..20 {
@@ -845,10 +845,10 @@ fn heap_eviction_hidden_desc() {
         let name = format!("normal_{i:04}.dat");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -862,10 +862,10 @@ fn heap_eviction_hidden_desc() {
         let name = format!("hidden_{i:04}.dat");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -994,19 +994,19 @@ fn search_index_star_sort_hidden_desc() {
     // Reuse the hidden drive from heap_eviction_hidden_desc.
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
     for i in 0_u64..20 {
         let frs = i + 100;
         let name = format!("normal_{i:04}.dat");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -1019,10 +1019,10 @@ fn search_index_star_sort_hidden_desc() {
         let name = format!("hidden_{i:04}.dat");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name =
             IndexNameRef::new(off, u16::try_from(name.len()).expect("name"), true, ext);
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -1082,10 +1082,10 @@ fn build_bulkiness_test_drive() -> (DriveCompactIndex, [&'static str; 3]) {
     let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
 
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     // (name, frs, size, allocated) — all three files share the same
     // `modified` so a regression that falls back to `rec.modified`
@@ -1102,14 +1102,14 @@ fn build_bulkiness_test_drive() -> (DriveCompactIndex, [&'static str; 3]) {
     for &(name, frs, size, allocated) in files {
         let off = idx.add_name(name);
         let ext = idx.intern_extension(name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: size,
             allocated,
@@ -1221,23 +1221,23 @@ fn build_modified_gradient_drive(
 ) -> DriveCompactIndex {
     let mut idx = MftIndex::new(letter);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
     for i in 0..count {
         let frs = base_frs + (i as u64);
         let name = format!("{letter}_f{i:05}.txt");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,
@@ -1356,24 +1356,24 @@ fn build_two_extension_drive(
 ) -> DriveCompactIndex {
     let mut idx = MftIndex::new(letter);
     let root_off = idx.add_name(".");
-    let root = idx.get_or_create(ROOT_FRS);
+    let root = idx.get_or_create(ROOT_FRS.into());
     root.stdinfo.set_directory(true);
     root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
-    root.first_name.parent_frs = ROOT_FRS;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
     for i in 0..count {
         let frs = 100 + (i as u64);
         let ext_part = if i % 2 == 0 { "dll" } else { "txt" };
         let name = format!("file_{i:05}.{ext_part}");
         let off = idx.add_name(&name);
         let ext = idx.intern_extension(&name);
-        let rec = idx.get_or_create(frs);
+        let rec = idx.get_or_create(frs.into());
         rec.first_name.name = IndexNameRef::new(
             off,
             u16::try_from(name.len()).expect("name too long"),
             true,
             ext,
         );
-        rec.first_name.parent_frs = ROOT_FRS;
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
         rec.first_stream.size = SizeInfo {
             length: 100,
             allocated: 512,

@@ -533,7 +533,7 @@ impl DriveCompactIndex {
 fn expand_ads_streams(
     index: &MftIndex,
     record: &uffs_mft::index::FileRecord,
-    resolve_parent: &dyn Fn(u64, u64) -> u32,
+    resolve_parent: &dyn Fn(uffs_mft::ParentFrs, uffs_mft::Frs) -> u32,
     names: &mut Vec<u8>,
     extra: &mut Vec<CompactRecord>,
 ) {
@@ -599,6 +599,36 @@ fn expand_ads_streams(
     }
 }
 
+/// Resolve a typed `ParentFrs` (vs an own typed `Frs`) into a compact-record
+/// index, returning `u32::MAX` for the "no real parent" cases (self-reference,
+/// `NO_ENTRY` sentinel, or root).
+///
+/// Extracted as a free helper so the typed `ParentFrs`/`Frs` signature is
+/// enforced at every call site AND so `build_compact_index` stays under
+/// the clippy `too_many_lines` budget.
+#[expect(
+    clippy::single_call_fn,
+    reason = "Wrapped by a closure in build_compact_index; kept free-standing \
+              for clippy::too_many_lines budget headroom"
+)]
+fn resolve_parent_compact_idx(
+    index: &MftIndex,
+    parent_frs: uffs_mft::ParentFrs,
+    own_frs: uffs_mft::Frs,
+) -> u32 {
+    let parent = parent_frs.as_frs();
+    if parent == own_frs || parent_frs.raw() == u64::from(uffs_mft::NO_ENTRY) || parent.is_root() {
+        return u32::MAX;
+    }
+    let parent_usize = uffs_mft::frs_to_usize(parent.raw());
+    index
+        .frs_to_idx
+        .get(parent_usize)
+        .copied()
+        .filter(|&idx| idx != uffs_mft::NO_ENTRY)
+        .unwrap_or(u32::MAX)
+}
+
 /// Expand hardlinks and ADS into additional `CompactRecord` entries.
 ///
 /// Phase 2 (hardlinks): for each valid record with `name_count > 1`, walks the
@@ -613,7 +643,7 @@ fn expand_ads_streams(
 fn expand_links_and_ads(
     index: &MftIndex,
     resolver: &uffs_mft::index::PathResolver,
-    resolve_parent: &dyn Fn(u64, u64) -> u32,
+    resolve_parent: &dyn Fn(uffs_mft::ParentFrs, uffs_mft::Frs) -> u32,
     names: &mut Vec<u8>,
 ) -> Vec<CompactRecord> {
     let mut extra: Vec<CompactRecord> = Vec::new();
@@ -773,22 +803,13 @@ pub fn build_compact_index(
     // propagates invalidity to descendants (e.g., $Extend children).
     let resolver = PathResolver::build(index, false);
 
-    // Helper: resolve parent_frs → compact index.
-    let resolve_parent = |parent_frs: u64, own_frs: u64| -> u32 {
-        if parent_frs == own_frs
-            || parent_frs == u64::from(uffs_mft::NO_ENTRY)
-            || parent_frs == uffs_mft::ROOT_FRS
-        {
-            u32::MAX
-        } else {
-            let parent_usize = uffs_mft::frs_to_usize(parent_frs);
-            index
-                .frs_to_idx
-                .get(parent_usize)
-                .copied()
-                .filter(|&idx| idx != uffs_mft::NO_ENTRY)
-                .unwrap_or(u32::MAX)
-        }
+    // Closure wraps the free helper `resolve_parent_compact_idx` so the
+    // typed `ParentFrs`/`Frs` signature is enforced at every call site
+    // (own↔parent swap becomes a compile error).  Keeping the helper
+    // free-standing also keeps `build_compact_index` under the
+    // clippy::too_many_lines budget.
+    let resolve_parent = |parent_frs: uffs_mft::ParentFrs, own_frs: uffs_mft::Frs| -> u32 {
+        resolve_parent_compact_idx(index, parent_frs, own_frs)
     };
 
     // Phase 1: build primary compact records (parallel).

@@ -52,7 +52,25 @@ use core::fmt;
 /// the on-disk `$FILE_NAME.parent_directory` field, and every parse /
 /// index / query API.  We preserve the bit pattern byte-for-byte so
 /// on-disk + on-wire formats are unchanged.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+///
+/// `#[repr(transparent)]` over `u64` plus `bytemuck::Pod + Zeroable` derives
+/// allow this newtype to slot into `bytemuck::Pod` index structures
+/// (`FileRecord`, `LinkInfo`, `ChildInfo`) without changing their on-disk
+/// representation — the field is bit-identical to a bare `u64` for
+/// memory-mapped serialization.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
 #[repr(transparent)]
 pub struct Frs(u64);
 
@@ -135,7 +153,24 @@ impl fmt::Display for Frs {
 ///
 /// To look the parent record up in the index, convert explicitly via
 /// [`ParentFrs::as_frs`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+///
+/// `#[repr(transparent)]` over [`Frs`] (itself transparent over `u64`)
+/// plus `bytemuck::Pod + Zeroable` derives allow this newtype to slot
+/// into `bytemuck::Pod` index structures (`LinkInfo.parent_frs`)
+/// without changing their on-disk representation.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
 #[repr(transparent)]
 pub struct ParentFrs(Frs);
 
@@ -327,6 +362,61 @@ mod tests {
             let via_from: Frs = parent.into();
             assert_eq!(via_method, via_from);
         }
+    }
+
+    #[test]
+    fn frs_is_pod_zeroable_with_u64_layout() {
+        // bytemuck::Pod regression pin: the on-disk index format
+        // (`FileRecord`, `LinkInfo`, `ChildInfo` are all `bytemuck::Pod`)
+        // requires `Frs` to be `Pod + Zeroable` AND byte-identical to
+        // `u64`.  Any change to the newtype that breaks repr(transparent)
+        // or adds non-Pod fields will fail this gate.
+        use core::mem::{align_of, size_of};
+
+        assert_eq!(
+            size_of::<Frs>(),
+            size_of::<u64>(),
+            "Frs size drifted from u64"
+        );
+        assert_eq!(
+            align_of::<Frs>(),
+            align_of::<u64>(),
+            "Frs alignment drifted from u64"
+        );
+        // Compare bytes-of-Frs against bytes-of-u64 directly so the
+        // assertion is endianness-agnostic by construction (clippy's
+        // host_endian_bytes lint forbids `to_ne_bytes` here, and
+        // picking `to_le_bytes` / `to_be_bytes` would falsely imply
+        // we care which endianness the in-memory layout has — we
+        // only care that Frs's layout matches u64's).
+        let raw: u64 = 0xDEAD_BEEF_CAFE_F00D;
+        assert_eq!(bytemuck::bytes_of(&Frs::new(raw)), bytemuck::bytes_of(&raw));
+        let zero: Frs = bytemuck::Zeroable::zeroed();
+        assert_eq!(zero, Frs::ZERO);
+    }
+
+    #[test]
+    fn parent_frs_is_pod_zeroable_with_u64_layout() {
+        use core::mem::{align_of, size_of};
+
+        assert_eq!(
+            size_of::<ParentFrs>(),
+            size_of::<u64>(),
+            "ParentFrs size drifted from u64"
+        );
+        assert_eq!(
+            align_of::<ParentFrs>(),
+            align_of::<u64>(),
+            "ParentFrs alignment drifted from u64"
+        );
+        // Same endianness-agnostic comparison as `frs_is_pod_zeroable_…`.
+        let raw: u64 = 0xDEAD_BEEF_CAFE_F00D;
+        assert_eq!(
+            bytemuck::bytes_of(&ParentFrs::new(raw)),
+            bytemuck::bytes_of(&raw)
+        );
+        let zero: ParentFrs = bytemuck::Zeroable::zeroed();
+        assert_eq!(zero, ParentFrs::ZERO);
     }
 
     #[test]

@@ -11,7 +11,7 @@ fn sort_directory_children_basic() {
 
     // Create a directory (FRS 100)
     let dir_frs = 100_u64;
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     dir_rec.stdinfo.set_directory(true);
 
     // Create child files with unsorted names
@@ -24,16 +24,16 @@ fn sort_directory_children_basic() {
 
         let offset = index.add_name(name);
         let ext_id = index.intern_extension(name);
-        let rec = index.get_or_create(child_frs);
+        let rec = index.get_or_create(child_frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
-        rec.first_name.parent_frs = dir_frs;
+        rec.first_name.parent_frs = Into::into(dir_frs);
 
         // Add child to directory's children list
         let child_info = ChildInfo {
             next_entry: NO_ENTRY,
             _pad0: [0; 4],
-            child_frs,
+            child_frs: child_frs.into(),
             name_index: 0,
             _pad1: [0; 6],
         };
@@ -42,7 +42,7 @@ fn sort_directory_children_basic() {
 
         // Link to previous child or set as first child
         if i == 0 {
-            let dir_rec = index.get_or_create(dir_frs);
+            let dir_rec = index.get_or_create(dir_frs.into());
             dir_rec.first_child = child_idx;
         } else {
             let prev_child_idx = (child_idx - 1) as usize;
@@ -55,7 +55,7 @@ fn sort_directory_children_basic() {
 
     // Verify children are sorted (case-insensitive)
     // Expected order: apple.txt, Banana.txt, cherry.txt, zebra.txt
-    let dir_idx = index.frs_to_idx_opt(dir_frs).unwrap();
+    let dir_idx = index.frs_to_idx_opt(dir_frs.into()).unwrap();
     let mut current_idx = index.records[dir_idx].first_child;
     let mut sorted_names = Vec::new();
 
@@ -81,14 +81,14 @@ fn sort_directory_children_empty() {
 
     // Create a directory with no children
     let dir_frs = 100_u64;
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     dir_rec.stdinfo.set_directory(true);
 
     // Sort should not crash
     index.sort_directory_children();
 
     // Verify first_child is still NO_ENTRY
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     assert_eq!(dir_rec.first_child, NO_ENTRY);
 }
 
@@ -98,34 +98,34 @@ fn sort_directory_children_single_child() {
 
     // Create a directory with one child
     let dir_frs = 100_u64;
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     dir_rec.stdinfo.set_directory(true);
 
     let child_frs = 200_u64;
     let offset = index.add_name("only_child.txt");
     let ext_id = index.intern_extension("only_child.txt");
-    let rec = index.get_or_create(child_frs);
+    let rec = index.get_or_create(child_frs.into());
     rec.first_name.name = IndexNameRef::new(offset, 14, true, ext_id);
-    rec.first_name.parent_frs = dir_frs;
+    rec.first_name.parent_frs = Into::into(dir_frs);
 
     let child_info = ChildInfo {
         next_entry: NO_ENTRY,
         _pad0: [0; 4],
-        child_frs,
+        child_frs: child_frs.into(),
         name_index: 0,
         _pad1: [0; 6],
     };
     let child_idx = u32::try_from(index.children.len()).unwrap();
     index.children.push(child_info);
 
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     dir_rec.first_child = child_idx;
 
     // Sort should not crash
     index.sort_directory_children();
 
     // Verify child is still there
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     assert_eq!(dir_rec.first_child, child_idx);
     assert_eq!(
         index.children[usize::try_from(child_idx).unwrap()].next_entry,
@@ -141,7 +141,7 @@ fn sort_directory_children_performance() {
 
     // Create a directory with 1000 children
     let dir_frs = 100_u64;
-    let dir_rec = index.get_or_create(dir_frs);
+    let dir_rec = index.get_or_create(dir_frs.into());
     dir_rec.stdinfo.set_directory(true);
 
     // Add 1000 children with random names
@@ -150,15 +150,15 @@ fn sort_directory_children_performance() {
         let name = format!("file_{:04}.txt", 1000 - i); // Reverse order
         let offset = index.add_name(&name);
         let ext_id = index.intern_extension(&name);
-        let rec = index.get_or_create(child_frs);
+        let rec = index.get_or_create(child_frs.into());
         rec.first_name.name =
             IndexNameRef::new(offset, u16::try_from(name.len()).unwrap(), true, ext_id);
-        rec.first_name.parent_frs = dir_frs;
+        rec.first_name.parent_frs = Into::into(dir_frs);
 
         let child_info = ChildInfo {
             next_entry: NO_ENTRY,
             _pad0: [0; 4],
-            child_frs,
+            child_frs: child_frs.into(),
             name_index: 0,
             _pad1: [0; 6],
         };
@@ -166,7 +166,7 @@ fn sort_directory_children_performance() {
         index.children.push(child_info);
 
         if i == 0 {
-            let dir_rec = index.get_or_create(dir_frs);
+            let dir_rec = index.get_or_create(dir_frs.into());
             dir_rec.first_child = child_idx;
         } else {
             let prev_child_idx = (child_idx - 1) as usize;
@@ -182,7 +182,7 @@ fn sort_directory_children_performance() {
     println!("Sorted 1000 children in {:?}", elapsed);
 
     // Verify first few children are sorted
-    let dir_idx = index.frs_to_idx_opt(dir_frs).unwrap();
+    let dir_idx = index.frs_to_idx_opt(dir_frs.into()).unwrap();
     let mut current_idx = index.records[dir_idx].first_child;
     let mut sorted_names = Vec::new();
 

@@ -657,8 +657,10 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
                 .collect();
 
-            // Setup record and chain streams
-            let record = index.get_or_create(frs);
+            // Setup record and chain streams.
+            // Boundary: lift the raw `u64` FRS argument (kernel/USN buffer)
+            // into a typed `Frs` once for the typed index API.
+            let record = index.get_or_create(crate::frs::Frs::new(frs));
             record.stdinfo = std_info;
             record.first_stream.size = SizeInfo {
                 length: default_size,
@@ -667,7 +669,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
             if !stream_indices.is_empty() {
                 chain_streams(index, &stream_indices);
-                let record = index.get_or_create(frs);
+                let record = index.get_or_create(crate::frs::Frs::new(frs));
                 record.first_stream.next_entry = stream_indices[0];
                 record.stream_count = 1 + len_to_u16(additional_stream_count);
             }
@@ -702,15 +704,16 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         .map(|(name, size, alloc)| add_stream_to_index(index, &name, size, alloc))
         .collect();
 
-    // Ensure parent exists (create placeholder if needed) - do this before getting
-    // our record
+    // Ensure parent exists (create placeholder if needed) - do this before
+    // getting our record.  Boundary: typed wrap of the raw `u64` from this
+    // file's parse-layer locals into the typed index API.
     if parent_frs != frs && parent_frs != 0 {
-        let _ = index.get_or_create(parent_frs);
+        let _ = index.get_or_create(crate::frs::Frs::new(parent_frs));
     }
 
-    // Now get or create the record in the index - no more index mutations after
-    // this
-    let record = index.get_or_create(frs);
+    // Now get or create the record in the index - no more index mutations
+    // after this.
+    let record = index.get_or_create(crate::frs::Frs::new(frs));
     record.stdinfo = std_info;
     record.first_stream.size = SizeInfo {
         length: default_size,
@@ -720,7 +723,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         next_entry: NO_ENTRY,
         name: name_ref,
         _pad0: [0; 4],
-        parent_frs,
+        // Typed `ParentFrs` written into the typed `LinkInfo.parent_frs`
+        // slot; raw `u64` only lives as a parse-layer local.
+        parent_frs: crate::frs::ParentFrs::new(parent_frs),
     };
     record.name_count = 1 + len_to_u16(additional_count);
     // stream_count = 1 (default) + additional ADS
