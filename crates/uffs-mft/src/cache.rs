@@ -327,7 +327,7 @@ pub fn save_to_cache(
     drive: crate::platform::DriveLetter,
     volume_serial: u64,
     usn_journal_id: u64,
-    next_usn: i64,
+    next_usn: crate::usn::Usn,
 ) -> std::io::Result<PathBuf> {
     let dir = cache_dir();
     create_secure_dir(&dir)?;
@@ -367,7 +367,7 @@ pub fn save_to_cache_background(
     drive: crate::platform::DriveLetter,
     volume_serial: u64,
     usn_journal_id: u64,
-    next_usn: i64,
+    next_usn: crate::usn::Usn,
 ) -> std::io::Result<()> {
     let profile = std::env::var_os("UFFS_CACHE_PROFILE").is_some();
 

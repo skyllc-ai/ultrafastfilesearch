@@ -168,7 +168,7 @@ impl MftReader {
         index: crate::index::MftIndex,
         handle: &crate::platform::VolumeHandle,
         journal_id: u64,
-        start_usn: i64,
+        start_usn: crate::usn::Usn,
     ) -> crate::index::MftIndex {
         use tracing::{debug, warn};
 
@@ -208,7 +208,7 @@ impl MftReader {
         handle: &crate::platform::VolumeHandle,
         records: &[crate::usn::UsnRecord],
         journal_id: u64,
-        next_usn: i64,
+        next_usn: crate::usn::Usn,
     ) -> crate::index::MftIndex {
         use tracing::info;
 
@@ -276,8 +276,10 @@ impl MftReader {
         let volume_serial =
             VolumeHandle::open(drive).map_or(0, |handle| handle.volume_data().volume_serial_number);
 
-        let (usn_journal_id, next_usn) =
-            query_usn_journal(drive).map_or((0, 0), |info| (info.journal_id, info.next_usn));
+        let (usn_journal_id, next_usn) = query_usn_journal(drive)
+            .map_or((0, crate::usn::Usn::ZERO), |info| {
+                (info.journal_id, info.next_usn)
+            });
 
         // Delegate to the single save_to_cache() implementation.
         // This handles: serialize → zstd → AES-256-GCM → atomic_write,

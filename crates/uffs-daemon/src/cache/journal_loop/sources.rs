@@ -132,7 +132,10 @@ impl JournalSource for WindowsJournalSource {
         // reseed from journal head.  `journal_id` is preserved so
         // the loop's id-comparison wrap detection can still fire
         // on a subsequent recreation.
-        let start_usn = i64::try_from(cursor).unwrap_or(i64::MAX);
+        // Persistence wire-format is `u64` (the cursor store stores
+        // unsigned cursors); the kernel-facing API is `Usn` (signed
+        // 64-bit `LONGLONG`).  Narrow at this single boundary.
+        let start_usn = uffs_mft::usn::Usn::new(i64::try_from(cursor).unwrap_or(i64::MAX));
         if start_usn < info.first_usn {
             return Ok(JournalPollResult {
                 changes: Vec::new(),
@@ -145,7 +148,7 @@ impl JournalSource for WindowsJournalSource {
             uffs_mft::usn::read_usn_journal(self.drive, info.journal_id, start_usn)?;
         let aggregated = uffs_mft::usn::aggregate_changes(&records);
         let changes: Vec<uffs_mft::usn::FileChange> = aggregated.into_values().collect();
-        let next_cursor = u64::try_from(next_usn).unwrap_or(u64::MAX);
+        let next_cursor = u64::try_from(next_usn.raw()).unwrap_or(u64::MAX);
 
         Ok(JournalPollResult {
             changes,

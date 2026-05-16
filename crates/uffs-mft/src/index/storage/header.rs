@@ -40,7 +40,7 @@ pub struct IndexHeader {
     /// USN Journal ID at time of index creation
     pub usn_journal_id: u64,
     /// Next USN to read from (checkpoint)
-    pub next_usn: i64,
+    pub next_usn: crate::usn::Usn,
     /// Timestamp when index was created (Unix epoch seconds)
     pub created_at: u64,
     /// Number of records in the index
@@ -61,7 +61,12 @@ pub struct IndexHeader {
 impl IndexHeader {
     /// Creates a new header for the given index.
     #[must_use]
-    pub fn new(index: &MftIndex, volume_serial: u64, usn_journal_id: u64, next_usn: i64) -> Self {
+    pub fn new(
+        index: &MftIndex,
+        volume_serial: u64,
+        usn_journal_id: u64,
+        next_usn: crate::usn::Usn,
+    ) -> Self {
         Self {
             magic: *INDEX_MAGIC,
             version: INDEX_VERSION,

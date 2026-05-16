@@ -305,7 +305,13 @@ fn parse_mft_file_to_index(
 /// Kick off the post-parse background cache save and emit a matching
 /// tracing line for success or failure.
 fn spawn_mft_cache_save(index: &MftIndex, drive_letter: uffs_mft::platform::DriveLetter) {
-    match uffs_mft::cache::save_to_cache_background(index, drive_letter, 0, 0, 0) {
+    match uffs_mft::cache::save_to_cache_background(
+        index,
+        drive_letter,
+        0,
+        0,
+        uffs_mft::usn::Usn::ZERO,
+    ) {
         Ok(()) => {
             tracing::info!(drive = %drive_letter, "💾 MFT cache save started (background)");
         }

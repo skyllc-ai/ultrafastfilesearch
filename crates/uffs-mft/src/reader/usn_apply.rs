@@ -49,7 +49,7 @@ pub(super) enum UsnDecision {
         /// Active journal id at the time of inspection.
         journal_id: u64,
         /// USN at which to resume reading (the cached `next_usn`).
-        start_usn: i64,
+        start_usn: crate::usn::Usn,
     },
 }
 
@@ -84,8 +84,8 @@ pub(super) fn usn_journal_invalidates_cache(
     if header.next_usn < current_info.first_usn {
         info!(
             drive = %drive,
-            cached_usn = header.next_usn,
-            first_usn = current_info.first_usn,
+            cached_usn = %header.next_usn,
+            first_usn = %current_info.first_usn,
             "🔄 USN Journal wrapped - rebuilding index"
         );
         return true;
@@ -112,7 +112,7 @@ pub(super) fn classify_usn_state(
 
     let start_usn = header.next_usn;
     if start_usn >= current_info.next_usn {
-        debug!(drive = %drive, usn = start_usn, "✅ Index is already up to date");
+        debug!(drive = %drive, usn = %start_usn, "✅ Index is already up to date");
         return UsnDecision::UseCached;
     }
 
@@ -199,7 +199,7 @@ pub(super) fn persist_usn_checkpoint(
     handle: &VolumeHandle,
     index: &MftIndex,
     journal_id: u64,
-    next_usn: i64,
+    next_usn: crate::usn::Usn,
 ) {
     let volume_serial = handle.volume_data().volume_serial_number;
 
@@ -208,7 +208,7 @@ pub(super) fn persist_usn_checkpoint(
     } else {
         debug!(
             drive = %drive,
-            next_usn,
+            next_usn = %next_usn,
             "💾 Cache updated with new USN checkpoint"
         );
     }

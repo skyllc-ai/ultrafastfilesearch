@@ -151,7 +151,7 @@ impl MftIndex {
             .ok_or("Invalid volume drive letter")?;
         let volume_serial = read_u64!();
         let usn_journal_id = read_u64!();
-        let next_usn = read_i64!();
+        let next_usn = crate::usn::Usn::new(read_i64!());
         let created_at = read_u64!();
         let record_count = read_u64!();
         let names_size = read_u64!();
