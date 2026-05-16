@@ -63,7 +63,11 @@ impl UffsClient {
             let mut last_err: Option<std::io::Error> = None;
             let mut client = None;
             for attempt in 0_u32..5 {
-                match ClientOptions::new().read(true).write(true).open(&pipe_name) {
+                match ClientOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(pipe_name.as_str())
+                {
                     Ok(stream) => {
                         client = Some(stream);
                         break;

@@ -154,7 +154,11 @@ impl UffsClientSync {
             let mut last_err: Option<std::io::Error> = None;
             let mut pipe_file: Option<File> = None;
             for attempt in 0..5_u32 {
-                match OpenOptions::new().read(true).write(true).open(&name) {
+                match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(name.as_str())
+                {
                     Ok(file) => {
                         pipe_file = Some(file);
                         break;
