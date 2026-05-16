@@ -239,7 +239,7 @@ pub struct NameInfo {
     /// The file name.
     pub name: String,
     /// Parent directory FRS.
-    pub parent_frs: u64,
+    pub parent_frs: crate::frs::ParentFrs,
     /// Namespace (0=POSIX, 1=Win32, 2=DOS, 3=Win32+DOS).
     pub namespace: u8,
     /// Creation time from `$FILE_NAME` (Unix microseconds).
@@ -251,7 +251,7 @@ pub struct NameInfo {
     /// MFT change time from `$FILE_NAME` (Unix microseconds).
     pub fn_mft_changed: i64,
     /// FRS of the MFT record this name was parsed from (base or extension).
-    pub source_frs: u64,
+    pub source_frs: crate::frs::Frs,
 }
 
 /// Information about a single data stream.

@@ -4,6 +4,7 @@
 //! Tests for parse-module helpers, record decoding, and regressions.
 
 use super::*;
+use crate::frs::{Frs, ParentFrs};
 use crate::ntfs::{AttributeType, ExtendedStandardInfo, FILE_RECORD_MAGIC, NameInfo, ReparseTag};
 
 fn write_u16_le(buffer: &mut [u8], offset: usize, value: u16) {
@@ -287,13 +288,13 @@ fn parse_file_name_full_reads_unaligned_payload() {
 
     if let Some(name_info) = result {
         assert_eq!(name_info.name, name);
-        assert_eq!(name_info.parent_frs, 42);
+        assert_eq!(name_info.parent_frs, ParentFrs::new(42));
         assert_eq!(name_info.namespace, 1);
         assert_eq!(name_info.fn_created, creation_time);
         assert_eq!(name_info.fn_modified, modification_time);
         assert_eq!(name_info.fn_accessed, access_time);
         assert_eq!(name_info.fn_mft_changed, mft_change_time);
-        assert_eq!(name_info.source_frs, 99);
+        assert_eq!(name_info.source_frs, Frs::new(99));
     }
 }
 
@@ -307,7 +308,7 @@ fn parse_record_forensic_reads_unaligned_record_slice() {
     assert!(matches!(&result, ParseResult::Base(_)));
 
     if let ParseResult::Base(parsed_record) = result {
-        assert_eq!(parsed_record.frs, 5);
+        assert_eq!(parsed_record.frs, Frs::ROOT);
         assert_eq!(parsed_record.sequence_number, 1);
         assert!(parsed_record.in_use);
     }
@@ -334,11 +335,11 @@ fn parse_record_forensic_reads_unaligned_extension_record_slice() {
     assert!(matches!(&merge_result, ParseResult::Extension(_)));
 
     if let ParseResult::Extension(extension) = merge_result {
-        assert_eq!(extension.base_frs, base_frs);
-        assert_eq!(extension.extension_frs, extension_frs);
+        assert_eq!(extension.base_frs, Frs::new(base_frs));
+        assert_eq!(extension.extension_frs, Frs::new(extension_frs));
         assert_eq!(extension.names.len(), 1);
         assert_eq!(extension.names[0].name, "ext-name.txt");
-        assert_eq!(extension.names[0].parent_frs, 42);
+        assert_eq!(extension.names[0].parent_frs, ParentFrs::new(42));
     }
 
     let forensic_result =
@@ -347,7 +348,7 @@ fn parse_record_forensic_reads_unaligned_extension_record_slice() {
 
     if let ParseResult::Base(parsed_record) = forensic_result {
         assert!(parsed_record.is_extension);
-        assert_eq!(parsed_record.base_frs, base_frs);
+        assert_eq!(parsed_record.base_frs, Frs::new(base_frs));
         assert_eq!(parsed_record.name, "ext-name.txt");
     }
 }
@@ -380,8 +381,9 @@ fn parse_record_forensic_reads_unaligned_resident_reparse_tag() {
 fn create_placeholder_record_works() {
     let record = create_placeholder_record(12345);
 
-    assert_eq!(record.frs, 12345);
-    assert_eq!(record.parent_frs, 5); // Root directory
+    assert_eq!(record.frs, Frs::new(12345));
+    // Placeholder records terminate path resolution at the NTFS root.
+    assert_eq!(record.parent_frs, ParentFrs::ROOT);
     assert_eq!(record.name, "<dir:12345>");
     assert!(record.is_directory);
     assert!(record.in_use);
@@ -396,8 +398,8 @@ fn parse_result_variants() {
     assert!(matches!(base, ParseResult::Base(_)));
 
     let ext = ParseResult::Extension(ExtensionAttributes {
-        base_frs: 100,
-        extension_frs: 101,
+        base_frs: Frs::new(100),
+        extension_frs: Frs::new(101),
         names: Vec::new(),
         streams: Vec::new(),
         dir_index_size: 0,
@@ -429,9 +431,11 @@ fn parse_options_forensic() {
 #[test]
 fn parsed_record_default() {
     let record = ParsedRecord::default();
-    assert_eq!(record.frs, 0);
+    // `Frs::default()` / `ParentFrs::default()` are the documented ZERO
+    // sentinels — a default `ParsedRecord` has no own / parent FRS.
+    assert_eq!(record.frs, Frs::ZERO);
     assert_eq!(record.sequence_number, 0);
-    assert_eq!(record.parent_frs, 0);
+    assert_eq!(record.parent_frs, ParentFrs::ZERO);
     assert!(record.name.is_empty());
     assert!(!record.in_use);
     assert!(!record.is_directory);
@@ -449,12 +453,12 @@ fn add_missing_parent_placeholders_no_missing() {
     let mut records = vec![
         {
             let mut r = create_placeholder_record(5);
-            r.parent_frs = 5; // Root references itself
+            r.parent_frs = ParentFrs::ROOT; // Root references itself
             r
         },
         {
             let mut r = create_placeholder_record(100);
-            r.parent_frs = 5; // References root
+            r.parent_frs = ParentFrs::ROOT; // References root
             r
         },
     ];
@@ -467,7 +471,7 @@ fn add_missing_parent_placeholders_no_missing() {
 fn add_missing_parent_placeholders_with_missing() {
     let mut records = vec![{
         let mut r = create_placeholder_record(100);
-        r.parent_frs = 50; // References non-existent parent
+        r.parent_frs = ParentFrs::new(50); // References non-existent parent
         r
     }];
 
@@ -475,7 +479,7 @@ fn add_missing_parent_placeholders_with_missing() {
     assert!(added >= 1, "Should add placeholder for missing parent 50");
 
     // Verify placeholder was added
-    let has_50 = records.iter().any(|r| r.frs == 50);
+    let has_50 = records.iter().any(|r| r.frs == Frs::new(50));
     assert!(has_50, "Placeholder for FRS 50 should exist");
 }
 
@@ -504,10 +508,10 @@ mod proptest_tests {
         #[test]
         fn placeholder_record_always_valid(frs in 0_u64..1_000_000) {
             let record = create_placeholder_record(frs);
-            prop_assert_eq!(record.frs, frs);
+            prop_assert_eq!(record.frs, Frs::new(frs));
             prop_assert!(record.is_directory);
             prop_assert!(record.in_use);
-            prop_assert_eq!(record.parent_frs, 5); // Always root
+            prop_assert_eq!(record.parent_frs, ParentFrs::ROOT); // Always root
         }
 
         /// ParseOptions should have consistent is_forensic behavior
@@ -563,13 +567,13 @@ fn extension_merge_with_empty_base_name() {
 
     // Add base record with empty name
     let base = ParsedRecord {
-        frs: 100,
+        frs: Frs::new(100),
         sequence_number: 1,
         lsn: 0,
-        parent_frs: 0,       // Wrong - should be updated from extension
-        name: String::new(), // Empty - should be updated from extension
-        namespace: 255,      // Invalid
-        names: Vec::new(),   // No names in base record
+        parent_frs: ParentFrs::ZERO, // Wrong - should be updated from extension
+        name: String::new(),         // Empty - should be updated from extension
+        namespace: 255,              // Invalid
+        names: Vec::new(),           // No names in base record
         streams: Vec::new(),
         size: 0,
         allocated_size: 0,
@@ -584,23 +588,23 @@ fn extension_merge_with_empty_base_name() {
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,
-        base_frs: 0,
+        base_frs: Frs::ZERO,
     };
     record_merger.add_result(ParseResult::Base(base));
 
     // Add extension record with the actual name
     let ext = ExtensionAttributes {
-        base_frs: 100,
-        extension_frs: 200,
+        base_frs: Frs::new(100),
+        extension_frs: Frs::new(200),
         names: vec![NameInfo {
             name: "test_directory".to_owned(),
-            parent_frs: 5, // Root
-            namespace: 1,  // Win32
+            parent_frs: ParentFrs::ROOT, // Root
+            namespace: 1,                // Win32
             fn_created: 0,
             fn_modified: 0,
             fn_accessed: 0,
             fn_mft_changed: 0,
-            source_frs: 200,
+            source_frs: Frs::new(200),
         }],
         streams: Vec::new(),
         dir_index_size: 0,
@@ -614,13 +618,14 @@ fn extension_merge_with_empty_base_name() {
     // Check that the base record now has the name from extension
     assert_eq!(result.len(), 1, "Should have exactly 1 merged record");
     let rec = &result[0];
-    assert_eq!(rec.frs, 100);
+    assert_eq!(rec.frs, Frs::new(100));
     assert_eq!(
         rec.name, "test_directory",
         "Name should be merged from extension"
     );
     assert_eq!(
-        rec.parent_frs, 5,
+        rec.parent_frs,
+        ParentFrs::ROOT,
         "parent_frs should be merged from extension"
     );
     assert_eq!(
@@ -637,17 +642,17 @@ fn extension_before_base_merge() {
 
     // Add extension record FIRST (before base record)
     let ext = ExtensionAttributes {
-        base_frs: 100,
-        extension_frs: 200,
+        base_frs: Frs::new(100),
+        extension_frs: Frs::new(200),
         names: vec![NameInfo {
             name: "test_directory".to_owned(),
-            parent_frs: 5,
+            parent_frs: ParentFrs::ROOT,
             namespace: 1,
             fn_created: 0,
             fn_modified: 0,
             fn_accessed: 0,
             fn_mft_changed: 0,
-            source_frs: 200,
+            source_frs: Frs::new(200),
         }],
         streams: Vec::new(),
         dir_index_size: 0,
@@ -657,10 +662,10 @@ fn extension_before_base_merge() {
 
     // Add base record AFTER extension
     let base = ParsedRecord {
-        frs: 100,
+        frs: Frs::new(100),
         sequence_number: 1,
         lsn: 0,
-        parent_frs: 0,
+        parent_frs: ParentFrs::ZERO,
         name: String::new(),
         namespace: 255,
         names: Vec::new(),
@@ -678,7 +683,7 @@ fn extension_before_base_merge() {
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,
-        base_frs: 0,
+        base_frs: Frs::ZERO,
     };
     record_merger.add_result(ParseResult::Base(base));
 
@@ -688,13 +693,14 @@ fn extension_before_base_merge() {
     // Check that the base record now has the name from extension
     assert_eq!(result.len(), 1, "Should have exactly 1 merged record");
     let rec = &result[0];
-    assert_eq!(rec.frs, 100);
+    assert_eq!(rec.frs, Frs::new(100));
     assert_eq!(
         rec.name, "test_directory",
         "Name should be merged from extension"
     );
     assert_eq!(
-        rec.parent_frs, 5,
+        rec.parent_frs,
+        ParentFrs::ROOT,
         "parent_frs should be merged from extension"
     );
 }

@@ -114,13 +114,17 @@ pub(super) fn parse_file_name_full(
 
     Some(NameInfo {
         name,
-        parent_frs: file_reference_to_frs(fn_attr.parent_directory),
+        // On-disk → typed boundary: `file_reference_to_frs` keeps its
+        // `u64` ABI (it decodes the 48-bit `parent_directory` field of
+        // `MFT_SEGMENT_REFERENCE`); we lift into `ParentFrs` here so
+        // every downstream consumer reads a typed parent reference.
+        parent_frs: crate::frs::ParentFrs::new(file_reference_to_frs(fn_attr.parent_directory)),
         namespace: fn_attr.file_name_namespace,
         fn_created: fn_attr.creation_time,
         fn_modified: fn_attr.modification_time,
         fn_accessed: fn_attr.access_time,
         fn_mft_changed: fn_attr.mft_change_time,
-        source_frs,
+        source_frs: crate::frs::Frs::new(source_frs),
     })
 }
 

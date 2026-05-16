@@ -161,8 +161,10 @@ impl ParsedColumns {
     /// This is the hot path for accumulation - keep it fast!
     #[inline]
     pub fn push_record(&mut self, record: &ParsedRecord) {
-        self.frs.push(record.frs);
-        self.parent_frs.push(record.parent_frs);
+        // Columnar storage is `Vec<u64>` — it backs the Polars dataframe
+        // surface whose schema is u64.  Downcast at the push boundary.
+        self.frs.push(record.frs.raw());
+        self.parent_frs.push(record.parent_frs.raw());
         // legacy-output parity: directories have empty name
         if record.is_directory {
             self.name.push(String::new());
@@ -250,8 +252,9 @@ impl ParsedColumns {
                 if crate::ntfs::is_internal_windows_stream(&stream_info.name) {
                     continue;
                 }
-                self.frs.push(record.frs);
-                self.parent_frs.push(name_info.parent_frs);
+                // Polars-bound `Vec<u64>` columns — downcast at the push boundary.
+                self.frs.push(record.frs.raw());
+                self.parent_frs.push(name_info.parent_frs.raw());
                 // legacy-output parity: directories have empty name
                 if record.is_directory {
                     self.name.push(String::new());

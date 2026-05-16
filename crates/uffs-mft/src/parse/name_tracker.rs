@@ -3,6 +3,7 @@
 
 //! Helpers for selecting the preferred primary file name during parsing.
 
+use crate::frs::ParentFrs;
 use crate::ntfs::NameInfo;
 
 /// Tracks the best primary name during parsing.
@@ -11,7 +12,7 @@ pub(super) struct PrimaryNameTracker {
     /// Primary filename.
     pub(super) name: String,
     /// Parent FRS of the primary name.
-    pub(super) parent_frs: u64,
+    pub(super) parent_frs: ParentFrs,
     /// Namespace of the primary name (255 = invalid/unset).
     pub(super) namespace: u8,
     /// `$FILE_NAME` creation timestamp.
@@ -49,7 +50,7 @@ impl Default for PrimaryNameTracker {
     fn default() -> Self {
         Self {
             name: String::new(),
-            parent_frs: 0,
+            parent_frs: ParentFrs::ZERO,
             namespace: Self::INVALID_NAMESPACE,
             fn_created: 0,
             fn_modified: 0,

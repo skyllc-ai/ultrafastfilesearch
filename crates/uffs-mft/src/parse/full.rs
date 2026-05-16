@@ -74,12 +74,15 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         return ParseResult::Skip;
     }
 
-    // Check if this is an extension record
+    // Check if this is an extension record.  On-disk → typed boundary:
+    // `file_reference_to_frs` decodes the 48-bit `MFT_SEGMENT_REFERENCE`
+    // back to a raw `u64`; we lift to `Frs` here so the rest of the
+    // function (and every downstream consumer) handles a typed value.
     let is_extension = !header.is_base_record();
     let base_frs = if is_extension {
-        file_reference_to_frs(header.base_file_record_segment)
+        crate::frs::Frs::new(file_reference_to_frs(header.base_file_record_segment))
     } else {
-        frs
+        crate::frs::Frs::new(frs)
     };
 
     // Extract sequence number and LSN from header
@@ -584,7 +587,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     if is_extension {
         return ParseResult::Extension(ExtensionAttributes {
             base_frs,
-            extension_frs: frs,
+            extension_frs: crate::frs::Frs::new(frs),
             names,
             streams,
             dir_index_size,
@@ -654,7 +657,7 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
     };
 
     ParseResult::Base(ParsedRecord {
-        frs,
+        frs: crate::frs::Frs::new(frs),
         sequence_number,
         lsn,
         parent_frs: primary.parent_frs,
@@ -676,7 +679,8 @@ pub fn parse_record_full(data: &[u8], frs: u64) -> ParseResult {
         is_deleted: false,
         is_corrupt: false,
         is_extension: false,
-        base_frs: 0,
+        // Base records carry the documented "no base record" sentinel.
+        base_frs: crate::frs::Frs::ZERO,
     })
 }
 

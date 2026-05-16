@@ -199,6 +199,8 @@ pub mod platform;
 
 pub mod usn;
 
+pub mod frs;
+
 pub mod cache;
 
 mod reader;
@@ -221,6 +223,8 @@ pub use cache::{
 };
 pub use error::{MftError, Result};
 pub use flags::FileFlags;
+// Re-export FRS newtypes — typed alternatives to raw `u64` FRS values.
+pub use frs::{Frs, ParentFrs};
 // Re-export lean index types
 pub use index::{
     ChildInfo, FileRecord, IndexBuildTiming, IndexNameRef, IndexStreamInfo, LinkInfo, MftIndex,

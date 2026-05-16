@@ -552,7 +552,7 @@ pub(super) fn parse_base_record(
     };
 
     ParseResult::Base(ParsedRecord {
-        frs,
+        frs: crate::frs::Frs::new(frs),
         sequence_number,
         lsn,
         parent_frs: primary.parent_frs,
@@ -574,6 +574,6 @@ pub(super) fn parse_base_record(
         is_deleted,
         is_corrupt: false,
         is_extension: is_extension_record,
-        base_frs: base_frs_value,
+        base_frs: crate::frs::Frs::new(base_frs_value),
     })
 }

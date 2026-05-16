@@ -381,8 +381,8 @@ pub(super) fn parse_extension_record(
     }
 
     ParseResult::Extension(ExtensionAttributes {
-        base_frs: base_frs_value,
-        extension_frs: frs,
+        base_frs: crate::frs::Frs::new(base_frs_value),
+        extension_frs: crate::frs::Frs::new(frs),
         names,
         streams,
         dir_index_size,

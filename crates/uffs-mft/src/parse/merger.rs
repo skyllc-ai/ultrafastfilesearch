@@ -87,7 +87,7 @@ impl MftRecordMerger {
     pub fn add_result(&mut self, result: ParseResult) {
         match result {
             ParseResult::Base(record) => {
-                let frs = frs_to_usize(record.frs);
+                let frs = frs_to_usize(record.frs.raw());
                 // Expand if needed (rare - only if FRS exceeds initial capacity)
                 if frs >= self.base_records.len() {
                     self.base_records.resize(frs + 1, None);
@@ -113,7 +113,7 @@ impl MftRecordMerger {
     pub fn merge(mut self) -> Vec<ParsedRecord> {
         // Merge all extensions into their base records
         for ext in self.extensions {
-            let base_frs = frs_to_usize(ext.base_frs);
+            let base_frs = frs_to_usize(ext.base_frs.raw());
             if base_frs < self.base_records.len()
                 && let Some(ref mut base) = self.base_records[base_frs]
             {
@@ -269,7 +269,7 @@ impl MftRecordMerger {
         // Merge all extensions into their base records
         for ext in self.extensions {
             // FRS values are bounded by MFT size, always < 2^32 on real systems
-            let base_frs = usize::try_from(ext.base_frs).unwrap_or(usize::MAX);
+            let base_frs = usize::try_from(ext.base_frs.raw()).unwrap_or(usize::MAX);
             if base_frs < self.base_records.len()
                 && let Some(ref mut base) = self.base_records[base_frs]
             {
