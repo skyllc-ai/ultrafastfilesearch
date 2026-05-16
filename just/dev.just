@@ -224,7 +224,7 @@ bake-day:
     $BakeDir = Join-Path $HOME 'uffs_bake'
     $Log = Join-Path $BakeDir "$Date-$Platform.log"
     New-Item -ItemType Directory -Path $BakeDir -Force | Out-Null
-    Write-Host "🎂 Bake-day check — $Platform — $Date" -ForegroundColor Blue
+    Write-Host "[bake-day] check - $Platform - $Date" -ForegroundColor Blue
     Write-Host "   Log: $Log`n" -ForegroundColor Blue
     just readiness *>&1 | Tee-Object -FilePath $Log
     $ReadinessExit = $LASTEXITCODE
@@ -243,25 +243,25 @@ bake-day:
     if ($RedFlags) {
         $Pass = $false
         $Reasons += "red-flag patterns found"
-        Write-Host "`n❌ Red-flag patterns:" -ForegroundColor Red
+        Write-Host "`n[FAIL] Red-flag patterns:" -ForegroundColor Red
         $RedFlags | ForEach-Object { Write-Host $_.Line }
     }
     if ($BgIoFail) {
         $Pass = $false
         $Reasons += "BackgroundIoPriority begin failed"
-        Write-Host "`n❌ BackgroundIoPriority:" -ForegroundColor Red
+        Write-Host "`n[FAIL] BackgroundIoPriority:" -ForegroundColor Red
         $BgIoFail | ForEach-Object { Write-Host $_.Line }
     }
-    Write-Host "`n── Bake-day summary ─────────────────────────────────" -ForegroundColor Blue
+    Write-Host "`n--- Bake-day summary ---------------------------------" -ForegroundColor Blue
     if ($Pass) {
-        Write-Host "✅ $Platform $Date — ALL GREEN (150/150)" -ForegroundColor Green
-        $Result = '150/150 ✅'
+        Write-Host "[OK] $Platform $Date - ALL GREEN (150/150)" -ForegroundColor Green
+        $Result = '150/150 OK'
     } else {
-        Write-Host "❌ $Platform $Date — FAILED: $($Reasons -join ', ')" -ForegroundColor Red
+        Write-Host "[FAIL] $Platform $Date - FAILED: $($Reasons -join ', ')" -ForegroundColor Red
         Write-Host "   Full log: $Log" -ForegroundColor Red
         $Result = 'FAIL'
     }
-    Write-Host "`n── Paste row into docs/architecture/memory-tiering-bake-criteria.md §4 ─" -ForegroundColor Blue
+    Write-Host "`n--- Paste row into docs/architecture/memory-tiering-bake-criteria.md Section 4 ---" -ForegroundColor Blue
     Write-Host "|  ?  | $Date | full readiness | (pending) | full readiness | $Result |       |"
     if (-not $Pass) { exit 1 }
 
@@ -408,18 +408,18 @@ update-tools:
 [windows]
 update-tools:
     #!powershell
-    Write-Host "`n🔄 Updating all development tools" -ForegroundColor Blue
+    Write-Host "`n[update-tools] Updating all development tools" -ForegroundColor Blue
     Write-Host "========================================================"
 
-    # ── 1. Rust toolchain ──────────────────────────────────────
-    Write-Host "`n🦀 Step 1/3: Rust toolchain" -ForegroundColor Blue
+    # --- 1. Rust toolchain ------------------------------------
+    Write-Host "`n[Rust] Step 1/3: Rust toolchain" -ForegroundColor Blue
     rustup self update 2>$null
     rustup update
     just toolchain-sync
-    Write-Host "  ✅ Rust toolchain up to date" -ForegroundColor Green
+    Write-Host "  [OK] Rust toolchain up to date" -ForegroundColor Green
 
-    # ── 2. Cargo tools ─────────────────────────────────────────
-    Write-Host "`n📦 Step 2/3: Cargo tools" -ForegroundColor Blue
+    # --- 2. Cargo tools ---------------------------------------
+    Write-Host "`n[Pkg] Step 2/3: Cargo tools" -ForegroundColor Blue
     $tools = @(
         "cargo-nextest"
         "cargo-llvm-cov"
@@ -434,27 +434,27 @@ update-tools:
     )
     $toolList = $tools -join " "
     if (Get-Command cargo-binstall -ErrorAction SilentlyContinue) {
-        Write-Host "  → Using cargo-binstall (fast, pre-built binaries)"
+        Write-Host "  -> Using cargo-binstall (fast, pre-built binaries)"
         Invoke-Expression "cargo binstall -y --no-confirm $toolList"
     } else {
-        Write-Host "  → Using cargo install (compiling from source — slower)"
-        Write-Host "  💡 Install cargo-binstall for faster updates:" -ForegroundColor Yellow
+        Write-Host "  -> Using cargo install (compiling from source - slower)"
+        Write-Host "  [TIP] Install cargo-binstall for faster updates:" -ForegroundColor Yellow
         Invoke-Expression "cargo install $toolList"
     }
-    Write-Host "  ✅ Cargo tools up to date" -ForegroundColor Green
+    Write-Host "  [OK] Cargo tools up to date" -ForegroundColor Green
 
-    # ── 3. System packages ─────────────────────────────────────
-    Write-Host "`n📦 Step 3/3: System packages" -ForegroundColor Blue
+    # --- 3. System packages -----------------------------------
+    Write-Host "`n[Pkg] Step 3/3: System packages" -ForegroundColor Blue
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         winget upgrade Casey.Just 2>$null
     } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
         scoop update just 2>$null
     } else {
-        Write-Host "  → No winget/scoop detected, skipping system packages"
+        Write-Host "  -> No winget/scoop detected, skipping system packages"
     }
-    Write-Host "  ✅ System packages up to date" -ForegroundColor Green
+    Write-Host "  [OK] System packages up to date" -ForegroundColor Green
 
-    Write-Host "`n🎉 All tools updated!" -ForegroundColor Green
+    Write-Host "`n[DONE] All tools updated!" -ForegroundColor Green
     Write-Host "  rustc:    $(rustc --version)"
     Write-Host "  nextest:  $(cargo nextest --version 2>$null | Select-Object -First 1)"
 
