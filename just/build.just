@@ -531,7 +531,7 @@ sync:
     $ErrorActionPreference = 'Stop'
     $branch = (git rev-parse --abbrev-ref HEAD).Trim()
     if ($branch -ne 'main') {
-        Write-Host "❌ just sync only runs on main (current: $branch)" -ForegroundColor Red
+        Write-Host "[FAIL] just sync only runs on main (current: $branch)" -ForegroundColor Red
         Write-Host "   Use 'git pull --rebase' (or commit the WIP first) on feature branches."
         exit 1
     }
@@ -541,19 +541,19 @@ sync:
     $after = (git rev-parse --short FETCH_HEAD).Trim()
     $dirty = (git status --porcelain)
     if ($dirty) {
-        Write-Host "⚠️  Discarding uncommitted edits to:" -ForegroundColor Yellow
+        Write-Host "[WARN] Discarding uncommitted edits to:" -ForegroundColor Yellow
         (git diff --name-only HEAD) -split "`n" | Where-Object { $_ } | ForEach-Object { Write-Host "   $_" }
     }
     if ($before -eq $after -and -not $dirty) {
-        Write-Host "✅ Already at origin/main ($before) — nothing to do" -ForegroundColor Green
+        Write-Host "[OK] Already at origin/main ($before) - nothing to do" -ForegroundColor Green
     } else {
         if ($before -ne $after) {
-            Write-Host "⚠️  Resetting $before -> $after" -ForegroundColor Yellow
+            Write-Host "[WARN] Resetting $before -> $after" -ForegroundColor Yellow
         }
         git reset --hard FETCH_HEAD
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $head = (git rev-parse --short HEAD).Trim()
-        Write-Host "✅ Synced to $head" -ForegroundColor Green
+        Write-Host "[OK] Synced to $head" -ForegroundColor Green
     }
 
 # Force-pull main (discarding local edits) and reinstall release binaries

@@ -5,6 +5,25 @@
 # Updated: April 2026 — Nightly (1.96+) / Edition 2024
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+# Windows PowerShell 5.1 (powershell.exe) reads files without a BOM as the
+# system ANSI code page (typically CP1252) — NOT as UTF-8.  `just` writes
+# shebang recipe bodies (`#!powershell`) as UTF-8 without a BOM, so any
+# multi-byte Unicode codepoint whose UTF-8 continuation byte lands in
+# 0x91-0x94 decodes to a smart quotation mark (U+2018-U+201D) which the
+# PowerShell tokenizer treats as a string delimiter.  This silently
+# terminates string literals mid-line and surfaces downstream as
+# "Unexpected token" / "Missing closing '}'" errors far from the real
+# cause.  Known offenders that hit this trap:
+#   em-dash (—)        UTF-8 E2 80 94  -> 0x94 = U+201D right double quote
+#   box-drawing (─)    UTF-8 E2 94 80  -> 0x94 = U+201D right double quote
+#   right arrow (→)    UTF-8 E2 86 92  -> 0x92 = U+2019 right single quote
+#   package emoji (📦) UTF-8 F0 9F 93 A6 -> 0x93 = U+201C left double quote
+#   bulb emoji   (💡) UTF-8 F0 9F 92 A1 -> 0x92 = U+2019 right single quote
+# RULE: Keep all `[windows]` `#!powershell` recipe strings ASCII-only.
+# Unicode inside `#` comments is safe (tokenizer skips comment bodies).
+# Migrating to PowerShell 7 (`pwsh`) would also fix this — pwsh reads
+# scripts as UTF-8 by default — but that requires every operator to have
+# PS Core installed, which the Windows-host CI baseline does not.
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 export FORCE_COLOR := "1"
