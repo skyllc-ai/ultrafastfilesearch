@@ -8,9 +8,6 @@
 //! input strings are folded char-by-char at match time.  This is
 //! zero-allocation for the common Exact/Prefix/Suffix/Contains variants.
 
-use std::collections::HashSet;
-
-use aho_corasick::AhoCorasick;
 use regex::Regex;
 use uffs_text::case_fold::CaseFold;
 
@@ -24,8 +21,7 @@ use crate::pattern::{ParsedPattern, PatternType};
 /// Polars expressions.  Case-insensitive matching uses NTFS `$UpCase` folding
 /// via [`CaseFold`] instead of ASCII-only `to_ascii_lowercase()`.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum IndexPattern {
+pub(crate) enum IndexPattern {
     /// Always matches (e.g., `*`).
     Any,
 
@@ -73,32 +69,6 @@ pub enum IndexPattern {
         suffix_folded: Vec<u16>,
     },
 
-    /// Multiple exact matches (hash set lookup).
-    ExactSet {
-        /// Set of exact values (case-sensitive).
-        values: HashSet<String>,
-        /// Pre-folded sets for case-insensitive matching.
-        folded_set: HashSet<Vec<u16>>,
-    },
-
-    /// Multiple suffix matches (e.g., extensions).
-    SuffixSet {
-        /// List of suffixes (case-sensitive).
-        suffixes: Vec<String>,
-        /// Pre-folded suffix codepoints for case-insensitive matching.
-        suffixes_folded: Vec<Vec<u16>>,
-    },
-
-    /// Multiple literal substrings (Aho-Corasick).
-    ContainsAny {
-        /// Aho-Corasick automaton for case-sensitive matching.
-        automaton: AhoCorasick,
-        /// Aho-Corasick automaton for case-insensitive matching (folded).
-        automaton_folded: AhoCorasick,
-        /// Original patterns for debugging.
-        patterns: Vec<String>,
-    },
-
     /// Fallback to regex.
     Regex {
         /// Compiled regex for case-sensitive matching.
@@ -118,11 +88,11 @@ impl IndexPattern {
     /// Check if a string matches this pattern.
     ///
     /// `fold` provides NTFS-compatible case folding for case-insensitive
-    /// matching.  Most variants use zero-allocation char-by-char fold
-    /// comparison.  `ExactSet` and `ContainsAny` may allocate (rare).
+    /// matching.  All variants use zero-allocation char-by-char fold
+    /// comparison (or per-character regex matching).
     #[inline]
     #[must_use]
-    pub fn matches(&self, input: &str, case_sensitive: bool, fold: CaseFold) -> bool {
+    pub(crate) fn matches(&self, input: &str, case_sensitive: bool, fold: CaseFold) -> bool {
         match self {
             Self::Any => true,
             Self::Exact { value, folded } => {
@@ -166,48 +136,6 @@ impl IndexPattern {
                         && fold.ends_with_folded(input, suffix_folded)
                 }
             }
-            Self::ExactSet { values, folded_set } => {
-                if case_sensitive {
-                    values.contains(input)
-                } else {
-                    // Fold input to Vec<u16> for HashSet lookup — alloc per call,
-                    // but ExactSet is rare.
-                    folded_set.contains(&fold.fold_to_u16(input))
-                }
-            }
-            Self::SuffixSet {
-                suffixes,
-                suffixes_folded,
-            } => {
-                if case_sensitive {
-                    suffixes.iter().any(|suf| input.ends_with(suf.as_str()))
-                } else {
-                    suffixes_folded
-                        .iter()
-                        .any(|suf| fold.ends_with_folded(input, suf))
-                }
-            }
-            Self::ContainsAny {
-                automaton,
-                automaton_folded,
-                ..
-            } => {
-                if case_sensitive {
-                    automaton.is_match(input)
-                } else {
-                    // Aho-Corasick needs a folded string — use fold_into with
-                    // a thread-local buffer (ContainsAny is rare).
-                    thread_local! {
-                        static BUF: core::cell::RefCell<Vec<u8>> =
-                            core::cell::RefCell::new(Vec::with_capacity(256));
-                    }
-                    BUF.with(|cell| {
-                        let mut buf = cell.borrow_mut();
-                        let folded_str = fold.fold_into(input, &mut buf);
-                        automaton_folded.is_match(folded_str)
-                    })
-                }
-            }
             Self::Regex { regex, regex_lower } => {
                 if case_sensitive {
                     regex.is_match(input)
@@ -222,23 +150,15 @@ impl IndexPattern {
     }
 }
 
-/// Compile a glob pattern into an `IndexPattern`.
-///
-/// Uses the default `$UpCase` table for pre-folding pattern strings.
-///
-/// # Errors
-///
-/// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
-pub fn compile_index_pattern(pattern: &str) -> Result<IndexPattern> {
-    compile_index_pattern_with_fold(pattern, CaseFold::default_table())
-}
-
 /// Compile a glob pattern into an `IndexPattern` with a specific `CaseFold`.
 ///
+/// Internal helper for [`compile_parsed_pattern_with_fold`]; called both
+/// directly for the `Glob` pattern type and per-alternative for OR patterns.
+///
 /// # Errors
 ///
 /// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
-pub fn compile_index_pattern_with_fold(pattern: &str, fold: CaseFold) -> Result<IndexPattern> {
+fn compile_index_pattern_with_fold(pattern: &str, fold: CaseFold) -> Result<IndexPattern> {
     let kind = classify_glob(pattern);
     match kind {
         GlobKind::Any => Ok(IndexPattern::Any),
@@ -319,7 +239,7 @@ pub fn compile_index_pattern_with_fold(pattern: &str, fold: CaseFold) -> Result<
 /// # Errors
 ///
 /// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
-pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
+pub(crate) fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
     compile_parsed_pattern_with_fold(parsed, CaseFold::default_table())
 }
 
@@ -328,7 +248,7 @@ pub fn compile_parsed_pattern(parsed: &ParsedPattern) -> Result<IndexPattern> {
 /// # Errors
 ///
 /// Returns an error if the pattern is invalid (e.g., malformed glob or regex).
-pub fn compile_parsed_pattern_with_fold(
+fn compile_parsed_pattern_with_fold(
     parsed: &ParsedPattern,
     fold: CaseFold,
 ) -> Result<IndexPattern> {
@@ -379,34 +299,5 @@ pub fn compile_parsed_pattern_with_fold(
             let folded = fold.fold_to_u16(&needle);
             Ok(IndexPattern::Contains { needle, folded })
         }
-    }
-}
-
-/// Compile multiple extension patterns into a `SuffixSet`.
-///
-/// Uses the default `$UpCase` table for pre-folding.
-#[must_use]
-pub fn compile_extensions(extensions: &[&str]) -> IndexPattern {
-    compile_extensions_with_fold(extensions, CaseFold::default_table())
-}
-
-/// Compile multiple extension patterns into a `SuffixSet` with a specific
-/// `CaseFold`.
-#[must_use]
-pub fn compile_extensions_with_fold(extensions: &[&str], fold: CaseFold) -> IndexPattern {
-    let suffixes: Vec<String> = extensions
-        .iter()
-        .map(|ext| {
-            if ext.starts_with('.') {
-                ext.to_string()
-            } else {
-                format!(".{ext}")
-            }
-        })
-        .collect();
-    let suffixes_folded: Vec<Vec<u16>> = suffixes.iter().map(|suf| fold.fold_to_u16(suf)).collect();
-    IndexPattern::SuffixSet {
-        suffixes,
-        suffixes_folded,
     }
 }

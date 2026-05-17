@@ -54,7 +54,6 @@
 // reachable from this integration test's tiny surface (`OutputConfig` +
 // `DisplayRow` + `uffs_time` constants).  The pattern mirrors
 // `uffs-mcp/tests/mcp_protocol.rs`.
-use aho_corasick as _;
 use anyhow as _;
 use bytemuck as _;
 use chrono as _;

@@ -4406,7 +4406,6 @@ dependencies = [
 name = "uffs-core"
 version = "0.5.100"
 dependencies = [
- "aho-corasick",
  "anyhow",
  "bytemuck",
  "chrono",

@@ -67,10 +67,9 @@ chrono.workspace = true
 # Hashing (FxHashMap — fast, non-crypto hash for internal tables)
 rustc-hash.workspace = true
 
-# String matching (SIMD-optimized for IndexQuery)
+# String matching for compiled patterns (aggregate engine).
 regex.workspace = true
 memchr.workspace = true
-aho-corasick.workspace = true
 globset.workspace = true
 
 # Async (for load_live_drive on Windows)

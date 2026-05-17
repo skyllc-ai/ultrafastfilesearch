@@ -218,23 +218,10 @@ fn hide_system() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn query_mode_from_str() {
-    use crate::index_search::QueryMode;
-    assert!(matches!(
-        QueryMode::from_str_opt("auto"),
-        Some(QueryMode::Auto)
-    ));
-    assert!(matches!(
-        QueryMode::from_str_opt("polars"),
-        Some(QueryMode::ForceDataFrame)
-    ));
-    assert!(matches!(
-        QueryMode::from_str_opt("index"),
-        Some(QueryMode::ForceIndex)
-    ));
-    assert!(QueryMode::from_str_opt("invalid").is_none());
-}
+// `QueryMode` was removed in #263 alongside the rest of the
+// `index_search::query` plumbing (no external or internal callers).  The
+// previous `query_mode_from_str` test exercised that dead enum and is
+// dropped here — no live surface remains to assert on.
 
 #[test]
 fn empty_dataframe() -> TestResult {

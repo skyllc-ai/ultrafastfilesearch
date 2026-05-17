@@ -120,17 +120,7 @@ mod error;
 mod export;
 pub mod extensions;
 pub(crate) mod glob;
-// Phase 3 audit (2026-05-13): `index_search` and its `pub use {…}`
-// re-exports have ZERO external module-path consumers, but the
-// submodule itself has ~91 pre-existing dead-code items (variants,
-// methods, functions never used internally either) that strict
-// dead-code analysis only sees once visibility is reduced.  Demotion
-// is deferred to a focused dead-code-cleanup PR — Phase 3 keeps the
-// module `pub` to avoid scope creep.  Tracked in the Phase 3 outcome
-// report; recommended next pass: prune `index_search::{routing,
-// query::{planning, filtering, expansion, execution, builder}, pattern,
-// result}` to remove the unused enums, methods, and re-exports.
-pub mod index_search;
+pub(crate) mod index_search;
 pub mod output;
 mod path_resolver;
 pub mod path_trie;
@@ -156,12 +146,6 @@ pub use error::{CoreError, Result};
 pub use export::{export_csv, export_json, export_table};
 pub use extensions::{
     ExtensionFilter, ExtensionIndex, ExtensionIndexStats, add_ext_column, ext_expr, has_ext_column,
-};
-pub use index_search::{
-    IndexPattern, IndexQuery, QueryComplexity, QueryFeatures, QueryMode, SearchResult, TypeFilter,
-    analyze_pattern_complexity, compile_extensions, compile_extensions_with_fold,
-    compile_index_pattern, compile_index_pattern_with_fold, compile_parsed_pattern,
-    compile_parsed_pattern_with_fold,
 };
 #[expect(
     deprecated,

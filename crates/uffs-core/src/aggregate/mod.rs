@@ -302,10 +302,9 @@ pub fn run_aggregate(
 /// point when combining search + aggregation: e.g. `*.exe --agg
 /// terms:extension` should aggregate only `.exe` files, not all files.
 ///
-/// The pattern is compiled once using
-/// [`IndexPattern`](crate::index_search::IndexPattern) and matched
-/// inline during the scan — no `DisplayRow` construction or path
-/// resolution is needed.
+/// The pattern is compiled once via
+/// `index_search::compile_parsed_pattern` and matched inline during
+/// the scan — no `DisplayRow` construction or path resolution is needed.
 ///
 /// # Errors
 ///

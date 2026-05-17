@@ -27,8 +27,9 @@ impl MftIndex {
     /// Outputs **one row per FRS** (File Record Segment) - this is the true
     /// `MftIndex` representation. Hard links and ADS are NOT expanded.
     ///
-    /// For search results with expansion across hard links and ADS, use
-    /// `IndexQuery::collect()`.
+    /// Hard-link and ADS expansion is not currently exposed as a public
+    /// surface; callers that need it should construct expanded rows from
+    /// `MftIndex::records` directly.
     ///
     /// # Tree Metrics
     ///
