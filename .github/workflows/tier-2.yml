@@ -436,10 +436,10 @@ jobs:
   #
   # Why scoped to `uffs-security` (and not `--workspace`):
   #
-  #   `cargo-mutants` is O(mutations × test-suite-runtime).  At ~198
+  #   `cargo-mutants` is O(mutations × test-suite-runtime).  At ~209
   #   generated mutations for `uffs-security` × ~5 s baseline tests,
-  #   the warm-cache full run lands at 10-15 min with `--jobs 4` on
-  #   `ubuntu-latest` (4 cores).  Extending to `uffs-mft` would add
+  #   the warm-cache full run lands at 15-25 min with `--jobs 4` on
+  #   `windows-latest` (4 cores).  Extending to `uffs-mft` would add
   #   ~600 mutations × ~30 s tests ≈ another 60-90 min — beyond a
   #   reasonable Tier 2 weekly budget without batching across days.
   #
@@ -450,32 +450,46 @@ jobs:
   #   measurable test-quality signal there that no other tool in
   #   this pipeline produces.
   #
+  # Why `windows-latest` (not `ubuntu-latest`):
+  #
+  #   The single highest-value file in `uffs-security` for
+  #   mutation testing is `src/pipe.rs` (Windows named-pipe
+  #   security helpers — the privilege-elevation IPC surface).
+  #   That file is `#![cfg(windows)]` at file level, so its tests
+  #   only compile on Windows.  On `ubuntu-latest` the inaugural
+  #   run (commit `e8b6bdf`, 2026-05-18 nightly, refs issue #267)
+  #   produced 153 MISSED mutations — all inside `pipe.rs`,
+  #   because the Linux runner cannot compile the test code that
+  #   would catch them.  This was a structural false-negative,
+  #   not a real test-quality signal.
+  #
+  #   The other ~56 cross-platform mutations (keystore, runtime-
+  #   dir, FNV hashing) compile on both platforms; moving the
+  #   whole job to Windows keeps that coverage *and* unlocks the
+  #   pipe.rs coverage that's the actual mutation-testing prize.
+  #   Running both platforms in parallel would test the cross-
+  #   platform 56 twice for marginal additional signal at
+  #   ~2× the Windows-runner $/min cost — single-Windows is the
+  #   honest cost-benefit choice.
+  #
   # Why advisory (job allowed to fail without breaking the workflow):
   #
   #   We have NO baseline of "expected missed mutations" yet — this
   #   is the first run.  The initial post-merge run will produce a
-  #   numerical baseline (e.g. "12 missed out of 198"); a follow-up
+  #   numerical baseline (e.g. "12 missed out of 209"); a follow-up
   #   PR can then promote the gate to hard-fail-on-regression once
   #   that baseline is recorded in `mutants.out/`.
   #
-  # Tier R3-04 of `docs/dev/architecture/code_clean/CLIPPY_POSTURE.md`.
+  # Tier R3-04 of `docs/architecture/code-quality/lint-posture.md`.
   mutants:
     name: Tier 2 / cargo-mutants (uffs-security)
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 60
     # Advisory in the initial rollout — see header comment.  Promote
     # to a hard gate via a follow-up PR once we have a baseline of
     # "expected missed mutations" and can fail on regression.
     continue-on-error: true
     steps:
-      - name: Free up disk space
-        # cargo-mutants copies the workspace into a temp dir for
-        # each mutant test run, so disk usage spikes briefly.  Same
-        # prelude as miri / careful for consistency.
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -488,8 +502,11 @@ jobs:
           # Dedicated cache key — cargo-mutants does many short
           # per-mutant rebuilds and benefits from its own cache so
           # the regular workspace builds don't evict mutation-test
-          # artifacts (and vice-versa).
-          shared-key: tier-2-mutants
+          # artifacts (and vice-versa).  `-windows` suffix scopes
+          # the cache to the Windows runner (rust-cache already
+          # includes the OS in its prefix, but the explicit suffix
+          # makes the platform pin visible in the cache UI).
+          shared-key: tier-2-mutants-windows
           cache-on-failure: 'true'
 
       - name: Install cargo-mutants
@@ -498,12 +515,18 @@ jobs:
           tool: cargo-mutants
 
       - name: Run cargo-mutants on uffs-security
-        # `--jobs 4` matches `ubuntu-latest`'s 4-core capacity.
+        # `--jobs 4` matches `windows-latest`'s 4-core capacity.
         # `--no-shuffle` gives deterministic mutant ordering, which
         # is useful when comparing successive runs.
         # `mutants.toml` at repo root supplies `additional_cargo_args
         # = ["--locked"]`, `timeout_multiplier = 2.0`, and exclusion
         # globs / regexes — see that file for justification of each.
+        #
+        # Explicit `shell: bash` because GitHub-Actions' default
+        # shell on Windows runners is PowerShell, which does NOT
+        # honour the `\` line-continuation; bash on Windows runners
+        # (provided by Git-for-Windows) does.
+        shell: bash
         run: |
           cargo mutants \
             --package uffs-security \
