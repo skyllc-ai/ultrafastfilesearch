@@ -12,7 +12,6 @@ name = "uffs-text"
 description = "Unicode text processing for UFFS: NTFS case folding, trigram keys, i18n foundation"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

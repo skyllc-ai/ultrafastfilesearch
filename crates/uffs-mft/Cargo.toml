@@ -16,7 +16,6 @@ name = "uffs-mft"
 description = "NTFS MFT reading library for UFFS (Ultra Fast File Search)"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

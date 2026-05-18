@@ -16,7 +16,6 @@ name = "uffs-core"
 description = "Query engine for UFFS (Ultra Fast File Search) using Polars"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

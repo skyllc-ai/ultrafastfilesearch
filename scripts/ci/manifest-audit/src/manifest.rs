@@ -110,11 +110,6 @@ pub(crate) struct MemberPackage {
     /// `.workspace = true`.
     pub(crate) edition: Option<toml::Value>,
 
-    /// `rust-version = ...` — Phase 1 invariant 3.4 requires
-    /// `.workspace = true`.
-    #[serde(rename = "rust-version")]
-    pub(crate) rust_version: Option<toml::Value>,
-
     /// `license = ...` — Phase 1 invariant 3.5 requires
     /// `.workspace = true`.
     pub(crate) license: Option<toml::Value>,
@@ -240,7 +235,6 @@ keywords.workspace = true
 categories.workspace = true
 documentation.workspace = true
 publish.workspace = true
-rust-version.workspace = true
 description = "per-crate description override is allowed"
 
 [package.metadata.docs.rs]

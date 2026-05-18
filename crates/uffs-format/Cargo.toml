@@ -23,7 +23,6 @@ name = "uffs-format"
 description = "Unified CSV/columnar formatter for UFFS (shared by daemon + thin CLI)"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

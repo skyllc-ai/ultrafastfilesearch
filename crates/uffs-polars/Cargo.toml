@@ -21,7 +21,6 @@ name = "uffs-polars"
 description = "Polars facade for UFFS (Ultra Fast File Search) - compilation isolation"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

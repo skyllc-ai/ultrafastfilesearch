@@ -223,12 +223,11 @@ pub(crate) fn audit_all(
             "3.3",
             &id,
         ));
-        findings.extend(check_inherited(
-            member.manifest.package.rust_version.as_ref(),
-            "rust-version",
-            "3.4",
-            &id,
-        ));
+        // Invariant 3.4 (`rust-version` consistency) was retired on 2026-05-18
+        // when the workspace dropped its `[workspace.package].rust-version`
+        // claim (refs issue #267 — the polars/nightly transitive feature
+        // makes any stable MSRV claim unverifiable).  Per-crate manifests no
+        // longer carry `rust-version.workspace = true`.
         findings.extend(audit_metadata_fields(member, &id, &exc));
         findings.extend(audit_deps_inherit_workspace(member, &id, &exc));
         findings.extend(audit_lints_inherit_workspace(member, &id));
@@ -397,7 +396,8 @@ fn normalise_path_dep(member_manifest_path: &str, dep_path: &str) -> String {
     components.join("/")
 }
 
-/// Shared 3.3 / 3.4 / 3.5 helper.
+/// Shared 3.3 / 3.5 helper.  (Invariant 3.4 — `rust-version` consistency —
+/// was retired on 2026-05-18; see `audit_all` for the citation.)
 fn check_inherited(
     value: Option<&toml::Value>,
     field_name: &str,
@@ -696,7 +696,6 @@ keywords.workspace = true
 categories.workspace = true
 documentation.workspace = true
 publish.workspace = true
-rust-version.workspace = true
 description = "per-crate description"
 
 [package.metadata.docs.rs]

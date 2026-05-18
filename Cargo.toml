@@ -58,10 +58,12 @@ members = [
 [workspace.package]
 version = "0.5.100"
 edition = "2024"
-# MSRV: Pure Rust code compiles on stable 1.91+ (Duration::from_mins),
-# but Polars is built with features = ["nightly", "simd"] which requires
-# a nightly toolchain. See rust-toolchain.toml for the pinned nightly channel.
-rust-version = "1.91"
+# No `rust-version` claim: the workspace is structurally nightly-only.
+# `crates/uffs-polars` enables `polars/nightly` unconditionally, which
+# transitively activates `foldhash/nightly` → `#![feature(...)]` → no
+# stable toolchain can build the workspace.  `rust-toolchain.toml` is
+# the single source of truth for the required channel.  See issue #267
+# for the audit + drop rationale.
 license = "MPL-2.0"
 repository = "https://github.com/skyllc-ai/UltraFastFileSearch"
 authors = ["Robert Nio <50460704+githubrobbi@users.noreply.github.com>"]

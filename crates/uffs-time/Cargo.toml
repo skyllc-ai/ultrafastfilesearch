@@ -15,7 +15,6 @@ name = "uffs-time"
 description = "NTFS FILETIME arithmetic for UFFS (pure const fn, zero deps)"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
