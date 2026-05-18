@@ -423,7 +423,40 @@ mod windows_impl {
                     None,
                 )
             };
-            let handle = handle_result.map_err(io::Error::other)?;
+            // Unwrap the FACILITY_WIN32 envelope so std can map the
+            // raw Win32 code to the documented `ErrorKind`
+            // (`AlreadyExists` / `PermissionDenied` per the trait
+            // contract at `RuntimeDir::create_owner_only`).
+            //
+            // `windows::core::Error::code()` returns an HRESULT.  Win32
+            // failures arrive wrapped via `HRESULT_FROM_WIN32`, which
+            // sets facility = 7 (`FACILITY_WIN32`, severity = 1) and
+            // stuffs `GetLastError()` into the low 16 bits:
+            //
+            //     0x8007_XXXX  ← XXXX = GetLastError()
+            //
+            // `io::Error::from_raw_os_error` expects the bare Win32
+            // code (not the wrapped HRESULT) — its internal
+            // `decode_error_kind` table is keyed on `ERROR_FILE_EXISTS`
+            // (80), `ERROR_ACCESS_DENIED` (5), etc., NOT on their
+            // HRESULT envelopes.  Passing the raw HRESULT instead
+            // would degrade every error to `ErrorKind::Other`, which
+            // is exactly what produced the nightly cargo-mutants
+            // baseline failure on Windows runners (`gh run 26037964594`,
+            // `runtime_dir::tests::create_owner_only_rejects_existing_file`).
+            //
+            // Non-WIN32-facility HRESULTs fall through unchanged —
+            // std has no portable kind mapping for them anyway, and
+            // `from_raw_os_error` will just preserve them verbatim.
+            let handle = handle_result.map_err(|err| {
+                let hresult = err.code().0;
+                let win32_code = if (hresult.cast_unsigned() & 0xFFFF_0000_u32) == 0x8007_0000_u32 {
+                    hresult & 0xFFFF_i32
+                } else {
+                    hresult
+                };
+                io::Error::from_raw_os_error(win32_code)
+            })?;
             #[expect(
                 unsafe_code,
                 reason = "transfer ownership Win32 HANDLE → std::fs::File"
