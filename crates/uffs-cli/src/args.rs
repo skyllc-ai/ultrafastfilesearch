@@ -7,7 +7,64 @@
 //! (see [`uffs_client::protocol::cli_args`]).  This module only handles
 //! subcommands that run client-side (daemon, mcp, stats, aggregate).
 
+use core::fmt;
 use std::path::PathBuf;
+
+use uffs_mft::platform::{DriveLetter, DriveLetterError};
+
+/// Typed error returned by [`parse_drive_letter`].
+///
+/// Phase 5d migration of the previous `Result<DriveLetter, String>`
+/// return type: the Display strings stay byte-identical with the
+/// pre-migration messages so end-user CLI output is unchanged, while
+/// [`std::error::Error::source`] now chains through to the underlying
+/// [`DriveLetterError`] for the `Inner` case (a real improvement over
+/// the previous `String` that flattened the source out).
+///
+/// `#[non_exhaustive]` per Phase 5c discipline so future variants don't
+/// require a semver bump on the (workspace-internal) consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub(crate) enum ParseDriveLetterError {
+    /// Input was not a single ASCII letter (optionally followed by `:`).
+    BadShape {
+        /// The original, untrimmed input (echoed back in Display).
+        input: String,
+    },
+    /// The single character was not in `A..=Z` (case-insensitive).
+    ///
+    /// `source` preserves the underlying [`DriveLetterError`] so callers
+    /// that walk [`std::error::Error::source`] keep the typed chain.
+    Inner {
+        /// The original, untrimmed input (echoed back in Display).
+        input: String,
+        /// The underlying [`DriveLetter::parse`] failure.
+        source: DriveLetterError,
+    },
+}
+
+impl fmt::Display for ParseDriveLetterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BadShape { input } => write!(
+                f,
+                "Invalid drive letter '{input}': expected single letter like 'C' or 'C:'"
+            ),
+            Self::Inner { input, source } => {
+                write!(f, "Invalid drive letter '{input}': {source}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for ParseDriveLetterError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Inner { source, .. } => Some(source),
+            Self::BadShape { .. } => None,
+        }
+    }
+}
 
 /// Parse a drive letter from common CLI input formats.
 ///
@@ -15,24 +72,30 @@ use std::path::PathBuf;
 ///
 /// # Errors
 ///
-/// Returns an error if the input is not a valid drive letter.
-pub(crate) fn parse_drive_letter(input: &str) -> Result<uffs_mft::platform::DriveLetter, String> {
+/// Returns [`ParseDriveLetterError`] when `input` is not a single
+/// ASCII letter (optionally with a `:` suffix and surrounding
+/// whitespace) in `A..=Z`.
+pub(crate) fn parse_drive_letter(input: &str) -> Result<DriveLetter, ParseDriveLetterError> {
     let trimmed = input.trim();
     let letter_str = trimmed.strip_suffix(':').unwrap_or(trimmed);
 
     if letter_str.len() != 1 {
-        return Err(format!(
-            "Invalid drive letter '{input}': expected single letter like 'C' or 'C:'"
-        ));
+        return Err(ParseDriveLetterError::BadShape {
+            input: input.to_owned(),
+        });
     }
 
     let ch = letter_str
         .chars()
         .next()
-        .ok_or_else(|| format!("Invalid drive letter '{input}'"))?;
+        .ok_or_else(|| ParseDriveLetterError::BadShape {
+            input: input.to_owned(),
+        })?;
 
-    uffs_mft::platform::DriveLetter::parse(ch)
-        .map_err(|err| format!("Invalid drive letter '{input}': {err}"))
+    DriveLetter::parse(ch).map_err(|source| ParseDriveLetterError::Inner {
+        input: input.to_owned(),
+        source,
+    })
 }
 
 // ── Subcommand types ───────────────────────────────────────────────────
@@ -60,7 +123,7 @@ pub(crate) enum DaemonAction {
         /// Data directory.
         data_dir: Option<PathBuf>,
         /// Drive letter(s) to load (filters `--data-dir` discovery).
-        drives: Vec<uffs_mft::platform::DriveLetter>,
+        drives: Vec<DriveLetter>,
         /// Skip file cache.
         no_cache: bool,
         /// Log level.
@@ -95,7 +158,7 @@ pub(crate) enum DaemonAction {
         /// Data directory — discover and load a specific drive from it.
         data_dir: Option<PathBuf>,
         /// Drive letter(s) to load (Windows live only).
-        drives: Vec<uffs_mft::platform::DriveLetter>,
+        drives: Vec<DriveLetter>,
         /// Skip cache when loading.
         no_cache: bool,
     },
@@ -105,7 +168,7 @@ pub(crate) enum DaemonAction {
     /// hibernate --help`.
     Hibernate {
         /// Drive letter(s) to hibernate; empty = all loaded drives.
-        drives: Vec<uffs_mft::platform::DriveLetter>,
+        drives: Vec<DriveLetter>,
     },
     /// Promote drive(s) to `Hot` and pin the tier (Phase 8-C).
     ///
@@ -113,7 +176,7 @@ pub(crate) enum DaemonAction {
     /// (matches the daemon's `DEFAULT_PRELOAD_PIN_MINUTES`).
     Preload {
         /// Drive letter(s) to preload (must be non-empty).
-        drives: Vec<uffs_mft::platform::DriveLetter>,
+        drives: Vec<DriveLetter>,
         /// Override the default 30-min pin window.
         pin_minutes: Option<u32>,
     },
@@ -125,7 +188,7 @@ pub(crate) enum DaemonAction {
     /// (clearing pins) before unlinking the cache files.
     Forget {
         /// Drive letter(s) to forget (must be non-empty).
-        drives: Vec<uffs_mft::platform::DriveLetter>,
+        drives: Vec<DriveLetter>,
         /// Force-forget non-`Cold` drives by auto-hibernating first.
         force: bool,
     },
@@ -194,7 +257,7 @@ fn parse_daemon_start(rest: &[String]) -> DaemonAction {
             "--drive" => {
                 if let Some(val) = iter.next() {
                     for ch in val.chars() {
-                        if let Ok(letter) = uffs_mft::platform::DriveLetter::parse(ch) {
+                        if let Ok(letter) = DriveLetter::parse(ch) {
                             drives.push(letter);
                         }
                     }
@@ -384,7 +447,7 @@ fn parse_daemon_forget(rest: &[String]) -> Result<DaemonAction, anyhow::Error> {
 /// values, and whitespace.  Silently skips entries that don't parse
 /// as ASCII letters - mirrors the lenient parsing already used by
 /// `parse_daemon_load`.
-fn extend_drives_from_csv(drives: &mut Vec<uffs_mft::platform::DriveLetter>, value: &str) {
+fn extend_drives_from_csv(drives: &mut Vec<DriveLetter>, value: &str) {
     for part in value.split(',') {
         if let Ok(letter) = parse_drive_letter(part) {
             drives.push(letter);
@@ -555,4 +618,66 @@ USAGE:  uffs status
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 pub(crate) fn print_status_help() {
     print!("{STATUS_HELP}");
+}
+
+#[cfg(test)]
+mod tests {
+    use core::error::Error as _;
+
+    use super::{ParseDriveLetterError, parse_drive_letter};
+
+    /// `BadShape` carries the original input and its Display matches the
+    /// byte-for-byte format the previous `Result<_, String>` produced.
+    /// Locks the user-visible CLI error message in place across the
+    /// Phase 5d migration so operators don't see a renderer change.
+    #[test]
+    fn bad_shape_preserves_legacy_display_format() {
+        let err = parse_drive_letter("CD").expect_err("multi-char input must error");
+        assert!(
+            matches!(&err, ParseDriveLetterError::BadShape { input } if input == "CD"),
+            "expected BadShape('CD'), got {err:?}",
+        );
+        assert_eq!(
+            err.to_string(),
+            "Invalid drive letter 'CD': expected single letter like 'C' or 'C:'",
+        );
+        assert!(err.source().is_none(), "BadShape has no underlying source");
+    }
+
+    /// `Inner` preserves the original input AND chains the underlying
+    /// [`DriveLetterError`] via [`Error::source`].
+    /// The Display string keeps the pre-migration shape; the chain is
+    /// the real improvement over the previous flattened `String`.
+    #[test]
+    fn inner_preserves_source_chain() {
+        let err = parse_drive_letter("1:").expect_err("non-letter input must error");
+        let ParseDriveLetterError::Inner { input, source } = &err else {
+            panic!("expected Inner variant, got {err:?}");
+        };
+        assert_eq!(input, "1:");
+        assert_eq!(source.raw, '1');
+        assert_eq!(
+            err.to_string(),
+            "Invalid drive letter '1:': drive letter must be ASCII A..=Z (case insensitive); got '1'",
+        );
+        // The error chain must include the typed source — this is the
+        // observable improvement over the pre-Phase-5d `String` return.
+        let chained = err.source().expect("Inner exposes its source");
+        assert_eq!(
+            chained.to_string(),
+            "drive letter must be ASCII A..=Z (case insensitive); got '1'",
+        );
+    }
+
+    /// Empty input takes the `BadShape` branch and round-trips the empty
+    /// `input` field — defensive coverage for the `chars().next()` arm
+    /// which is otherwise unreachable after the `len() != 1` guard.
+    #[test]
+    fn bad_shape_handles_empty_input() {
+        let err = parse_drive_letter("").expect_err("empty input must error");
+        assert!(
+            matches!(&err, ParseDriveLetterError::BadShape { input } if input.is_empty()),
+            "expected BadShape(''), got {err:?}",
+        );
+    }
 }
