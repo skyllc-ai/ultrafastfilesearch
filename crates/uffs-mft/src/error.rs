@@ -9,7 +9,23 @@ use thiserror::Error;
 pub type Result<T> = core::result::Result<T, MftError>;
 
 /// Errors that can occur during MFT operations.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: future Win32 /
+/// filesystem failure modes (e.g. a `VolumeShadowCopy { source }`
+/// variant when supporting VSS-snapshot reads, or a
+/// `Compressed { reason }` variant for NTFS-compressed-MFT support)
+/// can be added without breaking downstream exhaustive matchers.
+///
+/// **Contributor contract:** when adding a new variant here, audit
+/// the `impl From<MftError> for CoreError` in `uffs-core::error`:
+/// operation-lifecycle variants (timeout / cancellation /
+/// wait-failure analogues) MUST be added as explicit arms in that
+/// impl so they map to the matching `CoreError` taxonomy.  All
+/// other variants flow through the trailing `other => Self::Mft(other)`
+/// catchall.  The taxonomy contract is regression-tested in
+/// `uffs-core::error::tests::promotes_*_taxonomy_from_mft_errors`.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum MftError {
     /// Failed to open volume for reading.
     #[error("Failed to open volume '{volume}': {source}")]

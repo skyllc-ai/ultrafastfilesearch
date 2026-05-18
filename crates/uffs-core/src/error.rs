@@ -109,6 +109,51 @@ pub enum CoreError {
 }
 
 impl From<uffs_mft::MftError> for CoreError {
+    /// Translates an [`uffs_mft::MftError`] into a [`CoreError`],
+    /// promoting operation-lifecycle variants (`Timeout`, `Cancelled`,
+    /// `WaitFailed`) into the matching [`CoreError`] taxonomy so
+    /// callers can match on `CoreError::Timeout` / etc. uniformly
+    /// regardless of which layer raised the error.
+    ///
+    /// All other [`MftError`] variants flow through the catchall as
+    /// `Self::Mft(other)` — including any future variants added in
+    /// `uffs-mft`, which is `#[non_exhaustive]` (refs #192).
+    ///
+    /// **Contributor contract:** when `uffs-mft` adds a new variant,
+    /// audit whether it should be promoted to a [`CoreError`] taxonomy
+    /// variant.  Operation-lifecycle additions MUST get an explicit arm
+    /// here and a regression test below (see
+    /// `promotes_*_taxonomy_from_mft_errors`).  Pass-through additions
+    /// (raw Win32 / FS errors) need no source change here — the
+    /// catchall handles them safely.
+    ///
+    /// [`MftError`]: uffs_mft::MftError
+    ///
+    /// # `clippy::wildcard_enum_match_arm` expectation
+    ///
+    /// `MftError` is `#[non_exhaustive]` from `uffs-mft` (Phase 5 §5c,
+    /// refs #192): a catchall is structurally required — without one,
+    /// the match would be incomplete; with one, the lint fires.  The
+    /// two are fundamentally incompatible for cross-crate matches on
+    /// `#[non_exhaustive]` enums.  The deliberate-decision property
+    /// the lint normally guards is preserved by:
+    ///
+    /// 1. The three explicit taxonomy arms below, asserted by the
+    ///    `promotes_*_taxonomy_from_mft_errors` regression tests at the bottom
+    ///    of this file — adding a new lifecycle variant to `MftError` without
+    ///    updating those tests surfaces as a CI failure.
+    /// 2. The contributor contract in `MftError`'s rustdoc, which tells
+    ///    contributors when a new variant must be promoted here vs. passed
+    ///    through.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "MftError is #[non_exhaustive] from the cross-crate \
+                  perspective of uffs-core; the wildcard catchall is \
+                  structurally required for forward-compat.  \
+                  Deliberate-decision property preserved by explicit \
+                  arms + their regression tests + the contributor \
+                  docstring on MftError (see fn-level rustdoc)."
+    )]
     fn from(error: uffs_mft::MftError) -> Self {
         match error {
             uffs_mft::MftError::Timeout { operation, reason } => {
@@ -120,23 +165,7 @@ impl From<uffs_mft::MftError> for CoreError {
             uffs_mft::MftError::WaitFailed { operation, reason } => {
                 Self::WaitFailed { operation, reason }
             }
-            other @ (uffs_mft::MftError::VolumeOpen { .. }
-            | uffs_mft::MftError::NotNtfs(_)
-            | uffs_mft::MftError::InsufficientPrivileges
-            | uffs_mft::MftError::BootSectorRead(_)
-            | uffs_mft::MftError::InvalidBootSector(_)
-            | uffs_mft::MftError::RecordRead { .. }
-            | uffs_mft::MftError::InvalidRecord(_)
-            | uffs_mft::MftError::AttributeParse { .. }
-            | uffs_mft::MftError::Io(_)
-            | uffs_mft::MftError::Polars(_)
-            | uffs_mft::MftError::Parquet(_)
-            | uffs_mft::MftError::InvalidData(_)
-            | uffs_mft::MftError::RetrievalPointers(_)
-            | uffs_mft::MftError::PlatformNotSupported
-            | uffs_mft::MftError::InvalidInput(_)) => Self::Mft(other),
-            #[cfg(windows)]
-            other @ uffs_mft::MftError::Windows(_) => Self::Mft(other),
+            other => Self::Mft(other),
         }
     }
 }
