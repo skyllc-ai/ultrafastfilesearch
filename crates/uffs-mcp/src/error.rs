@@ -8,7 +8,21 @@
 use rmcp::ErrorData as McpError;
 
 /// Errors that can occur in the MCP ↔ daemon bridge.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: future bridge
+/// failure modes (e.g. `Unauthorized`, `RateLimited`, or a
+/// `ProtocolMismatch { client_version, server_version }` variant
+/// when the daemon's JSON-over-pipe protocol gains versioning) can
+/// be added without breaking downstream exhaustive matchers.
+/// Workspace-wide audit at PR-time confirmed all `BridgeError::*`
+/// references live inside `uffs-mcp` itself — zero external
+/// exhaustive matches (refs #192).  The two same-crate matches in
+/// [`BridgeError::is_daemon_connection_error`] and the
+/// `impl From<BridgeError> for McpError` are unaffected:
+/// `#[non_exhaustive]` only restricts cross-crate exhaustive
+/// matching.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BridgeError {
     /// The daemon client returned an error.
     #[error("daemon error: {0}")]
