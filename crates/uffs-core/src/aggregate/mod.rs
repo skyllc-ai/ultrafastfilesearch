@@ -589,7 +589,17 @@ fn scan_drive(
 }
 
 /// Errors that can occur during aggregation.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: future aggregation
+/// failure modes (e.g. `OverflowedAccumulator { field, kind }` when
+/// sum/avg accumulators saturate, or `IncompatibleSchemas` when
+/// cross-drive aggregates encounter divergent column types) can be
+/// added without breaking downstream exhaustive matchers.
+/// Workspace-wide audit at PR-time confirmed all 10 `AggregateError::*`
+/// references live inside `uffs-core` itself — zero external
+/// exhaustive matches today (refs #192).
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum AggregateError {
     /// A spec referenced a field that doesn't support the requested operation.
     #[error("field `{field}` does not support {operation}")]

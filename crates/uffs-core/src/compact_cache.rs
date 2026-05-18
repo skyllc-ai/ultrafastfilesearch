@@ -49,7 +49,19 @@ use crate::trigram::TrigramIndex;
 /// detection logic can now distinguish "cache file missing" from
 /// "decryption failed" from "stale by epoch" — the previous silent-
 /// `None` return collapsed all eight failure modes into one log line.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: cache-format
+/// evolution adds new failure modes over time (e.g. a future
+/// `UnsupportedFeature(&'static str)` variant when introducing
+/// optional column-storage features, or a `MagicMismatch` variant
+/// distinct from `ParseError`).  Downstream consumers (currently
+/// the daemon's stale-cache detection logic in
+/// `uffs-daemon::cache_manager`) match this enum non-exhaustively
+/// via `?` propagation and `Result::is_err()` — workspace-wide
+/// audit at PR-time confirmed zero external exhaustive matches
+/// (refs #192).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum LoadCacheError {
     /// Cache file does not exist on disk yet (typical on first boot
     /// or after a `cache clear`).  Caller should rebuild.

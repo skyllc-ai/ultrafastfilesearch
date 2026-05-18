@@ -9,7 +9,17 @@ use thiserror::Error;
 pub type Result<T> = core::result::Result<T, CoreError>;
 
 /// Errors that can occur during query operations.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: future operation
+/// taxonomies (e.g. a `RateLimited` variant for the daemon's
+/// admission-control gate, or a `Degraded { reason }` variant once
+/// partial-result handling lands) can be added as additive minor-
+/// version bumps without breaking downstream exhaustive matchers.
+/// Workspace-wide audit at PR-time confirmed all 23 `CoreError::*`
+/// references live inside `uffs-core` itself — zero external
+/// exhaustive matches today (refs #192).
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum CoreError {
     /// Invalid glob pattern.
     #[error("Invalid glob pattern '{pattern}': {reason}")]
