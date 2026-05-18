@@ -29,16 +29,18 @@ Recommended setup:
 3. Install the common contributor toolchain: `just setup`
 4. List available workflows any time with `just`
 
-### MSRV policy
+### Toolchain policy
 
-The workspace pins **Rust 1.91** as its declared minimum supported stable version (`rust-version = "1.91"` in `Cargo.toml`'s `[workspace.package]`).  This declaration sets four contracts:
+The workspace has **no MSRV claim** — it is structurally nightly-only.  `crates/uffs-polars` enables `polars/nightly` unconditionally to unlock Polars's SIMD-accelerated compute kernels, which transitively requires nightly Rust (issue #267 captures the full audit + drop rationale).
 
-- **Supported stable version:** Pure-Rust workspace code (i.e., everything outside the Polars-backed compilation surface) compiles on stable Rust **1.91 or newer**.  This is verified weekly by the `tier-2.yml::msrv` CI job, which installs stable 1.91 and runs `cargo +1.91 check --workspace --locked --all-features` plus a sibling `--no-default-features` run, failing the job on any stable-incompatible feature use.  `cargo check` (rather than `build`) is sufficient because every MSRV breach surfaces during type-checking.
-- **Nightly is required, not advisory:** Day-to-day development uses the pinned nightly toolchain from `rust-toolchain.toml`.  Nightly is **required** for two reasons: (1) `uffs-polars` is built with `features = ["nightly", "simd"]` to unlock Polars's SIMD-accelerated compute kernels, which need nightly intrinsics; (2) the workspace `[workspace.lints.rust]` policy enables `#[expect(...)]` (stable since 1.81, but other unstable lints are also gated to nightly).  The `tier-2.yml::msrv` stable build proves the *non-Polars* surface still compiles on stable; it does NOT prove the binary distribution is stable-buildable.
-- **Update cadence:** MSRV bumps are coupled to **major workspace-version boundaries** (`0.X.0` → `0.Y.0`).  Patch-level releases (`0.5.95` → `0.5.96`) NEVER raise MSRV.  Minor releases bump MSRV only when a transitive dep we cannot pin around (e.g., Polars, Tokio) bumps its own MSRV — in which case the bump is announced in `CHANGELOG.md` under that release's `### Toolchain` heading.  The nightly channel pin (`rust-toolchain.toml`'s `channel = "nightly-YYYY-MM-DD"`) bumps more frequently — see that file's header comment for the bump-cadence history and rollback rationale.
-- **Older release branches:** UFFS is pre-1.0 and has **no maintained back-branches**.  Only the latest `main`-derived release line carries MSRV.  Once UFFS reaches 1.0, this section will be expanded to cover branch-specific MSRV (e.g., `release-1.x` may stay on Rust 1.91 while `main` advances to 1.95).  Until then, "the workspace MSRV" unambiguously means "the MSRV at `main`'s `HEAD`".
+The single source of truth for the required toolchain is **`rust-toolchain.toml`** at the workspace root, which pins a specific known-good nightly channel (currently `nightly-2026-05-16`).  Every dev build and every CI job uses this channel.  See that file's header comment for the bump-cadence history, the per-bump rollback rationale, and the upstream-regression tracking that keeps the pin where it is.
 
-If any of these contracts changes, the MSRV section in `CHANGELOG.md` MUST be updated **in the same PR** that lands the change; reviewers should reject changes to `rust-version` (or to the `tier-2.yml::msrv` job) that don't update this section.
+Practical implications for contributors:
+
+- **Don't run `cargo +stable …` against the workspace.**  The polars-bound graph will not compile on any stable toolchain; the failure mode is `error[E0554]` inside `foldhash`.
+- **Don't add `rust-version = …` to any new manifest.**  The workspace-level claim was dropped in the change that closed #267; per-crate manifests do not carry `rust-version.workspace = true` either.  The `manifest-audit` tool no longer enforces invariant 3.4 (`rust-version` consistency) — adding back the field will pass the audit silently but will be reverted on review.
+- **Bumping the nightly pin** is handled by `just toolchain-sync` (or `just ship --fresh`, which runs `toolchain-sync` as part of the pipeline).  Both update `rust-toolchain.toml` to the latest nightly that compiles the workspace cleanly, log the bump in CHANGELOG, and revert if the new channel regresses any gate.
+- **Future MSRV path.**  If a publishable-leaf crate (`uffs-time`, `uffs-text`, `uffs-broker-protocol`) ever needs MSRV verification independent of the polars-bound graph, set MSRV per-crate via that crate's `[package.rust-version]` field and add a focused `cargo +stable check -p <crate>` CI job — do NOT resurrect a workspace-wide claim.
 
 For cross-compilation from macOS/Linux hosts:
 

@@ -182,7 +182,7 @@ The older C++ implementation remains useful as a parity and regression baseline,
 
 - **Windows** for live NTFS MFT reading (Administrator privileges required)
 - **macOS / Linux** for offline MFT analysis (no admin needed)
-- **Rust 1.91+** (Edition 2024, nightly required) to build from source
+- **Rust nightly** (Edition 2024) to build from source — channel pinned in `rust-toolchain.toml`; the workspace has no stable MSRV (see CONTRIBUTING.md → "Toolchain policy")
 
 ---
 

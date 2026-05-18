@@ -165,7 +165,7 @@ and `.github/workflows/tier-2.yml` (all as of commit `185ed8825`).
 | `miri` (UB check, narrow deep-dive) | — | — | — | ✅ (4 tests) |
 | `cargo careful` (UB check, broad std-debug-asserts) | — | — | — | ✅ (`uffs-security` + `uffs-mft`) |
 | `cargo mutants` (test-quality, advisory) | — | — | — | ✅ (`uffs-security`, ~198 mutations) |
-| `cargo +1.91 check` (MSRV verification) | — | — | — | ✅ (`--all-features` + `--no-default-features`) |
+| `cargo +1.91 check` (MSRV verification) | — | — | — | ❌ removed 2026-05-18 — workspace is structurally nightly-only (issue #267, §4.7) |
 | `cargo fuzz` (advers-input parsers, advisory) | — | — | — | ✅ (`uffs-mft`, 15 min/target) |
 | cargo-vet imports refresh | — | — | — | weekly PR |
 
@@ -361,67 +361,55 @@ transient failure, single-digit per week.
 | Advisory (`continue-on-error: true`) | does not block | red ❌ on job, ✅ workflow | yes if transient |
 | Tier 2 weekly | does not block PRs | `ci-failure-tier-2` issue auto-opened | yes if transient |
 
-### 4.7 GAP 7 — MSRV is declared but never verified (✅ CLOSED 2026-05-12)
+### 4.7 GAP 7 — MSRV verification (⛔ RECLASSIFIED “·N/A·” 2026-05-18 via issue #267)
 
-**Evidence**: The workspace declares `rust-version = "1.91"` in
-`Cargo.toml` and `msrv = "1.91"` in `clippy.toml`, and the
-`clippy::incompatible_msrv` lint is denied via the workspace-wide
-`pedantic` group.  But `rust-toolchain.toml` pins **nightly**, not
-1.91 stable, and there is no `cargo +1.91 check` job in any tier.
-Every dev build and every CI build runs against the pinned nightly.
+**Original framing (2026-05-12)**: The workspace declared
+`rust-version = "1.91"` and the `tier-2.yml::msrv` job was added
+to verify the claim with `cargo +1.91 check --workspace --locked
+--all-features` plus a sibling `--no-default-features` run.
 
-**Class of bugs this misses**: `clippy::incompatible_msrv` only fires
-for APIs explicitly attributed with `#[stable(since = ...)]` after
-1.91.  It is known to under-cover:
+**Why the original framing was wrong (2026-05-18)**: The very
+first run of the new job (issue #267, commit `e8b6bdf`) failed
+immediately with `error[E0554]` inside `foldhash-0.2.0/src/lib.rs`.
+The root cause is structural:
 
-- New trait impls on existing types (the trait was added pre-1.91 but
-  the impl is post-1.91).
-- Deref coercion / lifetime elision rule changes that affect
-  borrow-check behaviour without changing API signatures.
-- New `const fn` qualifications on previously non-const APIs.
-- Inference / specialisation improvements that compile pre-1.91 code
-  differently on a newer toolchain.
+- `crates/uffs-polars/Cargo.toml` enables `polars/nightly`
+  unconditionally in the polars dependency declaration to unlock
+  Polars's SIMD-accelerated compute kernels.
+- `polars/nightly` propagates to `foldhash/nightly` via the polars
+  dep graph.
+- `foldhash`'s `nightly` feature compiles `#![feature(...)]` —
+  invalid on any stable toolchain.
+- No cargo invocation (`--all-features`, `--no-default-features`,
+  workspace exclusion of `uffs-polars`) can break this chain: every
+  consumer crate transitively depends on `uffs-polars`, and the
+  `polars/nightly` enablement is at the dep-declaration level (not
+  behind a `uffs-polars`-side feature flag).
 
-A PR can introduce code that compiles cleanly on the pinned nightly,
-passes every gate in every tier, and silently fails for any
-downstream consumer on the claimed MSRV.  Pre-publish this is
-theoretical (no published version yet); post-R8 it becomes a
-direct SemVer breach for any patch / minor release that lands such
-code.
+The `rust-version = "1.91"` claim was therefore unverifiable from
+the moment `uffs-polars` was introduced.  GAP 7's original premise
+("a PR can land code that breaks stable consumers") cannot occur
+because the workspace has *no* stable consumers — it doesn't
+compile on stable at all.
 
-**Why this gap exists**: The R3-Q2 round of CI hardening focused on
-supply-chain (vet, machete) and runtime correctness (miri, careful,
-mutants).  MSRV verification was on the candidate list but was
-deprioritised because no first-publish baseline existed yet to
-protect.  The cost-benefit was understood but the work was deferred.
+**Resolution (2026-05-18, refs issue #267)**:
 
-**Resolution**: Closed 2026-05-12 via R3-06 (PR landing this entry).
-The weekly `msrv` job sits in `tier-2.yml` between `mutants` and
-`tier-2-summary`:
+- `[workspace.package].rust-version` claim **dropped**.
+- `msrv` / `check-incompatible-msrv-in-tests` removed from `clippy.toml`.
+- `tier-2.yml::msrv` **job removed**; its position is held by a
+  rationale comment citing #267 for archaeology.
+- `manifest-audit` invariant 3.4 (`rust-version` consistency)
+  **retired**.
+- `rust-toolchain.toml` is the single source of truth for the
+  required toolchain (pinned nightly).
 
-```yaml
-msrv:
-  name: Tier 2 / MSRV (1.91 stable)
-  runs-on: ubuntu-latest
-  timeout-minutes: 15
-  steps:
-    - uses: actions/checkout@<sha>
-    - run: |
-        rustup toolchain install 1.91 --profile minimal --no-self-update
-        rustup default 1.91
-    - uses: Swatinem/rust-cache@<sha>
-      with: { shared-key: tier-2-msrv, cache-on-failure: 'true' }
-    - run: cargo +1.91 check --workspace --locked --all-features
-    - run: cargo +1.91 check --workspace --locked --no-default-features
-```
-
-Wired into `tier-2-summary.needs` and the success-check as a **hard
-gate** (not advisory like `mutants`) since MSRV regressions have a
-binary correctness signal: either the 1.91 compiler accepts the
-workspace or it doesn't.  Also added to `notify-failure.needs` so a
-regression opens the rolling `ci-failure-tier-2` issue.  Promote to
-a hard pre-publish gate (release-time, alongside
-`cargo-semver-checks`) once R8 lands the first crates.io publish.
+**Forward-looking path**: If a publishable-leaf crate (`uffs-time`,
+`uffs-text`, `uffs-broker-protocol`) ever needs MSRV verification
+independent of the polars-bound graph, that should be a per-crate
+`[package.rust-version]` claim + a focused
+`cargo +stable check -p <crate> --locked` CI job — do NOT
+resurrect the workspace-wide claim.  GAP 7 will be re-classified
+as "OPEN (leaf-only)" only if and when that becomes a real need.
 
 ### 4.8 GAP 8 — Fuzz harness exists but never runs (✅ CLOSED 2026-05-12)
 
