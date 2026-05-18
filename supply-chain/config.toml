@@ -858,10 +858,6 @@ criteria = "safe-to-deploy"
 version = "0.2.37"
 criteria = "safe-to-deploy"
 
-[[exemptions.proc-macro2]]
-version = "1.0.106"
-criteria = "safe-to-deploy"
-
 [[exemptions.proptest]]
 version = "1.11.0"
 criteria = "safe-to-run"
@@ -880,10 +876,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.quinn-proto]]
 version = "0.11.14"
-criteria = "safe-to-deploy"
-
-[[exemptions.quote]]
-version = "1.0.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
