@@ -650,18 +650,35 @@ jobs:
         # 60-min job timeout.  No corpus seed yet — the very first
         # run starts from random bytes and discovers coverage
         # organically.
+        #
+        # `--target x86_64-unknown-linux-gnu` is required because
+        # cargo-fuzz ≥0.13 defaults to `x86_64-unknown-linux-musl`,
+        # and musl's statically-linked libc is incompatible with
+        # `-Zsanitizer=address` (libfuzzer-sys's default RUSTFLAGS),
+        # which manifests as `error: sanitizer is incompatible with
+        # statically linked libc` + `error[E0463]: can't find crate
+        # for \`core\`` for `libc`.  The glibc target is pre-installed
+        # via `rust-toolchain.toml::targets` (the workspace's native
+        # Linux build triple); pinning it here makes the sanitizer
+        # work without sweeping `-C target-feature=-crt-static` into
+        # RUSTFLAGS (which would still leave us on the musl runtime
+        # for everything except the libc link — a partial workaround,
+        # not a root fix).  Refs issue #267.
         run: |
           cd crates/uffs-mft
-          cargo +nightly fuzz run fuzz_parse_record -- -max_total_time=900
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu \
+            fuzz_parse_record -- -max_total_time=900
 
       - name: Run cargo-fuzz fuzz_apply_fixup (15 min budget)
         # Same shape as above.  `if: always()` so a crash in the
         # first target still lets the second target run — advisory
-        # rollout values coverage over fail-fast.
+        # rollout values coverage over fail-fast.  `--target` pin
+        # required for the same musl/sanitizer reason as above.
         if: always()
         run: |
           cd crates/uffs-mft
-          cargo +nightly fuzz run fuzz_apply_fixup -- -max_total_time=900
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu \
+            fuzz_apply_fixup -- -max_total_time=900
 
       - name: Upload fuzz artifacts (crashes + corpus)
         # Keep both `crashes/` (any reproducer libfuzzer found) and
