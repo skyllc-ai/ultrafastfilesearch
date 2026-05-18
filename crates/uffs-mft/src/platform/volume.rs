@@ -42,6 +42,52 @@ pub(crate) const WAIT_TIMEOUT_ERROR_CODE: u32 = 258;
 /// Win32 error code reported when an overlapped operation is aborted.
 const ERROR_OPERATION_ABORTED_CODE: u32 = 995;
 
+/// Convert a `windows::core::Error` into the equivalent `std::io::Error`,
+/// **unwrapping** the `HRESULT_FROM_WIN32` envelope so std's
+/// `decode_error_kind` table (keyed on bare Win32 codes like
+/// `ERROR_FILE_EXISTS = 80`, `ERROR_ACCESS_DENIED = 5`, …) resolves the
+/// canonical `ErrorKind` rather than degrading every failure to
+/// `ErrorKind::Other`.
+///
+/// `windows::core::Error::code()` returns an HRESULT.  Win32 failures
+/// arrive wrapped via `HRESULT_FROM_WIN32`, which sets facility = 7
+/// (`FACILITY_WIN32`, severity = 1) and stuffs `GetLastError()` into
+/// the low 16 bits:
+///
+/// ```text
+///     0x8007_XXXX  ← XXXX = GetLastError()
+/// ```
+///
+/// `io::Error::from_raw_os_error` expects the bare Win32 code (not the
+/// wrapped HRESULT), so we strip the envelope when present.  Non-WIN32
+/// HRESULTs fall through unchanged — std has no portable kind mapping
+/// for them anyway, and `from_raw_os_error` will preserve the raw value
+/// verbatim.
+///
+/// This mirrors the same fix applied to
+/// `WindowsRuntimeDir::create_owner_only` in PR #273 (refs #267,
+/// nightly run 26037964594).  The four `CreateFileW` error sites in
+/// this file (`VolumeHandle::open`, `open_overlapped_handle`,
+/// `open_mft_read_handle`, `open_unbuffered_handle`) previously
+/// forwarded the raw HRESULT to `io::Error::from_raw_os_error`,
+/// producing the same latent contract bug — no current test exercises
+/// `ErrorKind` on those paths, so the bug stayed hidden, but a future
+/// caller doing `if err.kind() == ErrorKind::PermissionDenied { … }`
+/// would silently take the wrong branch.
+fn hresult_to_io_error(err: &windows::core::Error) -> std::io::Error {
+    let hresult = err.code().0;
+    // `i32::cast_unsigned` reinterprets the same bits as `u32` for
+    // comparison against documented HRESULT envelope constants (which
+    // Microsoft publishes as `u32`).  Matches the existing convention
+    // at `VolumeHandle::open` (this file, search for `code_unsigned`).
+    let win32_code = if (hresult.cast_unsigned() & 0xFFFF_0000_u32) == 0x8007_0000_u32 {
+        hresult & 0xFFFF_i32
+    } else {
+        hresult
+    };
+    std::io::Error::from_raw_os_error(win32_code)
+}
+
 /// Classifies a Windows wait failure using the approved Wave 3A taxonomy.
 #[must_use]
 pub(crate) fn classify_wait_error_code(
@@ -216,7 +262,7 @@ impl VolumeHandle {
                 }
                 return Err(MftError::VolumeOpen {
                     volume,
-                    source: std::io::Error::from_raw_os_error(err.code().0),
+                    source: hresult_to_io_error(&err),
                 });
             }
         };
@@ -343,7 +389,7 @@ impl VolumeHandle {
 
         handle.map_err(|err| MftError::VolumeOpen {
             volume,
-            source: std::io::Error::from_raw_os_error(err.code().0),
+            source: hresult_to_io_error(&err),
         })
     }
 
@@ -388,7 +434,7 @@ impl VolumeHandle {
 
         handle.map_err(|err| MftError::VolumeOpen {
             volume,
-            source: std::io::Error::from_raw_os_error(err.code().0),
+            source: hresult_to_io_error(&err),
         })
     }
 
@@ -431,7 +477,7 @@ impl VolumeHandle {
 
         handle.map_err(|err| MftError::VolumeOpen {
             volume,
-            source: std::io::Error::from_raw_os_error(err.code().0),
+            source: hresult_to_io_error(&err),
         })
     }
 
@@ -1029,5 +1075,76 @@ mod tests {
             operation: "read_all_index",
             ..
         }));
+    }
+
+    // ── hresult_to_io_error regression tests ─────────────────────────────
+    //
+    // These pin the documented `RuntimeDir::create_owner_only`-style
+    // contract that PR #273 introduced workspace-wide: any
+    // `windows::core::Error` carrying a `FACILITY_WIN32` HRESULT must
+    // surface its bare Win32 code through `io::Error` so std's
+    // `decode_error_kind` table resolves the canonical `ErrorKind`.
+    //
+    // Without these tests the same latent bug PR #273 fixed could
+    // silently regress at any of the four `CreateFileW` call sites in
+    // this file the next time a refactor touches them.
+    use windows::core::{Error as WinError, HRESULT};
+
+    /// Build a `windows::core::Error` carrying an explicit HRESULT bit
+    /// pattern.  The constructor takes an `HRESULT`, which wraps an
+    /// `i32`; `u32::cast_signed` is the stable 1.87 exact-bit-pattern
+    /// converter that matches the rest of this file's HRESULT-handling
+    /// idiom (see `code_unsigned` at `VolumeHandle::open`).
+    fn synthesize_error(hresult_bits: u32) -> WinError {
+        WinError::from_hresult(HRESULT(hresult_bits.cast_signed()))
+    }
+
+    #[test]
+    fn hresult_to_io_error_unwraps_file_exists_to_already_exists() {
+        // `HRESULT_FROM_WIN32(ERROR_FILE_EXISTS = 80)`.
+        let err = synthesize_error(0x8007_0050);
+        let io_err = hresult_to_io_error(&err);
+
+        assert_eq!(
+            io_err.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "FACILITY_WIN32 envelope for ERROR_FILE_EXISTS must map to AlreadyExists",
+        );
+        assert_eq!(
+            io_err.raw_os_error(),
+            Some(80_i32),
+            "raw_os_error must report the bare Win32 code (80), not the HRESULT",
+        );
+    }
+
+    #[test]
+    fn hresult_to_io_error_unwraps_access_denied_to_permission_denied() {
+        // `HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED = 5)`.
+        let err = synthesize_error(0x8007_0005);
+        let io_err = hresult_to_io_error(&err);
+
+        assert_eq!(
+            io_err.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "FACILITY_WIN32 envelope for ERROR_ACCESS_DENIED must map to PermissionDenied",
+        );
+        assert_eq!(io_err.raw_os_error(), Some(5_i32));
+    }
+
+    #[test]
+    fn hresult_to_io_error_passes_through_non_win32_hresults() {
+        // `E_NOINTERFACE = 0x8000_4002` — FACILITY_NULL (0), severity 1.
+        // No portable Win32 code lives in here; the helper must leave
+        // the bit pattern intact so std at least preserves the raw
+        // value.
+        let bits = 0x8000_4002_u32;
+        let err = synthesize_error(bits);
+        let io_err = hresult_to_io_error(&err);
+
+        assert_eq!(
+            io_err.raw_os_error(),
+            Some(bits.cast_signed()),
+            "non-WIN32 HRESULT must be forwarded verbatim",
+        );
     }
 }
