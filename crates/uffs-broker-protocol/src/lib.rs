@@ -71,7 +71,18 @@ pub const RESPONSE_WIRE_LEN: usize = 9;
 /// surface them as a structured error to the user, log them, and
 /// continue serving subsequent requests.  Encoding never fails: it's a
 /// pure byte-layout operation.
+///
+/// `#[non_exhaustive]` is applied per Phase 5 §5c: future protocol
+/// extensions (e.g. a `Truncated { expected, got }` variant when a
+/// reader supplies fewer than `REQUEST_WIRE_LEN` / `RESPONSE_WIRE_LEN`
+/// bytes, or a `RateLimited` variant once the wire format gains an
+/// out-of-band error channel) can land as additive minor-version
+/// bumps without breaking downstream exhaustive matchers.  Downstream
+/// crates (`uffs-broker`, `uffs-daemon::broker_client`) currently
+/// treat this error opaquely — verified zero exhaustive-match sites
+/// workspace-wide at the Phase 5b audit (refs #192).
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProtocolError {
     /// Drive-letter byte was outside the ASCII range (high bit set or
     /// otherwise non-ASCII).  The broker should respond with
