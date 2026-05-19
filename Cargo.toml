@@ -350,8 +350,8 @@ large_enum_variant = "deny"                        # Optimize enum memory usage
 large_stack_arrays = "deny"                        # Avoid large stack allocations
 large_types_passed_by_value = "deny"               # Pass large types by reference
 trivially_copy_pass_by_ref = "deny"                # Pass small types by value
-clone_on_ref_ptr = "deny"                          # Avoid unnecessary clones
-redundant_clone = "deny"                           # Remove redundant clones
+clone_on_ref_ptr = "deny"                          # Use Arc::clone(&x) form — see allocation_policy.md §3.1 (category α)
+redundant_clone = "deny"                           # Remove redundant clones — see allocation_policy.md §3.4 (category δ)
 unnecessary_wraps = "deny"                         # Remove unnecessary Result/Option wraps
 option_option = "deny"                             # Avoid Option<Option<T>>
 result_unit_err = "deny"                           # Use better error types
@@ -369,14 +369,14 @@ suboptimal_flops = "deny"                          # Optimal floating point oper
 fn_params_excessive_bools = "deny"                 # Avoid too many boolean parameters
 struct_excessive_bools = "deny"                    # Avoid too many boolean fields
 verbose_bit_mask = "deny"                          # Use cleaner bit operations
-inefficient_to_string = "deny"                     # Use efficient string conversions
+inefficient_to_string = "deny"                     # Use efficient string conversions — see allocation_policy.md §2
 string_add = "deny"                                # Use format! instead of string addition
 string_add_assign = "deny"                         # Use format! instead of +=
 string_slice = "deny"                              # Use proper string slicing
-str_to_string = "deny"                             # Use to_owned() instead of to_string()
-implicit_clone = "deny"                            # Make clones explicit
-cloned_instead_of_copied = "deny"                  # Use copy when possible
-map_clone = "deny"                                 # Use copied() instead of map(clone)
+str_to_string = "deny"                             # Use to_owned() instead of to_string() — see allocation_policy.md §2
+implicit_clone = "deny"                            # Make clones explicit — see allocation_policy.md §2
+cloned_instead_of_copied = "deny"                  # Use .copied() for Copy types — see allocation_policy.md §2
+map_clone = "deny"                                 # Use .copied() over .map(Clone::clone) — see allocation_policy.md §2
 filter_map_next = "deny"                           # Use find_map instead
 flat_map_option = "deny"                           # Use filter_map instead
 manual_filter_map = "deny"                         # Use filter_map
@@ -458,9 +458,14 @@ unused_result_ok = "deny"             # Don't call .ok() just to discard — use
 unwrap_in_result = "deny"             # No unwrap/expect inside Result-returning fns
 
 # ───── Memory & allocation ─────
-assigning_clones = "deny"              # Use clone_from instead of clone + assign
-rc_buffer = "deny"                     # Avoid Rc<String> or Rc<Vec>
-rc_mutex = "deny"                      # Avoid Rc<Mutex<T>>
+# Allocation policy: docs/architecture/code-quality/allocation_policy.md
+# defines the five-category taxonomy (α/β/γ/δ/ε) for every prod
+# .clone()/.to_owned()/format!() site and the required per-site
+# justification shape.  Audit script: scripts/dev/clone_alloc_audit.sh.
+# See also docs/architecture/code-quality/lint-posture.md.
+assigning_clones = "deny"              # Use clone_from over .clone() + assign — see allocation_policy.md §2
+rc_buffer = "deny"                     # Avoid Rc<String>/Rc<Vec> — see allocation_policy.md §3.1 (α)
+rc_mutex = "deny"                      # Avoid Rc<Mutex<T>> — see allocation_policy.md §3.1 (α)
 read_zero_byte_vec = "deny"            # Avoid reading into zero-capacity vec
 significant_drop_in_scrutinee = "deny" # Avoid drops in match scrutinee
 significant_drop_tightening = "deny"   # Tighten significant drop scope

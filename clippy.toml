@@ -33,7 +33,17 @@
 # The panic-family lints (`unwrap_used`, `expect_used`, `panic`) stay at
 # `deny` for prod code; see `docs/architecture/code-quality/panic_policy.md`
 # for the five-category taxonomy (A-E) and the per-site #[expect(...)]
-# annotation contract.  For the broader lint posture see
+# annotation contract.
+#
+# The clone- and allocation-family lints (`redundant_clone`,
+# `clone_on_ref_ptr`, `cloned_instead_of_copied`, `inefficient_to_string`,
+# `unnecessary_to_owned`, `assigning_clones`, `rc_buffer`, `rc_mutex`, …)
+# likewise stay at `deny` for prod code; see
+# `docs/architecture/code-quality/allocation_policy.md` for the
+# five-category taxonomy (α-ε) and the per-site justification contract.
+# Audit script: `scripts/dev/clone_alloc_audit.sh`.
+#
+# For the broader lint posture see
 # `docs/architecture/code-quality/lint-posture.md`.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
