@@ -9,8 +9,13 @@
 //! (`--begins-with`, `--between`, `--exact-size`, `--word`, etc.)
 //! happens here.
 
+// `CliArgsError` is re-exported at the `cli_args` module path so the
+// public API of `from_cli_args` has a stable, canonically-named typed
+// error.  Phase 5d migration: see the type's doc-comment in
+// `cli_args_helpers.rs` for the full rationale.
+pub use super::cli_args_helpers::CliArgsError as Error;
 use super::cli_args_helpers::{
-    drives_csv, extract_extensions_from_regex, flag_val, is_pure_ext_glob, non_empty,
+    CliArgsError, drives_csv, extract_extensions_from_regex, flag_val, is_pure_ext_glob, non_empty,
     parse_bare_drive_prefix, parse_bool, parse_i32, parse_size, parse_u16, parse_u32, parse_u64,
 };
 use super::{SearchFilterMode, SearchParams, SearchResponseMode};
@@ -26,12 +31,15 @@ impl SearchParams {
     ///
     /// # Errors
     ///
-    /// Returns a descriptive error string on malformed arguments.
+    /// Returns a [`CliArgsError`] variant on malformed arguments.  The
+    /// [`core::fmt::Display`] strings stay byte-identical with the
+    /// pre-Phase-5d `Result<_, String>` payloads so operator-facing CLI
+    /// error output is unchanged.
     #[expect(
         clippy::too_many_lines,
         reason = "mechanical 1:1 flag-to-field mapping"
     )]
-    pub fn from_cli_args(args: &[String]) -> Result<Self, String> {
+    pub fn from_cli_args(args: &[String]) -> Result<Self, CliArgsError> {
         let mut raw = RawCliArgs::default();
         let mut iter = args.iter().cloned().peekable();
 
@@ -251,10 +259,14 @@ impl SearchParams {
                 }
                 other => {
                     if other.starts_with('-') {
-                        return Err(format!("Unknown flag: '{other}'"));
+                        return Err(CliArgsError::UnknownFlag {
+                            flag: other.to_owned(),
+                        });
                     }
                     if raw.pattern.is_some() {
-                        return Err(format!("Unexpected argument: '{other}'"));
+                        return Err(CliArgsError::UnexpectedArgument {
+                            arg: other.to_owned(),
+                        });
                     }
                     raw.pattern = Some(arg);
                 }
@@ -365,7 +377,7 @@ impl RawCliArgs {
         clippy::cognitive_complexity,
         reason = "three composable sugar rewrites (drive-prefix, ext-glob, regex-ext) plus filter normalisation; splitting further would fragment the parse pipeline"
     )]
-    fn into_search_params(mut self) -> Result<SearchParams, String> {
+    fn into_search_params(mut self) -> Result<SearchParams, CliArgsError> {
         // ── Pattern sugar: --begins-with / --ends-with / --contains ─
         let raw_pattern = self
             .pattern
@@ -418,9 +430,7 @@ impl RawCliArgs {
             && (pattern.contains('\\') || pattern.contains('/'))
             && !pattern.starts_with('>')
         {
-            return Err(
-                "--name-only cannot be used with path patterns containing '\\' or '/'".to_owned(),
-            );
+            return Err(CliArgsError::NameOnlyWithPathPattern);
         }
 
         // ── --exact-size / --exact-descendants ─────────────────────

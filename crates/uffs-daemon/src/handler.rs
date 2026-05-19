@@ -298,13 +298,19 @@ impl RequestHandler {
         };
 
         // Parse into SearchParams using the shared CLI parser.
+        //
+        // Phase 5d: `from_cli_args` now returns a typed
+        // `uffs_client::protocol::cli_args::Error` (alias of
+        // `CliArgsError`) whose Display string is byte-identical with
+        // the pre-Phase-5d `String` payload, so the JSON-RPC error
+        // message stays unchanged.
         let search_params = match SearchParams::from_cli_args(&args) {
             Ok(params) => params,
-            Err(msg) => {
+            Err(err) => {
                 return serde_json::to_string(&RpcErrorResponse::error(
                     Some(id),
                     ERR_INVALID_PARAMS,
-                    &msg,
+                    &err.to_string(),
                 ))
                 .unwrap_or_default();
             }

@@ -260,6 +260,33 @@ pub fn parse_month_spec(spec: &str) -> Vec<u32> {
     months
 }
 
+/// Typed error returned by [`parse_size`].
+///
+/// Phase 5d migration of the previous `Result<u64, String>` return
+/// type: the [`core::fmt::Display`] strings stay byte-identical with
+/// the pre-migration messages so any operator-facing CLI error output
+/// is unchanged, while callers can now match on variants instead of
+/// parsing the string.
+///
+/// `#[non_exhaustive]` per Phase 5c discipline so a future failure
+/// mode (e.g. overflow on the saturating-mul, or a negative-prefix
+/// rejection) can grow a variant without a semver bump.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ParseSizeError {
+    /// Input was empty after trimming.
+    #[error("empty size specification")]
+    Empty,
+    /// The numeric portion failed [`u64::from_str`].  The original
+    /// untrimmed spec is echoed back so the operator sees what they
+    /// typed.
+    #[error("invalid size: {spec}")]
+    InvalidNumber {
+        /// The original, untrimmed input.
+        spec: String,
+    },
+}
+
 /// Parse a human-readable size spec into bytes.
 ///
 /// Accepts: `1024`, `10KB`, `5MB`, `2GB`, `1TB`, `100B`.
@@ -267,8 +294,12 @@ pub fn parse_month_spec(spec: &str) -> Vec<u32> {
 ///
 /// # Errors
 ///
-/// Returns an error string if the input is empty or not a valid number.
-pub fn parse_size(spec: &str) -> Result<u64, String> {
+/// Returns [`ParseSizeError::Empty`] when the input is empty after
+/// trimming, or [`ParseSizeError::InvalidNumber`] when the digit
+/// portion fails [`u64::from_str`].  The Display strings stay
+/// byte-identical with the pre-Phase-5d output so any operator-facing
+/// CLI output is unchanged.
+pub fn parse_size(spec: &str) -> Result<u64, ParseSizeError> {
     const SUFFIXES: &[(&str, u64)] = &[
         ("TB", 1024 * 1024 * 1024 * 1024),
         ("GB", 1024 * 1024 * 1024),
@@ -279,7 +310,7 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
 
     let trimmed = spec.trim();
     if trimmed.is_empty() {
-        return Err("empty size specification".to_owned());
+        return Err(ParseSizeError::Empty);
     }
 
     let upper = trimmed.to_ascii_uppercase();
@@ -292,7 +323,9 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
     let count: u64 = digits
         .trim()
         .parse()
-        .map_err(|_parse_err| format!("invalid size: {spec}"))?;
+        .map_err(|_parse_err| ParseSizeError::InvalidNumber {
+            spec: spec.to_owned(),
+        })?;
 
     Ok(count.saturating_mul(multiplier))
 }
@@ -358,4 +391,88 @@ pub fn extract_drive_letter(pattern: &str) -> Option<uffs_mft::platform::DriveLe
         return None;
     }
     uffs_mft::platform::DriveLetter::parse(first as char).ok()
+}
+
+#[cfg(test)]
+mod parse_size_error_tests {
+    //! Phase 5d regression tests for [`ParseSizeError`].
+    //!
+    //! Locks each variant's Display string at the byte-identical text
+    //! the pre-Phase-5d `Result<u64, String>` returns produced, so any
+    //! operator-facing CLI error output stays unchanged through the
+    //! migration.
+
+    use super::{ParseSizeError, parse_size};
+
+    /// Empty input is rejected with the `Empty` variant whose Display
+    /// is byte-identical to the pre-Phase-5d `"empty size specification"`
+    /// message.
+    #[test]
+    fn empty_input_returns_empty_variant_with_locked_display() {
+        let err = parse_size("").expect_err("empty input must error");
+        assert_eq!(err, ParseSizeError::Empty);
+        assert_eq!(err.to_string(), "empty size specification");
+    }
+
+    /// Whitespace-only input also walks the `Empty` branch (the
+    /// pre-trim guard catches it).  Locks the operator-friendly
+    /// behaviour rather than a stricter
+    /// "looks-like-no-digits" alternative.
+    #[test]
+    fn whitespace_only_input_returns_empty_variant() {
+        let err = parse_size("   ").expect_err("whitespace-only input must error");
+        assert_eq!(err, ParseSizeError::Empty);
+    }
+
+    /// Non-numeric input is rejected with `InvalidNumber` whose
+    /// Display interpolates the original (untrimmed) spec verbatim —
+    /// byte-identical to the pre-Phase-5d
+    /// `"invalid size: {spec}"` message.
+    #[test]
+    fn non_numeric_input_returns_invalid_number_with_locked_display() {
+        let err = parse_size("abc").expect_err("non-numeric input must error");
+        assert_eq!(err, ParseSizeError::InvalidNumber {
+            spec: "abc".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "invalid size: abc");
+    }
+
+    /// A bare suffix with no digits (e.g. `MB`) is also rejected via
+    /// `InvalidNumber` — the suffix-strip leaves an empty digit slot,
+    /// which fails [`u64::from_str`].  The spec field echoes the
+    /// original input untouched.
+    #[test]
+    fn bare_suffix_returns_invalid_number_echoing_original_spec() {
+        let err = parse_size("MB").expect_err("bare suffix input must error");
+        assert_eq!(err, ParseSizeError::InvalidNumber {
+            spec: "MB".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "invalid size: MB");
+    }
+
+    /// Negative inputs (e.g. `-1KB`) are rejected — `u64::from_str`
+    /// refuses the leading minus.  Locks the existing behaviour that
+    /// the CLI rejects negative sizes rather than silently treating
+    /// them as zero.
+    #[test]
+    fn negative_input_returns_invalid_number() {
+        let err = parse_size("-1KB").expect_err("negative input must error");
+        assert_eq!(err, ParseSizeError::InvalidNumber {
+            spec: "-1KB".to_owned(),
+        },);
+    }
+
+    /// Happy-path lock — typed return value must round-trip the
+    /// expected byte count for the canonical suffixes.  Guards against
+    /// accidental regression of the success arm during the migration.
+    #[test]
+    fn happy_path_round_trips_canonical_suffixes() {
+        assert_eq!(parse_size("0"), Ok(0));
+        assert_eq!(parse_size("1024"), Ok(1024));
+        assert_eq!(parse_size("1KB"), Ok(1024));
+        assert_eq!(parse_size("1MB"), Ok(1024 * 1024));
+        assert_eq!(parse_size("1GB"), Ok(1024 * 1024 * 1024));
+        assert_eq!(parse_size("1TB"), Ok(1024_u64 * 1024 * 1024 * 1024));
+        assert_eq!(parse_size("  1MB  "), Ok(1024 * 1024));
+    }
 }
