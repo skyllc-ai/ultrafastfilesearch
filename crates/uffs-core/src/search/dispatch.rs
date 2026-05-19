@@ -24,6 +24,8 @@
 //!    [`dispatch_trigram_or_tree`]) — the three leaf dispatch paths +
 //!    [`pick_mode_label`] for tracing.
 
+use alloc::borrow::Cow;
+
 use rayon::prelude::*;
 
 use super::backend::{DisplayRow, FilterMode, PhaseTimings, SortSpec};
@@ -31,6 +33,34 @@ use super::filters::SearchFilters;
 use super::sorting::sort_rows;
 use crate::compact::DriveCompactIndex;
 use crate::search::field::FieldId;
+
+/// Build the search needle from `pattern`, applying case-folding when
+/// case-insensitive matching is requested.
+///
+/// Returns [`Cow::Borrowed`] for the case-sensitive path (zero
+/// allocation — the needle reuses the caller's `&str`) and
+/// [`Cow::Owned`] for the case-insensitive path (one allocation for
+/// the folded result).
+///
+/// Replaces a previous duplicated `if … pattern.to_owned() … else …
+/// .to_owned()` pattern in both [`super::backend::MultiDriveBackend::search`]
+/// and [`super::backend::search_index`]; the deduplication is the
+/// Phase 6e (`Cow<'_, str>` expansion) deliverable per the phase-6
+/// ownership/borrowing/allocation plan §3.5.  Downstream call sites
+/// already accept `&str` (via [`Cow`]'s `Deref<Target = str>`), so
+/// this is a behavior-preserving refactor.
+pub(super) fn fold_needle(
+    case_sensitive: bool,
+    pattern: &str,
+    fold: uffs_text::case_fold::CaseFold,
+) -> Cow<'_, str> {
+    if case_sensitive {
+        Cow::Borrowed(pattern)
+    } else {
+        let mut buf = Vec::with_capacity(pattern.len());
+        Cow::Owned(fold.fold_into(pattern, &mut buf).to_owned())
+    }
+}
 
 // ─── Pattern-rewrite safety nets ───────────────────────────────────────
 

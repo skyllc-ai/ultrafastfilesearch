@@ -568,12 +568,7 @@ impl MultiDriveBackend {
             .map_or_else(uffs_text::case_fold::CaseFold::default_table, |drive| {
                 drive.fold
             });
-        let needle = if case_sensitive {
-            pattern.to_owned()
-        } else {
-            let mut buf = Vec::with_capacity(pattern.len());
-            fold.fold_into(pattern, &mut buf).to_owned()
-        };
+        let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
         let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
 
         if is_match_all {
@@ -836,12 +831,7 @@ pub fn search_index(
         .map_or_else(uffs_text::case_fold::CaseFold::default_table, |drive| {
             drive.fold
         });
-    let needle = if case_sensitive {
-        pattern.to_owned()
-    } else {
-        let mut buf = Vec::with_capacity(pattern.len());
-        fold.fold_into(pattern, &mut buf).to_owned()
-    };
+    let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
     let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
 
     tracing::debug!(
