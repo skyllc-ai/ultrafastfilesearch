@@ -63,6 +63,31 @@
 //! admin at the manifest level would pop UAC on every `uffs <pattern>`
 //! invocation and defeat the v0.5.36 elevation refactor.  See
 //! `docs/refactor/elevation-posture.md` for the full posture doc.
+//!
+//! # Environment
+//!
+//! Build-time env vars consumed by this script (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5.1, playbook
+//! §1049-1056):
+//!
+//! | Name | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `CARGO_CFG_TARGET_OS`  | `string` | (set by Cargo) | Gates the effectful block on `target_os == "windows"`. |
+//! | `CARGO_CFG_TARGET_ENV` | `string` | (set by Cargo) | Gates the effectful block on `target_env == "msvc"` (vs `gnu`). |
+//!
+//! Both vars are auto-tracked by Cargo (no explicit
+//! `cargo:rerun-if-env-changed=` needed); changes to either value invalidate
+//! the build cache automatically.
+//!
+//! # Inputs / tools / platform
+//!
+//! - **Files read** (declared via `cargo:rerun-if-changed=`): `build.rs`
+//!   (self), `app.manifest`, `../../assets/brand/icons/uffs.ico`.
+//! - **Tools required**: MSVC `link.exe` + `delayimp.lib` (for `/DELAYLOAD`);
+//!   [`winresource`] crate (for PE resource embedding).
+//! - **Platform assumptions**: the effectful block is MSVC-Windows only; on
+//!   macOS / Linux / MinGW build hosts the script emits only the three
+//!   `cargo:rerun-if-changed=` hints (harmless no-ops).
 
 fn main() {
     // Re-run when this file, the app manifest, or the icon change.  The
