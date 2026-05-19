@@ -43,6 +43,16 @@
 # five-category taxonomy (α-ε) and the per-site justification contract.
 # Audit script: `scripts/dev/clone_alloc_audit.sh`.
 #
+# The trait / generic / dispatch lints (`type_complexity`,
+# `too_many_arguments`, `trait_duplication_in_bounds`,
+# `wrong_self_convention`, `multiple_bound_locations`) likewise stay at
+# `deny` / `warn` for prod code; see
+# `docs/architecture/code-quality/trait_policy.md` for the four-criterion
+# trait justification taxonomy (J1-J4), the generic-function categories
+# (G1-LOCAL / G2-USEFUL / G3-SPREAD / G4-CASCADING / G5-CLOSURE), the
+# dispatch matrix (D1-D4 + S1-S3), and the seal/open decision tree.
+# Audit script: `scripts/dev/trait_generic_audit.sh`.
+#
 # For the broader lint posture see
 # `docs/architecture/code-quality/lint-posture.md`.
 allow-unwrap-in-tests = true
