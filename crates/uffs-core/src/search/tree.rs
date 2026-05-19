@@ -20,16 +20,19 @@ use crate::compact::DriveCompactIndex;
 /// walks.  Uses `FxHashMap` (3–5× faster than `HashMap` for integer keys).
 pub type DirCache = FxHashMap<u32, String>;
 
-/// Trait extension to add `with_capacity` to `DirCache` (`FxHashMap`).
-pub(crate) trait DirCacheExt {
-    /// Create a new `DirCache` with the given capacity.
-    fn with_capacity(capacity: usize) -> Self;
-}
-
-impl DirCacheExt for DirCache {
-    fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_and_hasher(capacity, FxBuildHasher)
-    }
+/// Construct a [`DirCache`] with the given capacity, pre-wired with the
+/// crate's `FxBuildHasher`.
+///
+/// Replaces the former `DirCacheExt::with_capacity` extension trait
+/// (Phase 7b refactor playbook §879-886).  The trait satisfied none of
+/// the J1/J2/J3/J4 justification criteria — single impl, no test fakes,
+/// `pub(crate)` (no extension surface), no infrastructure decoupling —
+/// and forced every caller to bring a `DirCacheExt as _` import into
+/// scope just to write `DirCache::with_capacity(n)`.  A free function
+/// carries the same intent without the implicit trait import.
+#[must_use]
+pub(crate) fn dir_cache_with_capacity(capacity: usize) -> DirCache {
+    DirCache::with_capacity_and_hasher(capacity, FxBuildHasher)
 }
 
 /// Resolve a record's full path by walking the parent chain in the compact

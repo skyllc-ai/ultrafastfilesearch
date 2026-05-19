@@ -31,7 +31,7 @@ use rayon::prelude::*;
 use super::super::backend::{self, DisplayRow, FilterMode};
 use super::super::field::FieldId;
 use super::super::filters::{SearchFilters, row_passes_filters};
-use super::super::tree::{self, DirCache, DirCacheExt as _};
+use super::super::tree::{self, DirCache};
 use super::numeric_top_n::sort_indices_by_name;
 use super::{make_display_row, passes_filter_mode, stack_volume_prefix};
 use crate::compact::DriveCompactIndex;
@@ -145,7 +145,7 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
             .collect();
         sort_indices_by_name(&mut roots, drive, sort_desc);
 
-        let mut dir_cache = DirCache::with_capacity(256);
+        let mut dir_cache = tree::dir_cache_with_capacity(256);
         let mut stack: Vec<u32> = roots.into_iter().rev().collect();
         while let Some(idx) = stack.pop() {
             if path_results.len() >= limit {
@@ -319,7 +319,7 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
                 let cache = local_caches
                     .entry(drive_idx)
-                    .or_insert_with(|| DirCache::with_capacity(256));
+                    .or_insert_with(|| tree::dir_cache_with_capacity(256));
                 let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
                 local_rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
             }

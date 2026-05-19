@@ -11,7 +11,7 @@ use super::super::backend::{self, DisplayRow, FilterMode, PhaseTimings};
 use super::super::derived::bulkiness_for_record;
 use super::super::field::FieldId;
 use super::super::filters::SearchFilters;
-use super::super::tree::{self, DirCacheExt as _};
+use super::super::tree;
 use super::{HeapEntry, heap_push_capped, make_display_row, stack_volume_prefix};
 use crate::compact::{CompactRecord, DriveCompactIndex};
 
@@ -528,7 +528,7 @@ fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
         let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
         let cache = local_caches
             .entry(drive_idx)
-            .or_insert_with(|| tree::DirCache::with_capacity(256));
+            .or_insert_with(|| tree::dir_cache_with_capacity(256));
         let t_resolve = std::time::Instant::now();
         let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
         resolve_fn_ns += t_resolve.elapsed().as_nanos();

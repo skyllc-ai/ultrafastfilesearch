@@ -21,7 +21,7 @@ use super::backend::{DisplayRow, FilterMode, PhaseTimings};
 use super::field::FieldId;
 use super::filters::SearchFilters;
 use crate::compact::{CompactRecord, DriveCompactIndex};
-use crate::search::tree::{self, DirCacheExt as _};
+use crate::search::tree;
 
 /// Whether cache profiling is enabled (`UFFS_CACHE_PROFILE` env var).
 ///
@@ -475,7 +475,7 @@ pub(crate) fn search_compact_drive_tree(
     let match_count = match_indices.len();
 
     let t_resolve = std::time::Instant::now();
-    let mut dir_cache = tree::DirCache::with_capacity(256);
+    let mut dir_cache = tree::dir_cache_with_capacity(256);
     let rows: Vec<DisplayRow> = match_indices
         .iter()
         .filter_map(|&record_idx| {
@@ -584,7 +584,7 @@ fn indices_to_rows(
     indices: &[u32],
     volume_prefix: &str,
 ) -> Vec<DisplayRow> {
-    let mut dir_cache = tree::DirCache::with_capacity(256);
+    let mut dir_cache = tree::dir_cache_with_capacity(256);
     indices
         .iter()
         .filter_map(|&record_idx| {
