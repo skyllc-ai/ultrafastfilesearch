@@ -28,6 +28,7 @@ pub mod export;
 pub mod finalize;
 pub mod pagination;
 pub mod parser;
+pub mod parser_error;
 pub(crate) mod planner;
 pub mod presets;
 pub mod rollup;
@@ -48,6 +49,7 @@ pub use finalize::{
 };
 pub use pagination::{AggregateCursor, PaginatedBuckets, paginate_result};
 pub use parser::{parse_agg_spec, parse_and_expand_agg_specs};
+pub use parser_error::ParseAggSpecError;
 pub use planner::AggregatePlan;
 pub use presets::AggregatePreset;
 use rayon::prelude::*;

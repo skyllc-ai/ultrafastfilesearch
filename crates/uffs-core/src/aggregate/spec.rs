@@ -267,30 +267,61 @@ impl TopHitsSpec {
     ///
     /// # Errors
     ///
-    /// Returns `Err` with a human-readable message if the sort field is
-    /// not numeric/timestamp (i.e. cannot be meaningfully ordered), or if
-    /// `count` is zero.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Returns a [`TopHitsValidateError`] variant if `count` is zero,
+    /// exceeds [`MAX_SAMPLE_COUNT`], or [`Self::sort_field`] is not
+    /// sortable.  Display strings stay byte-identical with the
+    /// pre-Phase-5d `Result<_, String>` payloads.
+    pub const fn validate(&self) -> Result<(), TopHitsValidateError> {
         if self.count == 0 {
-            return Err("TopHitsSpec count must be ≥ 1".to_owned());
+            return Err(TopHitsValidateError::ZeroCount);
         }
         if self.count > MAX_SAMPLE_COUNT {
-            return Err(format!(
-                "TopHitsSpec count {} exceeds maximum {}",
-                self.count, MAX_SAMPLE_COUNT
-            ));
+            return Err(TopHitsValidateError::CountExceedsMax { count: self.count });
         }
         // sort_field should be something orderable — we accept any field
         // that the sort pipeline accepts (numeric, timestamp, boolean).
         let meta = self.sort_field.metadata();
         if !meta.sortable {
-            return Err(format!(
-                "TopHitsSpec sort_field {:?} is not sortable",
-                self.sort_field
-            ));
+            return Err(TopHitsValidateError::UnsortableField {
+                field: self.sort_field,
+            });
         }
         Ok(())
     }
+}
+
+/// Typed error returned by [`TopHitsSpec::validate`].
+///
+/// Phase 5d migration of the previous `Result<(), String>` return
+/// type: the [`core::fmt::Display`] strings stay byte-identical with
+/// the pre-migration `format!()` payloads so any operator-facing
+/// validation message is unchanged.
+///
+/// `#[non_exhaustive]` per Phase 5c discipline so a future validation
+/// rule (e.g. duplicate-projection-field check) can grow a variant
+/// without a semver bump on the (workspace-internal) consumer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum TopHitsValidateError {
+    /// `count` was zero — the sample size must be at least 1 to
+    /// emit anything meaningful.
+    #[error("TopHitsSpec count must be ≥ 1")]
+    ZeroCount,
+    /// `count` exceeded [`MAX_SAMPLE_COUNT`].  The offending value is
+    /// echoed for the operator.
+    #[error("TopHitsSpec count {count} exceeds maximum {max}", max = MAX_SAMPLE_COUNT)]
+    CountExceedsMax {
+        /// The offending count.
+        count: u8,
+    },
+    /// [`TopHitsSpec::sort_field`] is not declared sortable in its
+    /// metadata — typically a non-numeric / non-timestamp field like
+    /// `FieldId::Attributes`.
+    #[error("TopHitsSpec sort_field {field:?} is not sortable")]
+    UnsortableField {
+        /// The offending field id.
+        field: FieldId,
+    },
 }
 
 /// A scalar metric computed over a set of records.
@@ -578,10 +609,45 @@ mod tests {
     #[test]
     fn top_hits_validate_unsortable_field() {
         let spec = TopHitsSpec::new(2, FieldId::Attributes, true, vec![]);
-        let result = spec.validate();
-        assert!(result.is_err(), "Attributes is not sortable");
-        let msg = result.unwrap_err();
-        assert!(msg.contains("not sortable"), "error: {msg}");
+        let err = spec.validate().expect_err("Attributes is not sortable");
+        assert!(
+            matches!(&err, TopHitsValidateError::UnsortableField { field } if *field == FieldId::Attributes),
+            "expected UnsortableField(Attributes), got {err:?}",
+        );
+        // Display contract preserved from the pre-Phase-5d `String` return.
+        assert!(err.to_string().contains("not sortable"), "error: {err}");
+    }
+
+    #[test]
+    fn top_hits_validate_zero_count() {
+        // Construct directly to bypass `new`'s validation (if any) so we
+        // can exercise the `ZeroCount` arm.
+        let spec = TopHitsSpec {
+            count: 0,
+            sort_field: FieldId::Size,
+            sort_desc: true,
+            projection: vec![],
+        };
+        let err = spec.validate().expect_err("zero count must error");
+        assert_eq!(err, TopHitsValidateError::ZeroCount);
+        assert_eq!(err.to_string(), "TopHitsSpec count must be ≥ 1");
+    }
+
+    #[test]
+    fn top_hits_validate_count_exceeds_max() {
+        let over = MAX_SAMPLE_COUNT + 1;
+        let spec = TopHitsSpec {
+            count: over,
+            sort_field: FieldId::Size,
+            sort_desc: true,
+            projection: vec![],
+        };
+        let err = spec.validate().expect_err("over-max count must error");
+        assert_eq!(err, TopHitsValidateError::CountExceedsMax { count: over });
+        assert_eq!(
+            err.to_string(),
+            format!("TopHitsSpec count {over} exceeds maximum {MAX_SAMPLE_COUNT}"),
+        );
     }
 
     #[test]

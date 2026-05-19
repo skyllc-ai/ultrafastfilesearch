@@ -16,18 +16,43 @@
 //! - `missing:extension`
 //! - `distinct:extension`
 
+use core::num::ParseIntError;
+
+use super::parser_error::ParseAggSpecError;
 use super::spec::{
     AggregateKind, AggregateSpec, BucketMetric, CalendarInterval, DuplicateVerify, RollupMode,
     ScalarMetric, TopHitsSpec,
 };
 use crate::search::field::FieldId;
 
+/// Build a closure that lifts a [`ParseIntError`] into the typed
+/// [`ParseAggSpecError::InvalidIntOption`] variant.
+///
+/// Keeps every `val.parse().map_err(...)` call site to a single line
+/// so the file stays under the 800-LOC policy ceiling without
+/// shedding any of the typed-variant information.  `option` is the
+/// static label rendered into the pre-Phase-5d Display string
+/// (e.g. `"top"`, `"sample"`, `"range boundary"`).
+fn invalid_int(
+    option: &'static str,
+    value: String,
+) -> impl FnOnce(ParseIntError) -> ParseAggSpecError {
+    move |source| ParseAggSpecError::InvalidIntOption {
+        option,
+        value,
+        source,
+    }
+}
+
 /// Parse a single `--agg` specification string into an `AggregateSpec`.
 ///
 /// # Errors
 ///
-/// Returns an error string if the spec is malformed.
-pub fn parse_agg_spec(input: &str) -> Result<AggregateSpec, String> {
+/// Returns a [`ParseAggSpecError`] variant when the spec is
+/// malformed.  Display strings stay byte-identical with the
+/// pre-Phase-5d `Result<_, String>` payloads so any operator-facing
+/// log output (daemon `tracing::warn!` and CLI stderr) is unchanged.
+pub fn parse_agg_spec(input: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let trimmed = input.trim();
 
     // Split on first ':'
@@ -56,7 +81,9 @@ pub fn parse_agg_spec(input: &str) -> Result<AggregateSpec, String> {
 
         "distinct" => parse_distinct(rest),
 
-        _ => Err(format!("Unknown aggregate kind: `{kind_str}`")),
+        _ => Err(ParseAggSpecError::UnknownKind {
+            kind: kind_str.to_owned(),
+        }),
     }
 }
 
@@ -75,12 +102,14 @@ fn split_field_and_options(input: &str) -> (&str, &str) {
 }
 
 /// Parse a field name to `FieldId`.
-fn parse_field(name: &str) -> Result<FieldId, String> {
-    FieldId::parse(name).ok_or_else(|| format!("Unknown field: `{name}`"))
+fn parse_field(name: &str) -> Result<FieldId, ParseAggSpecError> {
+    FieldId::parse(name).ok_or_else(|| ParseAggSpecError::UnknownField {
+        name: name.to_owned(),
+    })
 }
 
 /// Parse "field,metrics=M+M" → Stats spec.
-fn parse_stats(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_stats(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (field_str, opts_str) = split_field_and_options(rest);
     let field = parse_field(field_str)?;
     let opts = parse_options(opts_str);
@@ -107,7 +136,7 @@ fn parse_stats(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "field,top=N,metrics=M+M" → Terms spec.
-fn parse_terms(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_terms(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (field_str, opts_str) = split_field_and_options(rest);
     let field = parse_field(field_str)?;
     let opts = parse_options(opts_str);
@@ -117,11 +146,7 @@ fn parse_terms(rest: &str) -> Result<AggregateSpec, String> {
 
     for (key, val) in &opts {
         match *key {
-            "top" => {
-                top = val
-                    .parse()
-                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
-            }
+            "top" => top = val.parse().map_err(invalid_int("top", (*val).to_owned()))?,
             "metrics" => {
                 for metric in val.split('+') {
                     metrics.push(parse_bucket_metric(metric)?);
@@ -130,7 +155,7 @@ fn parse_terms(rest: &str) -> Result<AggregateSpec, String> {
             "sample" => {
                 sample_count = val
                     .parse()
-                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
+                    .map_err(invalid_int("sample", (*val).to_owned()))?;
             }
             _ => {}
         }
@@ -151,7 +176,7 @@ fn parse_terms(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "field,interval=N" → Histogram spec.
-fn parse_histogram(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_histogram(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (field_str, opts_str) = split_field_and_options(rest);
     let field = parse_field(field_str)?;
     let opts = parse_options(opts_str);
@@ -163,7 +188,7 @@ fn parse_histogram(rest: &str) -> Result<AggregateSpec, String> {
             "interval" => {
                 interval = val
                     .parse()
-                    .map_err(|err| format!("Invalid interval: `{val}`: {err}"))?;
+                    .map_err(invalid_int("interval", (*val).to_owned()))?;
             }
             "metrics" => {
                 metrics.clear();
@@ -183,7 +208,7 @@ fn parse_histogram(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "field,calendar=INTERVAL" → `DateHistogram` spec.
-fn parse_date_histogram(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_date_histogram(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (field_str, opts_str) = split_field_and_options(rest);
     let field = parse_field(field_str)?;
     let opts = parse_options(opts_str);
@@ -193,8 +218,11 @@ fn parse_date_histogram(rest: &str) -> Result<AggregateSpec, String> {
     for (key, val) in &opts {
         match *key {
             "calendar" | "interval" => {
-                calendar = CalendarInterval::parse(val)
-                    .ok_or_else(|| format!("Invalid calendar interval: `{val}`"))?;
+                calendar = CalendarInterval::parse(val).ok_or_else(|| {
+                    ParseAggSpecError::InvalidCalendar {
+                        val: (*val).to_owned(),
+                    }
+                })?;
             }
             "metrics" => {
                 metrics.clear();
@@ -214,7 +242,7 @@ fn parse_date_histogram(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "field,bins=A..B+C..D+E.." → Range spec.
-fn parse_range(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_range(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (field_str, opts_str) = split_field_and_options(rest);
     let field = parse_field(field_str)?;
     let opts = parse_options(opts_str);
@@ -228,9 +256,9 @@ fn parse_range(rest: &str) -> Result<AggregateSpec, String> {
                     // Each bin can be "A..B" or just "A". Extract the boundary values.
                     for part in boundary_str.split("..") {
                         if !part.is_empty() {
-                            let boundary_val: u64 = part.parse().map_err(|err| {
-                                format!("Invalid range boundary: `{part}`: {err}")
-                            })?;
+                            let boundary_val: u64 = part
+                                .parse()
+                                .map_err(invalid_int("range boundary", part.to_owned()))?;
                             if !boundaries.contains(&boundary_val) {
                                 boundaries.push(boundary_val);
                             }
@@ -261,7 +289,7 @@ fn parse_range(rest: &str) -> Result<AggregateSpec, String> {
 /// spec.
 ///
 /// Nested sub-aggregation syntax: `rollup:drive,sub=terms:type`
-fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_rollup(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (mode_str, opts_str) = split_field_and_options(rest);
     let opts = parse_options(opts_str);
     let mut depth: u32 = 1;
@@ -276,17 +304,13 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
             "depth" => {
                 depth = val
                     .parse()
-                    .map_err(|err| format!("Invalid depth: `{val}`: {err}"))?;
+                    .map_err(invalid_int("depth", (*val).to_owned()))?;
             }
-            "top" => {
-                top = val
-                    .parse()
-                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
-            }
+            "top" => top = val.parse().map_err(invalid_int("top", (*val).to_owned()))?,
             "record" | "frs" | "ancestor" => {
                 record_idx = Some(
                     val.parse()
-                        .map_err(|err| format!("Invalid record index: `{val}`: {err}"))?,
+                        .map_err(invalid_int("record index", (*val).to_owned()))?,
                 );
             }
             "metrics" => {
@@ -298,7 +322,7 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
             "sample" => {
                 sample_count = val
                     .parse()
-                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
+                    .map_err(invalid_int("sample", (*val).to_owned()))?;
             }
             "sub" => {
                 // Parse nested sub-aggregation spec (e.g. "terms:type").
@@ -313,14 +337,13 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
         "drive" => RollupMode::Drive,
         "path" | "folder" | "dir" => RollupMode::Path { depth },
         "ancestor" | "drilldown" => {
-            let idx = record_idx
-                .ok_or_else(|| "rollup:ancestor requires record=<idx> option".to_owned())?;
+            let idx = record_idx.ok_or(ParseAggSpecError::AncestorRequiresRecord)?;
             RollupMode::Ancestor { record_idx: idx }
         }
         _ => {
-            return Err(format!(
-                "Unknown rollup mode: `{mode_str}`. Use 'path', 'drive', or 'ancestor'."
-            ));
+            return Err(ParseAggSpecError::UnknownRollupMode {
+                mode: mode_str.to_owned(),
+            });
         }
     };
 
@@ -336,7 +359,7 @@ fn parse_rollup(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "size+name,verify=MODE,top=N,sample=N" → Duplicates spec.
-fn parse_duplicates(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_duplicates(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let (keys_str, opts_str) = split_field_and_options(rest);
     let opts = parse_options(opts_str);
 
@@ -360,23 +383,23 @@ fn parse_duplicates(rest: &str) -> Result<AggregateSpec, String> {
                     "none" => DuplicateVerify::None,
                     "first_bytes" | "first" => DuplicateVerify::FirstBytes { count: 4096 },
                     "sha256" | "hash" => DuplicateVerify::Sha256,
-                    _ => return Err(format!("Unknown verify mode: `{val}`")),
+                    _ => {
+                        return Err(ParseAggSpecError::UnknownVerifyMode {
+                            val: (*val).to_owned(),
+                        });
+                    }
                 };
             }
-            "top" => {
-                top = val
-                    .parse()
-                    .map_err(|err| format!("Invalid top: `{val}`: {err}"))?;
-            }
+            "top" => top = val.parse().map_err(invalid_int("top", (*val).to_owned()))?,
             "sample" => {
                 sample_count = val
                     .parse()
-                    .map_err(|err| format!("Invalid sample: `{val}`: {err}"))?;
+                    .map_err(invalid_int("sample", (*val).to_owned()))?;
             }
             "max_groups" => {
                 max_groups = val
                     .parse()
-                    .map_err(|err| format!("Invalid max_groups: `{val}`: {err}"))?;
+                    .map_err(invalid_int("max_groups", (*val).to_owned()))?;
             }
             _ => {}
         }
@@ -394,13 +417,13 @@ fn parse_duplicates(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "NAME" → Preset expansion.
-fn parse_preset(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_preset(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let name = rest.trim();
     if super::presets::AggregatePreset::parse(name).is_none() {
-        return Err(format!(
-            "Unknown preset: `{name}`. Available: {}",
-            super::presets::AggregatePreset::ALL_NAMES.join(", ")
-        ));
+        return Err(ParseAggSpecError::UnknownPreset {
+            name: name.to_owned(),
+            available: super::presets::AggregatePreset::ALL_NAMES.join(", "),
+        });
     }
     // Return a Count as placeholder — the caller should expand the preset.
     // For now, we signal via label that this is a preset.
@@ -411,19 +434,19 @@ fn parse_preset(rest: &str) -> Result<AggregateSpec, String> {
 }
 
 /// Parse "field" → Missing spec.
-fn parse_missing(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_missing(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let field = parse_field(rest.trim())?;
     Ok(AggregateSpec::new(AggregateKind::Missing { field }))
 }
 
 /// Parse "field" → Distinct spec.
-fn parse_distinct(rest: &str) -> Result<AggregateSpec, String> {
+fn parse_distinct(rest: &str) -> Result<AggregateSpec, ParseAggSpecError> {
     let field = parse_field(rest.trim())?;
     Ok(AggregateSpec::new(AggregateKind::Distinct { field }))
 }
 
 /// Parse a scalar metric name.
-fn parse_scalar_metric(name: &str) -> Result<ScalarMetric, String> {
+fn parse_scalar_metric(name: &str) -> Result<ScalarMetric, ParseAggSpecError> {
     match name {
         "sum" => Ok(ScalarMetric::Sum),
         "min" => Ok(ScalarMetric::Min),
@@ -431,12 +454,14 @@ fn parse_scalar_metric(name: &str) -> Result<ScalarMetric, String> {
         "avg" | "mean" => Ok(ScalarMetric::Avg),
         "value_count" | "count" => Ok(ScalarMetric::ValueCount),
         "missing_count" | "missing" => Ok(ScalarMetric::MissingCount),
-        _ => Err(format!("Unknown scalar metric: `{name}`")),
+        _ => Err(ParseAggSpecError::UnknownScalarMetric {
+            name: name.to_owned(),
+        }),
     }
 }
 
 /// Parse a bucket metric name.
-fn parse_bucket_metric(name: &str) -> Result<BucketMetric, String> {
+fn parse_bucket_metric(name: &str) -> Result<BucketMetric, ParseAggSpecError> {
     match name {
         "count" => Ok(BucketMetric::Count),
         "total_bytes" | "bytes" | "size" => Ok(BucketMetric::TotalBytes),
@@ -448,7 +473,9 @@ fn parse_bucket_metric(name: &str) -> Result<BucketMetric, String> {
         "max_size" | "max" => Ok(BucketMetric::MaxSize),
         "share_count" | "share_of_count" => Ok(BucketMetric::ShareOfTotalCount),
         "share_bytes" | "share_of_bytes" => Ok(BucketMetric::ShareOfTotalBytes),
-        _ => Err(format!("Unknown bucket metric: `{name}`")),
+        _ => Err(ParseAggSpecError::UnknownBucketMetric {
+            name: name.to_owned(),
+        }),
     }
 }
 
@@ -459,7 +486,9 @@ fn parse_bucket_metric(name: &str) -> Result<BucketMetric, String> {
 /// # Errors
 ///
 /// Returns errors for any malformed spec.
-pub fn parse_and_expand_agg_specs(inputs: &[&str]) -> Result<Vec<AggregateSpec>, String> {
+pub fn parse_and_expand_agg_specs(
+    inputs: &[&str],
+) -> Result<Vec<AggregateSpec>, ParseAggSpecError> {
     let mut result = Vec::new();
 
     for input in inputs {
@@ -480,302 +509,10 @@ pub fn parse_and_expand_agg_specs(inputs: &[&str]) -> Result<Vec<AggregateSpec>,
     Ok(result)
 }
 
+// Tests live in a sibling file via `#[path]` to keep this file under
+// the 800-line policy ceiling.  The attached child sees this module's
+// scope (private items, `use super::*;`) exactly as it did when the
+// tests lived inline.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_count() {
-        let spec = parse_agg_spec("count").unwrap();
-        assert!(matches!(spec.kind, AggregateKind::Count));
-    }
-
-    #[test]
-    fn parse_stats_size() {
-        let spec = parse_agg_spec("stats:size").unwrap();
-        if let AggregateKind::Stats { field, metrics } = &spec.kind {
-            assert_eq!(*field, FieldId::Size);
-            assert_eq!(metrics.len(), 4); // default: sum/min/max/avg
-        } else {
-            panic!("expected Stats");
-        }
-    }
-
-    #[test]
-    fn parse_terms_extension_with_top() {
-        let spec = parse_agg_spec("terms:extension,top=100").unwrap();
-        if let AggregateKind::Terms { field, top, .. } = &spec.kind {
-            assert_eq!(*field, FieldId::Extension);
-            assert_eq!(*top, 100);
-        } else {
-            panic!("expected Terms");
-        }
-    }
-
-    #[test]
-    fn parse_facet_alias() {
-        let spec = parse_agg_spec("facet:extension").unwrap();
-        assert!(matches!(spec.kind, AggregateKind::Terms { .. }));
-    }
-
-    #[test]
-    fn parse_date_histogram() {
-        let spec = parse_agg_spec("datehist:modified,calendar=month").unwrap();
-        if let AggregateKind::DateHistogram {
-            field, calendar, ..
-        } = &spec.kind
-        {
-            assert_eq!(*field, FieldId::Modified);
-            assert_eq!(*calendar, CalendarInterval::Month);
-        } else {
-            panic!("expected DateHistogram");
-        }
-    }
-
-    #[test]
-    fn parse_range_with_bins() {
-        let spec = parse_agg_spec("range:size,bins=1024+1048576+1073741824").unwrap();
-        if let AggregateKind::Range { boundaries, .. } = &spec.kind {
-            assert_eq!(boundaries.len(), 3);
-        } else {
-            panic!("expected Range");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_path() {
-        let spec = parse_agg_spec("rollup:path,depth=2,top=20").unwrap();
-        if let AggregateKind::Rollup { mode, top, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Path { depth: 2 });
-            assert_eq!(*top, 20);
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_duplicates() {
-        let spec = parse_agg_spec("duplicates:size+name,verify=none,top=50").unwrap();
-        if let AggregateKind::Duplicates { keys, top, .. } = &spec.kind {
-            assert_eq!(keys.len(), 2);
-            assert_eq!(*top, 50);
-        } else {
-            panic!("expected Duplicates");
-        }
-    }
-
-    #[test]
-    fn parse_missing() {
-        let spec = parse_agg_spec("missing:extension").unwrap();
-        assert!(matches!(spec.kind, AggregateKind::Missing { .. }));
-    }
-
-    #[test]
-    fn parse_distinct() {
-        let spec = parse_agg_spec("distinct:extension").unwrap();
-        assert!(matches!(spec.kind, AggregateKind::Distinct { .. }));
-    }
-
-    #[test]
-    fn parse_preset() {
-        let spec = parse_agg_spec("preset:overview").unwrap();
-        assert!(spec.label.as_deref().unwrap().starts_with("__preset__"));
-    }
-
-    #[test]
-    fn parse_and_expand_preset() {
-        let specs = parse_and_expand_agg_specs(&["preset:overview"]).unwrap();
-        assert!(specs.len() >= 5); // overview has 5+ specs
-    }
-
-    #[test]
-    fn parse_unknown_kind() {
-        let result = parse_agg_spec("foobar:thing");
-        result.unwrap_err();
-    }
-
-    #[test]
-    fn parse_histogram() {
-        let spec = parse_agg_spec("hist:size,interval=1024").unwrap();
-        if let AggregateKind::Histogram {
-            field, interval, ..
-        } = &spec.kind
-        {
-            assert_eq!(*field, FieldId::Size);
-            assert_eq!(*interval, 1024);
-        } else {
-            panic!("expected Histogram");
-        }
-    }
-
-    // ── Stage 2 gap-fill tests ────────────────────────────────────
-
-    #[test]
-    fn parse_terms_with_sample() {
-        let spec = parse_agg_spec("terms:extension,top=10,sample=3").unwrap();
-        if let AggregateKind::Terms {
-            field, top, sample, ..
-        } = &spec.kind
-        {
-            assert_eq!(*field, FieldId::Extension);
-            assert_eq!(*top, 10);
-            let sample_spec = sample.as_ref().expect("sample should be Some");
-            assert_eq!(sample_spec.count, 3);
-        } else {
-            panic!("expected Terms");
-        }
-    }
-
-    #[test]
-    fn parse_terms_without_sample() {
-        let spec = parse_agg_spec("terms:extension,top=5").unwrap();
-        if let AggregateKind::Terms { sample, .. } = &spec.kind {
-            assert!(sample.is_none(), "no sample= → None");
-        } else {
-            panic!("expected Terms");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_drive() {
-        let spec = parse_agg_spec("rollup:drive,top=10").unwrap();
-        if let AggregateKind::Rollup { mode, top, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Drive);
-            assert_eq!(*top, 10);
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_with_sample() {
-        let spec = parse_agg_spec("rollup:path,depth=2,sample=2").unwrap();
-        if let AggregateKind::Rollup { mode, sample, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Path { depth: 2 });
-            let sample_spec = sample.as_ref().expect("sample should be Some");
-            assert_eq!(sample_spec.count, 2);
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_duplicates_with_sample() {
-        let spec = parse_agg_spec("duplicates:size+name,sample=5,top=50").unwrap();
-        if let AggregateKind::Duplicates {
-            keys, top, sample, ..
-        } = &spec.kind
-        {
-            assert_eq!(keys.len(), 2);
-            assert_eq!(*top, 50);
-            let sample_spec = sample.as_ref().expect("sample should be Some");
-            assert_eq!(sample_spec.count, 5);
-        } else {
-            panic!("expected Duplicates");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_folder_alias() {
-        let spec = parse_agg_spec("rollup:folder,depth=3").unwrap();
-        if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Path { depth: 3 });
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_dir_alias() {
-        let spec = parse_agg_spec("rollup:dir").unwrap();
-        if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Path { depth: 1 });
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_ancestor_mode() {
-        let spec = parse_agg_spec("rollup:ancestor,record=42,top=10").unwrap();
-        if let AggregateKind::Rollup { mode, top, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Ancestor { record_idx: 42 });
-            assert_eq!(*top, 10);
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_ancestor_frs_alias() {
-        let spec = parse_agg_spec("rollup:ancestor,frs=100").unwrap();
-        if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Ancestor { record_idx: 100 });
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_ancestor_missing_record_errors() {
-        let err = parse_agg_spec("rollup:ancestor,top=10");
-        assert!(err.is_err(), "ancestor without record= should fail");
-    }
-
-    #[test]
-    fn parse_rollup_drilldown_alias() {
-        let spec = parse_agg_spec("rollup:drilldown,record=5").unwrap();
-        if let AggregateKind::Rollup { mode, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Ancestor { record_idx: 5 });
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_with_nested_sub() {
-        let spec = parse_agg_spec("rollup:drive,sub=terms:extension").unwrap();
-        if let AggregateKind::Rollup { mode, sub, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Drive);
-            let sub_spec = sub.as_ref().expect("sub should be present");
-            assert!(
-                matches!(&sub_spec.kind, AggregateKind::Terms { .. }),
-                "sub should be a terms aggregation"
-            );
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_rollup_no_sub_by_default() {
-        let spec = parse_agg_spec("rollup:drive,top=5").unwrap();
-        if let AggregateKind::Rollup { sub, .. } = &spec.kind {
-            assert!(sub.is_none(), "sub should be None when not specified");
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-
-    #[test]
-    fn parse_nested_rollup_path_with_terms_type() {
-        let spec = parse_agg_spec("rollup:path,depth=1,sub=terms:type,top=20").unwrap();
-        if let AggregateKind::Rollup { mode, sub, top, .. } = &spec.kind {
-            assert_eq!(*mode, RollupMode::Path { depth: 1 });
-            assert_eq!(*top, 20);
-            let sub_spec = sub.as_ref().expect("sub should be present");
-            assert!(matches!(&sub_spec.kind, AggregateKind::Terms { .. }));
-        } else {
-            panic!("expected Rollup");
-        }
-    }
-    #[test]
-    fn parse_terms_sample_zero_is_none() {
-        let spec = parse_agg_spec("terms:extension,sample=0").unwrap();
-        if let AggregateKind::Terms { sample, .. } = &spec.kind {
-            assert!(sample.is_none(), "sample=0 should produce None");
-        } else {
-            panic!("expected Terms");
-        }
-    }
-}
+#[path = "parser_tests.rs"]
+mod tests;

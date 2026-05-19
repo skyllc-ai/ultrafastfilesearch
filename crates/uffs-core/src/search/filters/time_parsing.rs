@@ -67,6 +67,50 @@ pub fn parse_month_spec(spec: &str) -> Vec<u32> {
 // Size parsing helpers
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Typed error returned by [`parse_size`].
+///
+/// Phase 5d migration of the previous `Result<u64, String>` return
+/// type: the [`core::fmt::Display`] strings stay byte-identical with
+/// the pre-migration `format!()` payloads so any operator-facing CLI
+/// error output is unchanged, while callers can now match on
+/// variants instead of parsing the string.
+///
+/// `#[non_exhaustive]` per Phase 5c discipline so future failure
+/// modes (e.g. negative-prefix rejection, unit-overflow with a
+/// suffix-larger-than-`u64` policy) can grow a variant without a
+/// semver bump.
+///
+/// Note: this is an independent copy of `uffs_client::format::ParseSizeError`
+/// — the two `parse_size` functions live in different crates with a
+/// subtle behaviour difference (this `uffs-core` variant rejects
+/// overflow explicitly via `Overflow`, while the `uffs-client` variant
+/// saturates).  Both keep the same Display text for the shared
+/// variants so operator output is consistent regardless of which
+/// crate's helper renders the error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ParseSizeError {
+    /// Input was empty after trimming.
+    #[error("empty size specification")]
+    Empty,
+    /// The numeric portion failed [`u64::from_str`].  The original
+    /// untrimmed spec is echoed back so the operator sees what they
+    /// typed.
+    #[error("invalid size: {spec}")]
+    InvalidNumber {
+        /// The original, untrimmed input.
+        spec: String,
+    },
+    /// `count * multiplier` overflowed [`u64`] (e.g. `9999TB`).  The
+    /// original untrimmed spec is echoed back for the same reason as
+    /// [`Self::InvalidNumber`].
+    #[error("size overflows u64: {spec}")]
+    Overflow {
+        /// The original, untrimmed input.
+        spec: String,
+    },
+}
+
 /// Parse a human-readable size string into bytes.
 ///
 /// Accepts plain integers (bytes) and suffixes: `B`, `KB`, `MB`, `GB`, `TB`.
@@ -75,8 +119,10 @@ pub fn parse_month_spec(spec: &str) -> Vec<u32> {
 ///
 /// # Errors
 ///
-/// Returns `Err` if the spec is empty, contains non-numeric characters
-/// (after stripping the suffix), or the result overflows `u64`.
+/// Returns a [`ParseSizeError`] variant when the spec is empty,
+/// contains non-numeric characters (after stripping the suffix), or
+/// the result overflows [`u64`].  Display strings stay byte-identical
+/// with the pre-Phase-5d output.
 ///
 /// # Examples
 ///
@@ -90,7 +136,7 @@ pub fn parse_month_spec(spec: &str) -> Vec<u32> {
 /// assert_eq!(parse_size("0"), Ok(0));
 /// assert!(parse_size("abc").is_err());
 /// ```
-pub fn parse_size(spec: &str) -> Result<u64, String> {
+pub fn parse_size(spec: &str) -> Result<u64, ParseSizeError> {
     // Suffix table: longest-first to avoid prefix ambiguity.
     const SUFFIXES: &[(&str, u64)] = &[
         ("TB", 1024 * 1024 * 1024 * 1024),
@@ -102,7 +148,7 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
 
     let trimmed = spec.trim();
     if trimmed.is_empty() {
-        return Err("empty size specification".to_owned());
+        return Err(ParseSizeError::Empty);
     }
 
     let upper = trimmed.to_ascii_uppercase();
@@ -115,11 +161,15 @@ pub fn parse_size(spec: &str) -> Result<u64, String> {
     let count: u64 = digits
         .trim()
         .parse()
-        .map_err(|_parse_err| format!("invalid size: {spec}"))?;
+        .map_err(|_parse_err| ParseSizeError::InvalidNumber {
+            spec: spec.to_owned(),
+        })?;
 
     count
         .checked_mul(multiplier)
-        .ok_or_else(|| format!("size overflows u64: {spec}"))
+        .ok_or_else(|| ParseSizeError::Overflow {
+            spec: spec.to_owned(),
+        })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

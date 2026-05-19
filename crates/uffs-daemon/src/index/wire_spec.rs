@@ -77,15 +77,17 @@ pub(crate) enum WireSpecError {
     RawSyntaxMissing,
     /// [`parse_agg_spec`] rejected the raw spec syntax.
     ///
-    /// **Phase 5d transitional:** `parse_agg_spec` itself returns
-    /// `Result<_, String>` (uffs-core, scheduled for a separate PR in
-    /// the same sub-phase).  Once that migration lands, this variant
-    /// will be tightened to carry the typed `uffs-core` error directly
-    /// and the `String` payload retired.
+    /// Phase 5d (post-`uffs-core` migration): tightened from the
+    /// pre-migration `RawSyntax(String)` to carry the typed
+    /// [`uffs_core::aggregate::ParseAggSpecError`] directly.  Display
+    /// stays byte-identical with the pre-Phase-5d payload because
+    /// `ParseAggSpecError`'s `Display` impl preserves the original
+    /// `format!()` text from `parse_agg_spec`.  Source-chain is now
+    /// walkable via [`core::error::Error::source`].
     ///
     /// [`parse_agg_spec`]: uffs_core::aggregate::parser::parse_agg_spec
     #[error("{0}")]
-    RawSyntax(String),
+    RawSyntax(#[source] uffs_core::aggregate::ParseAggSpecError),
     /// `kind` did not match any of the supported aggregate kinds.
     #[error("unknown aggregate kind: `{kind}`")]
     UnknownKind {
@@ -440,21 +442,33 @@ mod tests {
 
     #[test]
     fn raw_syntax_passthrough_preserves_inner_message() {
-        // `parse_agg_spec("")` returns `Err(<some message>)`; the
-        // typed variant must echo that string verbatim through
-        // Display so the existing operator-facing message is intact.
+        // `parse_agg_spec("")` returns
+        // `Err(ParseAggSpecError::UnknownKind { kind: "" })`; the
+        // typed variant must echo the inner Display verbatim through
+        // its own Display so the existing operator-facing message is
+        // intact.  Post-`uffs-core` Phase 5d the inner is now a typed
+        // `ParseAggSpecError` rather than a `String` — the source
+        // chain is walkable via `Error::source`.
+        use core::error::Error as _;
+
         let mut spec = ws("raw");
         spec.label = Some(String::new());
         let err = IndexManager::convert_wire_spec(&spec).expect_err("empty raw spec must error");
-        let WireSpecError::RawSyntax(msg) = &err else {
+        let WireSpecError::RawSyntax(inner) = &err else {
             panic!("expected RawSyntax, got {err:?}");
         };
+        // Display equals the inner ParseAggSpecError Display, which
+        // for the empty-spec path expands to "Unknown aggregate kind:
+        // ``" — byte-identical with the pre-Phase-5d String payload.
+        let inner_display = inner.to_string();
         assert!(
-            !msg.is_empty(),
-            "passthrough message must not collapse to empty",
+            !inner_display.is_empty(),
+            "passthrough display must not collapse to empty",
         );
-        // Display equals the raw passthrough string.
-        assert_eq!(err.to_string(), *msg);
+        assert_eq!(err.to_string(), inner_display);
+        // The source chain walks to the inner typed error.
+        let chained = err.source().expect("RawSyntax exposes its inner source");
+        assert_eq!(chained.to_string(), inner_display);
     }
 
     #[test]
