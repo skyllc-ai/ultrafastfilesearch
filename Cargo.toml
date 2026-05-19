@@ -320,10 +320,14 @@ nursery = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 
 # ───── DENY level lints (strictest possible - no exceptions) ─────
+# Panic policy: docs/architecture/code-quality/panic_policy.md
+# defines the five-category taxonomy (A-E) for every prod
+# unwrap/expect/panic site and the required #[expect(...)]
+# annotation shape.  See also docs/architecture/code-quality/lint-posture.md.
 wildcard_imports = "deny"
-unwrap_used = "deny"                   # Force proper error handling
-expect_used = "deny"                   # Force proper error handling
-panic = "deny"                         # No panics allowed
+unwrap_used = "deny"                   # Force proper error handling — see panic_policy.md §1
+expect_used = "deny"                   # Force proper error handling — see panic_policy.md §1
+panic = "deny"                         # No panics allowed — see panic_policy.md §1
 todo = "deny"                          # No TODOs in production code
 unimplemented = "deny"                 # No unimplemented code
 unreachable = "deny"                   # No unreachable code

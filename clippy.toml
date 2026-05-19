@@ -29,6 +29,12 @@
 # ── Test code relaxations ────────────────────────────────────────────────────
 # These allow restriction lints to fire only in production code while letting
 # test code use idiomatic Rust test patterns (unwrap, expect, panic, dbg!).
+#
+# The panic-family lints (`unwrap_used`, `expect_used`, `panic`) stay at
+# `deny` for prod code; see `docs/architecture/code-quality/panic_policy.md`
+# for the five-category taxonomy (A-E) and the per-site #[expect(...)]
+# annotation contract.  For the broader lint posture see
+# `docs/architecture/code-quality/lint-posture.md`.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true

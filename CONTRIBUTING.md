@@ -218,6 +218,22 @@ Top-level `security:` is **not** an allowed type — the local `commit-msg` hook
 - Update docs when contributor-facing workflow or user-visible behavior changes.
 - **New Windows-gated code must pass `just lint-ci-windows` before PR.**  Strict clippy on `#[cfg(windows)]` paths is advisory during the Phase W2–W5 backlog cleanup (see `docs/architecture/windows-clippy-and-linux-cross-plan.md`) and becomes a hard gate at PR CI after W5.  New lints introduced into the backlog trigger an immediate reviewer ask.
 
+## Panic policy
+
+UFFS enforces a strict no-panic posture in production code via three workspace Clippy lints at `deny` level: `unwrap_used`, `expect_used`, and `panic`.  Test code is exempt (see `clippy.toml` `allow-*-in-tests = true`).
+
+The one-line rule: **library code never panics on user input or environment failure; binaries may panic during bootstrap; every other `panic!` / `unwrap()` / `expect()` in production code is a bug.**
+
+Every surviving prod `unwrap` / `expect` / `panic!` fits exactly one of five categories (A–E), each requiring a specific annotation shape:
+
+- **A** — Invariant violation IS a bug (upstream check guarantees the condition): keep as `expect("invariant: <specific condition>")` plus `#[expect(clippy::expect_used, reason = "<invariant + why upstream check guarantees it>")]`.
+- **B** — Caller error / validation failure: convert to typed error variant; propagate via `?`.
+- **C** — Environmental (IO, mutex poison, syscall): propagate via `?` after `map_err` to a typed error, preserving the source via `#[from]` or `#[source]`.
+- **D** — Bootstrap (one-time process startup, crash-correct): keep as `expect("BOOT INVARIANT: <condition>")` with `#[expect(...)]`.
+- **E** — Programmer bug at use site: keep as `panic!` with documented invariant in the enclosing function's `# Panics` doc section.
+
+Full taxonomy, anti-patterns, per-crate posture, and the per-site annotation contract live in [`docs/architecture/code-quality/panic_policy.md`](docs/architecture/code-quality/panic_policy.md).  Library crates do not return `anyhow::Error` from public APIs and do not return `Result<_, String>` (banned workspace-wide after Phase 5d); use a typed `thiserror::Error` enum with `#[non_exhaustive]` instead.
+
 ## Docs map
 
 - Root overview: `README.md`
