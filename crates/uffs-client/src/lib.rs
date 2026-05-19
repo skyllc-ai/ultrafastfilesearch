@@ -14,6 +14,24 @@
 //! let drives = client.drives().await?;
 //! ```
 //!
+//! # Features
+//!
+//! Documented per the workspace dependency policy
+//! (`docs/architecture/code-quality/dependency_policy.md`, playbook §988).
+//!
+//! | Feature | Default? | Enables | Adds deps | API impact | Semver |
+//! |---|:---:|---|---|---|---|
+//! | `async` | yes | The async [`connect::UffsClient`] (tokio reactor) used by `uffs-daemon`'s embedded client + `uffs-mcp`'s bridge | `dep:tokio` (with the `net` feature) | **Additive**: enabling adds [`connect`], `connect_keepalive`, `connect_logging`, `connect_platform`, and the async test surface.  All sync items ([`connect_sync::UffsClientSync`], [`protocol`], [`schema`]) compile identically with the feature off. | Removing an item behind `async` is breaking; adding one is not. |
+//!
+//! ## Why `async` is default-on
+//!
+//! `uffs-daemon` and `uffs-mcp` both consume `uffs-client` with default
+//! features so the async [`connect::UffsClient`] is available without
+//! an explicit feature opt-in.  `uffs-cli` overrides with
+//! `default-features = false` (see `crates/uffs-cli/Cargo.toml`) to
+//! drop tokio + `ws2_32.dll` from the sync-CLI binary — the canonical
+//! "consumer chooses to shrink the surface" pattern.
+//!
 //! ## API hygiene policy (Phase 3b §3.4 / §3.6 / §3.7)
 //!
 //! - **`protocol::*` wire DTOs / wire enums** — `pub` fields **are** the

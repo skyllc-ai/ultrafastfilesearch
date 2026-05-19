@@ -92,14 +92,23 @@ which.workspace = true
 uffs-time.workspace = true
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Features
+# Features (contract documented per playbook §988 — see
+# `crates/uffs-cli/src/main.rs` `# Features` rustdoc and
+# `docs/architecture/code-quality/dependency_policy.md`)
 # ─────────────────────────────────────────────────────────────────────────────
-# `mcp-http-probe`: enable `uffs system-status` probing of the MCP HTTP
-# gateway.  Disabled by default because it is the sole user of
-# `std::net::TcpStream` in the CLI, which unconditionally links
-# `ws2_32.dll` on Windows and adds measurable process-launch overhead.
-# Without this feature, `system-status` still reports the configured
-# HTTP bind address — it just doesn't actively probe `/status`.
+#
+# `mcp-http-probe` — **default-off**, **additive**.
+#
+#   * Enables `uffs status` probing the MCP HTTP gateway's `/status`
+#     endpoint inside `commands::system_status`.
+#   * Adds no crate-graph deps; uses `std::net::TcpStream` (libstd).
+#   * Disabled by default because `std::net::TcpStream` is the sole
+#     reason `ws2_32.dll` would be linked on Windows, adding ~50 ms
+#     to cold-start launch.  Without the feature, `uffs status` still
+#     reports the configured HTTP bind address — it just does not
+#     actively probe `/status`.
+#   * Semver: removing the probe behaviour or its observable output
+#     is breaking; adding richer probe output is not.
 [features]
 default = []
 mcp-http-probe = []

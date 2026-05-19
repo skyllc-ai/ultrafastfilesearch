@@ -57,6 +57,25 @@ name = "uffs-mcp-http"
 path = "src/bin/http_gateway.rs"
 required-features = ["streamable-http"]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Features (contract documented per playbook §988 — see
+# `crates/uffs-mcp/src/lib.rs` `# Features` rustdoc and
+# `docs/architecture/code-quality/dependency_policy.md`)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `streamable-http` — **default-on**, **additive**.
+#
+#   * Enables the `http` module + the `uffs-mcp-http` binary
+#     (`src/bin/http_gateway.rs`).  The binary carries
+#     `required-features = ["streamable-http"]` and so does not
+#     build at all when the feature is off.
+#   * Adds `rmcp/transport-streamable-http-server`, `dep:axum`,
+#     `dep:tower-service`.
+#   * Default-on so UFFS ships the HTTP gateway as a first-class
+#     transport alongside stdio.  Downstream MCP integrations that
+#     only want the stdio transport pass `default-features = false`.
+#   * Semver: removing items behind `streamable-http` is breaking;
+#     adding new items behind it is not.
 [features]
 default = ["streamable-http"]
 streamable-http = [

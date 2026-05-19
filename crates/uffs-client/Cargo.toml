@@ -46,11 +46,24 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Features (contract documented per playbook §988 — see
+# `crates/uffs-client/src/lib.rs` `# Features` rustdoc and
+# `docs/architecture/code-quality/dependency_policy.md`)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `async` — **default-on**, **additive**.
+#
+#   * Enables the async `connect::UffsClient` (tokio reactor) used by
+#     `uffs-daemon`'s embedded client and `uffs-mcp`'s bridge.
+#   * Adds `dep:tokio` (with the `net` feature).
+#   * Default-on so existing consumers (`uffs-daemon`, `uffs-mcp`)
+#     keep working with no change.  `uffs-cli` overrides with
+#     `default-features = false` to drop tokio + `ws2_32.dll` from
+#     the sync-CLI binary.
+#   * Semver: removing items behind `async` is breaking; adding new
+#     items behind it is not.
 [features]
-# Default enables the async `UffsClient` (tokio-based) so existing
-# consumers (`uffs-daemon`, `uffs-mcp`) keep working with no change.
-# The CLI (`uffs-cli`) overrides with `default-features = false` to
-# drop tokio + `ws2_32.dll` from the hot-path binary.
 default = ["async"]
 async = ["dep:tokio"]
 

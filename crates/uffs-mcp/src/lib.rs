@@ -25,6 +25,25 @@
 //! uffs_mcp::run_mcp_server().await
 //! # }
 //! ```
+//!
+//! # Features
+//!
+//! Documented per the workspace dependency policy
+//! (`docs/architecture/code-quality/dependency_policy.md`, playbook §988).
+//!
+//! | Feature | Default? | Enables | Adds deps | API impact | Semver |
+//! |---|:---:|---|---|---|---|
+//! | `streamable-http` | yes | The [`http`] module + the `uffs-mcp-http` binary (`src/bin/http_gateway.rs`).  Activates rmcp's streamable-HTTP server transport. | `rmcp/transport-streamable-http-server`, `dep:axum`, `dep:tower-service` | **Additive**: enabling adds `pub mod http`, the `mcp_serve` helper in `main.rs`, and the `uffs-mcp-http` binary (which carries `required-features = ["streamable-http"]` and so does not build at all when the feature is off).  All stdio surfaces ([`handler::UffsMcpServer`], `resources`, `roots`, `schemas`, [`text`], `tools`) compile identically with the feature off. | Removing an item behind `streamable-http` is breaking; adding one is not. |
+//!
+//! ## Why `streamable-http` is default-on
+//!
+//! UFFS ships the HTTP gateway as a first-class transport (the
+//! stdio-only path covers Claude Desktop / Cursor / Windsurf, but
+//! `uffs daemon http` and browser-side MCP clients need the streamable
+//! HTTP server).  Downstream MCP integrations that only want the
+//! stdio transport can pass `default-features = false` to drop
+//! axum and tower-service from their binary; both transports share
+//! the same tool / resource / prompt surface.
 
 // On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
 // render with their cfg badge.  Gated behind `cfg(docsrs)` so local

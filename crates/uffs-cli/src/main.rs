@@ -7,6 +7,25 @@
 //! This binary detects subcommands and forwards raw search args via
 //! `search_cli` RPC.  Argument transforms specific to the search
 //! subcommand live in [`commands::search::args`].
+//!
+//! # Features
+//!
+//! Documented per the workspace dependency policy
+//! (`docs/architecture/code-quality/dependency_policy.md`, playbook §988).
+//!
+//! | Feature | Default? | Enables | Adds deps | Binary-size impact | Semver |
+//! |---|:---:|---|---|---|---|
+//! | `mcp-http-probe` | **no** | Active probing of the MCP HTTP gateway's `/status` endpoint inside `uffs status` (see [`commands::system_status`]).  Without it, `uffs status` still reports the configured HTTP bind address but does not actively probe. | None on the crate graph.  Uses `std::net::TcpStream` (libstd) — but on Windows targets that drag in `ws2_32.dll`, adding ~50 ms to cold-start process launch. | Disabling drops the only `std::net` user from the CLI: `ws2_32.dll` is left unlinked.  This is **the** reason the feature is default-off — the CLI is the thin / fast-path binary. | Removing the probe behaviour or its observable output behind `mcp-http-probe` is breaking; adding richer probe output is not. |
+//!
+//! ## Why `mcp-http-probe` is default-off
+//!
+//! `uffs-cli` is the thin synchronous fast-path binary.  Every byte
+//! and every millisecond of cold-start matter (the CLI typically
+//! runs once per shell invocation; the daemon is the long-lived
+//! reactor).  `std::net::TcpStream` is the lone reason `ws2_32.dll`
+//! would be linked on Windows; gating its use behind a non-default
+//! feature lets package builds opt in only when probe data is worth
+//! the launch-time hit.
 
 // CLI main module uses single-call functions by design
 #![expect(
