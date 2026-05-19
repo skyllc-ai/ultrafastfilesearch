@@ -367,17 +367,23 @@ impl FastPathResolver {
                 let parent_path =
                     parent_frs.map_or_else(|| "<null>".to_owned(), |frs_val| self.resolve(frs_val));
 
-                // Build full path: parent + backslash + name
+                // Build full path: parent + backslash + name.  Mutates
+                // `parent_path` in-place to avoid the per-row `format!()`
+                // allocation that the previous branch tree performed (this
+                // map runs once per result row — Phase 6d hot-path
+                // category-δ).  `parent_path` is owned (from `resolve()`),
+                // so `push_str` reuses its buffer; the typical Win32 path
+                // length leaves ample headroom on the existing String's
+                // capacity, so re-allocation is rare.
                 let file_name = name.unwrap_or("<unnamed>");
-
-                // Special case: root directory has name "." - just use parent path
-                let mut path = if file_name == "." {
-                    parent_path
-                } else if parent_path.ends_with('\\') {
-                    format!("{parent_path}{file_name}")
-                } else {
-                    format!("{parent_path}\\{file_name}")
-                };
+                let mut path = parent_path;
+                // Special case: root directory has name "." — keep parent path as-is.
+                if file_name != "." {
+                    if !path.ends_with('\\') {
+                        path.push('\\');
+                    }
+                    path.push_str(file_name);
+                }
 
                 // Check if this entry has an ADS stream name
                 let has_ads = stream_name.is_some_and(|sn| !sn.is_empty());

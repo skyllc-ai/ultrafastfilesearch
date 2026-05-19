@@ -16,6 +16,21 @@
 use super::backend::DisplayRow;
 use super::derived::{bulkiness_for_row, tree_allocated_for_row};
 
+/// Static lookup table for the 26 valid drive labels (`"A:"` …
+/// `"Z:"`), indexed by [`uffs_mft::platform::DriveLetter::alphabet_index`].
+///
+/// Replaces a per-row `format!("{}:", drive)` allocation in the
+/// `Vec<DisplayRow>` → `DataFrame` conversion hot path (Phase 6d
+/// category-δ).  Each entry is a `&'static str` carved into the rodata
+/// segment; the resulting `Vec<&'static str>` carries no heap copies
+/// of the labels.  Polars'/Arrow's column-builder still copies into a
+/// contiguous string buffer, but we save the upstream per-row
+/// `String` allocation + free pair.
+const DRIVE_LABELS: [&str; 26] = [
+    "A:", "B:", "C:", "D:", "E:", "F:", "G:", "H:", "I:", "J:", "K:", "L:", "M:", //
+    "N:", "O:", "P:", "Q:", "R:", "S:", "T:", "U:", "V:", "W:", "X:", "Y:", "Z:",
+];
+
 /// Convert `DisplayRow` results to a Polars `DataFrame` with standard MFT
 /// column names so existing CLI output formatters can consume it.
 ///
@@ -37,7 +52,15 @@ pub fn display_rows_to_dataframe(
     let modified: Vec<i64> = rows.iter().map(|row| row.modified).collect();
     let accessed: Vec<i64> = rows.iter().map(|row| row.accessed).collect();
     let flags: Vec<u32> = rows.iter().map(|row| row.flags).collect();
-    let drives: Vec<String> = rows.iter().map(|row| format!("{}:", row.drive)).collect();
+    let drives: Vec<&str> = rows
+        .iter()
+        .map(|row| {
+            DRIVE_LABELS
+                .get(row.drive.alphabet_index())
+                .copied()
+                .unwrap_or("?:")
+        })
+        .collect();
     let descendants: Vec<u32> = rows.iter().map(|row| row.descendants).collect();
     let treesize: Vec<u64> = rows.iter().map(|row| row.treesize).collect();
     let tree_allocated: Vec<u64> = rows.iter().map(tree_allocated_for_row).collect();
