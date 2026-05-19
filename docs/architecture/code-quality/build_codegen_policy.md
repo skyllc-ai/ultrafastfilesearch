@@ -88,7 +88,7 @@ The contract is positive (the audit script flags what's missing) rather
 than negative (no new clippy lints to suppress) because the surface area
 is too small to justify a dedicated lint — the workspace has 1
 `build.rs`, 0 proc-macros, 6 `macro_rules!` sites, 4 codegen binaries,
-and 36 distinct env-var names.  A registry diff catches drift more
+and 42 distinct env-var names.  A registry diff catches drift more
 cheaply than a custom lint.
 
 ---
@@ -141,12 +141,13 @@ Every workspace-internal codegen binary (under `scripts/ci/` or
 ### 3.5  Environment variable contract
 
 Every environment variable the workspace reads (via `env::var(…)` /
-`env!(…)` / `option_env!(…)`) must be in the §5 registry with:
+`env::var_os(…)` / `env!(…)` / `option_env!(…)`, including reads via a
+`const NAME: &str = "VAR";` indirection) must be in the §5 registry with:
 
 - **Name** — the exact env var key.
-- **Scope** — `build-time` / `runtime` / `test-only` / `release-only` / `dev-only`.
-- **Type** — `bool` (parsed permissively: `"1"` / `"true"` / `"yes"` truthy; everything else falsy unless documented otherwise) / `int` / `path` / `token` / `string`.
+- **Type** — `bool` (parsed permissively: `"1"` / `"true"` / `"yes"` truthy; everything else falsy unless documented otherwise; `env::var_os(…).is_some()` shape treats *any* set value as truthy and is noted inline) / `int` / `path` / `token` / `string`.
 - **Default** — value used when the variable is unset.
+- **Set by** — who is expected to write it: `Cargo` (automatic), `OS / shell` (system), `operator / user shell` (manual export), `CI workflow` (set by a `scripts/ci/` runner), `test harness`, ``just ship` cross-check`, etc.  This is the *expected* writer, not the only possible writer.
 - **Where read** — the canonical use-site (file:line).
 - **Semver class** — `STANDARD` (system-provided, never breaks: `HOME`, `PATH`), `CARGO` (Cargo-provided, see Cargo's stability promises), or `INTERNAL` (UFFS-defined, can be added / removed / renamed in any minor version with a CHANGELOG entry).
 
@@ -207,84 +208,93 @@ name in the source tree that does not appear in this policy doc.
 
 ## 5  Environment variable registry
 
-**As of:** 2026-05-19, SHA `0433065c7` (Phase 9 entry).
+**As of:** 2026-05-19, SHA `aeb9807ac` (Phase 9 gap-closure entry).
 
-**Source:** `scripts/dev/build_codegen_audit.sh` §6 — 36 distinct env-var
+**Source:** `scripts/dev/build_codegen_audit.sh` §6 — 42 distinct env-var
 names consumed across `crates/` and `scripts/` (excluding `tests/`,
-`benches/`, `examples/`, and `*_tests.rs` files).
+`benches/`, `examples/`, and `*_tests.rs` files).  Detection covers four
+shapes: `env::var(LITERAL)`, `env::var_os(LITERAL)`, `env!(LITERAL)` /
+`option_env!(LITERAL)`, and `const NAME: &str = "VAR";` indirection
+(where the read site uses the const at a non-literal call site).
 
 ### 5.1 Build-time (Cargo-provided)
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `CARGO_CFG_TARGET_ENV` | `string` | (set by Cargo) | `crates/uffs-cli/build.rs:80` | Cargo-provided cfg value for `target_env` (e.g. `"msvc"`, `"gnu"`).  CARGO class. |
-| `CARGO_CFG_TARGET_OS` | `string` | (set by Cargo) | `crates/uffs-cli/build.rs:79` | Cargo-provided cfg value for `target_os`.  CARGO class. |
-| `CARGO_MANIFEST_DIR` | `path` | (set by Cargo) | `crates/uffs-daemon/tests/ipc_integration.rs` | Absolute path to the crate's manifest directory.  CARGO class. |
-| `CARGO_PKG_VERSION` | `string` | (set by Cargo) | `crates/uffs-cli/src/args.rs` + 9 other sites | Crate version string, used in `--version` output + log preludes.  CARGO class. |
-| `CARGO_TARGET_DIR` | `path` | `target/` | `scripts/ci/build-cross-all.rs` | Custom target directory override.  CARGO class. |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `CARGO_CFG_TARGET_ENV` | `string` | (set by Cargo) | Cargo | `crates/uffs-cli/build.rs:80` | Cargo-provided cfg value for `target_env` (e.g. `"msvc"`, `"gnu"`).  CARGO class. |
+| `CARGO_CFG_TARGET_OS` | `string` | (set by Cargo) | Cargo | `crates/uffs-cli/build.rs:79` | Cargo-provided cfg value for `target_os`.  CARGO class. |
+| `CARGO_MANIFEST_DIR` | `path` | (set by Cargo) | Cargo | `crates/uffs-daemon/tests/ipc_integration.rs` | Absolute path to the crate's manifest directory.  CARGO class. |
+| `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Cargo | `crates/uffs-cli/src/args.rs` + 9 other sites | Crate version string, used in `--version` output + log preludes.  CARGO class. |
+| `CARGO_TARGET_DIR` | `path` | `target/` | Cargo / user shell | `scripts/ci/build-cross-all.rs` | Custom target directory override.  CARGO class. |
 
 ### 5.2 Standard runtime (system-provided paths + identity)
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `APPDATA` | `path` | (Windows: `%USERPROFILE%\AppData\Roaming`) | `scripts/verify_parity.rs` | Windows-only.  STANDARD class. |
-| `HOME` | `path` | (Unix: user home) | `scripts/ci-pipeline/src/context.rs` + 18 other sites | Unix-only. STANDARD class. |
-| `LOCALAPPDATA` | `path` | (Windows: `%USERPROFILE%\AppData\Local`) | `scripts/dev/daemon-readiness.rs` + 9 other sites | Windows-only.  STANDARD class. |
-| `PATH` | `string` | (system) | `crates/uffs-daemon/src/main.rs` + 7 other sites | Executable search path; read for cross-tool discovery.  STANDARD class. |
-| `SHELL` | `path` | (Unix: `/bin/sh`) | `scripts/dev/build-local.rs` | Unix-only.  STANDARD class. |
-| `TEMP` | `path` | (Windows: `%USERPROFILE%\AppData\Local\Temp`) | `scripts/dev/daemon-readiness.rs` + 5 other sites | Windows-preferred temp path.  STANDARD class. |
-| `USERNAME` | `string` | (Windows: current user) | `crates/uffs-security/src/fs.rs` | Used for SID-hash derivation per `daemon_socket_path` flow.  STANDARD class. |
-| `USERPROFILE` | `path` | (Windows: user home) | `scripts/dev/daemon-readiness.rs` + 20 other sites | Windows-only.  STANDARD class. |
-| `XDG_CACHE_HOME` | `path` | (XDG: `$HOME/.cache`) | `scripts/dev/daemon-readiness.rs` + 1 other | XDG Base Directory spec; Linux/macOS.  STANDARD class. |
-| `XDG_DATA_HOME` | `path` | (XDG: `$HOME/.local/share`) | `scripts/dev/mcp-readiness.rs` | XDG Base Directory spec.  STANDARD class. |
-| `XDG_RUNTIME_DIR` | `path` | (XDG: `/run/user/$UID`) | `crates/uffs-client/src/daemon_ctl.rs` + 1 other | XDG Base Directory spec; used to locate the daemon socket on Linux.  STANDARD class. |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `APPDATA` | `path` | (Windows: `%USERPROFILE%\AppData\Roaming`) | Windows OS | `scripts/verify_parity.rs` | Windows-only.  STANDARD class. |
+| `HOME` | `path` | (Unix: user home) | Unix shell login | `scripts/ci-pipeline/src/context.rs` + 18 other sites | Unix-only. STANDARD class. |
+| `LOCALAPPDATA` | `path` | (Windows: `%USERPROFILE%\AppData\Local`) | Windows OS | `scripts/dev/daemon-readiness.rs` + 9 other sites | Windows-only.  STANDARD class. |
+| `PATH` | `string` | (system) | OS / shell | `crates/uffs-daemon/src/main.rs` + 7 other sites | Executable search path; read for cross-tool discovery.  STANDARD class. |
+| `SHELL` | `path` | (Unix: `/bin/sh`) | Unix shell login | `scripts/dev/build-local.rs` | Unix-only.  STANDARD class. |
+| `TEMP` | `path` | (Windows: `%USERPROFILE%\AppData\Local\Temp`) | Windows OS | `scripts/dev/daemon-readiness.rs` + 5 other sites | Windows-preferred temp path.  STANDARD class. |
+| `USERNAME` | `string` | (Windows: current user) | Windows OS | `crates/uffs-security/src/fs.rs` | Used for SID-hash derivation per `daemon_socket_path` flow.  STANDARD class. |
+| `USERPROFILE` | `path` | (Windows: user home) | Windows OS | `scripts/dev/daemon-readiness.rs` + 20 other sites | Windows-only.  STANDARD class. |
+| `XDG_CACHE_HOME` | `path` | (XDG: `$HOME/.cache`) | Unix shell / desktop env | `scripts/dev/daemon-readiness.rs` + 1 other | XDG Base Directory spec; Linux/macOS.  STANDARD class. |
+| `XDG_DATA_HOME` | `path` | (XDG: `$HOME/.local/share`) | Unix shell / desktop env | `scripts/dev/mcp-readiness.rs` | XDG Base Directory spec.  STANDARD class. |
+| `XDG_RUNTIME_DIR` | `path` | (XDG: `/run/user/$UID`) | Linux systemd / login session | `crates/uffs-client/src/daemon_ctl.rs` + 1 other | XDG Base Directory spec; used to locate the daemon socket on Linux.  STANDARD class. |
 
 ### 5.3 Logging
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `RUST_LOG` | `string` | `info` (set explicitly per binary) | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 4 other sites | `tracing-subscriber` filter directive.  STANDARD class (tracing convention). |
-| `RUST_LOG_FILE` | `path` | (none) | `crates/uffs-cli/tests/cli_integration.rs` + 1 other | Optional log file path override; test-only outside `daemon_mgmt.rs`.  INTERNAL class. |
-| `UFFS_LOG` | `string` | `info` | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 3 other sites | UFFS-specific log level override (used when `RUST_LOG` is not set).  INTERNAL class. |
-| `UFFS_LOG_DIR` | `path` | (platform default — `%LOCALAPPDATA%\UFFS\logs` / `$XDG_CACHE_HOME/uffs/logs`) | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 3 other sites | Log directory override.  INTERNAL class. |
-| `UFFS_LOG_FILE` | `path` | (none — auto-generated under `UFFS_LOG_DIR`) | `crates/uffs-cli/src/commands/search/args.rs` + 1 other | Log file path override.  INTERNAL class. |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `RUST_LOG` | `string` | `info` (set explicitly per binary) | operator / user shell | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 4 other sites | `tracing-subscriber` filter directive.  STANDARD class (tracing convention). |
+| `RUST_LOG_FILE` | `path` | (none) | operator / test harness | `crates/uffs-cli/tests/cli_integration.rs` + 1 other | Optional log file path override; test-only outside `daemon_mgmt.rs`.  INTERNAL class. |
+| `UFFS_LOG` | `string` | `info` | operator / user shell | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 3 other sites | UFFS-specific log level override (used when `RUST_LOG` is not set).  INTERNAL class. |
+| `UFFS_LOG_DIR` | `path` | (platform default — `%LOCALAPPDATA%\UFFS\logs` / `$XDG_CACHE_HOME/uffs/logs`) | operator / `--log-dir` CLI flag | `crates/uffs-cli/src/commands/daemon_mgmt.rs` + 3 other sites | Log directory override.  INTERNAL class. |
+| `UFFS_LOG_FILE` | `path` | (none — auto-generated under `UFFS_LOG_DIR`) | operator / `--log-file` CLI flag | `crates/uffs-cli/src/commands/search/args.rs` + 1 other | Log file path override.  INTERNAL class. |
 
 ### 5.4 UFFS runtime knobs
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `UFFS_API_LOG` | `path` | (none) | `scripts/windows/api-validation.rs` | API-validation harness log path.  INTERNAL class (dev/CI only). |
-| `UFFS_DEV` | `bool` | `false` | `crates/uffs-security/src/keystore.rs` | Enables dev-mode keystore relaxation (no DPAPI binding).  INTERNAL class. |
-| `UFFS_ELEVATE` | `string` | `auto` | `crates/uffs-cli/src/main.rs` + 1 other | Elevation policy override per `ElevationPolicy::from_env`.  INTERNAL class. |
-| `UFFS_EXTRA_ARGS` | `string` | (none) | `scripts/windows/cross-tool-benchmark.rs` | Extra CLI args appended in the cross-tool benchmark harness.  INTERNAL class (dev/CI only). |
-| `UFFS_MCP_AUTH_TOKEN` | `token` | (auto-generated per session) | `crates/uffs-mcp/src/bin/http_gateway.rs` | MCP HTTP gateway bearer-token override.  INTERNAL class. |
-| `UFFS_PARITY_DEBUG` | `bool` | `false` | `crates/uffs-mft/src/io/readers/parallel/to_index.rs` | Enables verbose chaos-order parity debugging in the LIVE parser.  INTERNAL class. |
-| `UFFS_PARKED_TO_COLD_IDLE_SECS` | `int` (seconds) | `300` | `crates/uffs-daemon/src/cache/policy.rs` + 2 other sites | Cache tier transition timer override.  INTERNAL class. |
-| `UFFS_SINGLE_THREAD` | `bool` | `false` | `crates/uffs-mft/src/reader/persistence.rs` | Forces single-threaded reader for parity debugging.  INTERNAL class. |
-| `UFFS_WARM_TO_PARKED_IDLE_SECS` | `int` (seconds) | `60` | `crates/uffs-daemon/src/cache/policy.rs` + 2 other sites | Cache tier transition timer override.  INTERNAL class. |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `UFFS_API_LOG` | `path` | (none) | CI harness | `scripts/windows/api-validation.rs` | API-validation harness log path.  INTERNAL class (dev/CI only). |
+| `UFFS_CACHE_PROFILE` | `bool` (`env::var_os(…).is_some()` — *any* value enables) | `false` (unset) | dev / `scripts/dev/tier-load-compare.rs` | `crates/uffs-core/src/compact_cache.rs` + 7 other sites across `uffs-core` + `uffs-mft` | Emits per-phase cache I/O timings to stderr (`[CACHE_PROFILE]` prefix).  INTERNAL class (dev / benchmark only). |
+| `UFFS_DEV` | `bool` | `false` | dev / user shell | `crates/uffs-security/src/keystore.rs` | Enables dev-mode keystore relaxation (no DPAPI binding).  INTERNAL class. |
+| `UFFS_ELEVATE` | `string` (`auto` / `never` / `always` / `prefer`) | `auto` | operator / user shell | `crates/uffs-cli/src/main.rs` + 1 other | Elevation policy override per `ElevationPolicy::from_env`.  INTERNAL class. |
+| `UFFS_EXTRA_ARGS` | `string` | (none) | CI harness | `scripts/windows/cross-tool-benchmark.rs` | Extra CLI args appended in the cross-tool benchmark harness.  INTERNAL class (dev/CI only). |
+| `UFFS_HOT_TO_WARM_IDLE_SECS` | `int` (seconds) | `60` | operator / benchmark harness | `crates/uffs-daemon/src/cache/policy.rs:135,180` (read via `HOT_TO_WARM_IDLE_ENV` const indirection) | Cache tier `Hot → Warm` transition timer override.  INTERNAL class. |
+| `UFFS_MCP_AUTH_TOKEN` | `token` | (auto-generated per session) | MCP client / `just ship` | `crates/uffs-mcp/src/bin/http_gateway.rs` | MCP HTTP gateway bearer-token override.  INTERNAL class. |
+| `UFFS_PARITY_DEBUG` | `bool` | `false` | dev / parity harness | `crates/uffs-mft/src/io/readers/parallel/to_index.rs` | Enables verbose chaos-order parity debugging in the LIVE parser.  INTERNAL class. |
+| `UFFS_PARKED_TO_COLD_IDLE_SECS` | `int` (seconds) | `86_400` (24 h) | operator / benchmark harness | `crates/uffs-daemon/src/cache/policy.rs:141` (read via `PARKED_TO_COLD_IDLE_ENV` const indirection) + 2 other sites in `scripts/` | Cache tier `Parked → Cold` transition timer override.  INTERNAL class. |
+| `UFFS_REBUILD_CHILDREN_ALWAYS` | `bool` (`env::var_os(…).is_some()` — *any* value enables) | `false` (unset) | dev / parity harness | `crates/uffs-mft/src/index/tree.rs:86` | Forces unconditional children-rebuild from name graph in LIVE parse; removes parse-order artifacts for validation runs.  INTERNAL class (dev only). |
+| `UFFS_SEARCH_MAX_CONCURRENCY` | `int` (search permits) | auto: `max(2, cpus × 26 / (drives × 10))` | operator / `scripts/windows/concurrency-sweep.rs` | `crates/uffs-daemon/src/index/mod.rs:366,446` (read via `Self::SEARCH_CONCURRENCY_ENV` const indirection) | Overrides the auto-tuned search-permit target for `(cpus, drives)` topology.  INTERNAL class. |
+| `UFFS_SINGLE_THREAD` | `bool` | `false` | dev / parity harness | `crates/uffs-mft/src/reader/persistence.rs` | Forces single-threaded reader for parity debugging.  INTERNAL class. |
+| `UFFS_SKIP_ORPHANS` | `bool` (`env::var_os(…).is_some()` — *any* value enables) | `false` (unset) | dev / parity harness | `crates/uffs-mft/src/index/tree.rs:97` | Skips orphan-record sweep in tree aggregation (only paths reachable from ROOT through visible FILE_NAME edges are included).  INTERNAL class (dev only). |
+| `UFFS_USN_REFRESH_INTERVAL_SECS` | `int` (seconds) | `300` (5 min) | operator | `crates/uffs-daemon/src/cache/policy.rs:144,203` (read via `USN_REFRESH_INTERVAL_ENV` const indirection) | USN journal refresh interval override; trades drift bound for per-drive replay efficiency.  INTERNAL class. |
+| `UFFS_WARM_TO_PARKED_IDLE_SECS` | `int` (seconds) | `300` (5 min) | operator / benchmark harness | `crates/uffs-daemon/src/cache/policy.rs:138` (read via `WARM_TO_PARKED_IDLE_ENV` const indirection) + 2 other sites in `scripts/` | Cache tier `Warm → Parked` transition timer override.  INTERNAL class. |
 
 ### 5.5 UFFS client knobs
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `UFFS_CLIENT_SKIP_HEALTH_CHECK` | `bool` | `false` | `crates/uffs-client/src/daemon_ctl.rs` | Skips post-connect health probe (used by `just ship` cross-check).  INTERNAL class. |
-| `UFFS_CLIENT_TIMEOUT_SECS` | `int` (seconds) | `5` | `crates/uffs-client/src/connect_sync_platform.rs` | Sync connect timeout override.  INTERNAL class. |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `UFFS_CLIENT_SKIP_HEALTH_CHECK` | `bool` | `false` | `just ship` cross-check | `crates/uffs-client/src/daemon_ctl.rs` | Skips post-connect health probe (used by `just ship` cross-check).  INTERNAL class. |
+| `UFFS_CLIENT_TIMEOUT_SECS` | `int` (seconds) | `5` | operator | `crates/uffs-client/src/connect_sync_platform.rs` | Sync connect timeout override.  INTERNAL class. |
 
 ### 5.6 Build/release knobs (build-time, read by `scripts/ci/`)
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `UFFS_PROFILING_BUILD` | `bool` | `false` | `scripts/ci/build-cross-all.rs` | Enables profiling-build profile in `cargo dist`.  INTERNAL class (release-only). |
-| `UFFS_RELEASE_BUILD` | `bool` | `false` | `scripts/ci/build-cross-all.rs` + 1 other | Enables release-build profile in `cargo dist`.  INTERNAL class (release-only). |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `UFFS_PROFILING_BUILD` | `bool` | `false` | `scripts/ci/` runner | `scripts/ci/build-cross-all.rs` | Enables profiling-build profile in `cargo dist`.  INTERNAL class (release-only). |
+| `UFFS_RELEASE_BUILD` | `bool` | `false` | `scripts/ci/` runner / release pipeline | `scripts/ci/build-cross-all.rs` + 1 other | Enables release-build profile in `cargo dist`.  INTERNAL class (release-only). |
 
 ### 5.7 Test-only
 
-| Name | Type | Default | Where read | Notes |
-|---|---|---|---|---|
-| `UFFS_MFT_TEST_DIR` | `path` | (none) | `crates/uffs-mft/src/io/readers/parallel/tests_chaos.rs` | Optional test-fixture directory for parallel-reader chaos harness.  INTERNAL class (test-only). |
-| `UFFS_MFT_TEST_FILE` | `path` | (none) | `crates/uffs-mft/src/io/readers/parallel/tests_chaos.rs` | Optional test-fixture file path.  INTERNAL class (test-only). |
+| Name | Type | Default | Set by | Where read | Notes |
+|---|---|---|---|---|---|
+| `UFFS_MFT_TEST_DIR` | `path` | (none) | test harness | `crates/uffs-mft/src/io/readers/parallel/tests_chaos.rs` | Optional test-fixture directory for parallel-reader chaos harness.  INTERNAL class (test-only). |
+| `UFFS_MFT_TEST_FILE` | `path` | (none) | test harness | `crates/uffs-mft/src/io/readers/parallel/tests_chaos.rs` | Optional test-fixture file path.  INTERNAL class (test-only). |
 
-**Total: 36 distinct env-var names** across 7 scope categories.
+**Total: 42 distinct env-var names** across 7 scope categories (5 build-time + 11 standard-runtime + 5 logging + 15 UFFS runtime knobs + 2 client knobs + 2 build/release knobs + 2 test-only).
 
 ---
 
@@ -375,9 +385,10 @@ Append-only.  Each entry: date, sub-phase, decision, PR.
 | Date | Sub-phase | Decision | PR |
 |---|---|---|---|
 | 2026-05-19 | 9a | Land `scripts/dev/build_codegen_audit.sh` as the workspace's build/macro/codegen/env baseline tool.  Mirror Phase 6a / 7a / 8a script shape.  Emits Markdown to stdout; reruns in ~1 s. | #299 |
-| 2026-05-19 | 9b | `uffs-cli/build.rs` audited.  Verdict: B2 + B3 (PE resource embedding + `/DELAYLOAD` link args).  No drift.  No refactor.  See `phase_9_build_audit_findings.md`. | this PR |
-| 2026-05-19 | 9c | Record deliberate "0 proc-macro crates" workspace posture.  Adding one requires the §3.2 contract. | this PR |
-| 2026-05-19 | 9d | All 6 `macro_rules!` sites audited.  Verdict: 5 × M1 (binary read helpers — embedded `?`-propagation + implicit captures), 1 × M2+M3 (`drive_letter_consts!` — 26-letter const declaration repetition).  No drift.  Refactor candidate (read helpers → `Cursor` struct) deferred — see `phase_9_macro_audit_findings.md` §5.1. | this PR |
-| 2026-05-19 | 9e | All 4 codegen binaries audited.  Verdict: 3 × C1 (`gen-hooks`, `gen-workflow`, `manifest-audit` — all `--check`-mode validators wired into `*-drift` gates) + 1 × C2 (`ci-pipeline` — release orchestrator, no idempotency contract).  No drift.  See `phase_9_codegen_inventory.md`. | this PR |
-| 2026-05-19 | 9f | Env-var registry §5 populated: 36 distinct names across 7 scope categories (5 build-time, 11 standard-runtime, 5 logging, 9 UFFS runtime knobs, 2 client knobs, 2 build/release knobs, 2 test-only). | this PR |
-| 2026-05-19 | 9g | Policy doc + CONTRIBUTING §"Build, codegen, and env-var policy" cross-link landed.  Mirrors Phase 5e / 6f / 7g / 8c cadence. | this PR |
+| 2026-05-19 | 9b | `uffs-cli/build.rs` audited.  Verdict: B2 + B3 (PE resource embedding + `/DELAYLOAD` link args).  No drift.  No refactor.  See `phase_9_build_audit_findings.md`. | #300 |
+| 2026-05-19 | 9c | Record deliberate "0 proc-macro crates" workspace posture.  Adding one requires the §3.2 contract. | #300 |
+| 2026-05-19 | 9d | All 6 `macro_rules!` sites audited.  Verdict: 5 × M1 (binary read helpers — embedded `?`-propagation + implicit captures), 1 × M2+M3 (`drive_letter_consts!` — 26-letter const declaration repetition).  No drift.  Refactor candidate (read helpers → `Cursor` struct) deferred — see `phase_9_macro_audit_findings.md` §5.1. | #300 |
+| 2026-05-19 | 9e | All 4 codegen binaries audited.  Verdict: 3 × C1 (`gen-hooks`, `gen-workflow`, `manifest-audit` — all `--check`-mode validators wired into `*-drift` gates) + 1 × C2 (`ci-pipeline` — release orchestrator, no idempotency contract).  No drift.  See `phase_9_codegen_inventory.md`. | #300 |
+| 2026-05-19 | 9f | Env-var registry §5 populated: 36 distinct names across 7 scope categories (5 build-time, 11 standard-runtime, 5 logging, 9 UFFS runtime knobs, 2 client knobs, 2 build/release knobs, 2 test-only). | #300 |
+| 2026-05-19 | 9g | Policy doc + CONTRIBUTING §"Build, codegen, and env-var policy" cross-link landed.  Mirrors Phase 5e / 6f / 7g / 8c cadence. | #300 |
+| 2026-05-19 | 9-gap | **Gap closure post-#300.**  Deep audit against playbook §1013-1078 + plan §0.2 identified 5 gaps: (A) §5 was missing the **Set by** column required by plan §0.2 item 5; (B) per-crate `# Environment` rustdoc sections deferred (plan §1 row 9f deliverable); (C) `crates/uffs-cli/build.rs` rustdoc was missing the env-var listing required by plan §2 criterion 3; (D) `count_includes` over-counted doc-comments by 1; (E) audit script missed `env::var_os(…)` + const-name indirection detection, causing **6 env vars** to be absent from §5 (`UFFS_CACHE_PROFILE`, `UFFS_HOT_TO_WARM_IDLE_SECS`, `UFFS_REBUILD_CHILDREN_ALWAYS`, `UFFS_SEARCH_MAX_CONCURRENCY`, `UFFS_SKIP_ORPHANS`, `UFFS_USN_REFRESH_INTERVAL_SECS`).  Corrected workspace baseline 36 → 42 env vars + 2 → 1 include sites.  Also corrected stale defaults for `UFFS_PARKED_TO_COLD_IDLE_SECS` (300 → 86 400) and `UFFS_WARM_TO_PARKED_IDLE_SECS` (60 → 300). | this PR |
