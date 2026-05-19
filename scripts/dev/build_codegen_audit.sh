@@ -202,15 +202,34 @@ list_macro_rules() {
 # appear inside comments (lines whose first non-whitespace characters
 # are `//`, `///`, or `*`).  Requires env-var names to be 2+ chars to
 # avoid matching single-letter rustdoc placeholders like `X` in prose.
+#
+# Detection covers four shapes:
+#   1. `env::var("NAME")`              — sync read
+#   2. `env::var_os("NAME")`           — read-OsString (absence-checking idiom)
+#   3. `env!("NAME")` / `option_env!("NAME")` — build-time literal
+#   4. `const FOO: &str = "NAME";`     — const-indirection (read via
+#      `env::var*(Self::FOO)` or `env::var*(FOO)` where the audit cannot
+#      grep through the indirection itself).  Restricted to known
+#      env-var prefixes (`UFFS_`, `RUST_`, `XDG_`, `CARGO_`) to avoid
+#      flagging arbitrary string consts.
+#
+# Caveat: bare locals like `let foo = "UFFS_X"; env::var(foo);` are NOT
+# detected.  No such pattern exists in the workspace as of 2026-05-19;
+# audit re-runs flag the gap if it appears.
 _extract_env_var_names() {
     local dir="$1"
     {
         rg "${RG_PROD_GLOBS[@]}" -N \
-            'env::var\("[A-Z_][A-Z0-9_]+"\)' "$dir" 2>/dev/null
+            '(?:std::)?env::var(?:_os)?\("[A-Z_][A-Z0-9_]+"\)' "$dir" 2>/dev/null
         rg "${RG_PROD_GLOBS[@]}" -N \
-            'env!\("[A-Z_][A-Z0-9_]+"\)' "$dir" 2>/dev/null
+            '(?:env|option_env)!\("[A-Z_][A-Z0-9_]+"\)' "$dir" 2>/dev/null
+        # Const-name indirection: a `const _: &str = "NAME";` declaration
+        # whose value matches a known env-var prefix is treated as a
+        # read site (the actual `env::var*(CONST)` call is non-literal
+        # and unreachable by literal-arg regexes).
         rg "${RG_PROD_GLOBS[@]}" -N \
-            'option_env!\("[A-Z_][A-Z0-9_]+"\)' "$dir" 2>/dev/null
+            'const [A-Z_][A-Z0-9_]+: ?&(?:'\''static )?str = "(?:UFFS_|RUST_|XDG_|CARGO_)[A-Z][A-Z0-9_]+"' \
+            "$dir" 2>/dev/null
     } | grep -Ev '^[[:space:]]*(//|/\*|\*[[:space:]])' \
       | sed -nE 's|.*"([A-Z_][A-Z0-9_]+)".*|\1|p'
 }
@@ -230,11 +249,15 @@ list_env_vars_workspace() {
 }
 
 # Count `include_bytes!` / `include_str!` / `include!` use sites.
+# Filters out matches in `//`, `///`, `/*`, and ` * ` comment-prefix lines
+# (which otherwise inflate the count when the macro name is mentioned in
+# rustdoc prose).
 count_includes() {
     local dir="$1"
-    rg "${RG_PROD_GLOBS[@]}" --no-heading --no-filename --count-matches \
-        '\b(include_bytes|include_str|include)!' "$dir" 2>/dev/null \
-        | awk 'BEGIN{s=0} {s+=$1} END{print s+0}'
+    rg "${RG_PROD_GLOBS[@]}" --no-heading -N \
+        '\b(include_bytes|include_str|include)!\(' "$dir" 2>/dev/null \
+        | grep -Ev '^[^:]+:[[:space:]]*(//|/\*|\*[[:space:]])' \
+        | wc -l | tr -d ' '
 }
 
 # Extract a `build.rs` summary: LOC, target gate shape, `cargo:`
