@@ -65,7 +65,7 @@ pub enum ParseAggSpecError {
         option: &'static str,
         /// The offending value as supplied on the wire / command line.
         value: String,
-        /// The underlying [`u*::from_str`] failure.
+        /// The underlying `u*::from_str` failure.
         #[source]
         source: ParseIntError,
     },
@@ -96,7 +96,7 @@ pub enum ParseAggSpecError {
         val: String,
     },
     /// The preset name did not match any of
-    /// [`crate::aggregate::presets::AggregatePreset::ALL_NAMES`].
+    /// `AggregatePreset::ALL_NAMES`.
     ///
     /// `available` is the comma-joined list of accepted names,
     /// preserved verbatim from the pre-Phase-5d Display message so

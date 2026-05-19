@@ -93,7 +93,7 @@ pub enum ParseSizeError {
     /// Input was empty after trimming.
     #[error("empty size specification")]
     Empty,
-    /// The numeric portion failed [`u64::from_str`].  The original
+    /// The numeric portion failed `u64::from_str`.  The original
     /// untrimmed spec is echoed back so the operator sees what they
     /// typed.
     #[error("invalid size: {spec}")]

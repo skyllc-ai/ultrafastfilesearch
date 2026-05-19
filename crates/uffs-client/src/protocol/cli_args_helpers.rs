@@ -20,7 +20,7 @@ use crate::format::ParseSizeError;
 pub(super) use crate::format::parse_size;
 
 /// Typed error produced by every CLI-argument parsing helper in this
-/// module and by [`super::cli_args::SearchParams::from_cli_args`].
+/// module and by [`crate::protocol::SearchParams::from_cli_args`].
 ///
 /// Phase 5d migration of the previous `Result<_, String>` return
 /// types: every [`core::fmt::Display`] string stays byte-identical
@@ -50,7 +50,7 @@ pub enum CliArgsError {
     BadInt {
         /// The CLI flag name whose value failed to parse.
         flag: String,
-        /// The underlying [`u*::from_str`] / [`i*::from_str`] failure.
+        /// The underlying `u*::from_str` / `i*::from_str` failure.
         #[source]
         source: ParseIntError,
     },

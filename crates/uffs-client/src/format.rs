@@ -277,7 +277,7 @@ pub enum ParseSizeError {
     /// Input was empty after trimming.
     #[error("empty size specification")]
     Empty,
-    /// The numeric portion failed [`u64::from_str`].  The original
+    /// The numeric portion failed `u64::from_str`.  The original
     /// untrimmed spec is echoed back so the operator sees what they
     /// typed.
     #[error("invalid size: {spec}")]
@@ -296,7 +296,7 @@ pub enum ParseSizeError {
 ///
 /// Returns [`ParseSizeError::Empty`] when the input is empty after
 /// trimming, or [`ParseSizeError::InvalidNumber`] when the digit
-/// portion fails [`u64::from_str`].  The Display strings stay
+/// portion fails `u64::from_str`.  The Display strings stay
 /// byte-identical with the pre-Phase-5d output so any operator-facing
 /// CLI output is unchanged.
 pub fn parse_size(spec: &str) -> Result<u64, ParseSizeError> {

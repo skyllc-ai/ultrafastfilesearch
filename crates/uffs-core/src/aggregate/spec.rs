@@ -268,7 +268,7 @@ impl TopHitsSpec {
     /// # Errors
     ///
     /// Returns a [`TopHitsValidateError`] variant if `count` is zero,
-    /// exceeds [`MAX_SAMPLE_COUNT`], or [`Self::sort_field`] is not
+    /// exceeds `MAX_SAMPLE_COUNT`, or [`Self::sort_field`] is not
     /// sortable.  Display strings stay byte-identical with the
     /// pre-Phase-5d `Result<_, String>` payloads.
     pub const fn validate(&self) -> Result<(), TopHitsValidateError> {
@@ -307,7 +307,7 @@ pub enum TopHitsValidateError {
     /// emit anything meaningful.
     #[error("TopHitsSpec count must be ≥ 1")]
     ZeroCount,
-    /// `count` exceeded [`MAX_SAMPLE_COUNT`].  The offending value is
+    /// `count` exceeded `MAX_SAMPLE_COUNT`.  The offending value is
     /// echoed for the operator.
     #[error("TopHitsSpec count {count} exceeds maximum {max}", max = MAX_SAMPLE_COUNT)]
     CountExceedsMax {
