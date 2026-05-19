@@ -267,6 +267,21 @@ A trait satisfying **none** of J1–J4 → demote to a concrete type and replace
 
 Generic-function categories (G1-LOCAL / G2-USEFUL / G3-SPREAD / G4-CASCADING / G5-CLOSURE), dispatch matrix (D1-PLUGIN / D2-HETERO / D3-NOOP / D4-VTBL-COST), seal-vs-open decision tree, the per-trait registry, the workspace inventory script (`scripts/dev/trait_generic_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/trait_policy.md`](docs/architecture/code-quality/trait_policy.md).
 
+## Feature flag and dependency policy
+
+UFFS keeps feature behavior additive and dependency duplication audited.  No new clippy lints; the contract is enforced by `cargo deny check`, `cargo machete`, `cargo vet`, and `cargo tree --workspace -d`, all wired into pre-push and `pr-fast.yml::security`.
+
+The one-line rule: **every feature is additive (enabling never removes a `pub` item); every default has a written justification; every optional dep is reachable via `dep:<name>` and at least one `#[cfg(feature = "…")]` use-site; every cross-version duplicate is either in `deny.toml [bans].skip-tree` with a one-line reason or accepted by the workspace's `multiple-versions = "warn"` posture and inventoried in `dependency_policy.md` §5.1.**
+
+Every feature added to the workspace must document the four-line playbook §988 contract in **both** the crate's root rustdoc (`# Features` section) and as a block comment above the `[features]` block in `Cargo.toml`:
+
+- **What it enables** — which module / item / subcommand / binary.
+- **What deps it adds** — `dep:<name>` gating + transitive feature pulls.
+- **API shape impact** — additive (default) | subtractive (forbidden).
+- **Semver claim** — adding items behind it is non-breaking; removing items behind it is breaking.
+
+The feature taxonomy (F1-additive-default-on / F2-additive-default-off / F3-orthogonal / F4-subtractive-FORBIDDEN / F5-feature-on-feature), the cross-version duplicate acceptance inventory, the per-crate feature registry, the workspace inventory script (`scripts/dev/feature_dep_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/dependency_policy.md`](docs/architecture/code-quality/dependency_policy.md).
+
 ## Docs map
 
 - Root overview: `README.md`
