@@ -28,6 +28,16 @@ use crate::lifecycle::LifecycleHandle;
 // `Self::try_pack_paths_blob(...)` method syntax — no call-site changes.
 #[path = "handler_blob.rs"]
 mod blob;
+
+// `ParseSearchParamsError` lives in its own sibling file for the same
+// 800-LOC policy reason and to keep the typed-error introduction
+// physically separate from the dispatcher.  Re-exporting the type
+// here lets every call site (and the co-located test module) refer
+// to it unqualified.
+#[path = "handler_parse_search_params.rs"]
+mod parse_search_params;
+use parse_search_params::ParseSearchParamsError;
+
 /// Request handler holding shared daemon state.
 pub(crate) struct RequestHandler {
     /// Shared index manager.
@@ -81,9 +91,9 @@ impl RequestHandler {
 
     /// Handle `search` method.
     async fn handle_search(&self, id: u64, req: &RpcRequest) -> String {
-        let search_params = match Self::parse_and_validate_search_params(id, req) {
+        let search_params = match Self::parse_and_validate_search_params(req) {
             Ok(params) => params,
-            Err(error_json) => return error_json,
+            Err(parse_err) => return parse_err.to_rpc_error_json(id),
         };
 
         // Auto-load missing drives from data_dir before searching.
@@ -148,34 +158,40 @@ impl RequestHandler {
     }
 
     /// Decode `req.params` into a [`SearchParams`] and enforce
-    /// [`MAX_PATTERN_LENGTH`].  Returns the parsed params on success
-    /// or a fully-formed JSON-RPC error response on failure so the
-    /// caller can return it directly.
-    fn parse_and_validate_search_params(id: u64, req: &RpcRequest) -> Result<SearchParams, String> {
+    /// [`MAX_PATTERN_LENGTH`].
+    ///
+    /// Phase 5d migration: previously this returned
+    /// `Result<SearchParams, String>` where the `String` was a
+    /// pre-serialised JSON-RPC error body.  The serialisation concern
+    /// has been hoisted to [`ParseSearchParamsError::to_rpc_error_json`]
+    /// at the wire boundary so the parser expresses only the domain
+    /// concern ("did the params parse?") and the request `id` no
+    /// longer threads through this private helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseSearchParamsError::MissingOrInvalidParams`] when
+    /// `req.params` is absent or fails to deserialise as
+    /// [`SearchParams`]; returns
+    /// [`ParseSearchParamsError::PatternTooLong`] when
+    /// `search_params.pattern` exceeds [`MAX_PATTERN_LENGTH`] (S4.4.3
+    /// regex-DoS guard).  The wire bytes produced by
+    /// [`ParseSearchParamsError::to_rpc_error_json`] are byte-identical
+    /// with the pre-Phase-5d output so clients see no change.
+    fn parse_and_validate_search_params(
+        req: &RpcRequest,
+    ) -> Result<SearchParams, ParseSearchParamsError> {
         let search_params: SearchParams = req
             .params
             .as_ref()
             .and_then(|val| serde_json::from_value::<SearchParams>(val.clone()).ok())
-            .ok_or_else(|| {
-                serde_json::to_string(&RpcErrorResponse::error(
-                    Some(id),
-                    ERR_INVALID_PARAMS,
-                    "Missing or invalid search params",
-                ))
-                .unwrap_or_default()
-            })?;
+            .ok_or(ParseSearchParamsError::MissingOrInvalidParams)?;
 
         // S4.4.3: Reject overly long patterns (regex DoS prevention).
         if search_params.pattern.len() > MAX_PATTERN_LENGTH {
-            return Err(serde_json::to_string(&RpcErrorResponse::error(
-                Some(id),
-                ERR_INVALID_PARAMS,
-                &format!(
-                    "Pattern too long ({} chars, max {MAX_PATTERN_LENGTH})",
-                    search_params.pattern.len()
-                ),
-            ))
-            .unwrap_or_default());
+            return Err(ParseSearchParamsError::PatternTooLong {
+                len: search_params.pattern.len(),
+            });
         }
 
         Ok(search_params)
@@ -730,3 +746,7 @@ mod paths_blob_tests;
 #[cfg(test)]
 #[path = "handler_csv_blob_tests.rs"]
 mod csv_blob_tests;
+
+#[cfg(test)]
+#[path = "handler_parse_search_params_tests.rs"]
+mod parse_search_params_tests;

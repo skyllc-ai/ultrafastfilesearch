@@ -18,6 +18,82 @@ use uffs_core::aggregate::TopHitsSpec;
 
 use crate::index::IndexManager;
 
+/// Typed errors produced by [`IndexManager::convert_wire_spec`] and
+/// its helpers.
+///
+/// Phase 5d migration of the previous `Result<_, String>` return type:
+/// the [`core::fmt::Display`] strings stay byte-identical with the
+/// pre-migration messages so the
+/// `tracing::warn!("skipping malformed aggregate spec: {e}")` line in
+/// `aggregation.rs` keeps rendering the exact same operator-facing
+/// text.  The typed variants give downstream tooling (and future
+/// aggregation-level RPC error handlers) something to match on without
+/// parsing strings.
+///
+/// `#[non_exhaustive]` per Phase 5c discipline so a future wire-kind
+/// can grow a variant without a semver bump on the
+/// (workspace-internal) consumer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub(crate) enum WireSpecError {
+    /// `kind == "preset"` but the `preset` field was absent.
+    #[error("preset kind requires 'preset' field")]
+    PresetFieldMissing,
+    /// `preset` named a value that [`AggregatePreset::parse`] does not
+    /// recognise.
+    ///
+    /// [`AggregatePreset::parse`]: uffs_core::aggregate::presets::AggregatePreset::parse
+    #[error("unknown preset: `{name}`")]
+    UnknownPreset {
+        /// The unrecognised preset name as supplied on the wire.
+        name: String,
+    },
+    /// The wire spec's `field` slot was absent for a kind that requires
+    /// it (`stats`, `terms`, `histogram`, `range`, `missing`,
+    /// `distinct`, `date_histogram`).
+    #[error("missing 'field'")]
+    FieldMissing,
+    /// `field` named a column that [`FieldId::parse`] does not
+    /// recognise.
+    ///
+    /// [`FieldId::parse`]: uffs_core::search::field::FieldId::parse
+    #[error("unknown field: `{name}`")]
+    UnknownField {
+        /// The unrecognised field name as supplied on the wire.
+        name: String,
+    },
+    /// `calendar` named a value that [`CalendarInterval::parse`] does
+    /// not recognise.
+    ///
+    /// [`CalendarInterval::parse`]: uffs_core::aggregate::spec::CalendarInterval::parse
+    #[error("unknown calendar interval: `{name}`")]
+    UnknownCalendar {
+        /// The unrecognised calendar identifier as supplied on the wire.
+        name: String,
+    },
+    /// `kind == "raw"` but the syntax slot (the wire `label` field)
+    /// was absent.
+    #[error("raw kind requires syntax in 'label' field")]
+    RawSyntaxMissing,
+    /// [`parse_agg_spec`] rejected the raw spec syntax.
+    ///
+    /// **Phase 5d transitional:** `parse_agg_spec` itself returns
+    /// `Result<_, String>` (uffs-core, scheduled for a separate PR in
+    /// the same sub-phase).  Once that migration lands, this variant
+    /// will be tightened to carry the typed `uffs-core` error directly
+    /// and the `String` payload retired.
+    ///
+    /// [`parse_agg_spec`]: uffs_core::aggregate::parser::parse_agg_spec
+    #[error("{0}")]
+    RawSyntax(String),
+    /// `kind` did not match any of the supported aggregate kinds.
+    #[error("unknown aggregate kind: `{kind}`")]
+    UnknownKind {
+        /// The unrecognised kind identifier as supplied on the wire.
+        kind: String,
+    },
+}
+
 impl IndexManager {
     /// Convert a wire-protocol [`AggregateSpecWire`] into one or more
     /// core [`AggregateSpec`]s.
@@ -27,9 +103,12 @@ impl IndexManager {
     ///
     /// # Errors
     ///
-    /// Returns a human-readable error string when the wire spec is
-    /// missing a required field, names an unknown preset / calendar
-    /// / kind, or fails the inner `parse_agg_spec` (for `kind: "raw"`).
+    /// Returns [`WireSpecError`] when the wire spec is missing a
+    /// required field, names an unknown preset / calendar / kind, or
+    /// fails the inner `parse_agg_spec` (for `kind: "raw"`).  The
+    /// [`core::fmt::Display`] string stays byte-identical with the
+    /// pre-Phase-5d `String` payload so operator-facing log lines are
+    /// unchanged.
     ///
     /// [`AggregateSpec`]: uffs_core::aggregate::spec::AggregateSpec
     /// [`AggregateSpecWire`]: uffs_client::protocol::AggregateSpecWire
@@ -39,7 +118,7 @@ impl IndexManager {
     )]
     pub(crate) fn convert_wire_spec(
         ws: &uffs_client::protocol::AggregateSpecWire,
-    ) -> Result<Vec<uffs_core::aggregate::spec::AggregateSpec>, String> {
+    ) -> Result<Vec<uffs_core::aggregate::spec::AggregateSpec>, WireSpecError> {
         use uffs_core::aggregate::parser::parse_agg_spec;
         use uffs_core::aggregate::presets::AggregatePreset;
         use uffs_core::aggregate::spec::{
@@ -58,9 +137,11 @@ impl IndexManager {
                 let name = ws
                     .preset
                     .as_deref()
-                    .ok_or_else(|| "preset kind requires 'preset' field".to_owned())?;
-                let preset = AggregatePreset::parse(name)
-                    .ok_or_else(|| format!("unknown preset: `{name}`"))?;
+                    .ok_or(WireSpecError::PresetFieldMissing)?;
+                let preset =
+                    AggregatePreset::parse(name).ok_or_else(|| WireSpecError::UnknownPreset {
+                        name: name.to_owned(),
+                    })?;
                 Ok(preset.expand())
             }
             "count" => Ok(make(AggregateKind::Count)),
@@ -93,8 +174,11 @@ impl IndexManager {
             "date_histogram" | "datehist" => {
                 let field = require_field(ws)?;
                 let cal_str = ws.calendar.as_deref().unwrap_or("month");
-                let calendar = CalendarInterval::parse(cal_str)
-                    .ok_or_else(|| format!("unknown calendar interval: `{cal_str}`"))?;
+                let calendar = CalendarInterval::parse(cal_str).ok_or_else(|| {
+                    WireSpecError::UnknownCalendar {
+                        name: cal_str.to_owned(),
+                    }
+                })?;
                 let metrics = parse_bucket_metrics(&ws.metrics);
                 Ok(make(AggregateKind::DateHistogram {
                     field,
@@ -171,28 +255,29 @@ impl IndexManager {
                 }))
             }
             "raw" => {
-                let syntax = ws
-                    .label
-                    .as_deref()
-                    .ok_or_else(|| "raw kind requires syntax in 'label' field".to_owned())?;
-                let spec = parse_agg_spec(syntax)?;
+                let syntax = ws.label.as_deref().ok_or(WireSpecError::RawSyntaxMissing)?;
+                let spec = parse_agg_spec(syntax).map_err(WireSpecError::RawSyntax)?;
                 Ok(vec![spec])
             }
-            other => Err(format!("unknown aggregate kind: `{other}`")),
+            other => Err(WireSpecError::UnknownKind {
+                kind: other.to_owned(),
+            }),
         }
     }
 }
 
 /// Parse the wire spec's `field` slot into a [`FieldId`], producing a
-/// human-readable error when it is absent or names an unknown column.
+/// typed [`WireSpecError`] when it is absent or names an unknown
+/// column.
+///
+/// [`FieldId`]: uffs_core::search::field::FieldId
 fn require_field(
     ws: &uffs_client::protocol::AggregateSpecWire,
-) -> Result<uffs_core::search::field::FieldId, String> {
-    let name = ws
-        .field
-        .as_deref()
-        .ok_or_else(|| "missing 'field'".to_owned())?;
-    uffs_core::search::field::FieldId::parse(name).ok_or_else(|| format!("unknown field: `{name}`"))
+) -> Result<uffs_core::search::field::FieldId, WireSpecError> {
+    let name = ws.field.as_deref().ok_or(WireSpecError::FieldMissing)?;
+    uffs_core::search::field::FieldId::parse(name).ok_or_else(|| WireSpecError::UnknownField {
+        name: name.to_owned(),
+    })
 }
 
 /// Parse wire metric strings to [`BucketMetric`]s.
@@ -265,4 +350,120 @@ fn build_sample(ws: &uffs_client::protocol::AggregateSpecWire) -> Option<TopHits
         }
         th
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Phase 5d regression tests for [`WireSpecError`].
+    //!
+    //! Locks the Display message of every variant at the byte-identical
+    //! string the pre-Phase-5d `Result<_, String>` returns produced.
+    //! The `tracing::warn!("skipping malformed aggregate spec: {e}")`
+    //! line in `aggregation.rs` interpolates Display, so operator-facing
+    //! daemon logs are guaranteed unchanged by this lock.
+
+    use uffs_client::protocol::AggregateSpecWire;
+
+    use super::{IndexManager, WireSpecError};
+
+    /// Make an empty wire spec with the given `kind` for happy-path
+    /// rejection tests.
+    fn ws(kind: &str) -> AggregateSpecWire {
+        AggregateSpecWire {
+            kind: kind.to_owned(),
+            ..AggregateSpecWire::default()
+        }
+    }
+
+    #[test]
+    fn preset_field_missing_display_locked() {
+        let err = IndexManager::convert_wire_spec(&ws("preset"))
+            .expect_err("preset kind without 'preset' field must error");
+        assert_eq!(err, WireSpecError::PresetFieldMissing);
+        assert_eq!(err.to_string(), "preset kind requires 'preset' field");
+    }
+
+    #[test]
+    fn unknown_preset_display_locked() {
+        let mut spec = ws("preset");
+        spec.preset = Some("does-not-exist".to_owned());
+        let err =
+            IndexManager::convert_wire_spec(&spec).expect_err("unknown preset name must error");
+        assert_eq!(err, WireSpecError::UnknownPreset {
+            name: "does-not-exist".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "unknown preset: `does-not-exist`");
+    }
+
+    #[test]
+    fn field_missing_display_locked() {
+        // `stats` requires a `field`; omitting it walks the
+        // `require_field` → `FieldMissing` path.
+        let err = IndexManager::convert_wire_spec(&ws("stats"))
+            .expect_err("stats kind without 'field' must error");
+        assert_eq!(err, WireSpecError::FieldMissing);
+        assert_eq!(err.to_string(), "missing 'field'");
+    }
+
+    #[test]
+    fn unknown_field_display_locked() {
+        let mut spec = ws("stats");
+        spec.field = Some("not-a-column".to_owned());
+        let err =
+            IndexManager::convert_wire_spec(&spec).expect_err("unknown field name must error");
+        assert_eq!(err, WireSpecError::UnknownField {
+            name: "not-a-column".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "unknown field: `not-a-column`");
+    }
+
+    #[test]
+    fn unknown_calendar_display_locked() {
+        let mut spec = ws("date_histogram");
+        spec.field = Some("modified".to_owned());
+        spec.calendar = Some("fortnight".to_owned());
+        let err = IndexManager::convert_wire_spec(&spec)
+            .expect_err("unknown calendar interval must error");
+        assert_eq!(err, WireSpecError::UnknownCalendar {
+            name: "fortnight".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "unknown calendar interval: `fortnight`");
+    }
+
+    #[test]
+    fn raw_syntax_missing_display_locked() {
+        let err = IndexManager::convert_wire_spec(&ws("raw"))
+            .expect_err("raw kind without label must error");
+        assert_eq!(err, WireSpecError::RawSyntaxMissing);
+        assert_eq!(err.to_string(), "raw kind requires syntax in 'label' field");
+    }
+
+    #[test]
+    fn raw_syntax_passthrough_preserves_inner_message() {
+        // `parse_agg_spec("")` returns `Err(<some message>)`; the
+        // typed variant must echo that string verbatim through
+        // Display so the existing operator-facing message is intact.
+        let mut spec = ws("raw");
+        spec.label = Some(String::new());
+        let err = IndexManager::convert_wire_spec(&spec).expect_err("empty raw spec must error");
+        let WireSpecError::RawSyntax(msg) = &err else {
+            panic!("expected RawSyntax, got {err:?}");
+        };
+        assert!(
+            !msg.is_empty(),
+            "passthrough message must not collapse to empty",
+        );
+        // Display equals the raw passthrough string.
+        assert_eq!(err.to_string(), *msg);
+    }
+
+    #[test]
+    fn unknown_kind_display_locked() {
+        let err = IndexManager::convert_wire_spec(&ws("bogus-kind"))
+            .expect_err("unknown kind must error");
+        assert_eq!(err, WireSpecError::UnknownKind {
+            kind: "bogus-kind".to_owned(),
+        },);
+        assert_eq!(err.to_string(), "unknown aggregate kind: `bogus-kind`");
+    }
 }
