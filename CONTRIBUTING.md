@@ -250,6 +250,23 @@ Every surviving prod `.clone()` / `format!()` / `to_owned()` fits exactly one of
 
 Full taxonomy, the per-site annotation contract, the workspace inventory script (`scripts/dev/clone_alloc_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/allocation_policy.md`](docs/architecture/code-quality/allocation_policy.md).
 
+## Trait, generic, and dispatch policy
+
+UFFS enforces a strict trait / generic / dispatch discipline in production code via five workspace Clippy lints: `type_complexity`, `too_many_arguments`, `trait_duplication_in_bounds`, `wrong_self_convention` (all `deny`), and `multiple_bound_locations` (`warn`).  Test code is exempt.
+
+The one-line rule: **a trait must satisfy at least one of [J1] multiple impls / [J2] test substitution / [J3] stable extension / [J4] high-level decoupling — otherwise it's decoration.  Generics stay local.  `dyn` for plugin boundaries; static for closed sets.**
+
+Trait justification four-criterion taxonomy:
+
+- **[J1]** Multiple meaningful implementations (≥ 2 prod impls on `main`).
+- **[J2]** Test-substitution boundary (prod impl + ≥ 1 test fake).
+- **[J3]** Stable extension surface (rustdoc documents external impls).
+- **[J4]** High-level / infrastructure decoupling.
+
+A trait satisfying **none** of J1–J4 → demote to a concrete type and replace usages.
+
+Generic-function categories (G1-LOCAL / G2-USEFUL / G3-SPREAD / G4-CASCADING / G5-CLOSURE), dispatch matrix (D1-PLUGIN / D2-HETERO / D3-NOOP / D4-VTBL-COST), seal-vs-open decision tree, the per-trait registry, the workspace inventory script (`scripts/dev/trait_generic_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/trait_policy.md`](docs/architecture/code-quality/trait_policy.md).
+
 ## Docs map
 
 - Root overview: `README.md`
