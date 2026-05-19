@@ -282,6 +282,22 @@ Every feature added to the workspace must document the four-line playbook §988 
 
 The feature taxonomy (F1-additive-default-on / F2-additive-default-off / F3-orthogonal / F4-subtractive-FORBIDDEN / F5-feature-on-feature), the cross-version duplicate acceptance inventory, the per-crate feature registry, the workspace inventory script (`scripts/dev/feature_dep_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/dependency_policy.md`](docs/architecture/code-quality/dependency_policy.md).
 
+## Build, codegen, and env-var policy
+
+UFFS keeps compile-time magic justified and traceable.  No new clippy lints; the contract is enforced by `scripts/dev/build_codegen_audit.sh` plus the existing `manifest-drift` / `hooks-drift` / `fast-drift` / `workflow-drift` gates wired into pre-push and `pr-fast.yml`.
+
+The one-line rule: **every `build.rs` falls into one of the three playbook §1041-1046 justification classes; every `macro_rules!` falls into one of the three playbook §1064 justification classes (control-flow hiding is forbidden); every codegen binary has a drift detector or a documented "no idempotency contract" rationale; every environment variable the workspace reads is in `build_codegen_policy.md` §5 with name, scope, type, default, where read, and semver class.**
+
+Current posture (as of Phase 9 entry, SHA `0433065c7`):
+
+- **1 `build.rs`** (`uffs-cli`) — MSVC-gated PE resource embedding + `/DELAYLOAD` linker args.
+- **0 proc-macro crates** — deliberate workspace posture; introducing one requires unanimous review.
+- **6 `macro_rules!` declarations** — all in `uffs-mft`, all `pub(crate)`-scoped or function-local.
+- **4 codegen binaries** — 3 emitter/validators (drift-detected) + 1 release orchestrator.
+- **36 distinct env-var names** across 7 scope categories (build-time, standard runtime, logging, UFFS runtime knobs, client knobs, build/release knobs, test-only).
+
+The `build.rs` / proc-macro / `macro_rules!` / codegen / env-var per-class contracts, the per-crate registry, the env-var registry, the workspace inventory script (`scripts/dev/build_codegen_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/build_codegen_policy.md`](docs/architecture/code-quality/build_codegen_policy.md).
+
 ## Docs map
 
 - Root overview: `README.md`
