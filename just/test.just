@@ -69,6 +69,15 @@ lint-ci:
     @printf "\033[0;34m🚨 CI lint gating (FAST-FAIL)...\033[0m\n"
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
 
+# Feature-additivity regression guard (Phase 8e — issue #295).  Runs the
+# same strict clippy flag stack as `lint-ci` but with `--no-default-features`
+# instead of `--all-features`, catching items that are reachable only when
+# a feature is enabled but not themselves `#[cfg(feature = "…")]`-gated.
+# MUST mirror .github/workflows/pr-fast.yml `clippy-no-default` job exactly.
+lint-ci-no-default:
+    @printf "\033[0;34m🚨 CI lint gating (--no-default-features, FAST-FAIL)...\033[0m\n"
+    cargo clippy --workspace --all-targets --no-default-features --no-deps -- -D warnings
+
 # Cross-platform CI lint gate via Docker (Linux target).
 # Catches Linux-only clippy drift that the local host (macOS) cannot reproduce
 # — e.g. platform-dependent type aliases like `libc::time_t` where nightly

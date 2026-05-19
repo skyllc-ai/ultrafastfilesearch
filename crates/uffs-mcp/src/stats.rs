@@ -86,6 +86,10 @@ impl McpStats {
     }
 
     /// Average tool call latency in microseconds (0 if no calls).
+    ///
+    /// Only consumed by the HTTP `/status` endpoint, hence the
+    /// `streamable-http` feature gate.
+    #[cfg(feature = "streamable-http")]
     #[must_use]
     pub(crate) fn avg_tool_latency_us(&self) -> u64 {
         let total = self.total_tool_calls.load(Ordering::Relaxed);
@@ -96,6 +100,10 @@ impl McpStats {
     }
 
     /// Serialize stats to a JSON value for the `/status` endpoint.
+    ///
+    /// Only consumed by the HTTP `/status` endpoint, hence the
+    /// `streamable-http` feature gate.
+    #[cfg(feature = "streamable-http")]
     #[must_use]
     pub(crate) fn to_json(&self) -> serde_json::Value {
         serde_json::json!({

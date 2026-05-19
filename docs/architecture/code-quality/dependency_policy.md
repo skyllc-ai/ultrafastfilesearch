@@ -52,7 +52,7 @@ test-substitution boundary documented in
 ## 2  The lint posture
 
 Phase 8 introduces **no new clippy lints**.  Feature and dependency
-hygiene is enforced through five complementary tools wired into the
+hygiene is enforced through six complementary tools wired into the
 pre-push gate and CI:
 
 | Tool | What it catches | Where |
@@ -62,6 +62,16 @@ pre-push gate and CI:
 | `cargo vet` | Unaudited crate-versions in the dep graph | `supply-chain/{config,audits,imports.lock}.toml` + `pr-fast.yml::security` |
 | `cargo tree --workspace -d` | Cross-version duplicate inventory | Surfaced by `scripts/dev/feature_dep_audit.sh --with-cargo`; no hard gate (workspace runs `multiple-versions = "warn"`) |
 | `cargo doc --no-deps --all-features` | Broken intra-doc links inside `# Features` sections | Pre-push gate (`rustdoc`) + `pr-fast.yml::docs` |
+| `cargo clippy --workspace --all-targets --no-default-features --no-deps -- -D warnings` | **Feature-additivity regressions** — `pub`/`pub(crate)` items reachable only when feature X is on but not themselves `#[cfg(feature = "X")]`-gated (manifests as `dead_code` warnings + unfulfilled `expect` warnings when feature X is off) | Pre-push gate (`lint-ci-no-default` — Phase 8e) + `pr-fast.yml::clippy-no-default` |
+
+The sixth tool — `lint-ci-no-default` — is the Phase 8e regression
+guard (issue #295).  It mirrors the existing `lint-ci` gate
+(`--all-features -D warnings`) but swaps in `--no-default-features`,
+so the pair establishes the **additivity invariant**: every item
+reachable only with feature X must compile cleanly both with feature X
+off AND with all features on.  Without this gate, the `--all-features`
+build masks the dead-code warning the `--no-default-features` build
+emits, and additivity regresses silently.
 
 `deny.toml` is configured at:
 
@@ -331,4 +341,5 @@ Append-only.  Each entry: date, sub-phase, decision, PR.
 |---|---|---|---|
 | 2026-05-19 | 8a | Add `scripts/dev/feature_dep_audit.sh` baseline tool | #292 |
 | 2026-05-19 | 8b | Document the 3 feature contracts per playbook §988 in rustdoc + Cargo.toml | #293 |
-| 2026-05-19 | 8c | Add this `dependency_policy.md` + `CONTRIBUTING.md` cross-link | this PR |
+| 2026-05-19 | 8c | Add this `dependency_policy.md` + `CONTRIBUTING.md` cross-link | #294 |
+| 2026-05-19 | 8e | Add `lint-ci-no-default` regression guard + fix 6 feature-additivity gaps (`McpStats::{avg_tool_latency_us,to_json}`, `keepalive_send_blocking`, 3 `cognitive_complexity` expects) | this PR |

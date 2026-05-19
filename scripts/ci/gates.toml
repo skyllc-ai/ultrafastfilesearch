@@ -341,6 +341,46 @@ Kept in lockstep manually until Phase 2 codegen lands.
 """
 
 [[gate]]
+id = "lint-ci-no-default"
+label = "CI-mirror clippy --no-default-features (-D warnings)"
+command = ["just", "lint-ci-no-default"]
+tiers = ["pre-push", "pr-fast"]
+gate_when = "rust_changed"
+hard = true
+tool = "cargo"
+expected_runtime_secs = 30
+bucket = "seq"
+order = 25
+consumer_names = { "pr-fast" = "clippy-no-default" }
+notes = """
+Phase 8e regression guard for issue #295 — feature additivity.
+
+`cargo clippy --workspace --no-default-features --all-targets -- -D warnings`
+catches the class of bug that surfaced post-Phase-8 closeout: items
+reachable only when feature X is on, but not themselves
+`#[cfg(feature = "X")]`-gated.  The existing `lint-ci` gate runs
+`--all-features` which masks the dead-code + unfulfilled-`expect`
+warnings these gaps emit.
+
+Specifically prevents regression of the 6 sites fixed by issue #295:
+- `uffs-mcp::McpStats::{avg_tool_latency_us,to_json}` (now
+  `cfg(feature = "streamable-http")`-gated).
+- `uffs-client::daemon_ctl::keepalive_send_blocking` (now
+  `cfg(feature = "async")`-gated).
+- 3 `cfg_attr(feature = "streamable-http", expect(cognitive_complexity, …))`
+  in `uffs-mcp::lib.rs` + `handler/mod.rs`.
+
+Mirrors `lint-ci` in flag stack and `-D warnings` strictness; differs
+only in `--no-default-features` instead of `--all-features`.  Together
+the two gates establish the additivity property: every `pub`/`pub(crate)`
+item reachable only with feature X must compile cleanly both with
+feature X off AND with all features on.
+
+Documented in
+`docs/architecture/code-quality/dependency_policy.md` §2.
+"""
+
+[[gate]]
 id = "rustdoc"
 label = "rustdoc -D warnings"
 command = [

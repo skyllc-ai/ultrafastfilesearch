@@ -227,9 +227,12 @@ impl Default for McpConfig {
 ///
 /// Returns an error if the daemon connection fails or the MCP transport
 /// encounters an I/O error.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "MCP server startup with daemon connect, idle timer, and transport orchestration"
+#[cfg_attr(
+    feature = "streamable-http",
+    expect(
+        clippy::cognitive_complexity,
+        reason = "MCP server startup with daemon connect, idle timer, and transport orchestration"
+    )
 )]
 pub async fn run_mcp_server_with_config(config: &McpConfig) -> anyhow::Result<()> {
     info!(

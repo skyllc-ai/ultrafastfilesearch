@@ -235,6 +235,7 @@ command -v reuse >/dev/null 2>&1 && spawn_bg "reuse" reuse lint --quiet
 if (( CODE_CHANGED )); then
     run_seq "cargo-check" cargo check --workspace --all-targets --all-features --locked
     run_seq "lint-ci" just lint-ci
+    run_seq "lint-ci-no-default" just lint-ci-no-default
     run_seq "lint-prod" just lint-prod
     run_seq "lint-tests" just lint-tests
     run_seq "rustdoc" env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked

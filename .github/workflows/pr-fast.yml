@@ -404,6 +404,38 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked --no-deps -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────
+  # clippy-no-default — Phase 8e regression guard (issue #295).  Same
+  # strict clippy flag stack as `clippy` above but with
+  # `--no-default-features` instead of `--all-features`, catching items
+  # reachable only when a feature is enabled but not themselves
+  # `#[cfg(feature = "…")]`-gated.  Cache key is distinct from `clippy`
+  # because the feature configuration produces a different artifact set.
+  # ─────────────────────────────────────────────────────────────────────
+  clippy-no-default:
+    name: Clippy (--no-default-features)
+    runs-on: ubuntu-22.04
+    needs: [classify, sanity]
+    if: needs.classify.outputs.code == 'true'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo rm -rf /usr/local/share/boost /usr/local/graalvm
+          df -h /
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: pr-fast-clippy-no-default
+          save-if: 'false'
+      - run: cargo clippy --workspace --all-targets --no-default-features --locked --no-deps -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────────
   # docs — rustdoc with `-Dwarnings` PLUS doctest execution.  Catches
   # the exact class of bug Phase 1 / Phase 2 locally catch too — keeping
   # the gate at CI gives belt-and-suspenders if a contributor bypasses
@@ -661,6 +693,7 @@ jobs:
       - fmt
       - sanity
       - clippy
+      - clippy-no-default
       - docs
       - test-build
       - tests
@@ -687,6 +720,7 @@ jobs:
             [fmt]='${{ needs.fmt.result }}'
             [sanity]='${{ needs.sanity.result }}'
             [clippy]='${{ needs.clippy.result }}'
+            [clippy-no-default]='${{ needs.clippy-no-default.result }}'
             [docs]='${{ needs.docs.result }}'
             [test-build]='${{ needs.test-build.result }}'
             [tests]='${{ needs.tests.result }}'

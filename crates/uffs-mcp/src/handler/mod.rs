@@ -321,9 +321,12 @@ impl ServerHandler for UffsMcpServer {
         .with_instructions(AGENT_INSTRUCTIONS.to_owned())
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "async match + await + iteration + logging contributes to Clippy score"
+    #[cfg_attr(
+        feature = "streamable-http",
+        expect(
+            clippy::cognitive_complexity,
+            reason = "async match + await + iteration + logging contributes to Clippy score"
+        )
     )]
     async fn on_roots_list_changed(&self, context: rmcp::service::NotificationContext<RoleServer>) {
         // Ask the client for the current list of roots.
@@ -361,9 +364,12 @@ impl ServerHandler for UffsMcpServer {
         })
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "tool dispatch with timing, error handling, stats, and reconnect"
+    #[cfg_attr(
+        feature = "streamable-http",
+        expect(
+            clippy::cognitive_complexity,
+            reason = "tool dispatch with timing, error handling, stats, and reconnect"
+        )
     )]
     async fn call_tool(
         &self,

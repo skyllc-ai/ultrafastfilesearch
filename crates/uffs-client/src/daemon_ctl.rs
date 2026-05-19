@@ -183,6 +183,10 @@ pub(crate) fn verify_daemon_after_connect_strict_at(
 /// On Unix, opens the `AF_UNIX` socket at `sock_path`.
 /// On Windows, opens the named pipe (no `ws2_32` cost) — `sock_path` is
 /// unused but kept for API stability.
+///
+/// Only consumed by the async keepalive task, hence the `async` feature
+/// gate (matches `connect_keepalive` in `lib.rs`).
+#[cfg(feature = "async")]
 pub(crate) fn keepalive_send_blocking(sock_path: &std::path::Path) {
     #[cfg(unix)]
     {
