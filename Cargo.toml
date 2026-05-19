@@ -340,12 +340,17 @@ unnecessary_safety_comment = "deny"    # Accurate safety comments
 # ───── DENY level lints — safety, correctness, discipline ─────
 # These MUST be clean in production code. clippy.toml relaxes test code
 # automatically via allow-*-in-tests settings.
-missing_errors_doc = "deny"                        # Document error conditions
-missing_panics_doc = "deny"                        # Document panic conditions
-missing_safety_doc = "deny"                        # Document safety requirements
-cognitive_complexity = "deny"                      # Keep functions simple (default threshold=25; violations get scoped #[expect])
-too_many_lines = "deny"                            # Keep functions short (default threshold=100; violations get scoped #[expect])
-type_complexity = "deny"                           # Keep types simple (default threshold=250; violations get scoped #[expect])
+missing_errors_doc = "deny"   # Document error conditions
+missing_panics_doc = "deny"   # Document panic conditions
+missing_safety_doc = "deny"   # Document safety requirements
+cognitive_complexity = "deny" # Keep functions simple (default threshold=25; violations get scoped #[expect])
+too_many_lines = "deny"       # Keep functions short (default threshold=100; violations get scoped #[expect])
+type_complexity = "deny"      # Keep types simple (default threshold=250; violations get scoped #[expect]) — see trait_policy.md §2
+# ── Phase 7f trait/generic/dispatch discipline lints — see trait_policy.md §2 ──
+too_many_arguments = "deny"                        # Keep fn signatures lean (default threshold=7; violations get scoped #[expect]) — see trait_policy.md §2
+trait_duplication_in_bounds = "deny"               # Disallow `T: Foo + Foo + Bar` duplicate bounds — see trait_policy.md §8 anti-patterns
+wrong_self_convention = "deny"                     # Enforce as_*/into_*/to_*/from_* method-name conventions — see trait_policy.md §2
+multiple_bound_locations = "warn"                  # Discourage split `<T: …>` + `where T: …` on the same `T` — see trait_policy.md §2
 large_enum_variant = "deny"                        # Optimize enum memory usage
 large_stack_arrays = "deny"                        # Avoid large stack allocations
 large_types_passed_by_value = "deny"               # Pass large types by reference
