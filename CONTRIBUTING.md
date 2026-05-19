@@ -234,6 +234,22 @@ Every surviving prod `unwrap` / `expect` / `panic!` fits exactly one of five cat
 
 Full taxonomy, anti-patterns, per-crate posture, and the per-site annotation contract live in [`docs/architecture/code-quality/panic_policy.md`](docs/architecture/code-quality/panic_policy.md).  Library crates do not return `anyhow::Error` from public APIs and do not return `Result<_, String>` (banned workspace-wide after Phase 5d); use a typed `thiserror::Error` enum with `#[non_exhaustive]` instead.
 
+## Allocation policy
+
+UFFS enforces a strict clone-and-allocation discipline in production code via five workspace Clippy lints at `deny` level: `redundant_clone`, `clone_on_ref_ptr`, `cloned_instead_of_copied`, `inefficient_to_string`, and `unnecessary_to_owned`.  Test code is exempt.
+
+The one-line rule: **hot paths (per-record / per-row / per-query) never allocate defensively; cold paths (error context, log lines, one-time setup) may allocate freely; every `.clone()` / `format!()` / `to_owned()` in production code must fit one of the five blessed categories (α / β / γ / δ / ε), and δ is a bug.**
+
+Every surviving prod `.clone()` / `format!()` / `to_owned()` fits exactly one of five categories, each requiring a specific annotation shape:
+
+- **α — Arc clone** (`Arc::clone(&x)` form): self-evident; no comment required.  `clone_on_ref_ptr = "deny"` enforces the explicit form.
+- **β — Ownership fence** (caller has `&T`, API needs `T`): 1–3 line `//` comment explaining why the alternative (`&T`, in-place mutation) doesn't work.
+- **γ — Error / log context** (allocation inside an error variant or `tracing!` event): brief reason; the *category* is self-evident from the context.
+- **δ — Hot-path anti-pattern** (clone of `String` / `Vec<T>` inside a per-record loop that could be eliminated): **FIX, do not suppress.**  Refactor the call site with a comment documenting the new (correct) borrow invariant.
+- **ε — Test helper** (`#[cfg(test)]`-only allocation): out of scope; test code is exempt.
+
+Full taxonomy, the per-site annotation contract, the workspace inventory script (`scripts/dev/clone_alloc_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/allocation_policy.md`](docs/architecture/code-quality/allocation_policy.md).
+
 ## Docs map
 
 - Root overview: `README.md`
