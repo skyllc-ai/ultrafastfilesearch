@@ -44,6 +44,19 @@
 //! stdio transport can pass `default-features = false` to drop
 //! axum and tower-service from their binary; both transports share
 //! the same tool / resource / prompt surface.
+//!
+//! # Environment
+//!
+//! Env vars read by this crate (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056):
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for the MCP `serverInfo.version` field.  CARGO semver class. |
+//! | `UFFS_LOG` | `string` | `info` | Log level for `tracing-subscriber` (preferred over `RUST_LOG` for UFFS binaries).  INTERNAL semver class. |
+//! | `UFFS_LOG_FILE` | `path` | (none) | Optional log-file path override for the MCP HTTP gateway binary.  INTERNAL semver class. |
+//! | `UFFS_MCP_AUTH_TOKEN` | `token` | (auto-generated per session) | Bearer-token override for the MCP HTTP gateway binary in `bin/http_gateway.rs`.  INTERNAL semver class. |
 
 // On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
 // render with their cfg badge.  Gated behind `cfg(docsrs)` so local

@@ -89,6 +89,28 @@
 //!
 //! No `pub trait` declarations live in this crate, so the
 //! sealed-trait decision (§3.7) is **N/A**.
+//!
+//! # Environment
+//!
+//! Env vars read by this crate (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056).  Several are dev / parity-debug knobs read via `env::var_os(…).
+//! is_some()` (any set value enables; absence disables).
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `CARGO_MANIFEST_DIR` | `path` | (set by Cargo) | Test-fixture path resolution.  CARGO semver class. |
+//! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for log preludes.  CARGO semver class. |
+//! | `RUST_LOG` | `string` | `info` | `tracing-subscriber` filter directive used by the standalone `uffs_mft` binary.  STANDARD semver class (tracing convention). |
+//! | `RUST_LOG_FILE` | `path` | (none) | Optional log-file path override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
+//! | `UFFS_LOG_DIR` | `path` | platform default | Log directory override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
+//! | `UFFS_CACHE_PROFILE` | `bool` (`env::var_os(…).is_some()`) | `false` (unset) | Emits per-phase cache I/O timings to stderr (`[CACHE_PROFILE]` prefix) from `cache`, `index/storage/{deserialize,file_io}`, and `reader/persistence`.  Dev / benchmark only.  INTERNAL semver class. |
+//! | `UFFS_MFT_TEST_DIR` | `path` | (none) | Optional test-fixture directory for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
+//! | `UFFS_MFT_TEST_FILE` | `path` | (none) | Optional test-fixture file path for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
+//! | `UFFS_PARITY_DEBUG` | `bool` | `false` | Enables verbose chaos-order parity debugging in the LIVE parser (`io::readers::parallel::to_index`).  INTERNAL semver class (dev only). |
+//! | `UFFS_REBUILD_CHILDREN_ALWAYS` | `bool` (`env::var_os(…).is_some()`) | `false` (unset) | Forces unconditional children-rebuild from name graph in `index::tree::compute_tree_metrics_impl`; removes parse-order artifacts for validation runs.  INTERNAL semver class (dev only). |
+//! | `UFFS_SINGLE_THREAD` | `bool` | `false` | Forces single-threaded reader in `reader::persistence` for parity debugging.  INTERNAL semver class (dev only). |
+//! | `UFFS_SKIP_ORPHANS` | `bool` (`env::var_os(…).is_some()`) | `false` (unset) | Skips orphan-record sweep in `index::tree::compute_tree_metrics_impl` (only paths reachable from ROOT through visible FILE_NAME edges are aggregated).  INTERNAL semver class (dev only). |
 
 // On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
 // (`#[cfg(windows)]`, `#[cfg(feature = "...")]`, etc.) render with their

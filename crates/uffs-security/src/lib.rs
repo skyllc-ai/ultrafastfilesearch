@@ -16,6 +16,17 @@
 //! - [`runtime_dir`] — Daemon-private runtime tempfile lifecycle (Phase 2b
 //!   memory tiering): owner-only file creation, orphan-pid sweep, read-only
 //!   mmap behind a typed soundness wrapper
+//!
+//! # Environment
+//!
+//! Env vars read by this crate (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056):
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `UFFS_DEV` | `bool` | `false` | Enables dev-mode keystore relaxation in [`keystore`] (no DPAPI binding; file-based key at `~/.local/share/uffs/key.bin` on Unix).  INTERNAL semver class. |
+//! | `USERNAME` | `string` | (Windows: current user) | Read by [`fs::set_file_permissions_owner_only`] on Windows to derive the principal for the `icacls /grant` ACL.  STANDARD semver class. |
 
 // Platform-gated deps: used by sub-modules behind #[cfg] gates.
 // Suppress unused-crate-dependencies lint for platforms where the

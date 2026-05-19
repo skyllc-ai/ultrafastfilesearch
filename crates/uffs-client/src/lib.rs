@@ -51,6 +51,20 @@
 //!   change in Phase 3b); safe under both external usage patterns in
 //!   `uffs-cli`.
 //! - **§3.7** N/A — no `pub trait` declarations in this crate.
+//!
+//! # Environment
+//!
+//! Env vars read by this crate (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056):
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for `ResponseStatus::version`.  CARGO semver class. |
+//! | `UFFS_CLIENT_SKIP_HEALTH_CHECK` | `bool` | `false` | Skips post-connect health probe in [`daemon_ctl`].  Used by `just ship` cross-check.  INTERNAL semver class. |
+//! | `UFFS_CLIENT_TIMEOUT_SECS` | `int` (seconds) | `5` | Sync connect timeout override in `connect_sync_platform`.  INTERNAL semver class. |
+//! | `UFFS_ELEVATE` | `string` (`auto` / `never` / `always` / `prefer`) | `auto` | Elevation policy for daemon spawn; read in `daemon_spawn::resolve_elevation_policy` (private module).  INTERNAL semver class. |
+//! | `XDG_RUNTIME_DIR` | `path` | (XDG: `/run/user/$UID`) | Linux daemon-socket location in [`daemon_ctl`].  STANDARD semver class. |
 
 // On docs.rs only: enable the `doc_cfg` rustdoc feature so cfg-gated items
 // (`#[cfg(feature = "async")]`, `#[cfg(windows)]`, etc.) render with their

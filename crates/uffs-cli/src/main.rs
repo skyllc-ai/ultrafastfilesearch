@@ -26,6 +26,21 @@
 //! would be linked on Windows; gating its use behind a non-default
 //! feature lets package builds opt in only when probe data is worth
 //! the launch-time hit.
+//!
+//! # Environment
+//!
+//! Runtime env vars read by this binary (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056).  Build-time env vars (`CARGO_CFG_TARGET_OS` /
+//! `CARGO_CFG_TARGET_ENV`) are documented in [`build.rs`](../../build.rs).
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for `--version` output + log preludes.  CARGO semver class. |
+//! | `RUST_LOG` | `string` | `info` | `tracing-subscriber` filter directive; consulted as a fallback when `UFFS_LOG` is unset.  STANDARD semver class (tracing convention). |
+//! | `UFFS_LOG` | `string` | `info` | UFFS-specific log level override (preferred over `RUST_LOG` for UFFS binaries).  INTERNAL semver class. |
+//! | `UFFS_LOG_DIR` | `path` | platform default (`%LOCALAPPDATA%\UFFS\logs` / `$XDG_CACHE_HOME/uffs/logs`) | Log directory override for `uffs daemon start` and `uffs search`.  Mirrors the `--log-dir` CLI flag.  INTERNAL semver class. |
+//! | `UFFS_LOG_FILE` | `path` | (none — auto-generated under `UFFS_LOG_DIR`) | Log-file path override.  Mirrors the `--log-file` CLI flag.  INTERNAL semver class. |
 
 // CLI main module uses single-call functions by design
 #![expect(

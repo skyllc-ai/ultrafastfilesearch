@@ -87,6 +87,16 @@
 //! reader and the test-side mock reader.  External impls are by
 //! design.  Sealing would defeat the trait's purpose.  **Kept open**
 //! (see the type-level decision record on `FileReader` itself).
+//!
+//! # Environment
+//!
+//! Env vars read by this crate (registry:
+//! `docs/architecture/code-quality/build_codegen_policy.md` §5, playbook
+//! §1049-1056):
+//!
+//! | Env var | Type | Default | Notes |
+//! |---|---|---|---|
+//! | `UFFS_CACHE_PROFILE` | `bool` (`env::var_os(…).is_some()` — *any* value enables) | `false` (unset) | Emits per-phase cache I/O timings to stderr (`[CACHE_PROFILE]` prefix) from `compact_cache::{load,save,seek}` and `search::query`.  Dev / benchmark only.  INTERNAL semver class. |
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic)]
