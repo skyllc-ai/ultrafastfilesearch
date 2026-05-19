@@ -191,4 +191,4 @@ Append-only.  Each entry: date, sub-phase, decision, PR.
 | 2026-05-19 | 7d | Audit 40 true dispatch sites — all D1/D2; zero refactor PRs | findings-only |
 | 2026-05-19 | 7e | Keep all 3 surviving `pub trait`s OPEN — `FileReader` (J3), `FormatRow` (J3), `RuntimeDir` (structurally sealed by private fields of `RuntimeFile`) | findings-only |
 | 2026-05-19 | 7f | Add 4 clippy lints: `too_many_arguments`, `trait_duplication_in_bounds`, `wrong_self_convention` (deny) + `multiple_bound_locations` (warn) | #291 |
-| 2026-05-19 | 7g | Add this `trait_policy.md` + `CONTRIBUTING.md` cross-link | this PR |
+| 2026-05-19 | 7g | Add this `trait_policy.md` + `CONTRIBUTING.md` cross-link | #290 |
