@@ -247,9 +247,14 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
             continue;
         }
         let drive_idx_u16 = uffs_mft::len_to_u16(drive_idx);
-        // Clone the resolved ids so we can reborrow `search_filters`
-        // for the next drive without re-aliasing the loop body.
-        for &ext_id in &search_filters.resolved_ext_ids.clone() {
+        // Borrow `resolved_ext_ids` immutably for the inner loop's
+        // lifetime: the body never touches `search_filters`, so the
+        // borrow is released when the inner loop ends, freeing the
+        // next outer iteration's call to `resolve_ext_ids_for_drive`
+        // (which needs `&mut search_filters`).  Replaces a defensive
+        // `.clone()` (Phase 6c category-δ) that was anticipating a
+        // re-aliasing scenario that the current code doesn't hit.
+        for &ext_id in &search_filters.resolved_ext_ids {
             for &rec_idx_u32 in drive.ext_index.get(ext_id) {
                 let rec_idx = rec_idx_u32 as usize;
                 let Some(rec) = drive.records.get(rec_idx) else {
