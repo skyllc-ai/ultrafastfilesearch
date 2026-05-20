@@ -239,6 +239,23 @@ impl UffsMcpServer {
     ///
     /// Separated from `call_tool` so the retry-on-reconnect logic can
     /// call it a second time with the same arguments.
+    ///
+    /// # Concurrency
+    ///
+    /// Snapshots the [`RootsState`] upfront via `.read().await.clone()`
+    /// rather than holding the read guard across the daemon-RPC tool
+    /// dispatch awaits below.  Without the snapshot, the guard would
+    /// be held for the duration of every tool call (potentially
+    /// seconds for a large `uffs_search` / `uffs_aggregate`), blocking
+    /// any concurrent [`ServerHandler::on_roots_list_changed`] writer
+    /// — which acquires `self.roots.write().await` to refresh the
+    /// state — for the duration of every in-flight tool call across
+    /// the whole MCP session.  Cloning `RootsState` is cheap (small
+    /// `Vec<RootScope>` of typically `< 10` short-string entries; see
+    /// the type's rustdoc).  See Phase 10b audit findings.
+    ///
+    /// [`RootsState`]: crate::roots::RootsState
+    /// [`ServerHandler::on_roots_list_changed`]: rmcp::handler::server::ServerHandler::on_roots_list_changed
     async fn dispatch_tool(
         &self,
         tool_name: &str,
@@ -253,7 +270,7 @@ impl UffsMcpServer {
             Self::readiness_gate(&mut client).await?;
         }
 
-        let roots_state = self.roots.read().await;
+        let roots_state = self.roots.read().await.clone();
 
         match tool_name {
             "uffs_search" => {

@@ -33,7 +33,14 @@ pub struct RootScope {
 }
 
 /// Shared roots state held by the MCP server.
-#[derive(Debug, Default)]
+///
+/// `Clone` is derived so the MCP handler can snapshot the current
+/// state under a brief read guard and then release the lock before
+/// dispatching tools that await on the daemon RPC.  Cloning is cheap:
+/// the `roots` and `warnings` `Vec`s are typically `< 10` short
+/// `String`s each (one per workspace root).  See Phase 10b audit
+/// findings and `crate::handler::UffsMcpServer::call_tool_with_args`.
+#[derive(Debug, Default, Clone)]
 pub struct RootsState {
     /// Whether the client has advertised roots at least once.
     pub advertised: bool,

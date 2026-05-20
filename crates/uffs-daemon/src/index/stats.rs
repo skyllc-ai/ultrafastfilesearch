@@ -74,8 +74,25 @@ impl IndexManager {
     /// Get current daemon status.
     ///
     /// Includes `has_drives` and `total_records` for completeness.
+    ///
+    /// # Concurrency
+    ///
+    /// Snapshots the `DaemonStatus` upfront via `.read().await.clone()`
+    /// rather than holding the read guard across the inner awaits
+    /// below.  Without the snapshot, the guard would be held across
+    /// [`Self::has_drives`], [`Self::total_records`], and
+    /// [`Self::snapshot`] — three independent `self.index.read().await`
+    /// acquisitions — blocking any concurrent
+    /// [`Self::set_ready`] / [`Self::set_loading_progress`] /
+    /// [`crate::index::refresh::IndexManager::refresh`] writer on
+    /// `self.status` for the duration of the status RPC (which on a
+    /// many-drive box with a slow snapshot path can be tens of
+    /// milliseconds).  `DaemonStatus` is a small `Clone` enum
+    /// (`Loading { usize, usize }` or `Refreshing { Vec<DriveLetter> }`
+    /// in the worst case), so the snapshot is microseconds and never
+    /// crosses an inner `.await`.  See Phase 10b audit findings.
     pub(crate) async fn status(&self, connections: usize) -> StatusResponse {
-        let status = self.status.read().await;
+        let status_snapshot = self.status.read().await.clone();
         let loaded = self.has_drives().await;
         let records = self.total_records().await;
         tracing::trace!(
@@ -115,7 +132,7 @@ impl IndexManager {
             });
 
         StatusResponse {
-            status: status.clone(),
+            status: status_snapshot,
             uptime_secs: self.start_time.elapsed().as_secs(),
             connections,
             pid: std::process::id(),
