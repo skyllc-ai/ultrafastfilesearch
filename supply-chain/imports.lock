@@ -8,9 +8,19 @@ user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
+[[publisher.cc]]
+version = "1.2.62"
+when = "2026-05-08"
+trusted-publisher = "github:rust-lang/cc-rs"
+
+[[publisher.digest]]
+version = "0.11.3"
+when = "2026-05-03"
+trusted-publisher = "github:RustCrypto/traits"
+
 [[publisher.h2]]
-version = "0.4.13"
-when = "2026-01-05"
+version = "0.4.14"
+when = "2026-05-04"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
@@ -36,6 +46,11 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.hybrid-array]]
+version = "0.4.12"
+when = "2026-05-09"
+trusted-publisher = "github:RustCrypto/hybrid-array"
+
 [[publisher.hyper]]
 version = "1.9.0"
 when = "2026-03-31"
@@ -49,6 +64,11 @@ when = "2026-02-02"
 user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
+
+[[publisher.js-sys]]
+version = "0.3.98"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.mime]]
 version = "0.3.17"
@@ -71,6 +91,13 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.tower-http]]
+version = "0.6.11"
+when = "2026-05-18"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.unicase]]
 version = "2.9.0"
 when = "2026-01-06"
@@ -81,6 +108,13 @@ user-name = "Sean McArthur"
 [[publisher.unicode-normalization]]
 version = "0.1.25"
 when = "2025-10-30"
+user-id = 1139
+user-login = "Manishearth"
+user-name = "Manish Goregaokar"
+
+[[publisher.unicode-segmentation]]
+version = "1.13.2"
+when = "2026-03-26"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
@@ -120,6 +154,31 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.wasm-bindgen]]
+version = "0.2.121"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-futures]]
+version = "0.4.71"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-macro]]
+version = "0.2.121"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-macro-support]]
+version = "0.2.121"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.wasm-bindgen-shared]]
+version = "0.2.121"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
 [[publisher.wasm-encoder]]
 version = "0.244.0"
 when = "2026-01-06"
@@ -135,6 +194,18 @@ user-login = "wasmtime-publish"
 version = "0.244.0"
 when = "2026-01-06"
 trusted-publisher = "github:bytecodealliance/wasm-tools"
+
+[[publisher.web-sys]]
+version = "0.3.98"
+when = "2026-05-07"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+
+[[publisher.winnow]]
+version = "1.0.3"
+when = "2026-05-14"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
 
 [[publisher.wit-bindgen]]
 version = "0.51.0"
@@ -170,6 +241,13 @@ trusted-publisher = "github:bytecodealliance/wasm-tools"
 version = "0.244.0"
 when = "2026-01-06"
 trusted-publisher = "github:bytecodealliance/wasm-tools"
+
+[[publisher.zerofrom]]
+version = "0.1.7"
+when = "2026-04-01"
+user-id = 1139
+user-login = "Manishearth"
+user-name = "Manish Goregaokar"
 
 [[audits.bytecode-alliance.wildcard-audits.bumpalo]]
 who = "Nick Fitzgerald <fitzgen@gmail.com>"
@@ -1763,7 +1841,16 @@ who = "Manish Goregaokar <manishsmail@gmail.com>"
 criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2019-11-06"
-end = "2026-02-01"
+end = "2027-04-23"
+notes = "All code written or reviewed by Manish"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.wildcard-audits.unicode-segmentation]]
+who = "Manish Goregaokar <manishsmail@gmail.com>"
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2019-05-15"
+end = "2027-04-23"
 notes = "All code written or reviewed by Manish"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
@@ -1781,7 +1868,7 @@ who = "Manish Goregaokar <manishsmail@gmail.com>"
 criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2019-07-25"
-end = "2026-02-01"
+end = "2027-04-23"
 notes = "All code written or reviewed by Manish"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 

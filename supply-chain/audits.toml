@@ -25,6 +25,12 @@ criteria = "safe-to-deploy"
 version = "0.5.2"
 notes = "Reviewed v0.5.2 source. Transitive dep of num_cpus. Two files: errno.rs is pure i32 constants (EPERM, ENOENT, ...); lib.rs is #![no_std] FFI declarations for the Hermit unikernel syscall interface (sys_mmap, sys_getpagesize, sys_errno, thread scheduling primitives, ...) plus two unsafe wrapper fns for get/set_priority. No network I/O, no filesystem I/O, no std dependency. On non-Hermit targets the extern C symbols are never linked and the functions are inert — num_cpus only touches hermit-abi when target_os=hermit, which none of our shipping targets hit. Apache-2.0 OR MIT; author Stefan Lankes, Hermit OS project lead."
 
+[[audits.num-conv]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.1 -> 0.2.2"
+notes = "Delta audit (cargo vet diff 0.2.1 -> 0.2.2, 4 files +72/-8). Cargo.toml/Cargo.toml.orig: version bump only. README.md + src/lib.rs doc-comments: add note that num-conv is being uplifted into the standard library (rust-lang/rust#154330). src/lib.rs: introduces new 'Widen' trait + 'WidenTarget' + sealed 'WidenTargetSealed' as the going-forward names for the existing 'Extend'/'ExtendTarget'/'ExtendTargetSealed' trio. The old Extend trait is kept with #[deprecated(since='0.2.2', note='use Widen instead')] for backward compat; #[allow(deprecated)] internally so the existing impls still compile. The Widen implementation is bit-identical to Extend ('self as _' for size-preserving widening). impl_extend! macro renamed to impl_widen!, but it emits BOTH the new WidenTargetSealed/WidenTarget impls AND retains the deprecated ExtendTargetSealed/ExtendTarget impls so downstream code calling .extend() still works. No new unsafe (none exists in this crate), no new ambient capabilities, no I/O / FFI / process / network — pure trait rename-with-deprecation release prefacing the stdlib uplift. jhpratt is the time-rs maintainer; same publisher as the existing 0.2.1 we already trust transitively via time."
+
 [[audits.pastey]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -42,6 +48,12 @@ Audit rationale (Apr 2026, v0.5.71):
   (analogous to stdlib env!()). Bounded to compile time, returns a compile
   error on missing var rather than silently succeeding.
 - License: MIT OR Apache-2.0 (inherited from paste)."""
+
+[[audits.quick-xml]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.39.2 -> 0.39.4"
+notes = "Delta audit (cargo vet diff 0.39.2 -> 0.39.4, 3 files +35/-10). Cargo.toml/Cargo.toml.orig: version bump only. src/parser/dtd.rs is the only source change — three robustness fixes to the DTD internal-subset parser, all panic-prevention: (a) when 9+ bytes already accumulated in UndecidedMarkup state without matching one of <!--, <![CDATA[, <!ELEMENT, <!ATTLIST, <!ENTITY, <!NOTATION, fall through to 'skip until >' instead of staging more bytes than the 9-byte work buffer can hold (which would have panicked on the slice copy in UndecidedMarkup); (b) symmetric fix in the keyword-scan branch when the full 9-byte window has been consumed; (c) removes the 'markup.len() < 9 => None' bail-out and changes the no-> fallback from 'Some(markup.len())' to 'None' so the caller correctly waits for more input rather than treating partial markup as complete. Plus two comment-typo fixes. No new unsafe, no new I/O / FFI / process surfaces, no API additions, no feature-gate changes. Pure parser bounds-hardening."
 
 [[audits.rmcp]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
@@ -73,11 +85,41 @@ Delta audit (Apr 2026, v0.5.71):
   No runtime behavior change.
 - No unsafe additions, no API changes, no new ambient capabilities."""
 
+[[audits.siphasher]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.2 -> 1.0.3"
+notes = "Delta audit (cargo vet diff 1.0.2 -> 1.0.3, 5 files +105/-36). .gitignore: adds .swival editor tmpdir (no runtime effect). Cargo.toml/Cargo.toml.orig: version bump only. src/sip.rs + src/sip128.rs: single-shot fast-path optimization for the existing SipHasher{,13,24}::hash() and ::hash() (Hash128) public APIs. The old impls cloned the Hasher state, called .write(bytes), then .finish() — going through the buffered short_write codepath byte-by-byte even though the full message was available up-front. The new impls add private Hasher<S>::hash(msg) / hash128(msg) fast paths that, when ntail==0 (no buffered tail bytes from a prior write), XOR-fold msg's 8-byte chunks directly into the SipHash state in a tight loop, then finalize with the standard tail handling. When ntail!=0 the impl falls back to the original clone-write-finish path so correctness is preserved for partially-streamed hashers. The fast path's two unsafe blocks (load_int_le! and u8to64_le) were already present in the pre-existing .write() path and are reused unchanged: the 'while i < len - left' loop with 'left = len & 0x7' guarantees i + 8 <= len, so load_int_le! is in bounds; u8to64_le's 3rd arg 'left' is bounded to 0..8 by construction. Also adds Hasher::write_u16 (was missing — previously fell through to the default Hasher trait impl, which is byte-by-byte). write_u16 mirrors the existing write_u32/_u64/_usize pattern: short_write(i, i.to_le() as u64). finish()/finish128() are refactored to delegate to static finish{,128}_with_state(state,length,tail) helpers — pure structural extraction, output bytes unchanged for any given (state,length,tail). Net result: speed-up for single-shot byte-array hashing; no public-API additions beyond write_u16 (which is part of the std::hash::Hasher trait, not a new surface); no new unsafe operations beyond what already existed; no FFI / FS / network / process — pure crypto primitive, used here only via phf_shared for compile-time string hashing in transitive deps. Author jedisct1 (Frank Denis) is a well-known cryptography maintainer."
+
 [[audits.tokio]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.52.2 -> 1.52.3"
 notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow]). Changes scoped to src/sync/mpsc/* and src/sync/rwlock.rs, implementing four documented upstream bug-fix PRs per tokio 1.52.3 release notes (May 2026): tokio#8062 fix mpsc len() underflow; tokio#8074 return TryRecvError::Empty from try_recv() when mpsc closed with outstanding permits; tokio#8075 notify receivers in mpsc OwnedPermit::release() by reusing non-owned Permit Drop impl; tokio#8076 reject RwLock::new max_readers==0 (prevents div-by-zero in semaphore fast path). Companion tests in tests/sync_mpsc.rs + tests/sync_rwlock.rs. No feature additions, no new unsafe, no public API signature changes."
+
+[[audits.zerofrom]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.7 -> 0.1.8"
+notes = "Delta audit (cargo vet diff 0.1.7 -> 0.1.8, 2 files +12/-5). Cargo.toml + Cargo.toml.orig only — ZERO source code changes (verified diff covers only the two manifest files). Changes: (a) version 0.1.7 -> 0.1.8; (b) authors transferred from 'Manish Goregaokar <manishsmail@gmail.com>' to 'The ICU4X Project Developers' (workspace-inherited in the .orig form), reflecting the upstream move of zerofrom from Manishearth's personal repo into the ICU4X project; (c) adds [package.metadata.playground] all-features=true (docs.rs-style metadata, no runtime effect); (d) adds 'bool-assert-comparison = allow' under [lints.clippy] (dev-time lint relaxation only); (e) edition/authors-from-workspace reshuffle in the .orig. No src/ changes, no new unsafe, no new deps, no new ambient capabilities — pure ownership/metadata transfer release."
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+user-id = 55123
+start = "2022-10-29"
+end = "2027-05-20"
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:rust-lang/cc-rs"
+start = "2025-09-01"
+end = "2027-05-20"
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-12"
+end = "2027-05-20"
 
 [[trusted.h2]]
 criteria = "safe-to-deploy"
@@ -103,6 +145,12 @@ user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-07-03"
 end = "2027-04-23"
 
+[[trusted.hybrid-array]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/hybrid-array"
+start = "2026-03-08"
+end = "2027-05-20"
+
 [[trusted.hyper]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
@@ -114,6 +162,18 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2022-01-15"
 end = "2027-04-23"
+
+[[trusted.js-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.js-sys]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
 
 [[trusted.mime]]
 criteria = "safe-to-deploy"
@@ -133,8 +193,98 @@ user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-04"
 end = "2027-04-23"
 
+[[trusted.tower-http]]
+criteria = "safe-to-deploy"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2024-09-23"
+end = "2027-05-20"
+
 [[trusted.unicase]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-05"
 end = "2027-04-23"
+
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-futures]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-futures]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2027-05-20"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
+start = "2026-04-28"
+end = "2027-05-20"
+
+[[trusted.winnow]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-02-22"
+end = "2027-05-20"
+
+[[trusted.zerofrom]]
+criteria = "safe-to-deploy"
+user-id = 1139 # Manish Goregaokar (Manishearth)
+start = "2022-04-06"
+end = "2027-05-20"
