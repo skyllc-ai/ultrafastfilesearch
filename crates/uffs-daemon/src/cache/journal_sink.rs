@@ -156,6 +156,38 @@ impl RegistryPatchSink {
     /// does NOT extend the daemon's lifetime — when all
     /// `Arc<IndexManager>` instances drop the applier exits cleanly
     /// via the `Weak::upgrade` `None` arm.
+    ///
+    /// # Backpressure
+    ///
+    /// The `apply_tx` mpsc channel is **unbounded by design**.  Three
+    /// constraints pin this choice (Phase 10d audit):
+    ///
+    /// 1. **Producer is sync-non-blocking by contract.**  `accept` /
+    ///    `trigger_save` / `journal_wrapped` are `fn`, not `async fn` — invoked
+    ///    synchronously from
+    ///    [`crate::cache::journal_loop::JournalLoop::process_tick`]. They
+    ///    cannot `.await` on a bounded `send`, so a bounded variant would have
+    ///    to use `try_send` + drop-on-full, which is operationally identical to
+    ///    the existing "dead applier silently absorbed" degraded path
+    ///    (documented on `apply_tx`).
+    ///
+    /// 2. **Producer cadence is throttled upstream by
+    ///    [`crate::cache::journal_loop::SaveTrigger`].**  Save messages fire on
+    ///    either the 50K-event threshold OR the 5-minute age threshold.
+    ///    Worst-case steady-state ≈ 1 `ApplyMsg::Save` per drive per 5 min × 26
+    ///    drives ≈ 5 messages/min.  Wrap messages are rare (NTFS USN journal
+    ///    head reset only).
+    ///
+    /// 3. **Payload is bounded.**  Each `ApplyMsg::Save` carries the drained
+    ///    per-letter `Vec<FileChange>` (capped at the 50K-event threshold; ~10
+    ///    MB peak per save tick) and is consumed within ~1 s by the applier's
+    ///    serial loop.  If the applier wedges, memory grows by ~10 MB per drive
+    ///    per 5 min — a worst-case that implies the daemon itself is wedged
+    ///    (the applier's blocking step is registry write-lock + body patch,
+    ///    which is a daemon-wide hot path), so process restart resolves both.
+    ///
+    /// See `docs/dev/baseline/2026-05-19/phase_10_backpressure_audit.md`
+    /// (local) for the full per-site verdict.
     pub(crate) fn spawn_with_applier(idx: &Arc<IndexManager>) -> (Arc<Self>, JoinHandle<()>) {
         let (apply_tx, apply_rx) = mpsc::unbounded_channel();
         let weak = Arc::downgrade(idx);

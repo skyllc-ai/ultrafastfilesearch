@@ -80,6 +80,7 @@ impl UffsClient {
         reader: BufReader<Box<dyn tokio::io::AsyncRead + Unpin + Send>>,
         writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
     ) -> Self {
+        // Phase 10d: unbounded by-design — see backpressure_audit.md.
         let (notification_tx, notification_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             reader,
