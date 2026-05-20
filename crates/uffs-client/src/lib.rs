@@ -6,6 +6,24 @@
 //! All surfaces (CLI, TUI, GUI, MCP) use this crate to communicate with
 //! the daemon. It handles auto-start, connection, keepalive, and reconnect.
 //!
+//! # Concurrency
+//!
+//! Hybrid runtime model:
+//!
+//! * [`connect::UffsClient`] (async; feature `async` default-on) — runs on the
+//!   caller's tokio runtime.  Per-RPC `read_line` ceiling 300 s
+//!   (`Duration::from_mins(5)`; hard-coded).  Notification channel is
+//!   `mpsc::unbounded_channel()` rate-bounded by the daemon's
+//!   `broadcast::Sender` capacity (Phase 10d C5 verdict).
+//! * [`connect_sync::UffsClientSync`] (sync) — synchronous I/O on the caller
+//!   thread.  Per-RPC deadline 60 s default, env-overridable via
+//!   `UFFS_CLIENT_TIMEOUT_SECS`; Windows path uses
+//!   [`windows_deadline::WindowsDeadlineGuard`] (`CancelSynchronousIo`
+//!   watchdog) to enforce the deadline on blocking pipe I/O.
+//!
+//! See `docs/architecture/code-quality/concurrency_policy.md` for the
+//! workspace contract.
+//!
 //! # Example
 //!
 //! ```rust,ignore

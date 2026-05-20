@@ -298,6 +298,22 @@ Current posture (as of Phase 9 entry, SHA `0433065c7`):
 
 The `build.rs` / proc-macro / `macro_rules!` / codegen / env-var per-class contracts, the per-crate registry, the env-var registry, the workspace inventory script (`scripts/dev/build_codegen_audit.sh`), and the per-phase decisions log live in [`docs/architecture/code-quality/build_codegen_policy.md`](docs/architecture/code-quality/build_codegen_policy.md).
 
+## Concurrency policy
+
+UFFS enforces a strict task-ownership, lock-discipline, channel-backpressure, timeout-coverage, and blocking-IO posture in production async code.  Three workspace Clippy lints at `deny` cover the std-side lock-across-await family (`await_holding_lock`, `await_holding_refcell_ref`, `await_holding_invalid_type`); the rest is enforced by `scripts/dev/concurrency_audit.sh` + a per-site annotation contract.
+
+The one-line rule: **every `tokio::spawn` declares its owner / shutdown / errors / cancellation; every async lock guard is dropped before the next `.await`; every channel is bounded with documented capacity OR unbounded with a documented producer-rate ceiling; every cross-process / cross-thread / cross-network await has a timeout OR is justified as a cooperatively-cancelled forever-loop; every `std::fs::*` / `std::thread::sleep` inside an `async fn` is wrapped in `spawn_blocking` / `block_in_place` OR is a sync helper called only from sync contexts.**
+
+Five dimensions, each with a taxonomy contributors quote inline:
+
+- **Task ownership** (`T1` named-constructor / `T2` inline-spawn / `T3` fire-and-forget / `T4` test-only) — every prod spawn site documents the four facets above.
+- **Lock discipline** (`L1`-`L5` patterns; `L6` lock-across-await is forbidden) — three Clippy `await_holding_*` lints at `deny`.
+- **Channel discipline** (`C1` bounded / `C2` broadcast / `C3` oneshot / `C4` watch / `C5` unbounded-with-ceiling; `C6` undocumented unbounded is forbidden).
+- **Timeout policy** (`W1` named const / `W2` env-overridable / `W3` cooperatively-cancelled forever-loop / `W4` inline literal; `W5` unbounded cross-process await is forbidden).
+- **Blocking-IO rule** (`B1` `spawn_blocking` / `B2` `block_in_place` / `B3` sync helper / `B4` startup/Drop/CLI one-shot; `B5` unbounded sync I/O on runtime worker is forbidden).
+
+Full taxonomy, per-site annotation templates, the workspace inventory script (`scripts/dev/concurrency_audit.sh`), per-crate posture matrix, and the per-phase audit trail live in [`docs/architecture/code-quality/concurrency_policy.md`](docs/architecture/code-quality/concurrency_policy.md).
+
 ## Docs map
 
 - Root overview: `README.md`

@@ -37,6 +37,31 @@
 //! | `UFFS_USN_REFRESH_INTERVAL_SECS` | `int` (seconds) | `300` (5 min) | USN journal refresh interval override (via `USN_REFRESH_INTERVAL_ENV` const indirection).  INTERNAL semver class. |
 //! | `UFFS_SEARCH_MAX_CONCURRENCY` | `int` (search permits) | auto: `max(2, cpus × 26 / (drives × 10))` | Overrides the auto-tuned search-permit target for `(cpus, drives)` topology (via `index::DriveIndex::SEARCH_CONCURRENCY_ENV` const indirection).  INTERNAL semver class. |
 //! | `XDG_RUNTIME_DIR` | `path` | (XDG: `/run/user/$UID`) | Linux daemon-socket location.  STANDARD semver class. |
+//!
+//! # Concurrency
+//!
+//! Runs on `#[tokio::main]` (default multi-threaded runtime).  The
+//! daemon's startup graph spawns a fixed set of long-lived tasks via
+//! the named `spawn_*` constructors above:
+//!
+//! * `spawn_load_task` — drive-load orchestration with per-drive timeout
+//!   (`IndexManager::DRIVE_LOAD_TIMEOUT`).
+//! * `spawn_ipc_servers` — Unix-socket accept loop + Windows `AF_UNIX` bridge;
+//!   per-connection idle timeout (`IDLE_CONNECTION_SECS`).
+//! * `spawn_stats_heartbeat` — periodic `DaemonStats` snapshot to subscribed
+//!   clients.
+//! * `spawn_idle_demote_controller` — memory-pressure-driven shard-demote
+//!   signal source.
+//! * `spawn_journal_loops_for_warm_shards` — per-shard USN journal loops, each
+//!   cooperatively cancelled via a dedicated `watch::Sender<bool>`.
+//! * `spawn_pressure_subscriber` — listens to OS memory-pressure events and
+//!   drives the demote controller.
+//!
+//! All shutdown coordination flows through the daemon's top-level
+//! `LifecycleHandle` (`watch::Sender<bool>` broadcast + force-exit
+//! watchdog).  See [`crate::lifecycle`] for the full ownership
+//! diagram and `docs/architecture/code-quality/concurrency_policy.md`
+//! for the workspace contract.
 
 // Enable unstable Windows Unix domain socket support (Windows 10 1803+).
 #![cfg_attr(windows, feature(windows_unix_domain_sockets))]

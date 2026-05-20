@@ -17,6 +17,18 @@
 //! It is **not** in the query data path — it merely bridges MCP framing to the
 //! daemon's native protocol.
 //!
+//! # Concurrency
+//!
+//! Runs on `#[tokio::main]` (default multi-threaded runtime).  Spawns
+//! a small number of long-lived tasks: the MCP stdio dispatcher (or
+//! the `streamable-http` axum server when that feature is on), the
+//! daemon-bridge `UffsClient` reader-loop, and per-RPC handler tasks
+//! spawned by the rmcp SDK.  Per-RPC timeouts inherit the async
+//! client's 300 s `read_line` ceiling; the reload pipeline in
+//! [`process::mcp_reload`] is intentionally sequential (one-shot CLI
+//! context).  See `docs/architecture/code-quality/concurrency_policy.md`
+//! for the workspace contract.
+//!
 //! # Usage
 //!
 //! ```rust,no_run

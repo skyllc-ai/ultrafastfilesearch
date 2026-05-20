@@ -14,6 +14,19 @@
 //!   manipulation
 //! - **Parquet Persistence**: Save/load indexes in compressed Parquet format
 //!
+//! # Concurrency
+//!
+//! Predominantly a sync library + CLI binary.  Tokio is used only by
+//! the daemon-embedded loaders (`commands::load`, `commands::windows`)
+//! to schedule per-drive `spawn_blocking` MFT reads in parallel.  All
+//! `std::fs::*` calls live in CLI command handlers or sync helpers
+//! invoked from sync `fn main` (Phase 10f B3/B4 verdicts).  No
+//! per-shard background tasks, no shared mutable state, no channels
+//! at this layer — the daemon owns all of that and pulls
+//! `DataFrame` snapshots from us.  See
+//! `docs/architecture/code-quality/concurrency_policy.md` for the
+//! workspace contract.
+//!
 //! ## Quick Start
 //!
 //! ```rust,ignore
