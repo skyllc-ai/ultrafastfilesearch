@@ -689,6 +689,26 @@ fn spawn_ipc_servers(
     });
     tracing::info!("IPC server task spawned");
 
+    // Task ownership (Phase 10c): the Windows named-pipe IPC server is
+    // **fire-and-forget** — the `_pipe_task` `JoinHandle` is bound but
+    // never `.abort()`-ed.  Rationale (mirrors the parent fn rustdoc):
+    //
+    //   * **Owner:** the binding `_pipe_task` lives until end-of-scope in
+    //     `spawn_ipc_servers`; the task itself outlives the binding (Tokio detaches
+    //     a spawned task once its `JoinHandle` drops).
+    //   * **Shutdown:** none cooperative — the pipe `accept` loop has no
+    //     cancellation hook; the `await_shutdown_then_force_exit` watchdog
+    //     `process::exit`s the daemon, terminating the task with the runtime.
+    //   * **Error obs.:** body logs via `tracing::error!`; outer `JoinHandle` drop
+    //     discards the result.
+    //   * **Cancel behavior:** process-exit only.
+    //
+    // The sibling AF_UNIX task IS returned + held + `.abort()`-ed —
+    // that's the "primary" IPC transport on Unix.  On Windows, both
+    // transports coexist (AF_UNIX for tools using the cross-platform
+    // socket path; named-pipe for native Windows tooling); aborting
+    // just one and letting the other ride out process exit is a
+    // deliberate asymmetry.
     #[cfg(windows)]
     let _pipe_task = {
         let pipe_index = Arc::clone(idx);

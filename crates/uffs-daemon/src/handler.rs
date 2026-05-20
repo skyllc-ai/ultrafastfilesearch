@@ -499,6 +499,31 @@ impl RequestHandler {
 
     /// Handle `refresh` method — spawns refresh in background, returns
     /// immediate ack.
+    ///
+    /// # Task ownership
+    ///
+    /// The spawned refresh task is **fire-and-forget** — the
+    /// `JoinHandle` is intentionally discarded.  The closure captures
+    /// an `Arc<IndexManager>` clone, keeping the manager alive for the
+    /// refresh duration even if the original client connection drops.
+    ///
+    /// * **Owner:** none held; the runtime owns the task.
+    /// * **Shutdown:** none — [`IndexManager::refresh`] runs to completion
+    ///   regardless of daemon shutdown signal.  Acceptable because refresh is
+    ///   short-lived (seconds), and the daemon's
+    ///   `await_shutdown_then_force_exit` watchdog will `process::exit` after
+    ///   the load-task timeout, terminating any in-flight refresh with the
+    ///   runtime.
+    /// * **Error obs.:** [`IndexManager::refresh`] logs internally; no upward
+    ///   propagation.  The immediate ack returned to the client asserts only
+    ///   that the refresh was scheduled, not that it succeeded — clients poll
+    ///   `status` for completion.
+    /// * **Cancel behavior:** not cancellable; runs to completion or process
+    ///   exit.
+    ///
+    /// See Phase 10c task-ownership inventory.
+    ///
+    /// [`IndexManager::refresh`]: crate::index::IndexManager::refresh
     fn handle_refresh(&self, id: u64, req: &RpcRequest) -> String {
         let refresh_params: RefreshParams = req
             .params
