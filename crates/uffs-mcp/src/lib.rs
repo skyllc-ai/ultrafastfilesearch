@@ -24,10 +24,11 @@
 //! the `streamable-http` axum server when that feature is on), the
 //! daemon-bridge `UffsClient` reader-loop, and per-RPC handler tasks
 //! spawned by the rmcp SDK.  Per-RPC timeouts inherit the async
-//! client's 300 s `read_line` ceiling; the reload pipeline in
-//! [`process::mcp_reload`] is intentionally sequential (one-shot CLI
-//! context).  See `docs/architecture/code-quality/concurrency_policy.md`
-//! for the workspace contract.
+//! client's 300 s `read_line` ceiling; the reload pipeline in the
+//! crate-private `process::mcp_reload` is intentionally sequential
+//! (one-shot CLI context).  See
+//! `docs/architecture/code-quality/concurrency_policy.md` for the
+//! workspace contract.
 //!
 //! # Usage
 //!

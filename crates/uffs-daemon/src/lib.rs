@@ -7,15 +7,11 @@
 //! both from the standalone `uffs-daemon` binary and from the embedded
 //! `uffs daemon run` subcommand in the CLI.
 //!
-//! Exception: `file_size_policy` allows this file to exceed 800 LOC.
-//! Rationale: `run_daemon` plus the cohesive cluster of background-
-//! task spawners (`spawn_load_task`, `spawn_ipc_servers`,
-//! `spawn_stats_heartbeat`, `spawn_idle_demote_controller`,
-//! `spawn_journal_loops_for_warm_shards`, `spawn_pressure_subscriber`)
-//! form the daemon's startup graph; splitting the controllers
-//! across sibling modules fragments the shared `DaemonConfig` /
-//! `EventSender` wiring and obscures the parent-task lifetime
-//! relationships between them.
+//! Setup helpers + shutdown coordination live in sibling modules
+//! ([`log_init`], `startup`, `shutdown` — the latter two are
+//! crate-private); the orchestrator [`run_daemon`] and the `spawn_*`
+//! cluster live here so the parent-task lifetime relationships stay
+//! cohesive in one file.
 //!
 //! # Environment
 //!
@@ -59,9 +55,10 @@
 //!
 //! All shutdown coordination flows through the daemon's top-level
 //! `LifecycleHandle` (`watch::Sender<bool>` broadcast + force-exit
-//! watchdog).  See [`crate::lifecycle`] for the full ownership
-//! diagram and `docs/architecture/code-quality/concurrency_policy.md`
-//! for the workspace contract.
+//! watchdog).  See the crate-private `lifecycle` module for the full
+//! ownership diagram and
+//! `docs/architecture/code-quality/concurrency_policy.md` for the
+//! workspace contract.
 
 // Enable unstable Windows Unix domain socket support (Windows 10 1803+).
 #![cfg_attr(windows, feature(windows_unix_domain_sockets))]
@@ -116,99 +113,16 @@ mod runtime_orphans;
 /// Process-level memory and runtime telemetry.
 pub(crate) mod telemetry;
 
-/// Default log file location: `<data-local-dir>/uffs/uffsd.log`.
-///
-/// Falls back to `./uffsd.log` if the platform data directory
-/// cannot be determined.
-#[must_use]
-pub(crate) fn default_log_file() -> PathBuf {
-    dirs_next::data_local_dir().map_or_else(
-        || PathBuf::from("uffsd.log"),
-        |dir| dir.join("uffs").join("uffsd.log"),
-    )
-}
+/// Tracing-subscriber bootstrap (re-exports [`init_tracing`] as part
+/// of the daemon library's public API).
+pub mod log_init;
+/// Graceful-shutdown + force-exit watchdog.
+mod shutdown;
+/// Pre-spawn startup helpers (panic-hook install, data-source
+/// gathering, lifecycle bootstrap).
+mod startup;
 
-/// Initialise tracing for the daemon process.
-///
-/// * `log_file = Some(path)` — write to that file (append mode). A path of
-///   `"-"` or empty string uses `default_log_file`.
-/// * `log_file = None` **and** the effective log level is `debug` or `trace` —
-///   automatically write to `default_log_file` so that diagnostic output is
-///   never lost to `/dev/null`.
-/// * `log_file = None` with a higher level — write to stdout.
-///
-/// Returns a guard that **must** be held until the daemon exits —
-/// dropping it flushes the non-blocking writer.
-#[must_use]
-pub fn init_tracing(
-    log_spec: &str,
-    log_file: Option<&std::path::Path>,
-) -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = tracing_subscriber::EnvFilter::try_new(log_spec)
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-
-    // Decide whether to use a file writer.
-    let is_verbose = {
-        let lower = log_spec.to_ascii_lowercase();
-        lower.contains("debug") || lower.contains("trace")
-    };
-    let effective_file: Option<PathBuf> = match log_file {
-        Some(path) => {
-            let resolved = if path.as_os_str().is_empty() || path == std::path::Path::new("-") {
-                default_log_file()
-            } else {
-                path.to_path_buf()
-            };
-            Some(resolved)
-        }
-        None if is_verbose => Some(default_log_file()),
-        None => None,
-    };
-
-    if let Some(resolved) = effective_file {
-        // Compute a *safe* parent directory.
-        //
-        // `PathBuf::from("uffsd.log").parent()` returns `Some(Path::new(""))`,
-        // not `None` — so the defensive `unwrap_or_else(|| Path::new("."))`
-        // below used to never fire for a relative file name, and
-        // `tracing_appender::rolling::never("", "uffsd.log")` would propagate
-        // the empty path through `create_dir_all("")`, which errors on
-        // Windows ("The system cannot find the path specified") and then
-        // panics via `.expect("initializing rolling file appender failed")`
-        // — killing the detached daemon before it ever binds IPC.
-        //
-        // Coerce both `None` and `Some("")` to the current directory so
-        // relative `--log-file` paths work the same everywhere.
-        let parent_dir = match resolved.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => std::path::Path::new("."),
-        };
-        let _mkdir_ignore = std::fs::create_dir_all(parent_dir);
-
-        let file_appender = tracing_appender::rolling::never(
-            parent_dir,
-            resolved
-                .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("uffsd.log")),
-        );
-        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-        // `try_init` — a subscriber may already exist when invoked via
-        // the embedded `uffs daemon run` path.
-        let _ignore = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(false)
-            .with_ansi(false)
-            .with_writer(non_blocking)
-            .try_init();
-        Some(guard)
-    } else {
-        let _ignore = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(false)
-            .try_init();
-        None
-    }
-}
+pub use log_init::init_tracing;
 
 /// Configuration for [`run_daemon`].
 pub struct DaemonConfig {
@@ -233,40 +147,6 @@ pub struct DaemonConfig {
     pub log_file: Option<PathBuf>,
 }
 
-/// Bail if the daemon has nothing to serve.
-fn validate_data_sources(
-    mft_files: &[PathBuf],
-    drives: &[uffs_mft::platform::DriveLetter],
-    lifecycle_mgr: &lifecycle::LifecycleManager,
-) -> anyhow::Result<()> {
-    let has_data = !mft_files.is_empty() || {
-        #[cfg(windows)]
-        {
-            !drives.is_empty()
-        }
-        #[cfg(not(windows))]
-        {
-            // `drives` is Windows-only; no auto-discovery on macOS/Linux.
-            // The explicit type pins the annotation clippy expects on
-            // discarded bindings.
-            let _: &[uffs_mft::platform::DriveLetter] = drives;
-            false
-        }
-    };
-    if !has_data {
-        tracing::error!(
-            "No data sources provided. On macOS/Linux pass --mft-file; \
-             on Windows, NTFS drives are auto-discovered."
-        );
-        lifecycle_mgr.remove_pid_file();
-        anyhow::bail!(
-            "Daemon has no data sources to load. \
-             Provide --mft-file <path> (or --data-dir when launching via CLI)."
-        );
-    }
-    Ok(())
-}
-
 /// Run the UFFS daemon with the given configuration.
 ///
 /// This is the main entry point shared by both the standalone
@@ -280,13 +160,13 @@ fn validate_data_sources(
 /// Returns an error if another daemon is already running, data sources
 /// are missing, or the IPC server fails to bind.
 pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
-    install_catastrophe_panic_hook();
-    log_daemon_starting(&config);
+    startup::install_catastrophe_panic_hook();
+    startup::log_daemon_starting(&config);
 
     let (event_tx, _event_rx) = events::event_channel();
-    emit_daemon_starting_event(&event_tx);
+    startup::emit_daemon_starting_event(&event_tx);
 
-    let lifecycle_mgr = bootstrap_lifecycle_manager(&config, event_tx.clone())?;
+    let lifecycle_mgr = startup::bootstrap_lifecycle_manager(&config, event_tx.clone())?;
 
     // D5.0: clean up stale shmem files from previous daemon sessions.
     uffs_client::shmem::cleanup_stale_shmem_files();
@@ -302,7 +182,7 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     // platform-default location.  Factored out to keep
     // `run_daemon`'s cognitive complexity under the workspace's
     // strict-clippy ceiling.
-    let daemon_config = load_daemon_config()?;
+    let daemon_config = startup::load_daemon_config()?;
 
     // Create index manager — uses the user-supplied --data-dir for offline MFT
     // discovery and hot-loading (not the lifecycle directory).
@@ -313,12 +193,12 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     ));
     tracing::debug!(index_data_dir = ?idx.data_dir(), "Index manager created");
 
-    let mft_files = gather_mft_files(&config);
-    let drives = resolve_drive_list(&config);
+    let mft_files = startup::gather_mft_files(&config);
+    let drives = startup::resolve_drive_list(&config);
     tracing::info!(mft_files = mft_files.len(), drives = ?drives, "Final data sources");
 
     // Refuse to start with zero data sources — an empty daemon is useless.
-    validate_data_sources(&mft_files, &drives, &lifecycle_mgr)?;
+    startup::validate_data_sources(&mft_files, &drives, &lifecycle_mgr)?;
     tracing::info!("Data sources validated OK");
 
     let load_task = spawn_load_task(
@@ -353,217 +233,7 @@ pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
     // Run idle timer (blocks until shutdown or timeout) then tear
     // everything down.  Returns `!` so `force_exit_with_watchdog`
     // covers the post-await tail.
-    await_shutdown_then_force_exit(lifecycle_mgr, ipc_task, load_task).await
-}
-
-/// Emit the startup `tracing::info!` line with every config field
-/// the operator might want to grep for.  Extracted so the orchestrator
-/// stays under clippy's `cognitive_complexity` budget.
-fn log_daemon_starting(config: &DaemonConfig) {
-    tracing::info!(
-        pid = std::process::id(),
-        version = env!("CARGO_PKG_VERSION"),
-        broker_available = broker_client::broker_available(),
-        mft_files = ?config.mft_files,
-        drives = ?config.drives,
-        data_dir = ?config.data_dir,
-        no_cache = config.no_cache,
-        no_retire = config.no_retire,
-        "uffsd starting"
-    );
-}
-
-/// Publish the [`DaemonEvent::DaemonStarting`] notification so any
-/// pre-IPC subscriber (e.g. the embedded MCP server) sees the
-/// transition.
-fn emit_daemon_starting_event(event_tx: &events::EventSender) {
-    event_tx.emit(events::DaemonEvent::DaemonStarting {
-        pid: std::process::id(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-    });
-}
-
-/// Wait for the idle timer / shutdown signal, then run the graceful
-/// shutdown sequence: abort the IPC task, timeout-join the load task,
-/// drop the lifecycle manager (which cleans up PID + socket files),
-/// and finally force-exit via the watchdog.
-///
-/// Returns `!` because both legitimate exits (clean shutdown, watchdog
-/// abort) terminate the process.
-async fn await_shutdown_then_force_exit(
-    mut lifecycle_mgr: lifecycle::LifecycleManager,
-    ipc_task: tokio::task::JoinHandle<()>,
-    load_task: tokio::task::JoinHandle<()>,
-) -> ! {
-    lifecycle_mgr.run_idle_timer().await;
-
-    tracing::info!("Daemon shutting down");
-    ipc_task.abort();
-    // Give the load task a brief window to finish, then abandon it.
-    // Stuck kernel-mode I/O threads cannot be cancelled, so we don't
-    // wait indefinitely — process::exit at the bottom will clean up.
-    let shutdown_deadline = tokio::time::timeout(core::time::Duration::from_secs(3), load_task);
-    let _ignore = shutdown_deadline.await;
-    tracing::info!("Daemon stopped");
-
-    // Clean up PID + socket files before exiting.
-    drop(lifecycle_mgr);
-
-    force_exit_with_watchdog()
-}
-
-/// Install a panic hook that runs the existing default hook (so the
-/// usual stack trace + payload still print) and then force-exits.
-///
-/// Without this, a panic on any blocking I/O thread can leave the
-/// daemon in a zombie state — the default hook tries to unwind through
-/// kernel-mode I/O which may never return.  Force-exiting with code
-/// `101` matches Rust's standard panic exit code so process supervisors
-/// don't see a "clean" 0-exit on a panic.
-fn install_catastrophe_panic_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        default_hook(info);
-        #[expect(clippy::exit, reason = "catastrophe safety net — force-exit on panic")]
-        {
-            std::process::exit(101);
-        }
-    }));
-}
-
-/// Resolve the operator's `daemon.toml` from the platform-default
-/// location and emit a structured `tracing::info!` event with the
-/// resolved path.
-///
-/// Phase 6 Commit C task 6.5 helper.  A missing file is **not** an
-/// error: [`config::Config::load_default`] returns the
-/// Phase-3-equivalent defaults so every existing deployment boots
-/// with the same observable behavior (plan task 6.8).  A malformed
-/// file propagates as a startup error so a typo doesn't silently
-/// fall back to defaults — the operator gets a precise parser error
-/// with line and column.
-///
-/// Returned as `Arc<Config>` so the index manager and any future
-/// background controller can share a single read-only view without
-/// cloning the BTreeMap-bearing `[shards.per_drive]` table.
-fn load_daemon_config() -> anyhow::Result<Arc<config::Config>> {
-    let cfg = config::Config::load_default()
-        .map_err(|err| anyhow::anyhow!("Failed to load daemon.toml from default path: {err}"))?;
-    tracing::info!(
-        daemon_config_path = ?config::Config::default_path(),
-        "daemon.toml resolved (or defaults used when missing)",
-    );
-    Ok(Arc::new(cfg))
-}
-
-/// Build the [`LifecycleManager`], gate against another running
-/// instance via the PID file, and write a fresh PID file.
-///
-/// Returns the manager ready for use, or bails when another daemon is
-/// already alive.
-fn bootstrap_lifecycle_manager(
-    config: &DaemonConfig,
-    event_tx: events::EventSender,
-) -> anyhow::Result<lifecycle::LifecycleManager> {
-    // Determine data directory:
-    // - lifecycle_dir: always %LOCALAPPDATA%\uffs — PID/socket/lock files
-    // - data_dir: user-supplied --data-dir (for MFT file discovery/hot-load)
-    let lifecycle_dir = dirs_next::data_local_dir()
-        .map_or_else(|| PathBuf::from("/tmp/uffs"), |base| base.join("uffs"));
-
-    let idle_timeout = if config.no_retire {
-        None
-    } else {
-        Some(core::time::Duration::from_secs(config.idle_timeout))
-    };
-    let mut lifecycle_mgr =
-        lifecycle::LifecycleManager::new(&lifecycle_dir, idle_timeout, event_tx);
-
-    tracing::info!(data_dir = %lifecycle_mgr.data_dir().display(), "Lifecycle data directory");
-
-    if !lifecycle_mgr.check_stale_pid() {
-        tracing::error!("Another daemon instance is already running");
-        anyhow::bail!("Another daemon instance is already running");
-    }
-
-    lifecycle_mgr.write_pid_file()?;
-    tracing::info!("PID file written");
-    Ok(lifecycle_mgr)
-}
-
-/// Merge `--mft-file` arguments with files discovered under
-/// `--data-dir`, applying the `--drive` filter when present.
-fn gather_mft_files(config: &DaemonConfig) -> Vec<PathBuf> {
-    let mut mft_files = config.mft_files.clone();
-    let Some(dir) = config.data_dir.as_ref() else {
-        return mft_files;
-    };
-
-    let discovered = uffs_mft::discovery::discover_mft_files(dir);
-    let filtered: Vec<PathBuf> = if config.drives.is_empty() {
-        discovered
-    } else {
-        discovered
-            .into_iter()
-            .filter(|path| drive_letter_matches(path, &config.drives))
-            .collect()
-    };
-    tracing::info!(
-        data_dir = %dir.display(),
-        count = filtered.len(),
-        filter = ?config.drives,
-        "Discovered MFT files from --data-dir"
-    );
-    mft_files.extend(filtered);
-    mft_files
-}
-
-/// Returns `true` when `path`'s parent directory carries a
-/// `drive_<letter>` prefix that matches one of `wanted` (case-
-/// insensitive — `DriveLetter::parse` canonicalises to uppercase).
-fn drive_letter_matches(
-    path: &std::path::Path,
-    wanted: &[uffs_mft::platform::DriveLetter],
-) -> bool {
-    path.parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix("drive_"))
-        .and_then(|suffix| suffix.chars().next())
-        .and_then(|letter_ch| uffs_mft::platform::DriveLetter::parse(letter_ch).ok())
-        .is_some_and(|letter| wanted.contains(&letter))
-}
-
-/// Resolve the drive list to scan.
-///
-/// On Windows, an empty `--drive` triggers auto-discovery; non-empty
-/// respects the explicit list.  Always empty on non-Windows since
-/// live MFT scanning is Windows-only.
-#[cfg(windows)]
-fn resolve_drive_list(config: &DaemonConfig) -> Vec<uffs_mft::platform::DriveLetter> {
-    let explicit = config.drives.clone();
-    if explicit.is_empty() {
-        let auto_drives = uffs_mft::detect_ntfs_drives();
-        tracing::info!(
-            count = auto_drives.len(),
-            drives = ?auto_drives,
-            "Auto-discovered NTFS drives (no --drive flag)"
-        );
-        auto_drives
-    } else {
-        tracing::info!(
-            drives = ?explicit,
-            "Loading only requested drives (--drive flag)"
-        );
-        explicit
-    }
-}
-
-/// Non-Windows variant: live MFT scanning is unsupported, so the
-/// drive list is always empty regardless of `config`.
-#[cfg(not(windows))]
-const fn resolve_drive_list(_config: &DaemonConfig) -> Vec<uffs_mft::platform::DriveLetter> {
-    Vec::new()
+    shutdown::await_shutdown_then_force_exit(lifecycle_mgr, ipc_task, load_task).await
 }
 
 /// Spawn the parallel load task that reads `mft_files` from disk and
@@ -1015,50 +685,6 @@ pub(crate) fn spawn_pressure_subscriber(
             }
         }
     })
-}
-
-/// Final shutdown: spawn a 5 s watchdog thread that calls
-/// [`std::process::abort`] if `process::exit` itself hangs (kernel
-/// I/O can wedge atexit handlers), then force-exit.
-///
-/// Returns `!` because both arms terminate the process.
-fn force_exit_with_watchdog() -> ! {
-    tracing::info!("Spawning shutdown watchdog (5s grace period)");
-    _ = std::thread::Builder::new()
-        .name("shutdown-watchdog".into())
-        .spawn(|| {
-            std::thread::sleep(core::time::Duration::from_secs(5));
-            // process::exit did not complete in 5 s — threads are stuck
-            // in kernel I/O.  Force-terminate via abort().
-            //
-            // Use eprintln! as a last-resort — tracing may not flush
-            // before abort().  print_stderr is intentional here: this is
-            // a catastrophe path where the structured logging subsystem
-            // may be unavailable.
-            let msg = "Shutdown watchdog: process::exit stuck for 5s — calling abort()";
-            tracing::error!("{msg}");
-            #[expect(
-                clippy::print_stderr,
-                reason = "catastrophe path — tracing may be dead"
-            )]
-            let _: () = eprintln!("[CATASTROPHE] {msg}");
-            std::process::abort();
-        }); // best-effort; if thread spawn fails, exit may still work
-
-    // Force-exit the process.  The Windows IPC server uses
-    // `std::os::windows::net::UnixListener` with `spawn_blocking(accept)`
-    // and per-connection `std::thread::spawn` bridge threads.  These
-    // blocking std threads cannot be cancelled by `ipc_task.abort()` and
-    // will keep the process alive indefinitely after the daemon logic has
-    // finished, turning it into a multi-GB zombie.  `process::exit(0)` is
-    // the standard pattern for daemons with uncancellable blocking threads.
-    #[expect(
-        clippy::exit,
-        reason = "daemon has orphaned blocking threads that prevent normal exit"
-    )]
-    {
-        std::process::exit(0);
-    }
 }
 
 #[cfg(test)]

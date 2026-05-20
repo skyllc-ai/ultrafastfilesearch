@@ -18,8 +18,9 @@
 //! * [`connect_sync::UffsClientSync`] (sync) — synchronous I/O on the caller
 //!   thread.  Per-RPC deadline 60 s default, env-overridable via
 //!   `UFFS_CLIENT_TIMEOUT_SECS`; Windows path uses
-//!   [`windows_deadline::WindowsDeadlineGuard`] (`CancelSynchronousIo`
-//!   watchdog) to enforce the deadline on blocking pipe I/O.
+//!   `windows_deadline::WindowsDeadlineGuard` (a `CancelSynchronousIo`
+//!   watchdog, `#[cfg(windows)]`-only) to enforce the deadline on blocking pipe
+//!   I/O.
 //!
 //! See `docs/architecture/code-quality/concurrency_policy.md` for the
 //! workspace contract.

@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use super::drive_letter_matches;
+use super::startup::drive_letter_matches;
 
 /// `drive_letter_matches` keys discovered MFT files to the
 /// `--drive` filter by walking `path.parent().file_name()` and
