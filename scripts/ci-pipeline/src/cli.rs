@@ -58,8 +58,10 @@ pub(crate) struct Cli {
     #[arg(long, global = true, default_value_t = 120)]
     pub max_target_gb: u64,
 
-    /// Override Cargo build parallelism (rustc job count)
-    /// If omitted, defaults to `min(num_cpus, 16)`.
+    /// Override Cargo build parallelism (`CARGO_BUILD_JOBS` / rustc job count).
+    /// Also caps the parallel fan-out of validation commands to this value.
+    /// If omitted, `CARGO_BUILD_JOBS` defaults to `min(num_cpus, 16)` and
+    /// fan-out defaults to `max(num_cpus / 4, 2)`.
     #[arg(long, global = true)]
     pub jobs: Option<usize>,
 

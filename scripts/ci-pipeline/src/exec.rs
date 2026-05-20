@@ -14,7 +14,7 @@
 //!   conventions.
 //! * [`execute_parallel`] / [`execute_parallel_with_env`] — fan out a
 //!   `Vec<(name, cmd, args)>` concurrently via `try_join_all`, bounded by the
-//!   `max_parallel_jobs` semaphore.
+//!   `fanout_concurrency` semaphore.
 //! * [`execute_step_with_tracking`] — adapter that wraps a `FnOnce() ->
 //!   Future<Result<()>>` in the resumable-workflow tracking contract
 //!   (mark-started → run → mark-completed/failed + record duration).
@@ -246,7 +246,7 @@ pub(crate) async fn execute_parallel(
         command_count
     );
 
-    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
+    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.fanout_concurrency));
     let tasks: Vec<_> = commands
         .into_iter()
         .map(|(name, cmd, args)| {
@@ -290,7 +290,7 @@ pub(crate) async fn execute_parallel_with_env(
         command_count
     );
 
-    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.max_parallel_jobs));
+    let semaphore = alloc::sync::Arc::new(tokio::sync::Semaphore::new(ctx.fanout_concurrency));
     let env_vars_template = env_vars.to_vec();
     let tasks: Vec<_> = commands
         .into_iter()

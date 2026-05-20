@@ -31,7 +31,10 @@ use tokio::process::Command;
 use crate::context::{
     PipelineContext, bytes_to_gib, dir_size_bytes, disk_free_bytes, get_cargo_target_dir,
 };
-use crate::exec::{execute_command, execute_parallel_with_env, execute_step_with_tracking};
+use crate::exec::{
+    execute_command, execute_command_with_env, execute_parallel_with_env,
+    execute_step_with_tracking,
+};
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
 use crate::version::{get_current_version, increment_version, update_polars_git};
 use crate::workflow::{
@@ -95,7 +98,20 @@ async fn tracked_clean_step(state: &mut WorkflowState, ctx: &PipelineContext) ->
             } else {
                 println!("  🧹 Auto-clean triggered (disk space low or target too large)");
             }
-            execute_command("Clean build artifacts", "cargo", &["clean"], ctx).await
+            // `cargo clean` doesn't compile anything but still probes the
+            // toolchain via `<rustc-wrapper> rustc -vV`.  On some macOS hosts
+            // sccache's wrapped probe dies with "Operation not permitted" in
+            // nested subprocesses even when it works at the top level.  Since
+            // clean never needs a wrapper, force-clear `RUSTC_WRAPPER` for
+            // this specific step regardless of sccache availability.
+            execute_command_with_env(
+                "Clean build artifacts",
+                "cargo",
+                &["clean"],
+                &[("RUSTC_WRAPPER", "")],
+                ctx,
+            )
+            .await
         } else {
             println!("  ⏭️  Skipping clean (disk space OK, target size OK)");
             Ok(())

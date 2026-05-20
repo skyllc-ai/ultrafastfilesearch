@@ -12,7 +12,7 @@
 //! threshold — see that struct's doc comment for the rationale.
 //!
 //! This module also owns the small filesystem helpers the context
-//! construction needs (`get_cargo_target_dir`, `command_exists`,
+//! construction needs (`get_cargo_target_dir`, `sccache_is_functional`,
 //! `disk_free_bytes`, `dir_size_bytes`).
 
 use core::time::Duration;
@@ -74,10 +74,24 @@ fn parse_cargo_config_target_dir() -> Option<PathBuf> {
     None
 }
 
-/// Return `true` if `cmd` exists in `$PATH`, checked via `which`.
-pub(crate) fn command_exists(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
+/// Return `true` if sccache can successfully wrap a rustc invocation.
+///
+/// `which sccache` is not enough: on some hosts the binary is present
+/// but the daemon fails to start (sandbox, missing IPC socket, etc.),
+/// causing every cargo invocation that inherits `RUSTC_WRAPPER=sccache`
+/// to die with "Operation not permitted".  Running `sccache rustc -vV`
+/// — the exact call Cargo makes for every build — flushes that out.
+///
+/// Note that this probe is not perfect: on some macOS shells sccache
+/// can succeed at the top level yet still fail when invoked as a
+/// nested subprocess of `cargo`.  Steps that are known to trip that
+/// (e.g. `cargo clean`, see `ship.rs`) explicitly clear `RUSTC_WRAPPER`
+/// for themselves rather than relying on this probe.
+pub(crate) fn sccache_is_functional() -> bool {
+    std::process::Command::new("sccache")
+        .args(["rustc", "-vV"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .output()
         .is_ok_and(|out| out.status.success())
 }
@@ -161,9 +175,12 @@ pub(crate) async fn dir_size_bytes(path: &Path, timeout_dur: Duration) -> Option
 pub(crate) struct PipelineContext {
     /// Wall-clock start of the pipeline run; used to report total duration.
     pub start_time: Instant,
-    /// Hard upper bound on parallel `cargo` invocations during the
-    /// fan-out validation stage.  Derived from `--jobs` / `num_cpus`.
-    pub max_parallel_jobs: usize,
+    /// Hard upper bound on simultaneous `cargo` invocations during the
+    /// fan-out validation stage.  Kept separate from `max_parallel_jobs`
+    /// so we don't multiply rustc threads × fan-out and OOM the host.
+    /// Defaults to `max(num_cpus / 4, 2)` when `--jobs` is not set;
+    /// when `--jobs N` is explicit it clamps to `min(N, max_parallel_jobs)`.
+    pub fanout_concurrency: usize,
     /// Per-step command timeout.  Applied uniformly to every subprocess.
     pub timeout_duration: Duration,
     /// Runtime boolean flags (CLI-derived + sccache auto-detection).
@@ -225,10 +242,19 @@ impl PipelineContext {
     /// warm cargo incremental cache over a cold sccache cache for lower
     /// per-run variance.
     pub(crate) fn new(cli: &Cli, validation_command: bool) -> Self {
-        let max_jobs = cli.jobs.unwrap_or_else(|| num_cpus::get().min(16));
+        let num_cpus = num_cpus::get();
+        let max_jobs = cli.jobs.unwrap_or_else(|| num_cpus.min(16));
+        // Fan-out: how many cargo invocations run simultaneously.
+        // When explicit --jobs is given, honour it as the ceiling.
+        // When defaulting, use num_cpus/4 (min 2) so total rustc threads
+        // (fanout × CARGO_BUILD_JOBS) stays bounded on dev laptops.
+        let fanout_concurrency = cli
+            .jobs
+            .map_or_else(|| (num_cpus / 4).max(2), |explicit| explicit.min(max_jobs));
 
         // Build global environment variables
         let mut global_env: Vec<(String, String)> = Vec::new();
+        global_env.push(("CARGO_BUILD_JOBS".into(), max_jobs.to_string()));
 
         // Normalize Cargo's target dir so child cargo/nextest processes
         // don't treat `~/...` from .cargo/config.toml as a literal
@@ -256,9 +282,16 @@ impl PipelineContext {
         // out to cargo — we still inject the wrapper explicitly because
         // git itself reads no Cargo config).
         let disable_sccache = cli.no_sccache || validation_command;
-        let sccache_available = !disable_sccache && command_exists("sccache");
+        let sccache_available = !disable_sccache && sccache_is_functional();
         if sccache_available {
             global_env.push(("RUSTC_WRAPPER".into(), "sccache".into()));
+        } else {
+            // Always clear RUSTC_WRAPPER when sccache is unavailable —
+            // .cargo/config.toml hard-codes `build.rustc-wrapper = "sccache"`,
+            // so subprocesses would otherwise inherit a broken wrapper and
+            // every cargo invocation (even `cargo clean`) would die with
+            // "sccache rustc -vV: Operation not permitted".
+            global_env.push(("RUSTC_WRAPPER".into(), String::new()));
         }
 
         // Create log file for non-verbose mode
@@ -275,7 +308,7 @@ impl PipelineContext {
 
         Self {
             start_time: Instant::now(),
-            max_parallel_jobs: max_jobs,
+            fanout_concurrency,
             timeout_duration: Duration::from_hours(1), // 60 minutes max
             flags: PipelineFlags {
                 verbose: cli.verbose,
