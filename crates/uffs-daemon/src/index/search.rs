@@ -347,8 +347,20 @@ impl IndexManager {
             let output_config = build_output_config(&effective_params);
 
             let t_write = profiling.then(Instant::now);
-            let write_result =
-                Self::write_rows_to_file(&filtered_rows, output_path, &output_config);
+            // Phase 10f: `write_rows_to_file` does sync `File::create` +
+            // buffered `write_all` + `rename` on the tokio runtime
+            // thread.  For large result sets (10⁵+ rows × ~200 bytes ≈
+            // tens of MB), the write blocks for tens-to-hundreds of ms;
+            // `block_in_place` tells the multi-threaded runtime to move
+            // other tasks off this worker for the duration so the IPC
+            // accept loop, stats heartbeat, and per-shard journal loops
+            // keep making progress.  Cheaper than `spawn_blocking` here
+            // because the `Err` arm falls through to the IPC path and
+            // reuses `filtered_rows` — `spawn_blocking` would force an
+            // expensive clone or an `Arc<Vec<DisplayRow>>` refactor.
+            let write_result = tokio::task::block_in_place(|| {
+                Self::write_rows_to_file(&filtered_rows, output_path, &output_config)
+            });
             let write_us = t_write.map_or(0, |ts| ts.elapsed().as_micros());
 
             match write_result {
