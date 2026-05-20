@@ -21,6 +21,68 @@ For the per-phase strategy that produced the current posture, see [`../../dev/ar
 
 ---
 
+## 0  The model at a glance
+
+UFFS has one process where concurrency matters in production — the daemon (`uffs-daemon`).  Three satellite binaries (`uffs-mft`, `uffs-mcp`, `uffs-mcp http_gateway`) carry their own `#[tokio::main]` multi-threaded runtimes but are simpler one-shot CLIs or stateless protocol bridges; `uffs-cli` is sync end-to-end.  This page describes the daemon's runtime model so a new contributor can read it in five minutes; everything in §1-§9 below follows from it.
+
+### 0.1  Daemon task graph
+
+The daemon's startup graph spawns a fixed set of long-lived tasks named via dedicated `spawn_*` constructors in `crates/uffs-daemon/src/lib.rs`.  Eight tasks total (six top-level + two subsystem-internal):
+
+```mermaid
+flowchart TD
+    R[run_daemon orchestrator]
+    R --> L[spawn_load_task<br/>drive-load + journal-loop bootstrap]
+    R --> I[spawn_ipc_servers<br/>AF_UNIX accept loop +<br/>Windows named-pipe sibling]
+    R --> S[spawn_stats_heartbeat<br/>periodic DaemonStats snapshot]
+    R --> D[spawn_idle_demote_controller<br/>30 s TTL demote sweep]
+    R --> M[spawn_mem_snapshot_task<br/>memory telemetry]
+    R --> P[spawn_pressure_subscriber<br/>OS memory-pressure watcher]
+    L --> J[spawn_journal_loops_for_warm_shards<br/>per-drive USN journal loop]
+    J --> JA[RegistryPatchSink::spawn_with_applier<br/>journal-event sink]
+    I --> C[handle_connection<br/>fire-and-forget per accepted client]
+    C --> W[writer_loop / notification_loop]
+```
+
+Per-connection sub-tasks (`reader_loop`, `writer_loop`, `notification_loop`) are abort-on-EOF and not shown as top-level edges.  The full per-site rustdoc inventory lives in §6 ("Spawn-site registry") below.
+
+### 0.2  Shard-state lifecycle
+
+The daemon's index is a per-drive collection of shards, each transitioning between six states (`crates/uffs-daemon/src/cache/shard.rs::ShardState`):
+
+| State | Body | Bloom | Trie | Entered by |
+|---|---|---|---|---|
+| `Unknown` | – | – | – | initial discovery |
+| `Cold` | – | – | – | parked-compactor demote (from `Parked`) |
+| `Parked` | – | ✓ | ✓ | `spawn_idle_demote_controller` after TTL OR `spawn_pressure_subscriber` cascade |
+| `Warm` | mmap | ✓ | ✓ | initial load OR promote from `Parked` |
+| `Hot` | mmap + prefaulted | ✓ | ✓ | recent search activity |
+| `Evicting` | (in transit) | – | – | transient — demote in progress |
+
+Legal transitions are pinned in `ShardState::can_transition_to`.  The two demote drivers are:
+
+  * **Idle TTL** — `spawn_idle_demote_controller` runs every 30 s and demotes `Warm`/`Hot` → `Parked` after a configurable idle-since-last-access window.
+  * **Memory-pressure cascade** — `spawn_pressure_subscriber` listens to the OS memory-pressure watch and cascades `Warm` → `Cold` one step at a time on `Low` transitions, preempted by `High`/`Normal`.  No-op on Mac/Linux (the platform `PressureSignal` never fires by design).
+
+### 0.3  IPC-request lifecycle
+
+  1. **Accept** — `spawn_ipc_servers` runs the `AF_UNIX` accept loop on Unix and an `AF_UNIX` + Windows-named-pipe sibling pair on Windows.  Per-connection `MAX_CONNECTIONS = 1024` cap.
+  2. **Per-connection task** — each accepted client spawns a fire-and-forget `handle_connection` task; ownership self-resets on socket EOF or `IDLE_CONNECTION_SECS = 60 s` idle timeout.
+  3. **Reader / writer / notifier** — inside the connection task, `reader_loop` reads JSON-RPC frames and dispatches to `handler::handle_request`; `writer_loop` writes responses; `notification_loop` forwards broadcast events.  Sub-tasks are `.abort()`-ed when `reader_loop` returns.
+  4. **Per-RPC timeout** — long-running methods carry their own deadline: search 30 s (`SEARCH_TIMEOUT`), drive-load `IndexManager::DRIVE_LOAD_TIMEOUT`, refresh fire-and-forget (immediate 202 ack; runs to completion or process exit).
+
+### 0.4  Shutdown sequence
+
+The terminal phase lives in `crates/uffs-daemon/src/shutdown.rs::await_shutdown_then_force_exit`:
+
+  1. **Signal source** — idle timer expiry, `Ctrl-C`, or RPC `Shutdown` method.  Any one releases `lifecycle_mgr.run_idle_timer().await`.
+  2. **IPC drain** — `ipc_task.abort()` cancels the accept loop; in-flight per-connection tasks finish their current request and exit on next read EOF.
+  3. **Load drain** — `tokio::time::timeout(3 s, load_task)` waits briefly; abandons on the deadline because stuck kernel-mode I/O cannot be cancelled.
+  4. **PID + socket cleanup** — `drop(lifecycle_mgr)` removes the PID file and the Unix-domain socket file.
+  5. **Force exit** — `force_exit_with_watchdog` spawns a 5 s watchdog thread that calls `std::process::abort` if `process::exit` itself hangs (kernel I/O can wedge atexit handlers), then calls `process::exit(0)`.
+
+---
+
 ## 1  The rule
 
 Stated as a one-liner contributors can quote:
@@ -33,7 +95,7 @@ Stated as a one-liner contributors can quote:
 
 The rule is enforced by **three layers**:
 
-  1. **Clippy lints** at `deny` level in `@/Users/rnio/Private/Github/UltraFastFileSearch/Cargo.toml`:
+  1. **Clippy lints** at `deny` level in the workspace `Cargo.toml`:
 
      ```toml
      [workspace.lints.clippy]
@@ -41,6 +103,8 @@ The rule is enforced by **three layers**:
      await_holding_refcell_ref    = "deny"  # No RefCell::borrow() held across .await
      await_holding_invalid_type   = "deny"  # No Rc<T> / Cell<T> held across .await (Send violation)
      ```
+
+     These three lints live in clippy's `suspicious` group (default `warn`) and are pinned at `deny` explicitly so the contract survives any future tightening of the workspace `-D warnings` shape — even if `--deny warnings` is removed from a CI gate, the named entries hold the line.
 
   2. **`scripts/dev/concurrency_audit.sh`** — emits an 11-section Markdown report covering: per-crate async-surface table, `tokio::spawn` site list, async-lock site list, `.read/.write/.lock().await` candidate set, `Arc<Mutex<…>>` nesting, channel inventory, timeout coverage, blocking-IO-in-async candidate files, cancellation infrastructure, `#[tokio::test]` count.  Runs as part of pre-push `lint-pre-push` and CI's `pr-fast.yml`.
 
@@ -276,7 +340,38 @@ Per-crate rustdoc `# Concurrency` sections at each crate root summarize the runt
 
 ---
 
-## 6  Verification
+## 6  Spawn-site registry
+
+The complete enumeration of every prod `tokio::spawn(` call site in the workspace, with the four facets the rule mandates (owner / shutdown / errors / cancellation).  18 prod sites total; the matching 9 `#[cfg(test)]` sites are exempt per §1.  Source-of-truth detail per site (every nuance, every commit-time verdict) lives in the local hand-audit at `docs/dev/baseline/2026-05-19/phase_10_task_ownership_inventory.md`; this table is the workspace-tracked summary so contributors can verify the contract without leaving the policy doc.
+
+| # | Group | Site | Constructor | Owner | Shutdown | Errors | Cancel |
+|---|---|---|---|---|---|---|---|
+| A1 | top-level | `daemon/src/lib.rs` | `spawn_load_task` | `run_daemon` (held) | `.abort()` in `await_shutdown_then_force_exit` | `tracing` inside | cooperative + abort fallback |
+| A2 | top-level | `daemon/src/lib.rs` (`AF_UNIX`) | `spawn_ipc_servers` | `run_daemon` (held) | `.abort()` in shutdown | `tracing` | abort (accept loop is cancellation-safe) |
+| A3 | top-level | `daemon/src/lib.rs` (named-pipe, win) | inline | dropped | process exit | `tracing` | none — watchdog reaps |
+| A4 | top-level | `daemon/src/lib.rs` | `spawn_stats_heartbeat` | dropped (`_stats_task`) | process exit | broadcast (infallible) | runs to exit |
+| A5 | top-level | `daemon/src/lib.rs` | `spawn_idle_demote_controller` | dropped | process exit | `tracing` | runs to exit |
+| A6 | top-level | `daemon/src/lib.rs` | `spawn_pressure_subscriber` | dropped | watch-sender drop on `IndexManager` drop | `tracing` | **cooperative** |
+| B1 | subsystem | `daemon/src/telemetry.rs` | `spawn_mem_snapshot_task` | dropped | process exit | `tracing` | runs to exit |
+| B2 | subsystem | `daemon/src/cache/journal_sink.rs` | `RegistryPatchSink::spawn_with_applier` | held by sink | `Weak<IndexManager>` upgrade `None` | `tracing` | **cooperative** |
+| B3 | subsystem | `daemon/src/cache/journal_loop.rs` | `spawn_journal_loop` | `JournalLoopHandle` | `cancel_tx.send(true)` (per-shard `watch`) | `JournalLoopHandle::wait_done()` for tests | **cooperative via `select!`** |
+| C1 | per-conn | `daemon/src/ipc.rs` | `spawn_unix_connection` | dropped (per-conn) | socket EOF | `tracing::debug!` | none — bounded by `MAX_CONNECTIONS` + idle timeout |
+| C2 | per-conn | `daemon/src/ipc.rs` (named-pipe, win) | inline | dropped | pipe EOF | `tracing::debug!` | none |
+| C3 | per-conn | `daemon/src/ipc/windows_unix_bridge.rs` | inline (bridge) | dropped | duplex EOF | `tracing::debug!` | none |
+| D1 | sub-task | `daemon/src/ipc.rs::handle_connection` | `Self::writer_loop` (inline) | parent connection | `.abort()` when `reader_loop` returns | indirect (via reader write fail) | abort |
+| D2 | sub-task | `daemon/src/ipc.rs::handle_connection` | `Self::notification_loop` (inline) | parent connection | `.abort()` when `reader_loop` returns | indirect (broadcast `Closed`/`Lagged`) | abort |
+| E1 | one-shot | `daemon/src/handler.rs` | inline (`handle_refresh`) | dropped | runs to completion **or** process exit | `tracing` inside `IndexManager::refresh` | none — short-lived |
+| F1 | runtime | `daemon/src/index/dispatch.rs` | inline (single-flight cleanup) | dropped | cooperative via `Shared` future | discarded (every awaiter has own clone) | none — cleanup IS the cancel-safety mechanism |
+| F2 | client | `client/src/connect_keepalive.rs` | `start_keepalive` | `KeepaliveGuard` | `oneshot::Sender` drop on guard drop | `tracing::debug!` | **cooperative via oneshot drop (RAII)** |
+| F3 | binary | `mft/src/main.rs` | inline (`run_until_shutdown`) | local `run_task` | `Ctrl-C` via `tokio::select!` arm | `JoinError` classified by `classify_binary_task_error` | abort on signal; cooperative on natural completion |
+
+**Group legend:** A = daemon top-level orchestration (`run_daemon`-spawned).  B = subsystem long-lived constructors.  C = per-connection IPC.  D = IPC connection-internal sub-tasks.  E = application one-shots.  F = runtime cleanup / external-crate spawns.
+
+Adding a new prod `tokio::spawn(` site requires a corresponding row here in the same PR — the `concurrency_audit.sh §2` count is the gate; a new row in §2 with no matching row here fails review.
+
+---
+
+## 7  Verification
 
 Every PR that touches async code must surface a clean run of:
 
@@ -297,7 +392,7 @@ Test code is exempt from the spawn-ownership and timeout-coverage rules; lock-di
 
 ---
 
-## 7  Anti-patterns
+## 8  Anti-patterns
 
 These shapes are **always wrong** in production code; submit a PR converting them, not suppressing them:
 
@@ -311,16 +406,17 @@ These shapes are **always wrong** in production code; submit a PR converting the
 
 ---
 
-## 8  Phase 10 audit trail
+## 9  Phase 10 audit trail
 
 The five dimensions above were each closed in a separate PR over Phase 10:
 
   * **10a** — `scripts/dev/concurrency_audit.sh` baseline tool (#303).
   * **10b** — Lock-across-await audit; 2 of 36 sites refactored to L5 (#304).
-  * **10c** — Task ownership inventory; 18 prod sites documented.
+  * **10c** — Task ownership inventory; 18 prod sites documented (#305).
   * **10d** — Backpressure audit; 2 prod unbounded channels documented as C5 (#306).
   * **10e** — Timeout coverage audit; 7 prod sites inventoried (findings-only, folded here).
   * **10f** — Blocking-IO-in-async audit; 1 real prod hazard fixed via B2 `block_in_place` (#307).
-  * **10g** — this policy doc + per-crate `# Concurrency` rustdoc.
+  * **10g** — this policy doc + per-crate `# Concurrency` rustdoc + daemon `lib.rs` decomposition + §0 model + §6 spawn-site registry + named `await_holding_*` clippy entries (#308).
+  * **10h** — `phase_10_final_report.md` (local-only) + tracking-issue closeout (#308).
 
 Per-site verdict tables live in `docs/dev/baseline/2026-05-19/phase_10_*.md` (local; not in git because the directory is gitignored).  The audit script can be re-run at any time to regenerate the inventory.

@@ -194,6 +194,45 @@ count_regex() {
         | awk 'BEGIN{s=0} {s+=$1} END{print s+0}'
 }
 
+# Bulk-collect per-crate match counts in a SINGLE `rg` pass.
+#
+# Usage: `bulk_per_crate <pattern> <out_assoc_array_name> [-F]`
+#
+# Replaces the N-crates × M-patterns nested loop that used to call
+# `count_*` once per (crate, pattern) pair (~126 rg invocations for
+# §1 alone, ~1.5 s of process-spawn overhead).  This version makes
+# **one** rg call per pattern across all of `crates/` and buckets
+# the per-file counts into per-crate totals via `awk` + a bash
+# nameref — cuts §1's wall time from ~1.5 s to ~0.3 s.
+#
+# The output array is keyed by crate name (e.g. `uffs-daemon`); the
+# `${CRATES[@]}` enumeration is the source of truth for the eventual
+# table row order.
+bulk_per_crate() {
+    local pattern="$1"
+    local -n out_map=$2 # nameref — requires bash 4.3+
+    local fixed_flag="${3:-}" # pass `-F` for fixed-string mode
+    local key value
+    while IFS=$'\t' read -r key value; do
+        [[ -z "$key" ]] && continue
+        out_map[$key]=$(( ${out_map[$key]:-0} + value ))
+    done < <(
+        rg "${RG_PROD_GLOBS[@]}" $fixed_flag --count-matches \
+            "$pattern" crates 2>/dev/null \
+            | awk -F: '{
+                # Path shape: crates/<crate>/<...rs>:<count>
+                n = split($1, parts, "/");
+                if (n >= 2 && parts[1] == "crates") {
+                    crate = parts[2];
+                    sum[crate] += $2;
+                }
+              }
+              END {
+                  for (c in sum) printf("%s\t%d\n", c, sum[c]);
+              }'
+    )
+}
+
 # Count `#[tokio::test]` sites in a directory (INCLUDES tests/, since
 # those are precisely where #[tokio::test] lives).
 count_tokio_tests() {
@@ -346,17 +385,31 @@ TOTAL_BOUNDED_CH=0
 TOTAL_UNBOUNDED_CH=0
 TOTAL_TIMEOUT=0
 
+# Bulk-collect all 9 per-crate counts in one rg pass per pattern.
+# Replaces the prior N × M nested loop (~126 rg invocations) and
+# brings §1 to roughly 1/5 of its previous wall time.
+declare -A C_ASYNC_FN C_SPAWN C_SPAWN_BLK C_STD_LOCK C_TOKIO_LOCK \
+           C_ARC_MU C_BOUNDED C_UNBOUNDED C_TIMEOUT
+bulk_per_crate 'async fn|async move'                          C_ASYNC_FN
+bulk_per_crate 'tokio::spawn('                                C_SPAWN     -F
+bulk_per_crate 'spawn_blocking'                               C_SPAWN_BLK -F
+bulk_per_crate 'std::sync::(Mutex|RwLock)|sync::Mutex<|sync::RwLock<' C_STD_LOCK
+bulk_per_crate 'tokio::sync::(Mutex|RwLock|Semaphore)'        C_TOKIO_LOCK
+bulk_per_crate 'Arc<(Mutex|RwLock)<'                          C_ARC_MU
+bulk_per_crate 'mpsc::channel\(|watch::channel\(|oneshot::channel\(' C_BOUNDED
+bulk_per_crate 'unbounded_channel\(\)|broadcast::channel\('   C_UNBOUNDED
+bulk_per_crate 'tokio::time::timeout\b|::timeout_at\('        C_TIMEOUT
+
 for c in "${CRATES[@]}"; do
-    crate_dir="crates/$c"
-    async_fn=$(count_regex "$crate_dir" 'async fn|async move')
-    spawn=$(count_fixed "$crate_dir" 'tokio::spawn(')
-    spawn_blk=$(count_fixed "$crate_dir" 'spawn_blocking')
-    std_lock=$(count_regex "$crate_dir" 'std::sync::(Mutex|RwLock)|sync::Mutex<|sync::RwLock<')
-    tokio_lock=$(count_regex "$crate_dir" 'tokio::sync::(Mutex|RwLock|Semaphore)')
-    arc_mu=$(count_regex "$crate_dir" 'Arc<(Mutex|RwLock)<')
-    bounded=$(count_regex "$crate_dir" 'mpsc::channel\(|watch::channel\(|oneshot::channel\(')
-    unbounded=$(count_regex "$crate_dir" 'unbounded_channel\(\)|broadcast::channel\(')
-    timeout=$(count_regex "$crate_dir" 'tokio::time::timeout\b|::timeout_at\(')
+    async_fn=${C_ASYNC_FN[$c]:-0}
+    spawn=${C_SPAWN[$c]:-0}
+    spawn_blk=${C_SPAWN_BLK[$c]:-0}
+    std_lock=${C_STD_LOCK[$c]:-0}
+    tokio_lock=${C_TOKIO_LOCK[$c]:-0}
+    arc_mu=${C_ARC_MU[$c]:-0}
+    bounded=${C_BOUNDED[$c]:-0}
+    unbounded=${C_UNBOUNDED[$c]:-0}
+    timeout=${C_TIMEOUT[$c]:-0}
 
     TOTAL_ASYNC_FN=$((TOTAL_ASYNC_FN + async_fn))
     TOTAL_SPAWN=$((TOTAL_SPAWN + spawn))

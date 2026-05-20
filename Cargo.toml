@@ -337,6 +337,18 @@ multiple_unsafe_ops_per_block = "deny" # Limit unsafe operations
 unnecessary_safety_doc = "deny"        # Accurate safety docs
 unnecessary_safety_comment = "deny"    # Accurate safety comments
 
+# ───── Phase 10 concurrency discipline lints — see concurrency_policy.md §1 ─────
+# The `await_holding_*` family lives in clippy's `suspicious` group, which
+# defaults to `warn`.  We pin all three at `deny` explicitly so the policy
+# doc's enforcement claim is literally true (not "effectively at deny via
+# `-D warnings` in CI") and survives any future tightening of the workspace
+# `--deny warnings` shape.  Triggering one is **never** acceptable in prod
+# code — the canonical fix is the snapshot-then-await pattern documented in
+# `concurrency_policy.md §2.2`.
+await_holding_lock = "deny"         # No std::sync::Mutex/RwLock guard across .await
+await_holding_refcell_ref = "deny"  # No RefCell::borrow{,_mut}() guard across .await
+await_holding_invalid_type = "deny" # No Rc<T> / Cell<T> across .await (Send violation)
+
 # ───── DENY level lints — safety, correctness, discipline ─────
 # These MUST be clean in production code. clippy.toml relaxes test code
 # automatically via allow-*-in-tests settings.
