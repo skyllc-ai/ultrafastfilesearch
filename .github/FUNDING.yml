@@ -21,7 +21,7 @@
 # Provides automatic invoicing, transparent expense ledger, fiscal hosting.
 # Create profile at: https://opencollective.com/create
 # Uncomment once the Open Collective profile is live:
-# open_collective: uffs
+open_collective: uffs-search
 
 # ── Ko-fi ───────────────────────────────────────────────────────────────────
 # Low-friction one-time tips.  Takes ~20 min to set up.
