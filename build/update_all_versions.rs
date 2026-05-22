@@ -41,7 +41,8 @@
 //! │ 3. File Update Phase (with pattern matching)                   │
 //! │    ├── Cargo.toml     (workspace version + flexible spacing)    │
 //! │    ├── README.md      (5 pattern types + dependency refs)       │
-//! │    └── Documentation  (version tags + exact matches)            │
+//! │    ├── Documentation  (version tags + exact matches)            │
+//! │    └── CITATION.cff   (version + date-released)                 │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -191,6 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("📝 Would update Cargo.toml...");
         println!("📝 Would update README.md...");
         println!("📝 Would update documentation files...");
+        println!("📝 Would update CITATION.cff (version + date-released)...");
         println!("🔒 Would refresh Cargo.lock (cargo generate-lockfile --offline)...");
         println!("✅ Dry run completed - no files were modified");
         println!("📦 {} would be updated to version: {}", package_name, new_version);
@@ -200,6 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         update_cargo_toml(&current_version, &new_version)?;
         update_readme(&package_name, &current_version, &new_version)?;
         update_docs(&current_version, &new_version)?;
+        update_citation(&current_version, &new_version)?;
         refresh_cargo_lock()?;
 
         println!("✅ All versions updated successfully!");
@@ -1067,6 +1070,87 @@ fn update_docs(current: &str, new: &str) -> Result<(), Box<dyn std::error::Error
         println!("ℹ️  Documentation checked: {} files, no updates needed", files_checked);
     } else {
         println!("ℹ️  No documentation files found to update");
+    }
+
+    Ok(())
+}
+
+/// # CITATION.cff Version + Date Update
+///
+/// Keeps `CITATION.cff` in sync with the workspace version on every bump so
+/// that the "Cite this repository" button on GitHub always reflects the
+/// current release.  Two fields are updated:
+///
+/// - `version: "x.y.z"` — the quoted semver string
+/// - `date-released: "YYYY-MM-DD"` — set to today's UTC date
+///
+/// The file is silently skipped when absent so that a workspace without
+/// `CITATION.cff` does not fail the bump pipeline.
+fn update_citation(current: &str, new: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = "CITATION.cff";
+    let Ok(content) = fs::read_to_string(path) else {
+        println!("ℹ️  CITATION.cff not found, skipping");
+        return Ok(());
+    };
+
+    let mut updated = content.clone();
+    let mut changed = false;
+
+    // Update version field: `version: "x.y.z"`
+    let old_version_line = format!("version: \"{}\"", current);
+    let new_version_line = format!("version: \"{}\"", new);
+    if updated.contains(&old_version_line) {
+        updated = updated.replace(&old_version_line, &new_version_line);
+        changed = true;
+    }
+
+    // Update date-released field to today's UTC date: `date-released: "YYYY-MM-DD"`
+    // We replace any existing date regardless of its value so the field always
+    // reflects the actual release day, not a stale copy.
+    let today = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Gregorian calendar conversion (no external deps — std-only)
+        let days_since_epoch = secs / 86_400;
+        let mut y = 1970u32;
+        let mut remaining = days_since_epoch as u32;
+        loop {
+            let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+            if remaining < days_in_year { break; }
+            remaining -= days_in_year;
+            y += 1;
+        }
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let month_days = [31u32, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut m = 0usize;
+        for &md in &month_days {
+            if remaining < md { break; }
+            remaining -= md;
+            m += 1;
+        }
+        format!("{:04}-{:02}-{:02}", y, m + 1, remaining + 1)
+    };
+
+    // Replace any `date-released: "YYYY-MM-DD"` line with today's date
+    if let Some(start) = updated.find("date-released: \"") {
+        if let Some(end) = updated[start..].find('\n') {
+            let old_line = updated[start..start + end].to_string();
+            let new_line = format!("date-released: \"{}\"", today);
+            if old_line != new_line {
+                updated = updated.replacen(&old_line, &new_line, 1);
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        fs::write(path, updated)?;
+        println!("✅ CITATION.cff updated ({} → {}, date-released: {})", current, new, today);
+    } else {
+        println!("ℹ️  CITATION.cff — no matching patterns found (version field may already be current)");
     }
 
     Ok(())

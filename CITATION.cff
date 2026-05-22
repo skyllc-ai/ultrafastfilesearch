@@ -1,0 +1,67 @@
+cff-version: 1.2.0
+message: >-
+  If you use UFFS in research, tooling, or published work, please cite it
+  using the metadata below.  A "Cite this repository" button will appear
+  in the GitHub sidebar once this file is merged.
+
+# ── Identity ────────────────────────────────────────────────────────────────
+title: "UFFS — Ultra Fast File Search"
+abstract: >-
+  UFFS is a benchmark-driven NTFS search engine for Windows, written in Rust.
+  It bypasses Windows file-enumeration APIs and reads the NTFS Master File
+  Table (MFT) directly, building a compact persisted index that is held in
+  memory by a background daemon.  Targeted queries are answered in 0–3 ms
+  daemon-side; the engine has been scale-tested to 100.4 million records.
+  A single Rust core powers the CLI, TUI, daemon IPC API, and an MCP server
+  that exposes deterministic local filesystem retrieval to AI agents.
+  Published benchmarks show UFFS winning 12/12 head-to-head cells against
+  Everything (voidtools) on documented targeted-query workloads.
+
+# ── Authorship ───────────────────────────────────────────────────────────────
+authors:
+  - name: "Sky, LLC"
+    alias: skyllc-ai
+    website: "https://github.com/skyllc-ai"
+  - given-names: Robert
+    family-names: Nio
+    alias: githubrobbi
+    orcid: ""          # add if/when an ORCID is registered
+
+# ── Source & license ────────────────────────────────────────────────────────
+repository-code: "https://github.com/skyllc-ai/UltraFastFileSearch"
+url: "https://github.com/skyllc-ai/UltraFastFileSearch"
+license: MPL-2.0
+license-url: "https://github.com/skyllc-ai/UltraFastFileSearch/blob/main/LICENSE"
+
+# ── Version ─────────────────────────────────────────────────────────────────
+# Keep this in sync with [workspace.package].version in Cargo.toml.
+# The release pipeline (release-plz / just ship) should bump this automatically
+# once Pattern 5 in build/update_all_versions.rs is extended to cover CITATION.cff.
+version: "0.5.102"
+date-released: "2026-05-20"
+
+# ── Classification ───────────────────────────────────────────────────────────
+type: software
+keywords:
+  - ntfs
+  - mft
+  - file-search
+  - windows
+  - rust
+  - search-engine
+  - mcp
+  - model-context-protocol
+  - cli
+  - daemon
+  - forensics
+  - sysadmin
+  - developer-tools
+  - agent-tools
+  - everything-alternative
+
+# ── Related identifiers ──────────────────────────────────────────────────────
+# Uncomment and populate once benchmark data or a companion paper is published.
+# references:
+#   - type: dataset
+#     title: "UFFS Benchmark Corpus and Raw Results"
+#     url: "https://github.com/skyllc-ai/UltraFastFileSearch/tree/main/docs/benchmarks"

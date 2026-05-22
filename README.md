@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/actions/workflows/pr-fast.yml"><img src="https://img.shields.io/github/actions/workflow/status/skyllc-ai/UltraFastFileSearch/pr-fast.yml?branch=main&label=CI" alt="CI"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/github/v/release/skyllc-ai/UltraFastFileSearch?label=release" alt="Release"></a>
+  <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/github/downloads/skyllc-ai/UltraFastFileSearch/total?label=downloads" alt="Total Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg" alt="License: MPL 2.0"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform: Windows"></a>
 </p>
@@ -71,13 +72,47 @@ Hot-path context (v0.5.71, 30 rounds, p50):
 
 ---
 
+## Download & Install
+
+> **[⬇ Latest Release — GitHub Releases tab](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest)**
+
+Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBOMs (CycloneDX), and SLSA build-provenance attestations — no build toolchain needed.
+
+| Platform | Download | Notes |
+|---|---|---|
+| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + MCP + MFT tools. Recommended. |
+| **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle. |
+| **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh`. |
+
+**Windows quick-install (one command):**
+```powershell
+# Extract the ZIP anywhere, add the folder to PATH, then:
+uffs --version
+```
+
+**Verify the download:**
+```bash
+# SHA256 checksum
+sha256sum -c CHECKSUMS.txt
+
+# SLSA build-provenance attestation (proves the binary came from this exact workflow run)
+gh attestation verify uffs-windows-x64.exe --owner skyllc-ai
+```
+
+**Build from source** (contributors / nightly development only):
+```bash
+# Requires Rust nightly — channel is pinned in rust-toolchain.toml
+cargo build --release
+```
+
+> 📖 **[Full installation guide](docs/user-manual/installation.md)** — PATH setup, daemon autostart, WinGet (coming), Scoop (coming)
+
+---
+
 ## Quick Start
 
 ```bash
-# Build from source (requires Rust nightly — see rust-toolchain.toml)
-cargo build --release
-
-# Search all drives (daemon starts automatically)
+# Search all drives (daemon starts automatically on first query)
 uffs "*.rs"
 
 # Search a specific drive
