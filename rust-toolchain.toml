@@ -6,30 +6,32 @@
 # and prevents issues caused by switching between stable/nightly toolchains
 
 [toolchain]
-# Latest known-good nightly — re-pinned 2026-04-20 after the toolchain-sync bump
-# to nightly-2026-04-20 surfaced the ethnum regression on `just ship-fresh`.
-# CI must NOT override this with `@nightly`; this file is the single source of truth.
+# Pinned nightly — single source of truth for every environment.
+# CI must NOT override this with `@nightly`; workflows install via
+# `rustup show` (which reads this file) so the pin is always honored.
 #
-# History note: previously pinned to nightly-2026-04-11 because nightly-2026-04-13
-# broke tokio 1.51.1 via unresolved imports in tokio::io::util.  Tokio 1.52.1 (which
-# the workspace now depends on) resolves the interaction, so the original trigger is
-# gone.  Pinned to nightly-2026-04-17 — the last nightly that compiles the workspace
-# cleanly.  Every nightly from 2026-04-18 onward (incl. 04-20) regresses with
+# Current pin: nightly-2026-05-20.  Requires ethnum >= 1.5.3 (the
+# workspace Cargo.lock resolves 1.5.3 transitively via polars-compute +
+# parquet — verify with `grep -A1 'name = "ethnum"' Cargo.lock`).
 #
-#   error[E0512]: cannot transmute between types of different sizes
-#    --> ethnum-1.5.2/src/error.rs:16  `mem::transmute::<(), TryFromIntError>(())`
+# Resolved-history note (kept so a future bump does not re-tread this):
+#   * nightly-2026-04-13 broke tokio 1.51.1 (unresolved imports in
+#     tokio::io::util).  Tokio 1.52.1 resolved it; trigger is gone.
+#   * nightlies 2026-04-18 .. (the 04-17→05-xx window) regressed any
+#     build still pinning ethnum 1.5.2 with:
+#         error[E0512]: cannot transmute between types of different sizes
+#          --> ethnum-1.5.2/src/error.rs:16
+#             `mem::transmute::<(), TryFromIntError>(())`
+#     because std's `TryFromIntError` private field grew 0 -> 8 bits.
+#     ethnum 1.5.3 removed that zero-sized transmute, so the regression
+#     is fixed at the dependency level — NOT by holding an old nightly.
+#     If you bump the channel and hit E0512, the fix is
+#     `cargo update -p ethnum --precise 1.5.3` (or newer), never a
+#     toolchain downgrade.
 #
-# `TryFromIntError`'s private field grew from 0 to 8 bits on nightly, and ethnum's
-# upstream main branch has NOT published a fix (verified 2026-04-20 against
-# https://raw.githubusercontent.com/nlordell/ethnum-rs/main/src/error.rs).  Since
-# ethnum is pulled in transitively by polars-compute + parquet, we cannot drop it,
-# and maintaining our own ethnum fork is out of scope — so we hold the pin at 04-17
-# until a new ethnum release removes the zero-sized `TryFromIntError` hack.
-#
-# Run `just toolchain-sync` to re-attempt a bump once upstream ships the fix; the
-# CI pipeline will auto-refresh on `ship --fresh` unless `--skip-toolchain-sync`
-# is passed — use that flag (or plain `just ship`) while the upstream regression
-# persists.
+# Run `just toolchain-sync` to re-attempt a channel bump; the CI
+# pipeline auto-refreshes on `ship --fresh` unless `--skip-toolchain-sync`
+# is passed.
 channel = "nightly-2026-05-20"
 
 # Specify components that should always be available
