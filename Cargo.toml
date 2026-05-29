@@ -56,7 +56,7 @@ members = [
 # Workspace Package Metadata (inherited by all crates)
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version = "0.5.103"
+version = "0.5.104"
 edition = "2024"
 # No `rust-version` claim: the workspace is structurally nightly-only.
 # `crates/uffs-polars` enables `polars/nightly` unconditionally, which
@@ -118,21 +118,21 @@ publish = false
 # proposed-plan output for 12 days because `release-plz update`
 # failed at `cargo package` with this very error.  See
 # `release-automation-baseline.md` §10 for the diagnostic trail.
-uffs-polars = { path = "crates/uffs-polars", version = "0.5.103" }
-uffs-security = { path = "crates/uffs-security", version = "0.5.103" }
-uffs-text = { path = "crates/uffs-text", version = "0.5.103" }
-uffs-time = { path = "crates/uffs-time", version = "0.5.103" }
-uffs-mft = { path = "crates/uffs-mft", version = "0.5.103" }
-uffs-format = { path = "crates/uffs-format", version = "0.5.103" }
-uffs-core = { path = "crates/uffs-core", version = "0.5.103" }
-uffs-client = { path = "crates/uffs-client", version = "0.5.103" }
+uffs-polars = { path = "crates/uffs-polars", version = "0.5.104" }
+uffs-security = { path = "crates/uffs-security", version = "0.5.104" }
+uffs-text = { path = "crates/uffs-text", version = "0.5.104" }
+uffs-time = { path = "crates/uffs-time", version = "0.5.104" }
+uffs-mft = { path = "crates/uffs-mft", version = "0.5.104" }
+uffs-format = { path = "crates/uffs-format", version = "0.5.104" }
+uffs-core = { path = "crates/uffs-core", version = "0.5.104" }
+uffs-client = { path = "crates/uffs-client", version = "0.5.104" }
 # `uffs-broker-protocol` carries the wire-protocol types shared between
 # `uffs-broker` (the elevated handle vendor, Windows-only binary) and
 # `uffs-daemon::broker_client` (the handle consumer).  Pure-logic
 # Layer-0 lib — cross-platform tests run on every CI lane.  Added in
 # F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
 # wire-format byte literals.
-uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.5.103" }
+uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.5.104" }
 # NOTE: no `uffs-broker` workspace dependency alias on purpose —
 # `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
 # this protocol module's now-extracted sibling); no other workspace
@@ -197,7 +197,7 @@ winresource = "0.1.31"
 
 # ───── Serialization ─────
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 # Phase 6 of memory-tiering: parse `daemon.toml` for per-drive
 # tier overrides + adaptive-TTL knobs in `uffs-daemon::config`.
 # Pinned to v1.1.2 to match the supply-chain exemption already on
@@ -248,7 +248,7 @@ colored = "3.1.1"
 
 # ───── Pattern Matching ─────
 regex = "1.12.3"
-memchr = "2.8.0"
+memchr = "2.8.1"
 aho-corasick = "1.1.4"
 globset = "0.4.18"
 
@@ -276,7 +276,7 @@ rayon = "1.12.0"
 crossbeam-channel = "0.5.15"
 
 # ───── Memory ─────
-mimalloc = "0.1.50"
+mimalloc = "0.1.52"
 memmap2 = "0.9.10"
 
 # ───── System ─────
@@ -289,7 +289,7 @@ hostname = "0.4.2"
 num_cpus = "1.17.0"
 # Random unique identifiers.  Only the `v4` (random) feature is enabled
 # workspace-wide; consumers that need v1/v5/v7 etc. re-add the feature.
-uuid = { version = "1.23.1", features = ["v4"] }
+uuid = { version = "1.23.2", features = ["v4"] }
 
 # ───── Security / Crypto ─────
 aes-gcm = "0.10"
