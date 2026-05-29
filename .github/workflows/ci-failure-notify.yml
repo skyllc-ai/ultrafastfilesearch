@@ -67,6 +67,7 @@ on:
     workflows:
       - "PR Fast CI"
       - "🌙 UFFS Tier 2 Nightly CI"
+      - "🐤 Nightly Canary"
     types: [completed]
 
 # Default to ZERO permissions; the single job below grants only what
@@ -206,6 +207,26 @@ jobs:
               label = 'ci-failure-tier-2';
               title = `🔴 CI Failure: Tier 2 Nightly CI — ${shortSha}`;
               extraBody = [
+                '',
+                '📧 Notification sent to: githubrobbi@nios.net',
+              ];
+            } else if (wf === '🐤 Nightly Canary') {
+              // Early-warning probe against the LATEST floating nightly
+              // (NOT the pinned toolchain).  A failure here means an
+              // upcoming nightly will break the workspace — triage
+              // before the next `just toolchain-sync` pin bump, not
+              // during it.  This is advisory: the canary is never a
+              // required merge check, so this issue tracks future risk,
+              // not a broken main.
+              label = 'ci-failure-nightly-canary';
+              title = `🐤 Nightly Canary: upcoming-toolchain regression — ${shortSha}`;
+              extraBody = [
+                '',
+                '⚠️ This is an **early-warning** signal from the floating-nightly canary, ' +
+                'not a broken pin. `main` still builds on the pinned toolchain. ' +
+                'Investigate before the next pin bump; if it is an upstream/dep ' +
+                'regression, the fix is usually a dependency bump (cf. the ethnum ' +
+                '1.5.2→1.5.3 episode), not a toolchain downgrade.',
                 '',
                 '📧 Notification sent to: githubrobbi@nios.net',
               ];
