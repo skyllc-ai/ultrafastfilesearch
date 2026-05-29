@@ -13,6 +13,18 @@ criteria = "safe-to-deploy"
 version = "3.1.1"
 notes = "Reviewed v3.1.1 source. Scope: ANSI terminal coloring. One unsafe block in control.rs (Windows Console FFI via windows-sys: GetStdHandle / GetConsoleMode / SetConsoleMode) — standard Win32 terminal setup, properly cfg(windows)-gated. No network I/O, no filesystem writes, no process spawning. Only std types plus windows-sys on Windows. Dev-deps (rspec, insta, ansiterm) are standard testing crates. MPL-2.0 licensed, same as our workspace."
 
+[[audits.crypto-common]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.6 -> 0.2.2"
+notes = "Delta audit (cargo vet diff 0.1.6 -> 0.2.2). Files: Cargo.toml/Cargo.toml.orig (version + metadata: autolib/autobins/resolver=2, switch generic-array -> hybrid_array dep), CHANGELOG/README/LICENSE-MIT (text), src/lib.rs, src/hazmat.rs, new src/generate.rs. Net unsafe blocks added: 0 (grep confirms the only 'unsafe' token added is a Clippy lint declaration 'undocumented_unsafe_blocks = warn'). New generate.rs is pure-safe key/IV generation over rand_core CryptoRng/TryCryptoRng traits (hybrid_array Array<ArraySize>), no FFI / I/O / process / network / ambient capability. The 0.2 line is the known RustCrypto API restructuring (generic-array -> hybrid_array); behavior of the trait surface is otherwise preserved. Same publisher (github:RustCrypto/traits) the repo already trusts for 'digest'."
+
+[[audits.either]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "1.15.0 -> 1.16.0"
+notes = "Delta audit (cargo vet diff 1.15.0 -> 1.16.0). Files: Cargo.toml(.orig) version bump, .github/workflows/ci.yml + README.rst (non-shipping), src/lib.rs, src/iterator.rs, src/serde_untagged.rs, src/serde_untagged_optional.rs. The only two 'unsafe' lines changed are NOT new: the existing Pin::new_unchecked projections in as_pin_ref/as_pin_mut, merely renamed from the internal map_either! macro to map_both!; the documented SAFETY invariant and runtime behavior are unchanged. Remainder is added safe iterator/serde trait impls. No new FFI / I/O / process / network / ambient capability. Publisher cuviper (rayon/itertools maintainer)."
+
 [[audits.hashbrown]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -24,6 +36,18 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.5.2"
 notes = "Reviewed v0.5.2 source. Transitive dep of num_cpus. Two files: errno.rs is pure i32 constants (EPERM, ENOENT, ...); lib.rs is #![no_std] FFI declarations for the Hermit unikernel syscall interface (sys_mmap, sys_getpagesize, sys_errno, thread scheduling primitives, ...) plus two unsafe wrapper fns for get/set_priority. No network I/O, no filesystem I/O, no std dependency. On non-Hermit targets the extern C symbols are never linked and the functions are inert — num_cpus only touches hermit-abi when target_os=hermit, which none of our shipping targets hit. Apache-2.0 OR MIT; author Stefan Lankes, Hermit OS project lead."
+
+[[audits.libmimalloc-sys]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.47 -> 0.1.48"
+notes = "Delta audit (cargo vet diff 0.1.47 -> 0.1.48). build.rs: restructured MSVC path to compile the vendored mimalloc via a generated OUT_DIR C++17 wrapper (mimalloc-static.cc that #includes static.c) because mimalloc needs the C++ atomics path under MSVC/clang-cl; non-MSVC keeps the direct C build. All paths derive from CARGO_MANIFEST_DIR/OUT_DIR (no untrusted input); fs::write only emits the #include wrapper into OUT_DIR (standard build-script practice). Vendored C is an upstream point-release SYNC of official microsoft/mimalloc: v2 MI_MALLOC_VERSION 20301->20302 (2.3.1->2.3.2) and v3 30301->30302 (3.3.1->3.3.2). Reviewed the 3272-line C delta for injected logic: no network/socket, no system/exec/popen, no LD_/DYLD_ env hijack, no exfil/base64/eval introduced; changes are confined to the version-pinned v2/ and v3/ trees and match upstream patch releases. extended.rs: no functional code change. Audited at the level appropriate for a vendored-allocator upstream sync (verify provenance + capability surface), not a line-by-line review of allocator C internals."
+
+[[audits.mimalloc]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.50 -> 0.1.51"
+notes = "Delta audit (cargo vet diff 0.1.50 -> 0.1.51). Only .gitignore, Cargo.toml, Cargo.toml.orig changed: version bump 0.1.50->0.1.51, libmimalloc-sys dep 0.1.47->0.1.48, and one new passthrough feature 'win_direct_tls = [libmimalloc-sys/win_direct_tls]'. ZERO .rs source changes. No new unsafe / FFI / I/O / capability in this wrapper crate."
 
 [[audits.num-conv]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -175,6 +199,12 @@ trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 start = "2026-04-28"
 end = "2027-05-20"
 
+[[trusted.memchr]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-07"
+end = "2027-05-29"
+
 [[trusted.mime]]
 criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
@@ -192,6 +222,12 @@ criteria = "safe-to-deploy"
 user-id = 359 # Sean McArthur (seanmonstar)
 start = "2019-03-04"
 end = "2027-04-23"
+
+[[trusted.serde_json]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-02-28"
+end = "2027-05-29"
 
 [[trusted.tower-http]]
 criteria = "safe-to-deploy"
