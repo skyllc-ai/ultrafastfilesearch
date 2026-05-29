@@ -31,12 +31,15 @@
 #
 # Coverage rationale (mirrors the PR-path clippy matrix):
 #
-#   * Linux + Windows both run, because `#[cfg(target_os = "…")]`-gated
-#     code is stripped on the other host target and would otherwise
-#     escape the probe (the platform-gated-lint gap noted in the
-#     uffs-products OSS sync report §6).
-#   * macOS is intentionally omitted: local dev is macOS, so the newest
-#     nightly is exercised there organically by maintainers.
+#   * Linux + Windows + macOS all run, because `#[cfg(target_os = "…")]`
+#     / `#[cfg(unix)]`-but-Darwin-specific code is stripped on the other
+#     host targets and would otherwise escape the probe (the platform-
+#     gated-lint gap noted in the uffs-products OSS sync report §6 — e.g.
+#     the macOS-only `~/Library/Logs/uffs` log-dir branch).
+#   * macOS gets its OWN canary leg rather than relying on local dev:
+#     maintainers' Macs run the *pinned* toolchain (rust-toolchain.toml),
+#     NOT the floating nightly, so they don't actually exercise
+#     tomorrow's compiler — which is the whole point of this workflow.
 #
 # Both jobs use the SAME strict flag stack as `pr-fast.yml`'s clippy
 # jobs (`--workspace --all-targets --all-features --locked --no-deps
@@ -84,9 +87,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
-      # Don't let a Linux break hide a Windows break (or vice-versa) —
-      # the whole point is to see *every* platform's regression in one
-      # weekly run.
+      # Don't let one platform's break hide another's — the whole point
+      # is to see *every* platform's regression in one weekly run.
       fail-fast: false
       matrix:
         include:
@@ -94,6 +96,10 @@ jobs:
             runner: ubuntu-22.04
           - os: windows
             runner: windows-latest
+          - os: macos
+            # macos-14 is Apple Silicon (aarch64-apple-darwin), matching
+            # the primary dev/target arch in rust-toolchain.toml.
+            runner: macos-14
     steps:
       - name: Free up disk space (Linux only)
         if: matrix.os == 'linux'
