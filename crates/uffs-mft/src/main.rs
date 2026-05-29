@@ -48,6 +48,10 @@ use clap::Parser as _;
 use criterion as _;
 // Pipelining / chaos-test dependencies (used cross-platform)
 use crossbeam_channel as _;
+// `dirs_next` is used only by the library (`cache.rs` cache-dir lookup);
+// the binary's logging now routes through `uffs_security::log_dir`, so
+// acknowledge the dep here to keep `unused-crate-dependencies` quiet.
+use dirs_next as _;
 #[cfg(test)]
 use hex as _;
 // Platform-gated dependencies (used on Windows only)

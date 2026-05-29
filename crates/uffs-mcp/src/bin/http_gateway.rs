@@ -19,7 +19,6 @@ use core::net::SocketAddr;
 use anyhow as _;
 use axum as _;
 use clap as _;
-use dirs_next as _;
 use rmcp as _;
 use schemars as _;
 use serde as _;
@@ -29,6 +28,7 @@ use tower_service as _;
 use tracing_appender as _;
 use uffs_client as _;
 use uffs_mft as _;
+use uffs_security as _;
 
 /// CLI arguments for the HTTP gateway.
 #[derive(Clone, Debug)]

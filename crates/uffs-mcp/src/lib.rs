@@ -155,11 +155,12 @@ pub fn init_mcp_tracing(
 }
 
 /// Default log file path for MCP diagnostic sessions.
+///
+/// Uses the shared per-platform native log directory resolved by
+/// [`uffs_security::log_dir::log_dir`] (overridable via `UFFS_LOG_DIR`);
+/// an explicit `UFFS_LOG_FILE` still takes precedence at the call site.
 fn default_mcp_log_file() -> std::path::PathBuf {
-    dirs_next::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("uffs")
-        .join("uffs_mcp.log")
+    uffs_security::log_dir::log_dir().join("uffs_mcp.log")
 }
 
 // Phase 3 module-layout: most submodules are crate-internal. Only

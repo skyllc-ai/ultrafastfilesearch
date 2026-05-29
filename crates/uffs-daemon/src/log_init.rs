@@ -10,16 +10,17 @@
 
 use std::path::PathBuf;
 
-/// Default log file location: `<data-local-dir>/uffs/uffsd.log`.
+/// Default log file location: `<native-log-dir>/uffsd.log`.
 ///
-/// Falls back to `./uffsd.log` if the platform data directory
-/// cannot be determined.
+/// The directory is the shared per-platform native log location resolved
+/// by [`uffs_security::log_dir::log_dir`] (macOS `~/Library/Logs/uffs`,
+/// Windows `%LOCALAPPDATA%\uffs\logs`, Linux `$XDG_STATE_HOME/uffs/logs`),
+/// overridable via `UFFS_LOG_DIR`.  When that resolution falls back to a
+/// relative `logs` (no home dir), the parent-dir normalisation in
+/// [`init_tracing`] still produces a usable `logs/uffsd.log`.
 #[must_use]
 pub(crate) fn default_log_file() -> PathBuf {
-    dirs_next::data_local_dir().map_or_else(
-        || PathBuf::from("uffsd.log"),
-        |dir| dir.join("uffs").join("uffsd.log"),
-    )
+    uffs_security::log_dir::log_dir().join("uffsd.log")
 }
 
 /// Initialise tracing for the daemon process.

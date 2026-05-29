@@ -4,7 +4,6 @@
 //! Logging initialization for the `uffs-mft` binary.
 
 use std::io;
-use std::path::PathBuf;
 
 use tracing_appender::non_blocking::NonBlocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -18,7 +17,8 @@ use tracing_subscriber::{EnvFilter, Layer as _};
 /// If `verbose` is true and `RUST_LOG` is not set, uses `debug` level for
 /// terminal. Otherwise, terminal logging is controlled by `RUST_LOG` (default:
 /// `info`). File logging is controlled by `RUST_LOG_FILE` (default: `info`).
-/// Log directory is controlled by `UFFS_LOG_DIR` (default: `~/bin/uffs/logs`).
+/// Log directory is the shared per-platform native location resolved by
+/// [`uffs_security::log_dir::log_dir`] (overridable via `UFFS_LOG_DIR`).
 #[expect(
     clippy::single_call_fn,
     reason = "logical separation of logging initialization"
@@ -26,17 +26,10 @@ use tracing_subscriber::{EnvFilter, Layer as _};
 pub(crate) fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
-    // Get log directory (default: ~/bin/uffs/logs)
-    let log_dir = std::env::var("UFFS_LOG_DIR").map_or_else(
-        |_| {
-            dirs_next::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("bin")
-                .join("uffs")
-                .join("logs")
-        },
-        PathBuf::from,
-    );
+    // Shared native log dir (macOS ~/Library/Logs/uffs, Windows
+    // %LOCALAPPDATA%\uffs\logs, Linux $XDG_STATE_HOME/uffs/logs),
+    // honoring the UFFS_LOG_DIR override.
+    let log_dir = uffs_security::log_dir::log_dir();
 
     // Create log directory if it doesn't exist
     drop(fs::create_dir_all(&log_dir));

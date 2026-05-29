@@ -4516,7 +4516,6 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
- "dirs-next",
  "rmcp",
  "schemars",
  "serde",
@@ -4529,6 +4528,7 @@ dependencies = [
  "tracing-subscriber",
  "uffs-client",
  "uffs-mft",
+ "uffs-security",
 ]
 
 [[package]]

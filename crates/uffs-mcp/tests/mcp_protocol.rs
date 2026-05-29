@@ -27,7 +27,6 @@ use anyhow as _;
 #[cfg(feature = "streamable-http")]
 use axum as _;
 use clap as _;
-use dirs_next as _;
 use rmcp::{ClientHandler, ServiceExt as _};
 use schemars as _;
 use serde as _;
@@ -40,6 +39,7 @@ use tracing_subscriber as _;
 use uffs_client as _;
 use uffs_mcp::handler::UffsMcpServer;
 use uffs_mft as _;
+use uffs_security as _;
 
 /// Spin up an in-process MCP server + client pair over a duplex channel.
 ///

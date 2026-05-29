@@ -16,6 +16,9 @@
 //! - [`runtime_dir`] — Daemon-private runtime tempfile lifecycle (Phase 2b
 //!   memory tiering): owner-only file creation, orphan-pid sweep, read-only
 //!   mmap behind a typed soundness wrapper
+//! - [`log_dir`] — Shared per-platform native log-directory resolution for
+//!   every UFFS binary (macOS `~/Library/Logs/uffs`, Windows
+//!   `%LOCALAPPDATA%\uffs\logs`, Linux `$XDG_STATE_HOME/uffs/logs`)
 //!
 //! # Environment
 //!
@@ -27,6 +30,8 @@
 //! |---|---|---|---|
 //! | `UFFS_DEV` | `bool` | `false` | Enables dev-mode keystore relaxation in [`keystore`] (no DPAPI binding; file-based key at `~/.local/share/uffs/key.bin` on Unix).  INTERNAL semver class. |
 //! | `USERNAME` | `string` | (Windows: current user) | Read by [`fs::set_file_permissions_owner_only`] on Windows to derive the principal for the `icacls /grant` ACL.  STANDARD semver class. |
+//! | `UFFS_LOG_DIR` | path | (native per-OS dir) | Read by [`log_dir`] to override the log directory for every UFFS binary.  STANDARD semver class. |
+//! | `XDG_STATE_HOME` | path | `~/.local/state` | Read by [`log_dir`] on Linux for the native log location (absolute paths only, per XDG spec).  STANDARD semver class. |
 
 // Platform-gated deps: used by sub-modules behind #[cfg] gates.
 // Suppress unused-crate-dependencies lint for platforms where the
@@ -38,6 +43,8 @@ use security_framework as _;
 pub mod crypto;
 pub mod fs;
 pub mod keystore;
+/// Shared per-platform log-directory resolution for all UFFS binaries.
+pub mod log_dir;
 pub mod runtime_dir;
 
 /// Windows named-pipe security helpers (DACL, SID resolution, pipe naming).

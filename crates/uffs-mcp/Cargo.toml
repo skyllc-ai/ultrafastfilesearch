@@ -91,6 +91,11 @@ uffs-client.workspace = true
 # code can name `DriveLetter` natively (parse into the typed value
 # rather than chasing the re-export through `uffs-client`).
 uffs-mft.workspace = true
+# Shared per-platform native log-directory resolution (used by the
+# stdio + HTTP-gateway log-file defaults).  Direct dep so the MCP
+# binaries don't reinvent the path logic; replaces the former direct
+# `dirs-next` usage.
+uffs-security.workspace = true
 
 # Async — `net` re-enabled because the HTTP gateway binds a TCP
 # listener and the health-check probes use `tokio::net::TcpStream`.
@@ -111,7 +116,6 @@ thiserror.workspace = true
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
-dirs-next.workspace = true
 tracing-appender.workspace = true
 
 # HTTP gateway (feature-gated)

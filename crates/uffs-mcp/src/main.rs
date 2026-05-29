@@ -18,7 +18,6 @@
 // Crates used by the library but not directly by this binary.
 #[cfg(feature = "streamable-http")]
 use axum as _;
-use dirs_next as _;
 use rmcp as _;
 use schemars as _;
 use serde as _;
@@ -306,10 +305,7 @@ async fn mcp_start(
     cmd.stderr(std::process::Stdio::null());
 
     if std::env::var("UFFS_LOG_FILE").is_err() {
-        let default_log = dirs_next::data_local_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join("uffs")
-            .join("mcp-gateway.log");
+        let default_log = uffs_security::log_dir::log_dir().join("mcp-gateway.log");
         cmd.env("UFFS_LOG_FILE", &default_log);
     }
 
