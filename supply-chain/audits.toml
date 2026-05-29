@@ -43,11 +43,23 @@ criteria = "safe-to-deploy"
 delta = "0.1.47 -> 0.1.48"
 notes = "Delta audit (cargo vet diff 0.1.47 -> 0.1.48). build.rs: restructured MSVC path to compile the vendored mimalloc via a generated OUT_DIR C++17 wrapper (mimalloc-static.cc that #includes static.c) because mimalloc needs the C++ atomics path under MSVC/clang-cl; non-MSVC keeps the direct C build. All paths derive from CARGO_MANIFEST_DIR/OUT_DIR (no untrusted input); fs::write only emits the #include wrapper into OUT_DIR (standard build-script practice). Vendored C is an upstream point-release SYNC of official microsoft/mimalloc: v2 MI_MALLOC_VERSION 20301->20302 (2.3.1->2.3.2) and v3 30301->30302 (3.3.1->3.3.2). Reviewed the 3272-line C delta for injected logic: no network/socket, no system/exec/popen, no LD_/DYLD_ env hijack, no exfil/base64/eval introduced; changes are confined to the version-pinned v2/ and v3/ trees and match upstream patch releases. extended.rs: no functional code change. Audited at the level appropriate for a vendored-allocator upstream sync (verify provenance + capability surface), not a line-by-line review of allocator C internals."
 
+[[audits.libmimalloc-sys]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.48 -> 0.1.49"
+notes = "Delta audit (cargo vet diff 0.1.48 -> 0.1.49). ZERO vendored-C files changed (no v2/v3 tree edits this release). build.rs unchanged. src/extended.rs adds exactly one new FFI binding: 'pub fn mi_stats_get_json(buf_size: usize, buf: *mut c_char) -> *mut c_char' (#[cfg(not(feature=v2))], v3-only) backing mimalloc's stats-to-JSON feature, plus a test 'use super::super::mi_malloc'. The C implementation already existed upstream; this is just the Rust extern declaration. No new ambient capability / I/O / process / network / env access."
+
 [[audits.mimalloc]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.50 -> 0.1.51"
 notes = "Delta audit (cargo vet diff 0.1.50 -> 0.1.51). Only .gitignore, Cargo.toml, Cargo.toml.orig changed: version bump 0.1.50->0.1.51, libmimalloc-sys dep 0.1.47->0.1.48, and one new passthrough feature 'win_direct_tls = [libmimalloc-sys/win_direct_tls]'. ZERO .rs source changes. No new unsafe / FFI / I/O / capability in this wrapper crate."
+
+[[audits.mimalloc]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.51 -> 0.1.52"
+notes = "Delta audit (cargo vet diff 0.1.51 -> 0.1.52). Cargo.toml(.orig): version bump + libmimalloc-sys dep 0.1.48->0.1.49. src/lib.rs + src/extended.rs add a v3-only (#[cfg(not(feature=v2))]) 'stats_json() -> Result<StatsJson, &str>' wrapper plus a StatsJson newtype with Deref/Drop. The unsafe blocks are allocator FFI into mimalloc's own functions (the new mi_stats_get_json getter and mi_free for the returned buffer) — standard mimalloc-sys FFI, no new ambient capability / I/O / network."
 
 [[audits.num-conv]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -120,6 +132,12 @@ who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.52.2 -> 1.52.3"
 notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow]). Changes scoped to src/sync/mpsc/* and src/sync/rwlock.rs, implementing four documented upstream bug-fix PRs per tokio 1.52.3 release notes (May 2026): tokio#8062 fix mpsc len() underflow; tokio#8074 return TryRecvError::Empty from try_recv() when mpsc closed with outstanding permits; tokio#8075 notify receivers in mpsc OwnedPermit::release() by reusing non-owned Permit Drop impl; tokio#8076 reject RwLock::new max_readers==0 (prevents div-by-zero in semaphore fast path). Companion tests in tests/sync_mpsc.rs + tests/sync_rwlock.rs. No feature additions, no new unsafe, no public API signature changes."
+
+[[audits.uuid]]
+who = "Robert Nio <robert_nio@intuit.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.1 -> 1.23.2"
+notes = "Delta audit (cargo vet diff 1.23.1 -> 1.23.2). Files: Cargo.toml(.orig) version bump, README, src/{error,fmt,parser,lib,external/serde_support}.rs. Patch release by KodrAus (uuid maintainer): formatting/parser refinements + serde tweak. The single unsafe is std::str::from_utf8_unchecked(self.0) on the crate's own fixed-size format buffer, which uuid populates exclusively with ASCII hex digits + hyphens before formatting — sound zero-copy formatting (same pattern as the vetted 1.23.1). No new I/O / FFI / process / network / ambient capability."
 
 [[audits.zerofrom]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
