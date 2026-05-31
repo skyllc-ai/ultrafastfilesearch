@@ -252,10 +252,6 @@ fn run_search(args: &[String]) -> Result<()> {
 
     let t_ready = std::time::Instant::now();
     // 2 minutes — `from_mins` is nightly-only as of 2026-04.
-    #[expect(
-        clippy::duration_suboptimal_units,
-        reason = "Duration::from_mins is nightly-only"
-    )]
     let ready_timeout = core::time::Duration::from_secs(120);
     client
         .await_ready(ready_timeout)

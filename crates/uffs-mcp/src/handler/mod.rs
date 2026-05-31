@@ -368,6 +368,10 @@ impl ServerHandler for UffsMcpServer {
         }
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "rmcp ServerHandler trait mandates an async signature; this handler returns precomputed data and has no .await"
+    )]
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -456,6 +460,10 @@ impl ServerHandler for UffsMcpServer {
         final_result.map_err(McpError::from)
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "rmcp ServerHandler trait mandates an async signature; this handler returns precomputed data and has no .await"
+    )]
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -513,6 +521,10 @@ impl ServerHandler for UffsMcpServer {
         })
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "rmcp ServerHandler trait mandates an async signature; this handler returns precomputed data and has no .await"
+    )]
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -614,6 +626,10 @@ impl ServerHandler for UffsMcpServer {
         )]))
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "rmcp ServerHandler trait mandates an async signature; this handler returns precomputed data and has no .await"
+    )]
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -627,6 +643,10 @@ impl ServerHandler for UffsMcpServer {
         })
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "rmcp ServerHandler trait mandates an async signature; this handler builds prompt messages synchronously with no .await"
+    )]
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,

@@ -10,7 +10,7 @@
 # CI must NOT override this with `@nightly`; workflows install via
 # `rustup show` (which reads this file) so the pin is always honored.
 #
-# Current pin: nightly-2026-05-20.  Requires ethnum >= 1.5.3 (the
+# Current pin: nightly-2026-05-31.  Requires ethnum >= 1.5.3 (the
 # workspace Cargo.lock resolves 1.5.3 transitively via polars-compute +
 # parquet — verify with `grep -A1 'name = "ethnum"' Cargo.lock`).
 #

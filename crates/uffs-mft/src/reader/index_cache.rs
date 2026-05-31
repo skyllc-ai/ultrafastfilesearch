@@ -245,7 +245,11 @@ impl MftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature mirrors the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_index_cached(&self, _ttl_seconds: u64) -> Result<crate::index::MftIndex> {
         Err(MftError::PlatformNotSupported)
     }

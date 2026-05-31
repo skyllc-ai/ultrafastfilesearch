@@ -104,7 +104,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature mirrors the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_all(&self) -> Result<DataFrame> {
         Err(MftError::PlatformNotSupported)
     }
@@ -116,7 +120,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature and by-value callback mirror the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_with_progress<F>(&self, _callback: F) -> Result<DataFrame>
     where
         F: Fn(crate::platform::DriveLetter, MftProgress) + Send + Sync + Clone + 'static,
@@ -131,7 +139,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature mirrors the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_all_detailed(&self) -> Result<Vec<DriveReadResult>> {
         Err(MftError::PlatformNotSupported)
     }
@@ -143,7 +155,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature mirrors the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_all_index(&self) -> Result<Vec<crate::index::MftIndex>> {
         Err(MftError::PlatformNotSupported)
     }
@@ -155,7 +171,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature and by-value callback mirror the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_all_index_with_progress<F>(
         &self,
         _callback: F,
@@ -173,7 +193,11 @@ impl MultiDriveMftReader {
     /// Always returns `MftError::PlatformNotSupported` on non-Windows
     /// platforms.
     #[cfg(not(windows))]
-    #[expect(clippy::unused_async, reason = "async for API parity with windows")]
+    #[expect(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "async signature mirrors the Windows impl for cross-cfg API parity"
+    )]
     pub async fn read_all_index_cached(
         &self,
         _ttl_seconds: u64,

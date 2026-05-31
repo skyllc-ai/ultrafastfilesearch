@@ -202,10 +202,6 @@ impl IndexManager {
     /// daemon.  Raw NTFS volume reads can hang indefinitely when a
     /// drive is unresponsive (bad sectors, sleep, USB disconnect).
     #[cfg(windows)]
-    #[expect(
-        clippy::duration_suboptimal_units,
-        reason = "Duration::from_mins is unstable (rust-lang/rust#120301); cannot migrate yet"
-    )]
     const DRIVE_LOAD_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(300);
 
     /// Load live Windows drives — **all drives in parallel**.
