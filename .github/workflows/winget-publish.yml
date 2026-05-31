@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# WinGet Publish — auto-submit the winget-pkgs manifest on every release.
+#
+# When `release.yml` finishes and publishes a non-draft, non-prerelease
+# GitHub Release (it sets `draft: false`, `prerelease: false`), GitHub
+# emits a `release: released` event.  This workflow reacts to that event
+# and uses `winget-releaser` (komac under the hood) to open a pull
+# request against microsoft/winget-pkgs that bumps `SkyLLC.UFFS` to the
+# new version.
+#
+# The action clones the *previous* version's manifest as a template and
+# updates only the version, installer URL, SHA256, and release date — so
+# the nested-installer structure (InstallerType: zip / NestedInstallerType:
+# portable, the four PortableCommandAliases uffs/uffsd/uffsmcp/uffs-mft)
+# carries over automatically with no manifest authoring on our side.
+#
+# ── Required secret ──────────────────────────────────────────────────
+# `WINGET_TOKEN` — a **classic** Personal Access Token with the
+# `public_repo` scope (fine-grained tokens that can fork + push to
+# microsoft/winget-pkgs also work).  The default `GITHUB_TOKEN` CANNOT
+# be used: it has no permission to fork an external repo or push the
+# manifest branch.  Create it under the maintainer account that owns the
+# winget-pkgs fork (the same account that hand-submitted PR
+# microsoft/winget-pkgs#378294 for v0.5.102), then add it at
+# Settings → Secrets and variables → Actions → New repository secret.
+
+name: 📦 WinGet Publish
+
+run-name: 📦 WinGet ${{ github.event.release.tag_name || inputs.release-tag }}
+
+on:
+  release:
+    types: [released]
+  # Manual fallback: re-submit a specific tag if the release-triggered
+  # run failed (e.g. the token expired) or a release predates this
+  # workflow.  Provide the git tag, e.g. `v0.5.102`.
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: 'Git tag to publish to WinGet (e.g. v0.5.102)'
+        required: true
+        type: string
+
+# Serialise submissions so two releases landing close together queue
+# cleanly instead of racing to open competing winget-pkgs PRs.
+concurrency:
+  group: winget-publish-${{ github.event.release.tag_name || inputs.release-tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Submit winget-pkgs manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Never run from forks — only the canonical repo holds WINGET_TOKEN.
+    if: github.repository_owner == 'skyllc-ai'
+    steps:
+      - name: Submit manifest to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: SkyLLC.UFFS
+          # Match the Windows ZIP asset uploaded by release.yml. The
+          # action derives the package version from the release tag,
+          # stripping the leading `v` (v0.5.102 → 0.5.102).
+          installers-regex: 'uffs-windows-x64\.zip$'
+          release-tag: ${{ github.event.release.tag_name || inputs.release-tag }}
+          # The account that owns the microsoft/winget-pkgs fork komac
+          # pushes the manifest branch to.  MUST match the account that
+          # owns WINGET_TOKEN — i.e. the maintainer who submitted the
+          # original PR microsoft/winget-pkgs#378294, NOT the `skyllc-ai`
+          # org (the action's default `github.repository_owner`, which
+          # has no winget-pkgs fork).
+          fork-user: githubrobbi
+          token: ${{ secrets.WINGET_TOKEN }}

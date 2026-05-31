@@ -14,6 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — WinGet distribution: live install docs + auto-submission pipeline
+
+`SkyLLC.UFFS` is published on the Windows Package Manager community
+repository (microsoft/winget-pkgs#378294, v0.5.102), so `winget install
+SkyLLC.UFFS` now works.
+
+- **Docs promote WinGet as the recommended Windows install.** `README.md`
+  Download section gains the `winget install SkyLLC.UFFS` one-liner and
+  the stale "WinGet (coming)" note is removed;
+  `docs/user-manual/installation.md` gains a new §1 *WinGet (Windows —
+  Recommended)* and renumbers the downstream sections (Pre-Built Binaries
+  → §2 … Verify Installation → §6).
+- **`.github/workflows/winget-publish.yml`** — on every published
+  release (`release: released`), `winget-releaser` (komac under the hood)
+  opens a winget-pkgs PR bumping the manifest. The prior version's
+  nested-installer structure (`InstallerType: zip` /
+  `NestedInstallerType: portable`, the four `uffs`/`uffsd`/`uffsmcp`/
+  `uffs-mft` command aliases) carries over automatically. A
+  `workflow_dispatch` fallback re-submits a specific tag by hand.
+  - **One-time setup required:** add a `WINGET_TOKEN` repository secret —
+    a classic PAT with `public_repo` scope owned by the maintainer
+    account that holds the winget-pkgs fork (the action's `fork-user` is
+    pinned to `githubrobbi`, not the `skyllc-ai` org). The default
+    `GITHUB_TOKEN` cannot fork an external repo, so the workflow no-ops
+    until this secret exists.
+
 ### Added — Phase 8: operator-driven memory tiering (v0.6.0 staging)
 
 The full operator-facing memory-tiering surface — every command end-to-end

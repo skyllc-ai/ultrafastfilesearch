@@ -84,9 +84,13 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 | **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle. |
 | **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh`. |
 
-**Windows quick-install (one command):**
+**Windows quick-install (one command) — via [WinGet](https://learn.microsoft.com/windows/package-manager/):**
 ```powershell
-# Extract the ZIP anywhere, add the folder to PATH, then:
+winget install SkyLLC.UFFS
+```
+
+Or grab the ZIP above, extract it anywhere, add the folder to PATH, then:
+```powershell
 uffs --version
 ```
 
@@ -105,7 +109,7 @@ gh attestation verify uffs-windows-x64.exe --owner skyllc-ai
 cargo build --release
 ```
 
-> 📖 **[Full installation guide](docs/user-manual/installation.md)** — PATH setup, daemon autostart, WinGet (coming), Scoop (coming)
+> 📖 **[Full installation guide](docs/user-manual/installation.md)** — WinGet, PATH setup, daemon autostart, Scoop (coming)
 
 ---
 

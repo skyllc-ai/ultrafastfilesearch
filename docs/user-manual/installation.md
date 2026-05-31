@@ -1,7 +1,8 @@
 # Installation
 
-Pre-built Windows binaries are available from
-[GitHub Releases](https://github.com/skyllc-ai/UltraFastFileSearch/releases).
+On Windows, the fastest path is [WinGet](https://learn.microsoft.com/windows/package-manager/)
+(§1).  Pre-built binaries for all platforms are also available from
+[GitHub Releases](https://github.com/skyllc-ai/UltraFastFileSearch/releases) (§2).
 Most users do not need to build from source.
 
 > **See also:** [Getting Started](getting-started.md) ·
@@ -10,7 +11,34 @@ Most users do not need to build from source.
 
 ---
 
-## 1  Pre-Built Binaries (Recommended)
+## 1  WinGet (Windows — Recommended)
+
+If you have the [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/)
+(bundled with Windows 11 and modern Windows 10), install in one command:
+
+```powershell
+winget install SkyLLC.UFFS
+```
+
+This installs the `uffs` CLI (daemon + MCP + MFT tools) and puts it on
+your PATH automatically.  Upgrade later with:
+
+```powershell
+winget upgrade SkyLLC.UFFS
+```
+
+Confirm the install:
+
+```powershell
+uffs --version
+```
+
+> Live NTFS search still requires an **Administrator** terminal — see
+> [§3 Platform Requirements](#3--platform-requirements).
+
+---
+
+## 2  Pre-Built Binaries
 
 Download the latest Windows x64 binaries from the
 [GitHub Releases page](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest).
@@ -71,7 +99,7 @@ Get-FileHash uffs-windows-x64.exe -Algorithm SHA256
 
 ---
 
-## 2  Platform Requirements
+## 3  Platform Requirements
 
 | Platform | Data source | Privileges |
 |----------|------------|------------|
@@ -106,7 +134,7 @@ See [Cache & Data Sources](cache-and-data.md) for how to set up the
 
 ---
 
-## 3  Add to PATH
+## 4  Add to PATH
 
 ### Windows (PowerShell)
 
@@ -128,7 +156,7 @@ uffs --version
 uffs "*.txt" --limit 5
 ```
 
-### macOS / Linux (build from source — see §4)
+### macOS / Linux (build from source — see §5)
 
 ```bash
 ln -s "$(pwd)/target/release/uffs" /usr/local/bin/uffs
@@ -136,7 +164,7 @@ ln -s "$(pwd)/target/release/uffs" /usr/local/bin/uffs
 
 ---
 
-## 4  Build from Source
+## 5  Build from Source
 
 Building from source is needed for development, contributing, or
 running on macOS/Linux.
@@ -211,7 +239,7 @@ for details on the `xwin-dev` profile and COFF archive size limits.
 
 ---
 
-## 5  Verify Installation
+## 6  Verify Installation
 
 ```bash
 # Check version
