@@ -14,6 +14,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — ship pipeline: release auto-commit no longer drifts local `main`
+
+The `just ship` flow (`scripts/ci-pipeline` → `git_ops::git_push`) used to
+create the `chore: development vX.Y.Z` auto-commit on the **current
+branch (`main`)** and then instruct the operator to run `git reset --hard
+origin/main` after the release PR squash-merged (because the squash
+rewrites the commit SHA).  That left local `main` ahead of / diverged
+from `origin/main` after every ship and required a destructive reset to
+recover.
+
+- **Auto-commit now lives on the `release/vX.Y.Z` branch, never on
+  `main`.** `git_push` switches onto the release branch
+  (`ensure_on_release_branch`, replacing `detect_current_branch`),
+  rebases it onto `origin/main`, opens the PR against `BASE_BRANCH`
+  (`main`), and then returns the working tree to `main`
+  (new `return_to_base_branch` helper).
+- **Local `main` no longer drifts**, so the post-merge step is a plain
+  `git pull --ff-only origin main` instead of `git reset --hard` — the
+  operator hint printed at the end of `git push` is updated to match.
+- `ensure_on_release_branch` uses a plain `git switch` (not `-C`) so a
+  resumed ship lands on the existing release branch that already holds
+  the auto-commit rather than resetting it to a commit-less `HEAD`.
+
 ### Added — WinGet distribution: live install docs + auto-submission pipeline
 
 `SkyLLC.UFFS` is published on the Windows Package Manager community
