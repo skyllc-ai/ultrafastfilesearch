@@ -261,9 +261,13 @@ async fn open_release_pr(
     let pr_title = format!("chore: release v{version} — ship pipeline auto-commit");
     let pr_body = format!(
         "## Summary\n\n\
-         `just ship` Phase 2 auto-commit for **v{version}**.  Binaries + \
-         GitHub Release v{version} are already live (step 09).  This PR \
-         routes the corresponding commit through branch-protection rules.\n\n\
+         `just ship` Phase 2 auto-commit for **v{version}** — the \
+         `[workspace.package].version` bump in `Cargo.toml`.  This PR \
+         routes that commit through branch-protection rules.  Once it \
+         merges to `{base_branch}`, `auto-tag-release.yml` tags the \
+         commit and invokes `release.yml`, which builds the \
+         cross-platform binaries and publishes GitHub Release \
+         v{version}.\n\n\
          ## Auto-merge\n\n\
          `--auto --squash` is queued — GitHub will merge as soon as the \
          required status checks pass.  Squash is required because \
@@ -273,9 +277,10 @@ async fn open_release_pr(
          satisfies `required_signatures: true`.  The original author's \
          signed commit remains verifiable in the PR branch history.\n\n\
          ## After merge\n\n\
-         Local `{base_branch}` had this commit with a different SHA \
-         before squash rewrote it onto main; recover with \
-         `git fetch origin && git reset --hard origin/{base_branch}`."
+         The auto-commit lived only on `{release_branch}`, so local \
+         `{base_branch}` never drifted — sync it with a plain \
+         `git pull --ff-only origin {base_branch}` (no `reset --hard` \
+         needed)."
     );
 
     println!("📬 Opening release PR");
