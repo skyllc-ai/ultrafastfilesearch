@@ -23,13 +23,16 @@
 //! * `run_ship_pipeline` — the entry point `just ship` ultimately calls.
 
 use core::time::Duration;
+use std::fs;
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
 use colored::Colorize as _;
 use tokio::process::Command;
 
 use crate::context::{
-    PipelineContext, bytes_to_gib, dir_size_bytes, disk_free_bytes, get_cargo_target_dir,
+    PipelineContext, active_rustc_id, bytes_to_gib, dir_size_bytes, disk_free_bytes,
+    get_cargo_target_dir,
 };
 use crate::exec::{
     execute_command, execute_command_with_env, execute_parallel_with_env,
@@ -66,10 +69,112 @@ async fn tracked_toolchain_step(state: &mut WorkflowState, ctx: &PipelineContext
     .await
 }
 
-/// Tracked clean step: applies the disk-pressure auto-clean policy,
-/// running `cargo clean` only when explicitly requested (`--clean`) or
-/// when one of the thresholds (`--min-free-gb`, `--max-target-gb`) is
-/// tripped.  Inert when `--no-clean` is set.
+/// Filename (under `CARGO_TARGET_DIR`) recording the `rustc -vV`
+/// fingerprint of the toolchain that last built the cache.  The clean
+/// step compares it against the active toolchain on every run: a nightly
+/// bump in step 00 leaves the shared target dir built by the previous
+/// rustc, whose cross-crate metadata is version-specific, so reusing it
+/// explodes with `E0514`.  A mismatch forces a `cargo clean` before any
+/// build step runs.
+const RUSTC_FINGERPRINT_FILE: &str = ".uffs-ci-rustc-fingerprint";
+
+/// Outcome of the clean-step decision.  Extracted as a pure value so the
+/// side-effecting async step body stays a thin shell over the
+/// unit-tested [`decide_clean`] policy.
+enum CleanDecision {
+    /// Run `cargo clean`; the payload is the human-readable reason.
+    Clean(&'static str),
+    /// Skip the clean — nothing is stale and the disk thresholds are fine.
+    Skip,
+    /// A toolchain change needs a clean but `--no-clean` suppressed it;
+    /// the stale fingerprint is left in place so the next run re-detects
+    /// the mismatch.
+    SuppressedToolchainChange,
+}
+
+/// User's explicit clean preference, derived from the `--clean` /
+/// `--no-clean` flags.  Modelled as an enum (rather than two bools) so
+/// the pure [`decide_clean`] policy stays under
+/// `clippy::fn_params_excessive_bools`.
+#[derive(Clone, Copy)]
+enum CleanMode {
+    /// `--clean`: clean unconditionally.
+    Force,
+    /// Neither flag set: apply the auto-clean heuristics.
+    Auto,
+    /// `--no-clean`: never auto-clean (a needed toolchain clean is
+    /// downgraded to a warning so the next run can re-detect it).
+    Never,
+}
+
+/// Pure clean-step policy.  Precedence, highest first:
+///
+/// 1. [`CleanMode::Force`] (`--clean`) always cleans.
+/// 2. [`CleanMode::Never`] (`--no-clean`) suppresses everything (a pending
+///    toolchain change is reported separately so its fingerprint can be
+///    preserved).
+/// 3. A toolchain (rustc) change forces a clean to avoid stale-artifact
+///    `E0514`.
+/// 4. Disk pressure (low free space or oversized target) auto-cleans.
+const fn decide_clean(
+    mode: CleanMode,
+    toolchain_changed: bool,
+    disk_pressure: bool,
+) -> CleanDecision {
+    match mode {
+        CleanMode::Force => CleanDecision::Clean("Forced clean (--clean flag)"),
+        CleanMode::Never => {
+            if toolchain_changed {
+                CleanDecision::SuppressedToolchainChange
+            } else {
+                CleanDecision::Skip
+            }
+        }
+        CleanMode::Auto => {
+            if toolchain_changed {
+                CleanDecision::Clean(
+                    "Toolchain changed (rustc fingerprint mismatch) — forcing clean to avoid stale-artifact E0514",
+                )
+            } else if disk_pressure {
+                CleanDecision::Clean("Auto-clean triggered (disk space low or target too large)")
+            } else {
+                CleanDecision::Skip
+            }
+        }
+    }
+}
+
+/// Return `true` when `target_dir` already holds build output — i.e. any
+/// entry other than the fingerprint file itself.  A missing or
+/// fingerprint-only dir means there is nothing to invalidate, so a fresh
+/// checkout (or the state right after a `cargo clean`) never triggers a
+/// spurious toolchain-clean.
+fn target_dir_has_build_output(target_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(target_dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| &*entry.file_name().to_string_lossy() != RUSTC_FINGERPRINT_FILE)
+}
+
+/// Persist the active `rustc` fingerprint under `target_dir`, recording
+/// the toolchain that (re)built the cache so a later run can detect the
+/// next bump.  Best-effort: recreates the dir if `cargo clean` removed it
+/// and swallows any write error — a missing marker only costs the next
+/// run a re-probe, never a hard failure.
+fn record_rustc_fingerprint(target_dir: &Path, id: &str) {
+    if fs::create_dir_all(target_dir).is_ok() {
+        _ = fs::write(target_dir.join(RUSTC_FINGERPRINT_FILE), id);
+    }
+}
+
+/// Tracked clean step: forces a `cargo clean` when the active `rustc`
+/// differs from the toolchain that built the cached `target` dir (a
+/// nightly bump → stale cross-crate metadata → `E0514`), and otherwise
+/// applies the disk-pressure auto-clean policy.  `--clean` always cleans;
+/// `--no-clean` suppresses both paths.  After the decision the active
+/// toolchain fingerprint is recorded for the next run.
 async fn tracked_clean_step(state: &mut WorkflowState, ctx: &PipelineContext) -> Result<()> {
     execute_step_with_tracking(state, STEP_CLEAN_ARTIFACTS, || async {
         let target_dir = get_cargo_target_dir();
@@ -77,6 +182,17 @@ async fn tracked_clean_step(state: &mut WorkflowState, ctx: &PipelineContext) ->
         let target_gb = dir_size_bytes(&target_dir, Duration::from_secs(30))
             .await
             .map(bytes_to_gib);
+
+        // Toolchain fingerprint: did rustc change since this target dir
+        // was last built?  Only meaningful when the dir actually holds
+        // build output and we could read the active toolchain id.
+        let active_id = active_rustc_id();
+        let stored_id = fs::read_to_string(target_dir.join(RUSTC_FINGERPRINT_FILE))
+            .ok()
+            .map(|text| text.trim().to_owned());
+        let toolchain_changed = active_id.is_some()
+            && target_dir_has_build_output(&target_dir)
+            && stored_id.as_deref() != active_id.as_deref();
 
         if ctx.flags.verbose {
             if let Some(free) = free_gb {
@@ -87,35 +203,54 @@ async fn tracked_clean_step(state: &mut WorkflowState, ctx: &PipelineContext) ->
             }
         }
 
-        let should_clean = ctx.flags.force_clean
-            || (!ctx.flags.force_no_clean
-                && (free_gb.is_some_and(|gb| gb < ctx.min_free_gb)
-                    || target_gb.is_some_and(|gb| gb > ctx.max_target_gb)));
+        let disk_pressure = free_gb.is_some_and(|gb| gb < ctx.min_free_gb)
+            || target_gb.is_some_and(|gb| gb > ctx.max_target_gb);
 
-        if should_clean {
-            if ctx.flags.force_clean {
-                println!("  🧹 Forced clean (--clean flag)");
-            } else {
-                println!("  🧹 Auto-clean triggered (disk space low or target too large)");
-            }
-            // `cargo clean` doesn't compile anything but still probes the
-            // toolchain via `<rustc-wrapper> rustc -vV`.  On some macOS hosts
-            // sccache's wrapped probe dies with "Operation not permitted" in
-            // nested subprocesses even when it works at the top level.  Since
-            // clean never needs a wrapper, force-clear `RUSTC_WRAPPER` for
-            // this specific step regardless of sccache availability.
-            execute_command_with_env(
-                "Clean build artifacts",
-                "cargo",
-                &["clean"],
-                &[("RUSTC_WRAPPER", "")],
-                ctx,
-            )
-            .await
+        let mode = if ctx.flags.force_clean {
+            CleanMode::Force
+        } else if ctx.flags.force_no_clean {
+            CleanMode::Never
         } else {
-            println!("  ⏭️  Skipping clean (disk space OK, target size OK)");
-            Ok(())
+            CleanMode::Auto
+        };
+
+        match decide_clean(mode, toolchain_changed, disk_pressure) {
+            CleanDecision::Clean(reason) => {
+                println!("  🧹 {reason}");
+                // `cargo clean` doesn't compile anything but still probes
+                // the toolchain via `<rustc-wrapper> rustc -vV`.  On some
+                // macOS hosts sccache's wrapped probe dies with "Operation
+                // not permitted" in nested subprocesses even when it works
+                // at the top level.  Since clean never needs a wrapper,
+                // force-clear `RUSTC_WRAPPER` for this specific step.
+                execute_command_with_env(
+                    "Clean build artifacts",
+                    "cargo",
+                    &["clean"],
+                    &[("RUSTC_WRAPPER", "")],
+                    ctx,
+                )
+                .await?;
+            }
+            CleanDecision::SuppressedToolchainChange => {
+                println!(
+                    "  ⚠️  rustc changed but --no-clean is set — keeping stale artifacts (build may hit E0514)"
+                );
+                // Leave the stale fingerprint untouched so the next run
+                // re-detects the mismatch and can clean.
+                return Ok(());
+            }
+            CleanDecision::Skip => {
+                println!("  ⏭️  Skipping clean (disk OK, target size OK, toolchain unchanged)");
+            }
         }
+
+        // Record the toolchain that will build this target dir (after a
+        // clean, or confirming the unchanged cache) for next-run detection.
+        if let Some(id) = active_id {
+            record_rustc_fingerprint(&target_dir, &id);
+        }
+        Ok(())
     })
     .await
 }
@@ -566,4 +701,65 @@ pub(crate) async fn run_ship_pipeline(ctx: &PipelineContext) -> Result<()> {
     print_ship_next_steps(&state);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CleanDecision, CleanMode, decide_clean};
+
+    #[test]
+    fn force_mode_always_cleans() {
+        assert!(matches!(
+            decide_clean(CleanMode::Force, false, false),
+            CleanDecision::Clean(_)
+        ));
+    }
+
+    #[test]
+    fn never_mode_suppresses_toolchain_change() {
+        assert!(matches!(
+            decide_clean(CleanMode::Never, true, true),
+            CleanDecision::SuppressedToolchainChange
+        ));
+    }
+
+    #[test]
+    fn never_mode_without_change_skips() {
+        assert!(matches!(
+            decide_clean(CleanMode::Never, false, true),
+            CleanDecision::Skip
+        ));
+    }
+
+    #[test]
+    fn auto_mode_toolchain_change_forces_clean() {
+        assert!(matches!(
+            decide_clean(CleanMode::Auto, true, false),
+            CleanDecision::Clean(_)
+        ));
+    }
+
+    #[test]
+    fn auto_mode_disk_pressure_cleans() {
+        assert!(matches!(
+            decide_clean(CleanMode::Auto, false, true),
+            CleanDecision::Clean(_)
+        ));
+    }
+
+    #[test]
+    fn auto_mode_toolchain_change_takes_precedence_over_disk() {
+        assert!(matches!(
+            decide_clean(CleanMode::Auto, true, true),
+            CleanDecision::Clean(_)
+        ));
+    }
+
+    #[test]
+    fn auto_mode_nothing_to_do_skips() {
+        assert!(matches!(
+            decide_clean(CleanMode::Auto, false, false),
+            CleanDecision::Skip
+        ));
+    }
 }

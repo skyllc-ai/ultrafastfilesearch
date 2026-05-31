@@ -96,6 +96,36 @@ pub(crate) fn sccache_is_functional() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
+/// Capture a stable identity string for the currently active `rustc`.
+///
+/// Runs `rustc -vV`, whose output lists the release, commit-hash,
+/// commit-date, host triple, and LLVM version — a tuple that changes on
+/// every nightly bump.  The clean step uses this as a fingerprint: when
+/// the active toolchain differs from the one that built the cached
+/// `target` dir, Cargo's rustc-version-specific cross-crate metadata is
+/// invalid (every build explodes with `E0514` "found crate compiled by
+/// a different version of rustc") and a `cargo clean` must be forced.
+///
+/// `RUSTC_WRAPPER` is cleared for the probe so it never routes through
+/// sccache, which can fail in nested subprocesses on some macOS hosts
+/// (see [`sccache_is_functional`]).
+///
+/// Returns `None` when `rustc` cannot be spawned or exits non-zero; the
+/// caller then treats the toolchain as unknown and falls back to the
+/// disk-pressure auto-clean policy.
+pub(crate) fn active_rustc_id() -> Option<String> {
+    let output = std::process::Command::new("rustc")
+        .args(["-vV"])
+        .env("RUSTC_WRAPPER", "")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!id.is_empty()).then_some(id)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Disk-pressure helpers (used by the Phase 1 auto-clean step)
 // ─────────────────────────────────────────────────────────────────────────────
