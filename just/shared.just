@@ -103,9 +103,24 @@ toolchain-ensure:
 #      short-circuits straight to step-back because it is not transient.
 #      Post-install health probe (`rustc +CANDIDATE --version`) catches the
 #      rare "install reported success but toolchain is corrupt" case.
-#   3. If install succeeds, run `cargo check --workspace --all-targets` with
-#      `+TOOLCHAIN` override (so rust-toolchain.toml stays untouched during the
-#      probe).  If check fails — step back one day and retry.
+#   3. Run clippy ONCE per feature set with the SAME strict flag stack as the
+#      PR merge gate (`--workspace --all-targets --locked --no-deps -- -D
+#      warnings`) under the `+TOOLCHAIN` override (so rust-toolchain.toml stays
+#      untouched during the probe).  Clippy is a SUPERSET of `cargo check` — it
+#      runs the full compile front-end and THEN the lint passes — so this one
+#      gate proves the workspace both COMPILES and is lint-clean; a separate
+#      `cargo check` is deliberately NOT run because it would only recompile
+#      the same code for no extra signal (clippy can't reuse the check driver's
+#      artifacts, so running both compiled the workspace twice).  Probe BOTH
+#      the `--all-features` and `--no-default-features` sets the gate uses,
+#      because cfg/feature-gated code (e.g. the non-windows MftReader stubs) can
+#      trip a lint in one set but not the other.  A nightly can compile yet
+#      still fail the gate by tripping a new/renamed lint or leaving a
+#      now-stale `#[expect(...)]` unfulfilled — exactly how the v0.5.106 bump
+#      to nightly-2026-05-31 compiled here but failed the merge gate (the
+#      `unused_async` → `unused_async_trait_impl` lint split, and
+#      `duration_suboptimal_units` no longer firing).  If clippy fails — step
+#      back one day, so sync only pins a nightly the merge gate will accept.
 #   4. Verify every component listed in rust-toolchain.toml installs cleanly on
 #      the candidate.  If a component conflict fires (e.g. the rustup rename
 #      `llvm-tools-preview` → `llvm-tools` tripping a stale bookkeeping entry),
@@ -122,8 +137,12 @@ toolchain-ensure:
 #     cache wipe before stepping back — handles the common `.partial` rename
 #     failure mode and short network blips without losing a day on the pin),
 #   • corrupt toolchain installs (`rustc --version` health probe),
-#   • upstream nightly regressions (ethnum, rustc ICE, etc.) that break cargo
-#     check on specific dates,
+#   • upstream nightly regressions (ethnum, rustc ICE, etc.) that fail to
+#     COMPILE on specific dates — caught by the Phase 2 clippy gate, which
+#     compiles the workspace as part of linting (no separate `cargo check`),
+#   • upstream nightly *lint* changes — new lints, lint renames, or lints that
+#     stop firing and strand an `#[expect(...)]` — that compile clean but fail
+#     the merge gate's `clippy -D warnings` (also caught by the Phase 2 gate),
 #   • rustup component-rename bookkeeping conflicts that would otherwise fire
 #     on the *next* rustup invocation (breaking `cargo fmt` / `ship-fresh`
 #     after a successful sync).
@@ -311,28 +330,52 @@ toolchain-sync:
             continue
         fi
 
-        # ── Phase 2: cargo check --workspace --all-targets ─────
+        # ── Phase 2: clippy gate (same strict flags as the PR merge gate) ──
         # `+TOOLCHAIN` override bypasses rust-toolchain.toml, so a failed probe
-        # never mutates the pin.  --all-targets covers tests/benches/examples,
-        # which catch regressions that lib-only check misses (e.g. ethnum-via-
-        # polars-parquet only surfaces under test targets).  CARGO_TARGET_DIR
-        # is scoped per-candidate so cross-toolchain artifact hash mismatches
-        # ("please recompile that crate using this compiler") don't produce
-        # false-negative probe failures.
-        printf "\033[0;34m   Running cargo +%s check --workspace --all-targets...\033[0m\n" "$CANDIDATE"
-        if CARGO_TARGET_DIR="$PROBE_ROOT/$CANDIDATE" \
-            cargo "+$CANDIDATE" check --workspace --all-targets --quiet \
-            >/tmp/toolchain-sync-check.log 2>&1; then
-            printf "\033[0;32m   ✅ cargo check ok\033[0m\n"
-        else
-            printf "\033[0;33m   ⚠️  cargo check failed under %s — stepping back one day.\033[0m\n" "$CANDIDATE"
-            printf "\033[0;33m      (last 3 lines from /tmp/toolchain-sync-check.log:)\033[0m\n"
-            tail -n 3 /tmp/toolchain-sync-check.log | sed 's/^/        /'
-
+        # never mutates the pin.  This is the SINGLE compile step: clippy is a
+        # superset of `cargo check` — it runs the full compile front-end and
+        # THEN the lint passes — so we deliberately do NOT also run `cargo
+        # check` (that would just recompile the same code for no extra signal;
+        # clippy can't reuse the check driver's artifacts, so keeping both
+        # compiled the workspace twice).  This one gate therefore proves the
+        # workspace COMPILES *and* passes the PR gate's `-D warnings` lint.
+        # The PR gate (`pr-fast.yml`) runs clippy with `-D warnings`, so a
+        # nightly that compiles can still fail it by tripping a new/renamed lint
+        # or leaving a now-stale `#[expect(...)]` unfulfilled — exactly the
+        # v0.5.106 → nightly-2026-05-31 episode (`unused_async` →
+        # `unused_async_trait_impl` split; `duration_suboptimal_units` no longer
+        # firing — which a bare `cargo check` sailed straight past).  Probe
+        # BOTH the `--all-features` and `--no-default-features` sets the gate
+        # uses, because cfg/feature-gated code (e.g. the non-windows MftReader
+        # stubs) can trip a lint in one set but not the other; `--all-targets`
+        # covers tests/benches/examples (e.g. the ethnum-via-polars-parquet
+        # path that only surfaces under test targets).  CARGO_TARGET_DIR is
+        # scoped per-candidate so cross-toolchain artifact hash mismatches
+        # ("please recompile that crate using this compiler") can't produce
+        # false negatives, and the two feature-set runs share it.  Windows-only
+        # lints stay the Nightly Canary's job; this probe runs on the
+        # maintainer's host.  `clippy` ships in the `--profile default` install
+        # (Phase 1), so it is already present.
+        CLIPPY_OK=1
+        for CLIPPY_FEATURES in "--all-features" "--no-default-features"; do
+            printf "\033[0;34m   Running cargo +%s clippy %s -- -D warnings...\033[0m\n" "$CANDIDATE" "$CLIPPY_FEATURES"
+            if CARGO_TARGET_DIR="$PROBE_ROOT/$CANDIDATE" \
+                cargo "+$CANDIDATE" clippy --workspace --all-targets "$CLIPPY_FEATURES" --locked --no-deps --quiet -- -D warnings \
+                >/tmp/toolchain-sync-clippy.log 2>&1; then
+                printf "\033[0;32m   ✅ clippy ok (%s)\033[0m\n" "$CLIPPY_FEATURES"
+            else
+                printf "\033[0;33m   ⚠️  clippy failed under %s (%s) — stepping back one day.\033[0m\n" "$CANDIDATE" "$CLIPPY_FEATURES"
+                printf "\033[0;33m      (last 5 lines from /tmp/toolchain-sync-clippy.log:)\033[0m\n"
+                tail -n 5 /tmp/toolchain-sync-clippy.log | sed 's/^/        /'
+                CLIPPY_OK=0
+                break
+            fi
+        done
+        if [ "$CLIPPY_OK" != "1" ]; then
             if [ "$CANDIDATE" = "$CURRENT" ]; then
-                printf "\n\033[0;31m❌ Current pin %s installs but no longer compiles the workspace.\033[0m\n" "$CURRENT"
-                printf "\033[0;31m   Full log: /tmp/toolchain-sync-check.log\033[0m\n"
-                printf "\033[0;31m   Manual intervention required — the pinned toolchain is broken.\033[0m\n"
+                printf "\n\033[0;31m❌ Current pin %s no longer compiles + passes clippy -D warnings.\033[0m\n" "$CURRENT"
+                printf "\033[0;31m   Full log: /tmp/toolchain-sync-clippy.log\033[0m\n"
+                printf "\033[0;31m   Manual intervention required — fix the lints; the merge gate will reject this pin.\033[0m\n"
                 exit 1
             fi
             CANDIDATE_DATE=$(date_minus_one "$CANDIDATE_DATE")
