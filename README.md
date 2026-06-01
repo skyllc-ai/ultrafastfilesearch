@@ -111,6 +111,8 @@ cargo build --release
 
 > 📖 **[Full installation guide](docs/user-manual/installation.md)** — WinGet, PATH setup, daemon autostart, Scoop (coming)
 
+> 🖥️ **Prefer a UI?** Free **demo** builds of the UFFS TUI and GUI (macOS, Linux, Windows) are at **[uffs-demo/releases](https://github.com/githubrobbi/uffs-demo/releases/latest)** — limited result counts, exports disabled. They drive this same open-source daemon. Full versions are commercial (see [Maintainership & Commercial](#maintainership--commercial)).
+
 ---
 
 ## Quick Start
