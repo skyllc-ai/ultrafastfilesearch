@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — ship pipeline: force `cargo clean` after a `rustc` toolchain bump
+
+`just ship` step `00-toolchain-ensure` can bump the pinned nightly, but
+step `02-clean-artifacts` only cleaned on disk-pressure heuristics — so a
+fresh nightly reused a `target` dir built by the previous `rustc`, whose
+version-specific cross-crate metadata then made every build explode with
+`E0514` ("found crate compiled by a different version of rustc").
+
+- **The clean step now fingerprints the toolchain.** `context::active_rustc_id`
+  captures `rustc -vV`; the clean step stores it under
+  `CARGO_TARGET_DIR/.uffs-ci-rustc-fingerprint` and, on every run, forces a
+  `cargo clean` when the active toolchain differs from the one that built
+  the cache (before any build step runs). The fingerprint is re-recorded
+  after the decision so the next bump is detected.
+- **Disk-pressure auto-clean and the `--clean` / `--no-clean` flags are
+  preserved.** `--no-clean` downgrades a needed toolchain clean to a warning
+  and leaves the stale fingerprint so the next run re-detects it. The clean
+  policy is extracted into a pure, unit-tested `decide_clean` function.
+
 ### Fixed — ship pipeline: release auto-commit no longer drifts local `main`
 
 The `just ship` flow (`scripts/ci-pipeline` → `git_ops::git_push`) used to
