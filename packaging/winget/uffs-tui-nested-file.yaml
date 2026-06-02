@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+#
+# Canonical NestedInstallerFiles entry that exposes the bundled `uffs-tui`
+# demo as a typed WinGet command (`uffs-tui`).
+#
+# This is the SINGLE source of truth for the alias.  It must be SEEDED ONCE
+# into the SkyLLC.UFFS installer manifest (see ./README.md); thereafter komac
+# preserves it across every auto-submitted release.
+#
+# RelativeFilePath is rooted at the zip's single top-level directory
+# (`uffs-windows-x64/`), which is unchanged by the min/normal/full tiering —
+# the winget package always points at the `normal` zip (`uffs-windows-x64.zip`).
+
+- RelativeFilePath: uffs-windows-x64/uffs-tui.exe
+  PortableCommandAlias: uffs-tui
