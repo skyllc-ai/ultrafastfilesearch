@@ -37,7 +37,12 @@ concurrency:
 
 permissions:
   contents: write
-  actions: read
+  # `actions: write` (was `read`) so the `submit-winget` job can dispatch
+  # `winget-publish.yml` via `gh workflow run` after the release lands.
+  # Per-job blocks can only NARROW this, so it must be granted here; every
+  # other job re-declares a narrower per-job `permissions:` set and does
+  # not inherit write.
+  actions: write
   issues: write
   # SLSA build-provenance attestation flow (P1 hardening):
   #   - `id-token: write` lets the runner mint an OIDC token
@@ -82,6 +87,15 @@ jobs:
     name: 📋 Release Preparation
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Explicit per-job scopes so this job does NOT inherit the
+    # workflow-level `actions: write` (granted only for the
+    # `submit-winget` dispatch).  This job needs `contents: write` for
+    # its `gh release create --draft` preflight; `actions` stays read —
+    # the rollback-attack guard below deliberately must NOT run with
+    # `actions: write`.
+    permissions:
+      contents: write
+      actions: read
     outputs:
       version: ${{ steps.validate.outputs.version }}
       tag: ${{ steps.validate.outputs.tag }}
@@ -317,6 +331,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: release-preparation
     timeout-minutes: ${{ matrix.timeout }}
+    # Explicit read-only scope so this job does NOT inherit the
+    # workflow-level `actions: write` (granted only for `submit-winget`).
+    # The build only checks out + compiles + uploads artifacts — no
+    # write scope is needed.
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     strategy:
@@ -1029,6 +1049,51 @@ jobs:
             echo "- [📦 Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ needs.release-preparation.outputs.tag }})"
             echo "- [📋 Full Changelog](https://github.com/${{ github.repository }}/commits/${{ needs.release-preparation.outputs.version }})"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # WinGet submission — dispatch winget-publish.yml after the release lands
+  # ═══════════════════════════════════════════════════════════════════════════
+  #
+  # Why dispatch instead of relying on `on: release` in winget-publish.yml:
+  # the Release above is created with the default GITHUB_TOKEN, and GitHub
+  # suppresses event cascades from GITHUB_TOKEN-authored actions — so a
+  # `release: released` trigger would never fire.  Triggering another
+  # workflow via `gh workflow run` (workflow_dispatch) IS a permitted
+  # GITHUB_TOKEN action, so this is the robust path.
+  #
+  # Non-blocking: `continue-on-error: true` plus the job being outside every
+  # other job's `needs:` graph means a winget hiccup (rate limit, token
+  # rotation, microsoft/winget-pkgs outage) can never fail or roll back an
+  # otherwise-successful release.
+  submit-winget:
+    name: 📦 Submit to WinGet
+    runs-on: ubuntu-latest
+    needs: [release-preparation, create-github-release]
+    if: github.repository_owner == 'skyllc-ai'
+    continue-on-error: true
+    permissions:
+      actions: write # required to dispatch winget-publish.yml via the API
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch winget-publish workflow for the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-preparation.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Dispatching winget-publish.yml for ${RELEASE_TAG}"
+          # Dispatch against the repo's default branch: `gh workflow run
+          # --ref` resolves the workflow definition from that ref, and
+          # winget-publish.yml always lives on the default branch.  Using
+          # the default branch (not github.ref_name, which is the tag on a
+          # `push: tags: v*` run) keeps the dispatch ref stable.
+          default_branch="$(gh repo view "${GH_REPO}" --json defaultBranchRef -q .defaultBranchRef.name)"
+          gh workflow run winget-publish.yml \
+            --ref "${default_branch}" \
+            -f "release-tag=${RELEASE_TAG}"
+          echo "✅ winget-publish.yml dispatched for ${RELEASE_TAG} on ${default_branch} (runs independently; check the Actions tab)."
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Failure Notification — opens a GitHub Issue on release failure

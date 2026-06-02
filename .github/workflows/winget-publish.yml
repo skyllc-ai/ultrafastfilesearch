@@ -28,14 +28,23 @@
 
 name: 📦 WinGet Publish
 
-run-name: 📦 WinGet ${{ github.event.release.tag_name || inputs.release-tag }}
+run-name: 📦 WinGet ${{ inputs.release-tag }}
 
+# `workflow_dispatch` ONLY — deliberately NOT `on: release`.
+#
+# A GitHub Release published by `release.yml` using the default
+# `GITHUB_TOKEN` does **not** emit a `release` event: GitHub suppresses
+# event cascades from `GITHUB_TOKEN`-authored actions to prevent
+# workflow-trigger loops.  So an `on: release:` trigger here would
+# NEVER fire from our release pipeline — it was dead config.
+#
+# Instead, `release.yml`'s `submit-winget` job explicitly dispatches
+# this workflow via `gh workflow run` once the release is published
+# (the documented `GITHUB_TOKEN` → `workflow_dispatch` exception, which
+# IS permitted).  `release-tag` is therefore always supplied; this is
+# also the manual re-submit entry point if a release predates the
+# automation or a previous run failed (e.g. expired token).
 on:
-  release:
-    types: [released]
-  # Manual fallback: re-submit a specific tag if the release-triggered
-  # run failed (e.g. the token expired) or a release predates this
-  # workflow.  Provide the git tag, e.g. `v0.5.102`.
   workflow_dispatch:
     inputs:
       release-tag:
@@ -46,7 +55,7 @@ on:
 # Serialise submissions so two releases landing close together queue
 # cleanly instead of racing to open competing winget-pkgs PRs.
 concurrency:
-  group: winget-publish-${{ github.event.release.tag_name || inputs.release-tag }}
+  group: winget-publish-${{ inputs.release-tag }}
   cancel-in-progress: false
 
 permissions:
@@ -60,7 +69,26 @@ jobs:
     # Never run from forks — only the canonical repo holds WINGET_TOKEN.
     if: github.repository_owner == 'skyllc-ai'
     steps:
+      # Graceful no-op when the token is absent: warn (not ❌) so a
+      # missing/rotated secret never shows as a hard failure.  The
+      # weekly `winget-token-expiry-check.yml` is the durable alarm for
+      # this condition; here we just skip cleanly.  `outputs.present`
+      # gates the submit step below.
+      - name: Check WINGET_TOKEN is configured
+        id: token
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "${WINGET_TOKEN:-}" ]]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=WINGET_TOKEN missing::Skipping winget-pkgs submission for ${{ inputs.release-tag }} — set the WINGET_TOKEN secret, then re-run this workflow manually."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Submit manifest to winget-pkgs
+        if: steps.token.outputs.present == 'true'
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: SkyLLC.UFFS
@@ -68,7 +96,7 @@ jobs:
           # action derives the package version from the release tag,
           # stripping the leading `v` (v0.5.102 → 0.5.102).
           installers-regex: 'uffs-windows-x64\.zip$'
-          release-tag: ${{ github.event.release.tag_name || inputs.release-tag }}
+          release-tag: ${{ inputs.release-tag }}
           # The account that owns the microsoft/winget-pkgs fork komac
           # pushes the manifest branch to.  MUST match the account that
           # owns WINGET_TOKEN — i.e. the maintainer who submitted the
