@@ -80,9 +80,13 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 
 | Platform | Download | Notes |
 |---|---|---|
-| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + MCP + MFT tools. Recommended. |
-| **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle. |
-| **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh`. |
+| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + MCP + MFT tools + `uffs-tui` demo. Recommended. |
+| **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle + `uffs-tui` demo. |
+| **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh` + `uffs-tui` demo. |
+
+> 📦 **Three tiers per platform** — `…-min.zip` (just `uffs` + `uffsd` + the `uffs-tui` demo, for CI/scripting), the bare `….zip` (**recommended**: adds MCP + MFT tooling + docs), and `…-full.zip` (adds the `uffs-diag` diagnostic tools). Every tier bundles the free `uffs-tui` demo.
+
+> 🖥️ **Fastest way to try it — no CLI required.** Unzip any tier and run **`uffs-tui`**: the daemon auto-starts and you're browsing your own drives in a UI within seconds. The bundled TUI is the free demo (capped result counts, exports disabled — see `DEMO-LICENSE.txt`); full TUI/GUI are commercial.
 
 **Windows quick-install (one command) — via [WinGet](https://learn.microsoft.com/windows/package-manager/):**
 ```powershell
@@ -111,7 +115,7 @@ cargo build --release
 
 > 📖 **[Full installation guide](docs/user-manual/installation.md)** — WinGet, PATH setup, daemon autostart, Scoop (coming)
 
-> 🖥️ **Prefer a UI?** Free **demo** builds of the UFFS TUI and GUI (macOS, Linux, Windows) are at **[uffs-demo/releases](https://github.com/githubrobbi/uffs-demo/releases/latest)** — limited result counts, exports disabled. They drive this same open-source daemon. Full versions are commercial (see [Maintainership & Commercial](#maintainership--commercial)).
+> 🖥️ **Prefer a UI?** The free **`uffs-tui` demo is bundled in every release ZIP** above — just run `uffs-tui`. Standalone demo builds of the TUI **and GUI** (macOS, Linux, Windows) also live at **[uffs-demo/releases](https://github.com/githubrobbi/uffs-demo/releases/latest)** — limited result counts, exports disabled. They drive this same open-source daemon. Full versions are commercial (see [Maintainership & Commercial](#maintainership--commercial)).
 
 ---
 

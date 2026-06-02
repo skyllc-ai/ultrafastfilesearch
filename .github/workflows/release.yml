@@ -584,98 +584,151 @@ jobs:
           echo "📦 Packaged binaries:"
           ls -la
 
-      - name: Stage release bundle
+      - name: Stage release bundles (min / normal / full)
         shell: bash
+        env:
+          # `gh release download` reads the public githubrobbi/uffs-demo
+          # repo.  The default GITHUB_TOKEN can read public release assets,
+          # so no extra secret is needed.  The demo is versioned
+          # INDEPENDENTLY of the engine — we fetch its latest TUI build and
+          # bundle it as the zero-friction front door (`uffs-tui`) so a new
+          # user can launch a UI on their own data without touching the CLI.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🎁 Staging release bundle for ${{ matrix.target }}..."
+          set -euo pipefail
+          echo "🎁 Staging release bundles (min / normal / full) for ${{ matrix.target }}..."
 
-          STAGE_DIR="release-staging/${{ matrix.artifact-name }}"
-          mkdir -p "$STAGE_DIR/assets"
+          ARTIFACT="${{ matrix.artifact-name }}"   # e.g. uffs-windows-x64
+          TRIPLE="${{ matrix.target }}"
+          OS="${{ matrix.os }}"
+          BINDIR="target/${TRIPLE}/release"
+          PLAT="${ARTIFACT#uffs-}"                 # windows-x64 / macos-arm64 / linux-x64
+          if [[ "$OS" == "windows-latest" ]]; then EXT=".exe"; else EXT=""; fi
 
-          # ── Binaries ───────────────────────────────────────────────────────
-          # Same shipping set as `Package binaries` above.  Diagnostic
-          # binaries (uffs-diag) stay workspace-only and are not shipped.
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            for bin in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe; do
-              if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
-                cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
-              fi
-            done
+          # Diagnostic tools (uffs-diag) — built by `--workspace --bins`
+          # above; shipped ONLY in the `full` tier.  Kept in lockstep with
+          # ALL_BINARIES in scripts/ci/build-cross-all.rs.
+          DIAG_BINS=(analyze-mft-parents dump-mft-records scan-mft-magic \
+                     dump-mft-extents cross-check-mft-reference compare-raw-mft \
+                     inspect-mft-record-flow analyze-diff compare-scan-parity \
+                     verify-iocp-capture)
+
+          # ── Fetch the free demo TUI (non-fatal) ────────────────────────────
+          # Bundled into EVERY tier so `uffs-tui` works straight out of the
+          # zip.  If the asset is missing or the download fails, we emit a
+          # warning and ship the engine bundles WITHOUT the demo — a
+          # demo-repo hiccup must never block an engine release.
+          mkdir -p demo
+          DEMO_ASSET="uffs_tui-demo-${PLAT}${EXT}"
+          DEMO_BIN=""
+          if gh release download --repo githubrobbi/uffs-demo \
+               --pattern "$DEMO_ASSET" --dir demo --clobber; then
+            DEMO_BIN="demo/${DEMO_ASSET}"
+            chmod +x "$DEMO_BIN" 2>/dev/null || true
+            echo "✅ Fetched demo TUI: ${DEMO_ASSET}"
           else
-            for bin in uffs uffsd uffsmcp uffs-mft; do
-              if [[ -f "target/${{ matrix.target }}/release/$bin" ]]; then
-                cp "target/${{ matrix.target }}/release/$bin" "$STAGE_DIR/"
-              fi
-            done
+            echo "::warning title=Demo TUI unavailable::Could not fetch ${DEMO_ASSET} from githubrobbi/uffs-demo — shipping engine bundles without the bundled TUI demo."
           fi
 
-          # ── Documentation (common across every platform) ─────────────────────
-          cp README.md LICENSE TRADEMARK.md CHANGELOG.md "$STAGE_DIR/"
+          # ── Tier staging helper ────────────────────────────────────────────
+          #   $1 = zip basename (also the archive's single root dir)
+          #   $2 = tier: min | normal | full
+          stage_bundle() {
+            local zipbase="$1" tier="$2"
+            local stage="release-staging/${zipbase}"
+            rm -rf "$stage"; mkdir -p "$stage/assets"
 
-          # ── Platform-specific brand assets + packaging helpers ──────────────
-          case "${{ matrix.target }}" in
-            *-windows-*)
-              cp assets/brand/icons/uffs.ico     "$STAGE_DIR/assets/"
-              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
-              ;;
-            *-apple-*)
-              cp assets/brand/icons/uffs.icns    "$STAGE_DIR/assets/"
-              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
-              mkdir -p "$STAGE_DIR/packaging/macos"
-              cp packaging/macos/Info.plist.in   "$STAGE_DIR/packaging/macos/"
-              cp packaging/macos/bundle.sh       "$STAGE_DIR/packaging/macos/"
-              chmod +x "$STAGE_DIR/packaging/macos/bundle.sh"
+            # Engine binaries per tier.  ALL tiers include uffs + uffsd:
+            # the CLI auto-spawns the SEPARATE uffsd binary (find_daemon_exe
+            # in uffs-client) — `uffs` alone cannot search.
+            local engine_bins=()
+            case "$tier" in
+              min)    engine_bins=(uffs uffsd) ;;
+              normal) engine_bins=(uffs uffsd uffsmcp uffs-mft) ;;
+              full)   engine_bins=(uffs uffsd uffsmcp uffs-mft "${DIAG_BINS[@]}") ;;
+            esac
+            for b in "${engine_bins[@]}"; do
+              if [[ -f "${BINDIR}/${b}${EXT}" ]]; then
+                cp "${BINDIR}/${b}${EXT}" "$stage/"
+              fi
+            done
 
-              # Pre-build a ready-to-run UFFS.app inside the bundle so
-              # end users don't need to run bundle.sh themselves.  Runs
-              # the committed script from the repo root (not the staged
-              # copy) since bundle.sh expects repo-root-relative paths.
-              chmod +x packaging/macos/bundle.sh
-              packaging/macos/bundle.sh \
-                "target/${{ matrix.target }}/release/uffs" \
-                "$STAGE_DIR/UFFS.app"
-              ;;
-            *-linux-*)
-              cp -r assets/brand/icons/hicolor   "$STAGE_DIR/assets/"
-              cp assets/brand/uffs-hero-1024.png "$STAGE_DIR/assets/"
-              mkdir -p "$STAGE_DIR/packaging/linux"
-              cp packaging/linux/install.sh      "$STAGE_DIR/packaging/linux/"
-              cp packaging/linux/uffs.desktop    "$STAGE_DIR/packaging/linux/"
-              chmod +x "$STAGE_DIR/packaging/linux/install.sh"
-              ;;
-          esac
+            # Demo TUI — every tier, renamed to a clean `uffs-tui` command.
+            if [[ -n "$DEMO_BIN" && -f "$DEMO_BIN" ]]; then
+              cp "$DEMO_BIN" "$stage/uffs-tui${EXT}"
+            fi
 
-          echo "📂 Staging tree:"
-          find "$STAGE_DIR" -maxdepth 4 -type f | sort
+            # Licenses — engine (MPL-2.0) always; the demo notice is added
+            # only when the demo is actually present, so the mixed-license
+            # zip stays unambiguous.
+            cp LICENSE "$stage/"
+            if [[ -n "$DEMO_BIN" && -f packaging/DEMO-NOTICE.txt ]]; then
+              cp packaging/DEMO-NOTICE.txt "$stage/DEMO-LICENSE.txt"
+            fi
 
-          # ── ZIP the bundle ─────────────────────────────────────────────────
-          # 7z on Windows (pre-installed, no Git-Bash zip dependency);
-          # `zip` on macOS/Linux.  The ZIP goes straight into
-          # release-artifacts/ so the existing Upload step picks it up
-          # alongside the raw binaries.
-          #
-          # Both branches `cd release-staging` first so the archive's
-          # root entry is `${{ matrix.artifact-name }}/`, not
-          # `release-staging/${{ matrix.artifact-name }}/` — fixes #92,
-          # where the Windows ZIP previously contained the staging
-          # directory as a wrapper folder.
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            (cd release-staging && \
-             7z a -tzip \
-               "../release-artifacts/${{ matrix.artifact-name }}.zip" \
-               "${{ matrix.artifact-name }}" > /dev/null)
-          else
-            (cd release-staging && \
-             zip -rq "../release-artifacts/${{ matrix.artifact-name }}.zip" \
-                     "${{ matrix.artifact-name }}")
-          fi
+            # Docs + brand + packaging helpers — normal/full only; `min`
+            # stays a lean engine + TUI payload.
+            if [[ "$tier" != "min" ]]; then
+              cp README.md TRADEMARK.md CHANGELOG.md "$stage/"
+              case "$TRIPLE" in
+                *-windows-*)
+                  cp assets/brand/icons/uffs.ico     "$stage/assets/"
+                  cp assets/brand/uffs-hero-1024.png "$stage/assets/"
+                  ;;
+                *-apple-*)
+                  cp assets/brand/icons/uffs.icns    "$stage/assets/"
+                  cp assets/brand/uffs-hero-1024.png "$stage/assets/"
+                  mkdir -p "$stage/packaging/macos"
+                  cp packaging/macos/Info.plist.in   "$stage/packaging/macos/"
+                  cp packaging/macos/bundle.sh       "$stage/packaging/macos/"
+                  chmod +x "$stage/packaging/macos/bundle.sh"
+                  # Pre-build a ready-to-run UFFS.app inside the bundle so
+                  # end users don't need to run bundle.sh themselves.
+                  chmod +x packaging/macos/bundle.sh
+                  packaging/macos/bundle.sh \
+                    "${BINDIR}/uffs" "$stage/UFFS.app"
+                  ;;
+                *-linux-*)
+                  cp -r assets/brand/icons/hicolor   "$stage/assets/"
+                  cp assets/brand/uffs-hero-1024.png "$stage/assets/"
+                  mkdir -p "$stage/packaging/linux"
+                  cp packaging/linux/install.sh      "$stage/packaging/linux/"
+                  cp packaging/linux/uffs.desktop    "$stage/packaging/linux/"
+                  chmod +x "$stage/packaging/linux/install.sh"
+                  ;;
+              esac
+            fi
 
-          echo "📦 Bundle ZIP:"
-          ls -la "release-artifacts/${{ matrix.artifact-name }}.zip"
+            # ── ZIP the bundle ───────────────────────────────────────────────
+            # 7z on Windows (pre-installed, no Git-Bash zip dependency);
+            # `zip` on macOS/Linux.  `cd release-staging` first so the
+            # archive's root entry is `${zipbase}/`, not
+            # `release-staging/${zipbase}/` (fixes #92).
+            if [[ "$OS" == "windows-latest" ]]; then
+              (cd release-staging && \
+               7z a -tzip "../release-artifacts/${zipbase}.zip" "${zipbase}" > /dev/null)
+            else
+              (cd release-staging && \
+               zip -rq "../release-artifacts/${zipbase}.zip" "${zipbase}")
+            fi
+            echo "📦 ${zipbase}.zip:"; ls -la "release-artifacts/${zipbase}.zip"
+          }
 
-          # Clean up staging; only the ZIP needs to survive into the
-          # uploaded artifact.
-          rm -rf release-staging
+          # ── Emit the three tiers ────────────────────────────────────────────
+          # The `normal` zip keeps the bare `${ARTIFACT}.zip` name so the
+          # winget package (SkyLLC.UFFS, installers-regex
+          # `uffs-windows-x64\.zip$`) and backwards-compat download URLs are
+          # unchanged.  `min` and `full` are additive.
+          stage_bundle "${ARTIFACT}-min"  min
+          stage_bundle "${ARTIFACT}"      normal
+          stage_bundle "${ARTIFACT}-full" full
+
+          echo "📂 normal-tier staging tree:"
+          find "release-staging/${ARTIFACT}" -maxdepth 4 -type f | sort
+
+          # Clean up staging + downloaded demo; only the ZIPs survive into
+          # the uploaded artifact.
+          rm -rf release-staging demo
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -896,32 +949,48 @@ jobs:
           cross-platform, so macOS and Linux builds are shipped for
           **offline MFT analysis** from captured `.mft` / `.bin` snapshots.
 
-          Each platform ships as a **one-download ZIP bundle** with the
-          binaries, the UFFS brand assets, the full documentation set
-          (`README.md`, `LICENSE`, `TRADEMARK.md`, `CHANGELOG.md`), and
-          the platform's packaging helper.  Individual binaries are also
-          attached for automation that `wget`s a single file.
+          Each platform ships as a **one-download ZIP bundle** in three
+          tiers — pick the one that matches how much you need:
+
+          | Tier | Zip suffix | Contents |
+          |------|-----------|----------|
+          | **min** | `-min.zip` | `uffs` + `uffsd` + `uffs-tui` demo. Lean engine for CI/scripting. |
+          | **normal** | *(no suffix)* | min + `uffsmcp` + `uffs-mft` + docs + brand + packaging helper. **Recommended.** |
+          | **full** | `-full.zip` | normal + the `uffs-diag` diagnostic tools. |
+
+          > 🖥️ **Every tier bundles the free `uffs-tui` demo** — the
+          > zero-setup front door.  After unzipping, just run `uffs-tui`
+          > to browse your own drives in a UI (the daemon auto-starts).
+          > The demo has capped result counts and disabled exports; see
+          > `DEMO-LICENSE.txt` in the zip.  Full TUI/GUI are commercial.
+
+          Individual binaries are also attached for automation that
+          `wget`s a single file.
 
           ### 🟦 Windows x86_64 — primary live-indexing target
-          - **`uffs-windows-x64.zip`** — recommended: CLI + daemon + MCP
-            + MFT tooling + icon + docs.  The `.exe`s ship with the UFFS
-            icon and `asInvoker` manifest embedded.
+          - **`uffs-windows-x64.zip`** — recommended (normal tier): CLI +
+            daemon + MCP + MFT tooling + `uffs-tui` demo + icon + docs.
+            The `.exe`s ship with the UFFS icon and `asInvoker` manifest
+            embedded.  Also: `uffs-windows-x64-min.zip`,
+            `uffs-windows-x64-full.zip`.
           - Raw binaries: `uffs-windows-x64.exe`, `uffsd-windows-x64.exe`,
             `uffsmcp-windows-x64.exe`, `uffs-mft-windows-x64.exe`.
 
           ### 🍏 macOS Apple Silicon — offline MFT analysis
-          - **`uffs-macos-arm64.zip`** — recommended: raw binaries + a
-            ready-to-run `UFFS.app` bundle + icns + docs +
-            `packaging/macos/bundle.sh` for rebuilding.
+          - **`uffs-macos-arm64.zip`** — recommended (normal tier): raw
+            binaries + `uffs-tui` demo + a ready-to-run `UFFS.app` bundle
+            + icns + docs + `packaging/macos/bundle.sh` for rebuilding.
+            Also: `uffs-macos-arm64-min.zip`, `uffs-macos-arm64-full.zip`.
           - Raw binaries: `uffs-macos-arm64`, `uffsd-macos-arm64`,
             `uffsmcp-macos-arm64`, `uffs-mft-macos-arm64`.
           - Intel Macs: run the arm64 build under Rosetta 2.
 
           ### 🐧 Linux x86_64 — offline MFT analysis
-          - **`uffs-linux-x64.zip`** — recommended: binaries + full
-            hicolor icon tree + `packaging/linux/install.sh` (drops the
-            `.desktop` entry and icons under `/usr/local` with one
-            `sudo` invocation) + docs.
+          - **`uffs-linux-x64.zip`** — recommended (normal tier): binaries
+            + `uffs-tui` demo + full hicolor icon tree +
+            `packaging/linux/install.sh` (drops the `.desktop` entry and
+            icons under `/usr/local` with one `sudo` invocation) + docs.
+            Also: `uffs-linux-x64-min.zip`, `uffs-linux-x64-full.zip`.
           - Raw binaries: `uffs-linux-x64`, `uffsd-linux-x64`,
             `uffsmcp-linux-x64`, `uffs-mft-linux-x64`.
           - Use with `--mft-file` to analyse captured MFT snapshots on servers, forensics VMs, or in Docker.

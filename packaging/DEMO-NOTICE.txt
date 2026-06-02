@@ -1,0 +1,44 @@
+UFFS TUI — DEMO BUILD: LICENSE & NOTICE
+=======================================
+
+This archive bundles a binary named `uffs-tui` (uffs-tui.exe on Windows).
+It is the FREE DEMO build of the UFFS terminal UI, provided for convenience
+as a zero-setup front door to the engine.
+
+WHAT IS COVERED BY THE MPL-2.0
+------------------------------
+Everything in this archive EXCEPT `uffs-tui` is part of UFFS Core — the
+open-source engine, daemon, CLI, MCP server, and MFT tooling — and is
+licensed under the Mozilla Public License 2.0 (see the accompanying
+`LICENSE` file). UFFS Core will never be made less open.
+
+WHAT THIS NOTICE COVERS
+-----------------------
+The `uffs-tui` demo binary is a SEPARATE, proprietary product. It is NOT
+part of UFFS Core and is NOT licensed under the MPL-2.0. It is distributed
+free of charge as a closed-source demonstration build with the following
+limitations:
+
+  * result counts are capped, and
+  * exports are disabled.
+
+The demo drives the same open-source UFFS daemon over the public IPC
+protocol; it adds no hidden functionality to the engine.
+
+  Copyright (c) 2025-2026 SKY, LLC. All rights reserved.
+
+  - Source repository for the demo: https://github.com/githubrobbi/uffs-demo
+  - The demo is versioned independently of the engine and may be built
+    against a specific UFFS core commit.
+
+REMOVING THE DEMO
+-----------------
+If you only want the open-source engine, delete the `uffs-tui` binary (and
+this `DEMO-LICENSE.txt`); the remaining files are entirely MPL-2.0. The
+`min` download tier ships the same engine without docs/brand assets.
+
+FULL / COMMERCIAL VERSIONS
+--------------------------
+Full-featured UFFS TUI and GUI products (no result caps, exports enabled)
+are commercial. See the project README ("Maintainership & Commercial") for
+details: https://github.com/skyllc-ai/UltraFastFileSearch
