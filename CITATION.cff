@@ -37,7 +37,7 @@ license-url: "https://github.com/skyllc-ai/UltraFastFileSearch/blob/main/LICENSE
 # Keep this in sync with [workspace.package].version in Cargo.toml.
 # The release pipeline (release-plz / just ship) should bump this automatically
 # once Pattern 5 in build/update_all_versions.rs is extended to cover CITATION.cff.
-version: "0.5.108"
+version: "0.5.109"
 date-released: "2026-06-02"
 
 # ── Classification ───────────────────────────────────────────────────────────
