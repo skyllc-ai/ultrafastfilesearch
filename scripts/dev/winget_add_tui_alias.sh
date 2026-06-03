@@ -61,14 +61,24 @@ if ! grep -q 'PackageIdentifier: SkyLLC.UFFS' "$MANIFEST"; then
   exit 1
 fi
 
+# winget-pkgs manifests use CRLF line endings; mixing LF into them trips
+# the pipeline's "Validation-Line-Endings-Error".  Detect the manifest's
+# convention and emit the two inserted lines with a matching terminator so
+# the file stays uniform.  (awk preserves the trailing CR on existing
+# lines because the default record separator is LF.)
+cr=''
+if grep -q $'\r$' "$MANIFEST"; then
+  cr=$'\r'
+fi
+
 # Insert the two-line nested-file block immediately after the
 # `NestedInstallerFiles:` key so it joins the existing alias list.
 tmp="$(mktemp)"
-awk '
+awk -v cr="$cr" '
   /^NestedInstallerFiles:[[:space:]]*$/ {
     print
-    print "- RelativeFilePath: uffs-windows-x64/uffs-tui.exe"
-    print "  PortableCommandAlias: uffs-tui"
+    printf "%s%s\n", "- RelativeFilePath: uffs-windows-x64/uffs-tui.exe", cr
+    printf "%s%s\n", "  PortableCommandAlias: uffs-tui", cr
     next
   }
   { print }
