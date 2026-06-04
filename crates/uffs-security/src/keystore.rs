@@ -189,8 +189,11 @@ const DPAPI_ENTROPY: &[u8] = b"uffs-cache-v1";
 #[cfg(target_os = "windows")]
 fn dpapi_write_key(path: &std::path::Path, key: &[u8; KEY_SIZE]) -> io::Result<()> {
     let encrypted = dpapi_protect(key)?;
-    std::fs::write(path, &encrypted)?;
-    crate::fs::set_file_permissions_owner_only(path)?;
+    // Replace any stale blob first so create_new can't follow a planted symlink.
+    if path.exists() {
+        let _ignore = std::fs::remove_file(path);
+    }
+    crate::fs::write_secret_file(path, &encrypted)?;
     Ok(())
 }
 
@@ -401,8 +404,11 @@ fn file_based_key() -> io::Result<[u8; KEY_SIZE]> {
         crate::fs::create_secure_dir(parent)?;
     }
 
-    std::fs::write(&key_path, key)?;
-    crate::fs::set_file_permissions_owner_only(&key_path)?;
+    // Replace any stale key first so create_new can't follow a planted symlink.
+    if key_path.exists() {
+        let _ignore = std::fs::remove_file(&key_path);
+    }
+    crate::fs::write_secret_file(&key_path, &key)?;
 
     tracing::info!(path = %key_path.display(), "Generated and stored new encryption key (file-based)");
     Ok(key)
@@ -460,5 +466,43 @@ mod tests {
         let key2 = file_based_key().expect("second file_based_key");
         assert_eq!(key1, key2, "file-based key should be stable across calls");
         assert_ne!(key1, [0_u8; KEY_SIZE], "key should not be all zeros");
+    }
+
+    /// WI-2.3: the keystore's key-write pattern produces a 0600 file with no
+    /// perms-after window — exercised against an isolated temp path so the
+    /// assertion is deterministic and never depends on (or mutates) the real
+    /// shared `key.bin`. This mirrors the exact `remove_file`-then-
+    /// `write_secret_file` shape now used by `file_based_key` /
+    /// `dpapi_write_key`.
+    #[cfg(unix)]
+    #[test]
+    fn key_write_pattern_is_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key_path = dir.path().join("uffs").join("key.bin");
+        crate::fs::create_secure_dir(key_path.parent().expect("parent")).expect("secure dir");
+
+        let key = [0xAB_u8; KEY_SIZE];
+        // First write (born 0600).
+        crate::fs::write_secret_file(&key_path, &key).expect("write");
+        let mode = std::fs::metadata(&key_path)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "key.bin must be born 0600, got {mode:o}");
+
+        // Regeneration path: remove-then-write stays 0600 (no widening).
+        std::fs::remove_file(&key_path).expect("remove");
+        crate::fs::write_secret_file(&key_path, &key).expect("rewrite");
+        let mode2 = std::fs::metadata(&key_path)
+            .expect("stat2")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode2, 0o600,
+            "rewritten key.bin must stay 0600, got {mode2:o}"
+        );
     }
 }
