@@ -98,8 +98,8 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ⬜ | | |
 | WI-4.3 | 4 Bytes | Strict-parse subprocess stdout used for decisions (PID/name) | ✅ | `harden/bugs` | ✅ |
 | WI-4.4 | 4 Bytes | **RFC + impl:** lossless name storage (binary/WTF-8 column) | 🟨 RFC landed | `harden/bugs` | RFC ✅ / impl pending sign-off |
-| WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ✅ | `harden/wi-5.2-parser-checked` | ✅ |
-| WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | 🟨 partial | `harden/wi-5.2-parser-checked` | parser malformed-record regression test landed with WI-5.2; cache-deserialize fuzz pending |
+| WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ✅ | PR #349 (merged) | ✅ |
+| WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | ✅ | `harden/wi-5.3-malformed-tests` | parser malformed-record test (PR #349) + deserializer truncation/boundary/seeded-fuzz corpus |
 | WI-6.1 | 6 Errors | `daemon_ctl` control writes: surface/log instead of bare `drop` | ✅ | `harden/bugs` | ✅ |
 | WI-6.2 | 6 Errors | Log dir-create failures (`log_init`, `mft/logging`) to stderr once | ✅ | `harden/bugs` | ✅ |
 | WI-6.3 | 6 Errors | Audit remaining `.ok()`/`let _ =`; add justification comments | ✅ | `harden/bugs-2` | ✅ |
@@ -123,7 +123,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | 2 | Perms-after-create | Every secret/dir **born** with final perms; zero chmod-after on secrets | 2.1–2.4 | **100%** |
 | 3 | Path string identity | No safety decision on path strings; identity helper exists + tested | 3.1 | **100%** |
 | 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | ~40% (4.3 ✅ + 4.4 RFC ✅; 4.1 decoder + 4.2 argv pending — gate still red on 36 byte sites) |
-| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ~85% (5.1 ✅; 5.2 ✅ all 5 parsers hardened + module-scoped `arithmetic_side_effects`; 5.3 🟨 parser malformed-record regression test landed, cache-deserialize fuzz pending) |
+| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ✅ 100% (5.1 ✅; 5.2 ✅ all 5 parsers hardened + module-scoped `arithmetic_side_effects`; 5.3 ✅ parser malformed-record test + deserializer truncation/boundary/seeded-fuzz corpus) |
 | 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
 | 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% (Windows-only, pending) |
 | 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | ~50% (8.2 ✅; 8.1 broker single-handle Windows-only, pending) |
@@ -816,9 +816,9 @@ deterministic (seeded) and runs in CI.
 
 **Verify:** `cargo nextest run -p uffs-mft -- malformed`
 
-**Implementation notes (partial, landed with WI-5.2 on `harden/wi-5.2-parser-checked`):**
+**Implementation notes (landed on `harden/wi-5.2-parser-checked`):**
 
-- **Done:** a deterministic, table-driven malformed-record regression test
+- **Parsers** — a deterministic, table-driven malformed-record regression test
   (`io::parser::tests::malformed_records_do_not_panic`) feeds 8 crafted records —
   each passing the FILE-record header gate so the attribute loop runs — through
   **all three live parser entry points** (`parse_record_to_index`,
@@ -826,15 +826,26 @@ deterministic (seeded) and runs in CI.
   target every edge WI-5.2 converted: first-attribute-offset past EOF, attribute
   length overrunning the record, `name_length * 2` overflow, non-resident size
   fields past EOF, reparse value-offset past EOF, zero-length attribute (loop
-  termination), and a full garbage body. The asserted property is **no panic**
-  (records may legitimately parse or skip; the contract under test is liveness,
-  not a specific return). A `RecordBuilder` constructs records by append, so the
-  fixture itself is index-free and panic-free.
-- **Pending (follow-up):** seeded-`rand` fuzz vectors and the **cache-deserializer**
-  malformed-input cases (`index/storage/deserialize.rs`). The deserializer was
-  not part of the WI-5.2 parser surface and is deferred to a dedicated WI-5.3
-  commit; a `cargo-fuzz` target is intentionally **not** added (would introduce a
-  toolchain dependency without sign-off, per the plan's own caveat).
+  termination), and a full garbage body. A `RecordBuilder` constructs records by
+  append, so the fixture itself is index-free and panic-free.
+- **Cache deserializer** (`index/storage/deserialize.rs`, `index/tests_storage.rs`)
+  — five tests: a valid-blob round-trip baseline; a **truncation sweep** over a
+  *populated* serialized index at every length; empty / 1-byte rejection;
+  out-of-range section-length header fields (`u64::MAX` in record-count /
+  names-size / links-count → clean error, no overflow/OOB); and a **seeded,
+  deterministic fuzz loop** (`ChaCha8Rng::seed_from_u64`, 5 000 iterations)
+  mixing bit-flips, random truncation, trailing garbage, and fully random blobs.
+- **Property under test** is **liveness** — `deserialize` returns `Ok` *or* `Err`
+  but never panics/aborts — except where a specific rejection is provable (tiny
+  inputs, a cut inside the fixed header, oversized length fields). The truncation
+  sweep deliberately does **not** assert "every prefix is an error": the
+  deserializer is intentionally lenient about some trailing/optional sections, so
+  a near-complete prefix may legitimately parse `Ok`; asserting otherwise would
+  encode a false contract. This was found empirically (a 1570/1610-byte prefix
+  parsed) and the test was corrected to match the real, safe behaviour.
+- A `cargo-fuzz` target is intentionally **not** added — it would introduce a
+  toolchain dependency without sign-off (per the plan's own caveat); the seeded
+  `ChaCha8Rng` corpus gives deterministic, CI-friendly fuzz coverage instead.
 
 ---
 
