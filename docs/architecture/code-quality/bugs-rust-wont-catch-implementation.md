@@ -110,17 +110,24 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 
 ### 1.2 Category coverage rollup (fill as phases close)
 
+> **Status (partial landing — 13 WIs of 20):** this branch closes Phase A
+> entirely plus the surgical subset of B/C/E. The remaining WIs (4.1, 4.2, 5.2,
+> 5.3, 6.3, 7.1, 8.1) are larger / cross-cutting / Windows-only and are tracked
+> as follow-ups below — see §1.1 statuses and the per-WI deviation notes. The
+> plan's §2 "Definition of done" is therefore **not yet met**; this is
+> incremental, reviewable progress, not the finished effort.
+
 | # | Category | Mitigation definition (acceptance) | WIs | Coverage |
 |---|----------|------------------------------------|-----|:--------:|
-| 1 | TOCTOU | No check→use on re-resolved paths; no predictable temp + `File::create` | 1.1, 1.2, 2.4 | 0% |
-| 2 | Perms-after-create | Every secret/dir **born** with final perms; zero chmod-after on secrets | 2.1–2.4 | 0% |
-| 3 | Path string identity | No safety decision on path strings; identity helper exists + tested | 3.1 | 0% |
-| 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | 0% |
-| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | 0% |
-| 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | 0% |
-| 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% |
-| 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | 0% |
-| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | 0% |
+| 1 | TOCTOU | No check→use on re-resolved paths; no predictable temp + `File::create` | 1.1, 1.2, 2.4 | **100%** |
+| 2 | Perms-after-create | Every secret/dir **born** with final perms; zero chmod-after on secrets | 2.1–2.4 | **100%** |
+| 3 | Path string identity | No safety decision on path strings; identity helper exists + tested | 3.1 | **100%** |
+| 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | ~40% (4.3 ✅ + 4.4 RFC ✅; 4.1 decoder + 4.2 argv pending — gate still red on 36 byte sites) |
+| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ~33% (5.1 ✅; 5.2 parser-hardening + 5.3 fuzz pending) |
+| 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
+| 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% (Windows-only, pending) |
+| 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | ~50% (8.2 ✅; 8.1 broker single-handle Windows-only, pending) |
+| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | Gate built ✅; **not yet wired into the pipeline** (still red on the 36 byte sites until WI-4.1/4.2 land) |
 
 > **Note on WI-4.4 (🟨 Deferred-but-tracked):** literal *lossless* name handling
 > requires a binary/WTF-8 name column that ripples through the Polars query
