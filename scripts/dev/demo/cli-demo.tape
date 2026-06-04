@@ -13,17 +13,21 @@
 Output uffs-cli.gif
 
 Set Shell "pwsh"
-Set FontSize 14
-Set Width 1400
-Set Height 560
+Set FontSize 20
+Set Width 1200
+Set Height 640
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 Set PlaybackSpeed 1.0
 
-# Settle on a clean prompt
+# Settle on a clean prompt and disable terminal line-wrap (DECAWM off).
+# Long output lines will clip at the right edge instead of wrapping and
+# distorting the table layout. The VT100 sequence \033[?7l is honoured
+# by ttyd/xterm.js which VHS uses as its renderer.
 Hide
 Type "clear" Enter
+Type "printf '\033[?7l'" Enter
 Show
 Sleep 600ms
 
