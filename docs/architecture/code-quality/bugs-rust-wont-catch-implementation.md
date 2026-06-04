@@ -92,7 +92,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-2.4 | 2 Perms | `atomic_write`: temp born `0600` + randomised name (also feeds WI-1.2) | ✅ | `harden/bugs` | ✅ |
 | WI-1.1 | 1 TOCTOU | `secure_remove`: single fd (open once, `file.metadata()`) | ✅ | `harden/bugs` | ✅ |
 | WI-1.2 | 1 TOCTOU | Randomised, `create_new` temp in `atomic_write` + daemon `--out` export | ✅ | `harden/bugs` | ✅ |
-| WI-5.1 | 5 Panic | Enable `arithmetic_side_effects`; `overflow-checks=true` for `dist` | ⬜ | | |
+| WI-5.1 | 5 Panic | Enable `arithmetic_side_effects`; `overflow-checks=true` for `dist` | ✅ | `harden/bugs` | ✅ |
 | WI-G.1 | Guard | CI grep-gate script forbidding the anti-patterns from returning | ⬜ | | |
 | WI-4.1 | 4 Bytes | Single instrumented UTF-16 decoder; per-index `lossy_name_count` stat + warn | ⬜ | | |
 | WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ⬜ | | |
@@ -128,6 +128,19 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 > it ships as an RFC first (acceptance below). WI-4.1 makes the current loss
 > **non-silent, measured, and tested** — that is the required mitigation; WI-4.4
 > is the path to elimination and must not be silently dropped.
+
+> **Deviation (WI-5.1 — implementation reality):** the plan called for a
+> workspace `arithmetic_side_effects = "warn"`. That is **not viable** in this
+> repo: the lint gate runs `-D warnings` (`just/shared.just::common_flags`),
+> which promotes a workspace `"warn"` to a hard error across ~1766 legitimate
+> sites (timestamp math, chunking, compact-cache offsets, crypto) far beyond
+> the untrusted-input parsers the lint targets. Resolution: WI-5.1 ships the
+> unambiguous half (`[profile.dist] overflow-checks = true`); the lint itself
+> is enabled **module-scoped** (`#![warn(clippy::arithmetic_side_effects)]`) on
+> the MFT parser modules in WI-5.2, where wrapping on raw on-disk bytes is the
+> real DoS risk, and those sites are converted to `checked_*`. Net effect for
+> Category 5 is identical (parsers guarded), without 1766 false-positive gate
+> failures.
 
 ---
 

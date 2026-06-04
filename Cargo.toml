@@ -359,51 +359,60 @@ cognitive_complexity = "deny" # Keep functions simple (default threshold=25; vio
 too_many_lines = "deny"       # Keep functions short (default threshold=100; violations get scoped #[expect])
 type_complexity = "deny"      # Keep types simple (default threshold=250; violations get scoped #[expect]) — see trait_policy.md §2
 # ── Phase 7f trait/generic/dispatch discipline lints — see trait_policy.md §2 ──
-too_many_arguments = "deny"                        # Keep fn signatures lean (default threshold=7; violations get scoped #[expect]) — see trait_policy.md §2
-trait_duplication_in_bounds = "deny"               # Disallow `T: Foo + Foo + Bar` duplicate bounds — see trait_policy.md §8 anti-patterns
-wrong_self_convention = "deny"                     # Enforce as_*/into_*/to_*/from_* method-name conventions — see trait_policy.md §2
-multiple_bound_locations = "warn"                  # Discourage split `<T: …>` + `where T: …` on the same `T` — see trait_policy.md §2
-large_enum_variant = "deny"                        # Optimize enum memory usage
-large_stack_arrays = "deny"                        # Avoid large stack allocations
-large_types_passed_by_value = "deny"               # Pass large types by reference
-trivially_copy_pass_by_ref = "deny"                # Pass small types by value
-clone_on_ref_ptr = "deny"                          # Use Arc::clone(&x) form — see allocation_policy.md §3.1 (category α)
-redundant_clone = "deny"                           # Remove redundant clones — see allocation_policy.md §3.4 (category δ)
-unnecessary_wraps = "deny"                         # Remove unnecessary Result/Option wraps
-option_option = "deny"                             # Avoid Option<Option<T>>
-result_unit_err = "deny"                           # Use better error types
-bool_to_int_with_if = "deny"                       # Use more idiomatic conversions
-cast_lossless = "deny"                             # Use lossless casts
-cast_possible_truncation = "deny"                  # Warn about truncating casts
-cast_possible_wrap = "deny"                        # Warn about wrapping casts
-cast_precision_loss = "deny"                       # Warn about precision loss
-cast_sign_loss = "deny"                            # Warn about sign loss
-float_cmp = "deny"                                 # Proper float comparisons
-float_cmp_const = "deny"                           # Proper float constant comparisons
-lossy_float_literal = "deny"                       # Avoid lossy float literals
-imprecise_flops = "deny"                           # Precise floating point operations
-suboptimal_flops = "deny"                          # Optimal floating point operations
-fn_params_excessive_bools = "deny"                 # Avoid too many boolean parameters
-struct_excessive_bools = "deny"                    # Avoid too many boolean fields
-verbose_bit_mask = "deny"                          # Use cleaner bit operations
-inefficient_to_string = "deny"                     # Use efficient string conversions — see allocation_policy.md §2
-string_add = "deny"                                # Use format! instead of string addition
-string_add_assign = "deny"                         # Use format! instead of +=
-string_slice = "deny"                              # Use proper string slicing
-str_to_string = "deny"                             # Use to_owned() instead of to_string() — see allocation_policy.md §2
-implicit_clone = "deny"                            # Make clones explicit — see allocation_policy.md §2
-cloned_instead_of_copied = "deny"                  # Use .copied() for Copy types — see allocation_policy.md §2
-map_clone = "deny"                                 # Use .copied() over .map(Clone::clone) — see allocation_policy.md §2
-filter_map_next = "deny"                           # Use find_map instead
-flat_map_option = "deny"                           # Use filter_map instead
-manual_filter_map = "deny"                         # Use filter_map
-manual_find_map = "deny"                           # Use find_map
-map_unwrap_or = "deny"                             # Use map_or instead
-unnecessary_unwrap = "deny"                        # Remove unnecessary unwraps
-or_fun_call = "deny"                               # Use or_else for expensive operations
-single_match_else = "deny"                         # Use if let instead of match
-match_bool = "deny"                                # Use if instead of match on bool
-indexing_slicing = "deny"                          # Avoid indexing and slicing — use .get()
+too_many_arguments = "deny"          # Keep fn signatures lean (default threshold=7; violations get scoped #[expect]) — see trait_policy.md §2
+trait_duplication_in_bounds = "deny" # Disallow `T: Foo + Foo + Bar` duplicate bounds — see trait_policy.md §8 anti-patterns
+wrong_self_convention = "deny"       # Enforce as_*/into_*/to_*/from_* method-name conventions — see trait_policy.md §2
+multiple_bound_locations = "warn"    # Discourage split `<T: …>` + `where T: …` on the same `T` — see trait_policy.md §2
+large_enum_variant = "deny"          # Optimize enum memory usage
+large_stack_arrays = "deny"          # Avoid large stack allocations
+large_types_passed_by_value = "deny" # Pass large types by reference
+trivially_copy_pass_by_ref = "deny"  # Pass small types by value
+clone_on_ref_ptr = "deny"            # Use Arc::clone(&x) form — see allocation_policy.md §3.1 (category α)
+redundant_clone = "deny"             # Remove redundant clones — see allocation_policy.md §3.4 (category δ)
+unnecessary_wraps = "deny"           # Remove unnecessary Result/Option wraps
+option_option = "deny"               # Avoid Option<Option<T>>
+result_unit_err = "deny"             # Use better error types
+bool_to_int_with_if = "deny"         # Use more idiomatic conversions
+cast_lossless = "deny"               # Use lossless casts
+cast_possible_truncation = "deny"    # Warn about truncating casts
+cast_possible_wrap = "deny"          # Warn about wrapping casts
+cast_precision_loss = "deny"         # Warn about precision loss
+cast_sign_loss = "deny"              # Warn about sign loss
+float_cmp = "deny"                   # Proper float comparisons
+float_cmp_const = "deny"             # Proper float constant comparisons
+lossy_float_literal = "deny"         # Avoid lossy float literals
+imprecise_flops = "deny"             # Precise floating point operations
+suboptimal_flops = "deny"            # Optimal floating point operations
+fn_params_excessive_bools = "deny"   # Avoid too many boolean parameters
+struct_excessive_bools = "deny"      # Avoid too many boolean fields
+verbose_bit_mask = "deny"            # Use cleaner bit operations
+inefficient_to_string = "deny"       # Use efficient string conversions — see allocation_policy.md §2
+string_add = "deny"                  # Use format! instead of string addition
+string_add_assign = "deny"           # Use format! instead of +=
+string_slice = "deny"                # Use proper string slicing
+str_to_string = "deny"               # Use to_owned() instead of to_string() — see allocation_policy.md §2
+implicit_clone = "deny"              # Make clones explicit — see allocation_policy.md §2
+cloned_instead_of_copied = "deny"    # Use .copied() for Copy types — see allocation_policy.md §2
+map_clone = "deny"                   # Use .copied() over .map(Clone::clone) — see allocation_policy.md §2
+filter_map_next = "deny"             # Use find_map instead
+flat_map_option = "deny"             # Use filter_map instead
+manual_filter_map = "deny"           # Use filter_map
+manual_find_map = "deny"             # Use find_map
+map_unwrap_or = "deny"               # Use map_or instead
+unnecessary_unwrap = "deny"          # Remove unnecessary unwraps
+or_fun_call = "deny"                 # Use or_else for expensive operations
+single_match_else = "deny"           # Use if let instead of match
+match_bool = "deny"                  # Use if instead of match on bool
+indexing_slicing = "deny"            # Avoid indexing and slicing — use .get()
+# NOTE (WI-5.1/5.2): `arithmetic_side_effects` is intentionally NOT a
+# workspace lint. The repo's lint gate runs `-D warnings` (see
+# `just/shared.just::common_flags`), which would promote a workspace
+# `"warn"` to a hard error across ~1766 legitimate sites (timestamp math,
+# chunking, compact-cache offsets, crypto) far beyond the untrusted-input
+# parsers this lint is meant to guard. Instead WI-5.2 enables it
+# module-scoped (`#![warn(clippy::arithmetic_side_effects)]`) on the MFT
+# parser modules that consume raw on-disk bytes, where wrapping is a real
+# DoS risk, and converts those sites to `checked_*`.
 match_same_arms = "deny"                           # Combine identical match arms
 redundant_pattern_matching = "deny"                # Simplify pattern matching
 single_match = "deny"                              # Use if let instead of single match
@@ -668,6 +677,11 @@ strip = "debuginfo"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+# Shipped binaries keep overflow checks on: a wrapped integer in the daemon
+# (which runs `panic = "abort"`) is a correctness/DoS risk worth the small
+# perf cost. `release` leaves them off for benchmarks; `dist` is what users
+# actually run, so it opts back in. (WI-5.1)
+overflow-checks = true
 
 [profile.test]
 inherits = "dev"
