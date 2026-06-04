@@ -90,7 +90,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-2.2 | 2 Perms | `create_secure_dir`: per-component `0700` via `DirBuilderExt::mode` | ✅ | `harden/bugs` | ✅ |
 | WI-2.3 | 2 Perms | Keystore: write `key.bin` / DPAPI blob born `0600` (no chmod-after) | ✅ | `harden/bugs` | ✅ |
 | WI-2.4 | 2 Perms | `atomic_write`: temp born `0600` + randomised name (also feeds WI-1.2) | ✅ | `harden/bugs` | ✅ |
-| WI-1.1 | 1 TOCTOU | `secure_remove`: single fd (open once, `file.metadata()`) | ⬜ | | |
+| WI-1.1 | 1 TOCTOU | `secure_remove`: single fd (open once, `file.metadata()`) | ✅ | `harden/bugs` | ✅ |
 | WI-1.2 | 1 TOCTOU | Randomised, `create_new` temp in `atomic_write` + daemon `--out` export | ✅ | `harden/bugs` | ✅ |
 | WI-5.1 | 5 Panic | Enable `arithmetic_side_effects`; `overflow-checks=true` for `dist` | ⬜ | | |
 | WI-G.1 | Guard | CI grep-gate script forbidding the anti-patterns from returning | ⬜ | | |

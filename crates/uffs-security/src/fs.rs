@@ -325,22 +325,28 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
     /// Size of the zero-fill buffer for secure wipe.
     const ZERO_BUF_SIZE: usize = 64 * 1024;
 
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-
-    let file_len = meta.len();
-    // `meta` goes out of scope at end-of-function; no explicit drop needed.
-
-    // On Windows, ensure the file isn't read-only before we try to write.
-    // See `win_clear_readonly` docs for why we don't use
-    // `std::fs::Permissions::set_readonly(false)` here.
+    // On Windows, ensure the file isn't read-only before we try to open it
+    // for write. This is a path-based attribute clear that necessarily
+    // precedes the fd anchor below — acceptable because it only toggles an
+    // attribute, not content. See `win_clear_readonly` docs for why we don't
+    // use `std::fs::Permissions::set_readonly(false)` here.
     #[cfg(windows)]
     win_clear_readonly(path)?;
 
-    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    // Anchor on a single fd: open once, then read the length from the OPEN
+    // file (not a separate `std::fs::metadata(path)` stat). This closes the
+    // TOCTOU window where the path could be re-pointed between the size we
+    // overwrite and the bytes we write. NotFound is a no-op, as before.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let file_len = file.metadata()?.len();
 
     let zeros = vec![0_u8; ZERO_BUF_SIZE];
     let mut remaining = file_len;
@@ -708,5 +714,41 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".uffs.tmp"))
             .count();
         assert_eq!(leftover, 0, "no temp files should remain");
+    }
+
+    #[test]
+    fn secure_remove_zeroes_then_unlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("victim.bin");
+        std::fs::write(&path, vec![0xFF_u8; 4096]).unwrap();
+        secure_remove(&path).unwrap();
+        assert!(!path.exists(), "file must be unlinked after secure_remove");
+    }
+
+    #[test]
+    fn secure_remove_absent_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.bin");
+        // Removing a missing path is a no-op success.
+        secure_remove(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_remove_follows_symlink_to_target_then_unlinks_link() {
+        // Documents the chosen semantics: `secure_remove` opens the path for
+        // write (following a symlink to its target, the OS default), zeroes
+        // the TARGET's bytes via the fd, then unlinks the LINK. We assert the
+        // observable end state: the link is gone. (The pre-stat removal in
+        // WI-1.1 means size + overwrite now go through one fd, eliminating the
+        // metadata→open re-resolution.)
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.bin");
+        std::fs::write(&target, vec![0xAB_u8; 1024]).unwrap();
+        let link = dir.path().join("link.bin");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        secure_remove(&link).unwrap();
+        assert!(!link.exists(), "the symlink itself must be removed");
     }
 }
