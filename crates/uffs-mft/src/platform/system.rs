@@ -734,11 +734,16 @@ fn query_memory_macos() -> Option<SystemMemory> {
         .arg("hw.memsize")
         .output()
         .ok()?;
+    // AUDIT-OK(bytes): sysctl memsize for a stats display; the following
+    // .parse().ok()? already fails closed on any non-numeric/garbage byte.
+    // (WI-4.3 follow-up)
     let total_str = String::from_utf8_lossy(&total_out.stdout);
     let total_bytes: u64 = total_str.trim().parse().ok()?;
 
     // Available: vm_stat → parse "Pages free" and "Pages inactive"
     let vm_out = Command::new("vm_stat").output().ok()?;
+    // AUDIT-OK(bytes): vm_stat output parsed line-by-line for a stats display;
+    // each field parse fails closed. (WI-4.3 follow-up)
     let vm_str = String::from_utf8_lossy(&vm_out.stdout);
 
     // First line: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"

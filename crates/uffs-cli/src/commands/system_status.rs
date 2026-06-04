@@ -384,6 +384,9 @@ fn find_mcp_stdio_processes() -> Vec<StdioSession> {
     else {
         return Vec::new();
     };
+    // AUDIT-OK(bytes): per-line PID scan of process-list output; each line's
+    // PID parses-or-skips (fail-safe). Whole-buffer strict decode would drop
+    // the whole list on one bad byte. (WI-4.3 follow-up)
     let text = String::from_utf8_lossy(&raw_output.stdout);
     let my_pid = std::process::id();
 
@@ -475,7 +478,10 @@ fn resolve_parent_name(ppid: u32) -> Option<String> {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    // Strict decode: this process name is returned and used for a
+    // comparison/targeting decision, so invalid UTF-8 fails closed (None)
+    // rather than yielding a U+FFFD-mangled name. (WI-4.3 follow-up)
+    let name = core::str::from_utf8(&output.stdout).ok()?.trim().to_owned();
     if name.is_empty() {
         return None;
     }
@@ -504,6 +510,8 @@ fn http_get_json(bind: &str, port: u16, path: &str) -> Result<serde_json::Value>
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
 
+    // AUDIT-OK(bytes): HTTP probe response body split for display only, not a
+    // trust/targeting decision. (WI-4.3 follow-up)
     let text = String::from_utf8_lossy(&response);
     let body = text
         .split_once("\r\n\r\n")
