@@ -28,25 +28,25 @@ Show
 Sleep 600ms
 
 # 1) Whole-machine search across every drive — returns immediately
-Type "uffs ""*.rs"""
+Type "uffs.exe ""*.rs"""
 Sleep 400ms
 Enter
 Sleep 2500ms
 
 # 2) Filtered hunt: big, recent log files only
-Type "uffs ""*.log"" --min-size 100MB --newer 7d --files-only"
+Type "uffs.exe ""*.log"" --min-size 100MB --newer 7d --files-only"
 Sleep 400ms
 Enter
 Sleep 2800ms
 
 # 3) Single-drive scope
-Type "uffs ""*.dll"" --drive C"
+Type "uffs.exe ""*.dll"" --drive C"
 Sleep 400ms
 Enter
 Sleep 2500ms
 
 # 4) Prove the architecture: per-drive tier + telemetry table (the hot daemon)
-Type "uffs daemon status_drives"
+Type "uffs.exe daemon status_drives"
 Sleep 400ms
 Enter
 Sleep 3500ms
