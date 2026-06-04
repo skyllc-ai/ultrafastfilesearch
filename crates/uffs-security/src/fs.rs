@@ -255,11 +255,16 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 // Atomic Writes (S1.3)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Writes data atomically: write to `.uffs.tmp`, `sync_all()`, rename over
-/// the target.
+/// Writes data atomically: write to a **randomised** temp in the same
+/// directory, `sync_all()`, rename over the target.
 ///
 /// If the process is killed mid-write, the original file remains intact.
-/// Stale `.uffs.tmp` files are cleaned up on the next `cache_dir()` call.
+/// Stale temp files are cleaned up on the next `cache_dir()` call.
+///
+/// The temp file is **born** `0600` via [`create_new_secure_file`] and carries
+/// a random suffix, so there is no perms-after-create window and no
+/// predictable name an attacker could pre-plant as a symlink (`create_new`
+/// refuses to follow it).
 ///
 /// Works on all platforms: POSIX `rename` is atomic on the same filesystem;
 /// on Windows `std::fs::rename` uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
@@ -270,17 +275,32 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
 
-    let tmp_path = path.with_extension("uffs.tmp");
+    use rand::Rng as _;
 
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
+    // Unique temp name in the SAME directory as `path` (same-FS rename stays
+    // atomic). `unwrap_or_default` here is on `Option`, not `Result`.
+    // Use `fill_bytes` (the API the keystore/crypto already use) for the
+    // random suffix rather than the version-sensitive `random()` helper.
+    let mut suffix_bytes = [0_u8; 8];
+    rand::rng().fill_bytes(&mut suffix_bytes);
+    let suffix = u64::from_le_bytes(suffix_bytes);
+    let file_name = path.file_name().unwrap_or_default();
+    let tmp_name = format!("{}.{:016x}.uffs.tmp", file_name.to_string_lossy(), suffix);
+    let tmp_path = path.with_file_name(tmp_name);
 
-    set_file_permissions_owner_only(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)?;
+    let write_result = (|| -> io::Result<()> {
+        let mut file = create_new_secure_file(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp_path, path)
+    })();
 
-    Ok(())
+    if write_result.is_err() {
+        // Best-effort cleanup of the temp on any failure before rename.
+        let _ignore = std::fs::remove_file(&tmp_path);
+    }
+    write_result
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -621,5 +641,72 @@ mod tests {
         create_secure_dir(&target).unwrap();
         // Second call on an existing dir must still succeed.
         create_secure_dir(&target).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_sets_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.bin");
+        atomic_write(&path, b"payload").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "atomic_write final file must be 0600, got {mode:o}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_target() {
+        // The TARGET may pre-exist (rename replaces it); only the randomised
+        // TEMP uses create_new. Confirms we didn't break replace semantics.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.bin");
+        atomic_write(&path, b"first").unwrap();
+        atomic_write(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn atomic_write_concurrent_no_collision() {
+        // `tempdir` outlives the threads because we join all of them before
+        // it drops at end-of-scope — so each thread can take an owned
+        // `PathBuf` clone without needing `Arc`.
+        let tempdir = tempfile::tempdir().unwrap();
+        let target = tempdir.path().join("shared.bin");
+
+        let handles: Vec<_> = (0_u8..8)
+            .map(|writer_id| {
+                let thread_target = target.clone();
+                std::thread::spawn(move || {
+                    let payload = vec![writer_id; 256];
+                    atomic_write(&thread_target, &payload).unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Final content must be exactly one writer's payload (256 equal bytes),
+        // never an interleaving of two writers (randomised temps must not
+        // collide).
+        let final_bytes = std::fs::read(&target).unwrap();
+        assert_eq!(final_bytes.len(), 256);
+        let first = final_bytes.first().copied().unwrap();
+        assert!(
+            final_bytes.iter().all(|&byte| byte == first),
+            "final file must be one writer's payload, not interleaved"
+        );
+
+        // No leftover temp files in the dir.
+        let leftover = std::fs::read_dir(tempdir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".uffs.tmp"))
+            .count();
+        assert_eq!(leftover, 0, "no temp files should remain");
     }
 }

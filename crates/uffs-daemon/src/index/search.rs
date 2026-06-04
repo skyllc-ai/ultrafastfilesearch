@@ -677,16 +677,29 @@ impl IndexManager {
     ) -> Result<usize, std::io::Error> {
         use std::io::BufWriter;
 
+        use rand::Rng as _;
+
         // Zero results → don't create the file at all.
         if rows.is_empty() {
             return Ok(0);
         }
 
         let target = std::path::Path::new(path);
-        let tmp_path = target.with_extension("uffs.tmp");
+
+        // Randomised temp name in the same directory (same-FS rename stays
+        // atomic). Born 0600 via `create_new_secure_file`, which refuses to
+        // follow a symlink pre-planted at a guessed temp path. `file_name`
+        // is an `Option`, not a `Result` — `unwrap_or_default` is not an
+        // unwrap-lint violation.
+        let mut suffix_bytes = [0_u8; 8];
+        rand::rng().fill_bytes(&mut suffix_bytes);
+        let suffix = u64::from_le_bytes(suffix_bytes);
+        let file_name = target.file_name().unwrap_or_default();
+        let tmp_name = format!("{}.{:016x}.uffs.tmp", file_name.to_string_lossy(), suffix);
+        let tmp_path = target.with_file_name(tmp_name);
 
         // Write to temp file — target is untouched until rename.
-        let file = std::fs::File::create(&tmp_path)?;
+        let file = uffs_security::fs::create_new_secure_file(&tmp_path)?;
         let mut writer = BufWriter::with_capacity(256 * 1024, file);
 
         let write_result = output_config

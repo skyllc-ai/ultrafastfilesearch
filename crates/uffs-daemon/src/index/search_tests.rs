@@ -109,3 +109,59 @@ fn build_output_config_parity_compat_uses_defaults() {
     assert!(cfg.parity_compat);
     assert!(cfg.columns.is_some());
 }
+
+/// WI-1.2: the `--out` export writes the target with the expected content
+/// AND does not follow a symlink pre-planted at the *old, predictable* temp
+/// name (`<target>.uffs.tmp`).  The randomised temp name makes that guess
+/// fail, so the sentinel the symlink points at is left untouched.
+#[test]
+fn write_rows_to_file_ignores_pre_planted_predictable_tmp() {
+    use uffs_core::search::backend::DisplayRow;
+    use uffs_mft::platform::DriveLetter;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("results.csv");
+
+    // Pre-plant a symlink at the OLD predictable temp path, pointing at a
+    // sentinel we must not clobber. (Unix only — needs symlink semantics.)
+    #[cfg(unix)]
+    let sentinel = {
+        let sentinel = dir.path().join("sentinel.bin");
+        std::fs::write(&sentinel, b"DO NOT TOUCH").unwrap();
+        let guessed_tmp = target.with_extension("uffs.tmp");
+        std::os::unix::fs::symlink(&sentinel, &guessed_tmp).unwrap();
+        sentinel
+    };
+
+    let rows = vec![DisplayRow::new(
+        0,
+        DriveLetter::C,
+        "C:\\Users\\file.txt".to_owned(),
+        1234,
+        false,
+        0,
+        0,
+        0,
+        0,
+        1234,
+        0,
+        0,
+        0,
+    )];
+    let cfg = build_output_config(&SearchParams::default());
+
+    let written = IndexManager::write_rows_to_file(&rows, target.to_str().unwrap(), &cfg).unwrap();
+    assert_eq!(written, 1);
+
+    // Target exists with the row's filename in it.
+    let body = std::fs::read_to_string(&target).unwrap();
+    assert!(
+        body.contains("file.txt"),
+        "exported file must contain the row"
+    );
+
+    // The pre-planted symlink's sentinel target is untouched (randomised
+    // temp name was used, not the guessed predictable one).
+    #[cfg(unix)]
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"DO NOT TOUCH");
+}
