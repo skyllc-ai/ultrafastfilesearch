@@ -13,10 +13,68 @@ use crate::commands::{daemon_load, daemon_tiering};
 
 /// Execute a daemon management action.
 ///
+/// Every command that mutates daemon state (stop, kill, restart, load,
+/// preload, hibernate, forget) requires an elevated shell:
+/// - **Windows**: Administrator (UAC-elevated) token.
+/// - **Unix** (Linux, macOS, …): effective user ID 0 (root / sudo).
+///
+/// `uffsd` runs with elevated privileges to read raw filesystem data;
+/// a non-privileged caller must not stop or restart it — doing so would
+/// kill the running daemon with no safe path to bring it back.
+///
+/// Read-only queries (`status`, `stats`, `status_drives`) are always
+/// permitted without elevation.  `daemon start --elevate` is also
+/// permitted on Windows; it opts in to an explicit UAC prompt.
+///
 /// # Errors
 ///
-/// Returns an error if the operation fails.
+/// Returns an error if the operation fails, or if a mutating command is
+/// attempted from a non-elevated shell.
 pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
+    // Elevation gate — checked here, once, before any action is dispatched,
+    // so no individual subcommand handler can accidentally bypass it.
+    {
+        let is_read_only_or_uac_start = matches!(
+            action,
+            DaemonAction::Status
+                | DaemonAction::Stats
+                | DaemonAction::StatusDrives
+                | DaemonAction::Start { elevate: true, .. }
+        );
+        if !is_read_only_or_uac_start && !uffs_mft::is_elevated() {
+            #[cfg(windows)]
+            anyhow::bail!(
+                "Daemon management commands require an elevated (Administrator) shell.\n\n\
+                 uffsd runs with admin privileges to read the NTFS Master File Table.\n\
+                 A non-elevated process must not stop or restart it — doing so would\n\
+                 kill the running daemon with no way to bring it back.\n\n\
+                 To run this command, pick one:\n\
+                 \x20 1. Relaunch PowerShell / cmd as Administrator\n\
+                 \x20    (right-click \u{2192} \"Run as administrator\"), then retry.\n\
+                 \x20 2. For `daemon start`, add --elevate to get a UAC prompt:\n\
+                 \x20      uffs daemon start --elevate\n\
+                 \x20 3. Install the broker service (one-time setup, no future UAC):\n\
+                 \x20      uffs-broker --install"
+            );
+            #[cfg(unix)]
+            anyhow::bail!(
+                "Daemon management commands require root privileges.\n\n\
+                 uffsd runs as root to read raw filesystem data.\n\
+                 A non-root process must not stop or restart it — doing so would\n\
+                 kill the running daemon with no way to bring it back.\n\n\
+                 To run this command, prefix it with sudo:\n\
+                 \x20  sudo uffs daemon <subcommand>"
+            );
+            // Fallback for platforms that are neither Windows nor Unix
+            // (e.g. WASM, bare-metal targets — should not arise in practice).
+            #[cfg(not(any(windows, unix)))]
+            anyhow::bail!(
+                "Daemon management commands require elevated privileges.\n\
+                 Please run this command as a privileged user."
+            );
+        }
+    }
+
     match action {
         DaemonAction::Start {
             mft_file,

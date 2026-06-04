@@ -102,6 +102,10 @@ bytemuck.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+# Unix privilege check (`is_elevated` → geteuid() == 0)
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true

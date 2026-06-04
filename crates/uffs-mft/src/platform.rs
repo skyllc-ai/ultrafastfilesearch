@@ -44,6 +44,9 @@ pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
 pub use system::DriveType;
+// Elevation check — available on all platforms (Windows: UAC token check;
+// Unix: geteuid() == 0).  Both the daemon CLI gate and uffs-daemon use this.
+pub use system::is_elevated;
 // is_volume_read_only — Windows-only (non-Windows stub was removed because
 // every caller in this crate is #[cfg(windows)]-gated).  Consumed by the
 // uffs-mft bin (commands/windows/incremental.rs) via the external-style
@@ -54,15 +57,15 @@ pub use system::is_volume_read_only;
 pub(crate) use system::u32_size_of;
 // System memory query — available on all platforms
 pub use system::{SystemMemory, query_system_memory};
-// Public API surface — consumed cross-crate (uffs-daemon), by the
-// uffs-mft bin (commands/) via `uffs_mft::platform::*` external-style
+// Windows-specific public API surface — consumed cross-crate (uffs-daemon),
+// by the uffs-mft bin (commands/) via `uffs_mft::platform::*` external-style
 // paths, and as platform utility helpers (infer_drive_from_path,
 // volume_root_path are stable public API restored from the Phase 2.5
 // demotion in commit 1529cb162).
 #[cfg(windows)]
 pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
-    is_elevated, volume_root_path,
+    volume_root_path,
 };
 #[cfg(windows)]
 pub(crate) use volume::{

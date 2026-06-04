@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Windows privilege, path, and drive-classification helpers.
+//! Platform privilege, path, and drive-classification helpers.
+//!
+//! Covers Windows (UAC token, drive-type detection, volume enumeration) and
+//! Unix (geteuid-based elevation check, memory query).
+//!
+//! Exception: single cross-platform module covering Windows Win32 FFI
+//! (privilege checking, volume detection, drive classification) and Unix stubs
+//! (geteuid, /proc/meminfo, sysctl).  Splitting by OS would require duplicating
+//! shared types (`DriveType`, `SystemMemory`) or a separate types module,
+//! adding more files for a marginal line-count benefit.
 
 #[cfg(windows)]
 use core::mem::size_of;
@@ -47,9 +56,15 @@ use super::drive_letter::DriveLetter;
 #[cfg(windows)]
 use super::volume::HandleGuard;
 
-/// Checks if the current process has Administrator privileges.
+/// Checks if the current process is running with elevated privileges.
 ///
-/// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
+/// - **Windows**: returns `true` when the process token carries the
+///   Administrator elevation flag (UAC-checked via `GetTokenInformation`).
+/// - **Unix** (Linux, macOS, …): returns `true` when the effective user ID is 0
+///   (root / sudo).
+///
+/// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE` on
+/// Windows and root on Unix.
 #[cfg(windows)]
 #[must_use]
 #[expect(
@@ -90,6 +105,19 @@ pub fn is_elevated() -> bool {
     };
 
     result.is_ok() && elevation.TokenIsElevated != 0
+}
+
+/// Unix implementation: elevated iff the effective user ID is 0 (root/sudo).
+#[cfg(unix)]
+#[must_use]
+#[expect(
+    unsafe_code,
+    reason = "FFI: POSIX geteuid() — defined to be safe but the libc binding is unsafe"
+)]
+pub fn is_elevated() -> bool {
+    // SAFETY: `geteuid()` is always safe to call: it has no preconditions,
+    // never fails, and is signal-safe per POSIX.
+    unsafe { libc::geteuid() == 0 }
 }
 
 /// Returns the path to the volume root (e.g., "C:\").

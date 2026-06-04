@@ -21,9 +21,13 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 Set PlaybackSpeed 1.0
 
-# Settle on a clean prompt
+# Settle on a clean prompt and disable terminal line-wrap (DECAWM off).
+# Long output lines will clip at the right edge instead of wrapping and
+# distorting the table layout. The VT100 sequence \033[?7l is honoured
+# by ttyd/xterm.js which VHS uses as its renderer.
 Hide
 Type "clear" Enter
+Type "printf '\033[?7l'" Enter
 Show
 Sleep 600ms
 

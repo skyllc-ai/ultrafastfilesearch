@@ -57,6 +57,10 @@ use hex as _;
 // Platform-gated dependencies (used on Windows only)
 #[cfg(not(windows))]
 use indicatif as _;
+// `libc` is used only by the library (`is_elevated` on Unix); acknowledge
+// the dep here so `unused-crate-dependencies` stays quiet in the binary.
+#[cfg(unix)]
+use libc as _;
 #[cfg(test)]
 use proptest as _;
 // Chaos test harness uses rand (ChaosMftReader is public, not test-only)

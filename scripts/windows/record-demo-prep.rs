@@ -38,7 +38,7 @@
 //   rust-script scripts/windows/record-demo-prep.rs --bin C:\Users\me\bin\uffs.exe
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, exit};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
@@ -222,6 +222,18 @@ fn run_quiet(bin: &str, args: &[&str]) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// Run a uffs subcommand silently and return whether it succeeded.
+/// Used to probe whether a daemon is reachable without printing anything.
+fn run_quiet_check(bin: &str, args: &[&str]) -> bool {
+    Command::new(bin)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn print_recorder_settings() {
