@@ -27,6 +27,10 @@ use dirs_next as _;
 use hex as _;
 use hostname as _;
 use indicatif as _;
+// `libc` is used only by the library (`is_elevated` on Unix); acknowledge
+// the dep here so `unused-crate-dependencies` stays quiet in the benchmark.
+#[cfg(unix)]
+use libc as _;
 use proptest as _;
 use rand as _;
 use rand_chacha as _;

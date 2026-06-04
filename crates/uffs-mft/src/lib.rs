@@ -289,6 +289,10 @@ pub use ntfs::{
     StandardInformation, StreamInfo, apply_usa_fixup, extract_data_runs_from_attribute,
     fixup_file_record, parse_data_runs,
 };
+// Elevation check — cross-platform public API (Windows: UAC token check;
+// Unix: geteuid() == 0).  Exported unconditionally so uffs-cli and
+// uffs-daemon can gate mutating daemon commands on all targets.
+pub use platform::is_elevated;
 // Re-export platform types
 // Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms
 // Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on
@@ -299,7 +303,7 @@ pub use platform::{DriveType, MftBitmap, MftExtent, SystemMemory, query_system_m
 // is_volume_read_only) are pub(crate) and consumed only via
 // `crate::platform::*` paths, so no crate-root re-export is needed.
 #[cfg(windows)]
-pub use platform::{VolumeHandle, detect_ntfs_drives, is_elevated};
+pub use platform::{VolumeHandle, detect_ntfs_drives};
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,
