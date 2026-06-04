@@ -234,7 +234,8 @@ fn print_recorder_settings() {
          Font          : Cascadia Mono / Cascadia Code, size 18-20\n  \
          Theme         : dark, high-contrast (e.g. One Half Dark / Catppuccin Mocha)\n  \
          FPS / width   : 12-15 fps, export at 1200px wide, target < 3 MB GIF\n  \
-         Recorder      : ScreenToGif (Windows-native; VHS needs ttyd → WSL/Linux/macOS only)"
+         Recorder      : ScreenToGif (reliable, Windows-native) or VHS + ttyd\n  \
+                         VHS on Windows: winget install tsl0922.ttyd, then open a NEW terminal"
             .dimmed()
     );
 }
@@ -329,8 +330,10 @@ fn main() -> Result<()> {
     }
 
     println!();
-    step("Next: record BOTH clips with ScreenToGif (Windows-native).");
-    step("      VHS needs ttyd (no native Windows build) — run cli-demo.tape under WSL/Linux/macOS only.");
+    step("Next: record BOTH clips with ScreenToGif OR VHS.");
+    step("      ScreenToGif: Windows-native, no extra deps.");
+    step("      VHS: `winget install tsl0922.ttyd` then open a NEW terminal and run:");
+    step("           vhs scripts/dev/demo/cli-demo.tape");
     step("      See scripts/dev/demo/README.md for shot lists and wiring.");
     Ok(())
 }
