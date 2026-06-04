@@ -27,25 +27,63 @@ Type "clear" Enter
 Show
 Sleep 600ms
 
-# 1) Whole-machine search across every drive — returns immediately
-Type "uffs.exe ""*.rs"""
+# Every row search is capped with --limit so VHS never scroll-captures
+# thousands of lines (default limit=0 = unlimited). Aggregations below
+# return compact summaries, so they need no cap.
+
+# 1) Known-item lookup: "find that invoice, anywhere on the machine"
+#    Literal pattern → full-path substring match across every drive.
+Type "uffs.exe invoice --files-only --limit 12 --format table"
 Sleep 400ms
 Enter
-Sleep 2500ms
+Sleep 2600ms
 
-# 2) Filtered hunt: big, recent log files only
-Type "uffs.exe ""*.log"" --min-size 100MB --newer 7d --files-only"
+# 2) Storage triage: the giant logs eating your disk (size filter + sort)
+Type "uffs.exe '*.log' --min-size 100MB --files-only --sort -size --limit 12 --format table"
+Sleep 400ms
+Enter
+Sleep 2600ms
+
+# 3) Developer reflex: every node_modules folder on the box, instantly
+Type "uffs.exe node_modules --dirs-only --limit 12 --format table"
+Sleep 400ms
+Enter
+Sleep 2600ms
+
+# 4) Recent work: Rust files touched this week (relatable recency filter).
+#    NOTE: --newer 7d is data-age-dependent — empty on old offline MFT
+#    snapshots, but lights up against live drives (the Windows record run).
+Type "uffs.exe '*.rs' --newer 7d --files-only --sort -modified --limit 12 --format table"
+Sleep 400ms
+Enter
+Sleep 2600ms
+
+# 5) Flex the engine: regex (the slowest mode) for date-stamped exports —
+#    still returned in milliseconds.
+Type "uffs.exe '>[0-9]{4}-[0-9]{2}-[0-9]{2}' --ext log,csv --files-only --limit 12 --format table"
 Sleep 400ms
 Enter
 Sleep 2800ms
 
-# 3) Single-drive scope
-Type "uffs.exe ""*.dll"" --drive C"
+# 6) Answers, not rows: every drive's footprint in one server-side pass
+Type "uffs.exe agg by_drive"
 Sleep 400ms
 Enter
-Sleep 2500ms
+Sleep 3000ms
 
-# 4) Prove the architecture: per-drive tier + telemetry table (the hot daemon)
+# 7) Where is my space going? Top-10 semantic types via --agg power syntax
+Type "uffs.exe '*' --agg 'terms:type,top=10' --format table"
+Sleep 400ms
+Enter
+Sleep 3000ms
+
+# 8) Size distribution — tiny vs huge, across the whole index
+Type "uffs.exe agg by_size"
+Sleep 400ms
+Enter
+Sleep 3000ms
+
+# 9) Prove the architecture: per-drive Hot/Warm/Parked/Cold tier telemetry
 Type "uffs.exe daemon status_drives"
 Sleep 400ms
 Enter
