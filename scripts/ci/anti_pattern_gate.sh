@@ -40,13 +40,23 @@ has_audit_ok() {
   if sed -n "${lineno}p" "$file" | grep -Eq '// *AUDIT-OK\('; then
     return 0
   fi
-  # Line directly above (justification comment convention).
-  if (( lineno > 1 )); then
-    local prev=$(( lineno - 1 ))
-    if sed -n "${prev}p" "$file" | grep -Eq '// *AUDIT-OK\('; then
+  # Walk upward through the CONTIGUOUS `//` comment block directly above
+  # the match. This lets a multi-line justification carry the
+  # `AUDIT-OK(<category>): <reason>` marker on any of its lines (commonly
+  # the first), not only the single line immediately above the code.
+  local probe=$(( lineno - 1 ))
+  while (( probe >= 1 )); do
+    local line
+    line="$(sed -n "${probe}p" "$file")"
+    # Stop at the first non-comment, non-blank line (end of the block).
+    if ! printf '%s\n' "$line" | grep -Eq '^[[:space:]]*//'; then
+      break
+    fi
+    if printf '%s\n' "$line" | grep -Eq '// *AUDIT-OK\('; then
       return 0
     fi
-  fi
+    probe=$(( probe - 1 ))
+  done
   return 1
 }
 
