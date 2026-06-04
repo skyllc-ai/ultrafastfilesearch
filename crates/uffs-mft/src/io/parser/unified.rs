@@ -6,6 +6,18 @@
 //! ONE function processes ALL records (base AND extension) through the SAME
 //! attribute loop.  This eliminates the dual-parser architecture that caused
 //! name-ordering and stream-counting discrepancies.
+//!
+//! # Hardening (WI-5.2)
+//! This module parses **untrusted on-disk bytes**. Every offset/length
+//! derived from those bytes is combined with `checked_add`/`checked_mul`
+//! (or `saturating_*` where overflow is provably unreachable) and every
+//! slice into `data` goes through `.get()` / the `rd_u*` helpers — never
+//! `data[a..b]` indexing. The daemon builds with `panic = "abort"`, so a
+//! single parser panic on a malformed record would be a whole-process
+//! denial of service.
+//! `arithmetic_side_effects` is enabled module-wide as a regression guard:
+//! any new raw `+`/`*` on a byte-derived value is a compile error here.
+#![warn(clippy::arithmetic_side_effects)]
 
 use core::mem::size_of;
 
@@ -33,25 +45,33 @@ fn decode_utf16le_into(bytes: &[u8], out: &mut String) -> u32 {
     out.clear();
     let mut replacements: u32 = 0;
     let mut i = 0_usize;
-    while let Some(pair) = bytes
-        .get(i..i + 2)
+    while let Some(pair) = i
+        .checked_add(2)
+        .and_then(|end| bytes.get(i..end))
         .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
     {
         let code = u16::from_le_bytes(pair);
-        i += 2;
+        // `i` indexes a &[u8]; it cannot exceed `bytes.len()` (≤ isize::MAX),
+        // so `+= 2` cannot overflow usize. saturating_add keeps it total.
+        i = i.saturating_add(2);
         match code {
             // High surrogate
             0xD800..=0xDBFF => {
-                if let Some(low_pair) = bytes
-                    .get(i..i + 2)
+                if let Some(low_pair) = i
+                    .checked_add(2)
+                    .and_then(|end| bytes.get(i..end))
                     .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
                 {
                     let low = u16::from_le_bytes(low_pair);
                     if (0xDC00..=0xDFFF).contains(&low) {
-                        i += 2;
+                        i = i.saturating_add(2);
+                        // Bounds-proven: `code ∈ 0xD800..=0xDBFF` and
+                        // `low ∈ 0xDC00..=0xDFFF`, so both subtractions are
+                        // non-negative and the result is ≤ 0x10FFFF — no
+                        // overflow/underflow is reachable.
                         let cp = 0x1_0000_u32
-                            + ((u32::from(code) - 0xD800_u32) << 10_u32)
-                            + (u32::from(low) - 0xDC00_u32);
+                            .saturating_add((u32::from(code).saturating_sub(0xD800_u32)) << 10_u32)
+                            .saturating_add(u32::from(low).saturating_sub(0xDC00_u32));
                         if let Some(ch) = char::from_u32(cp) {
                             out.push(ch);
                         } else {
@@ -148,7 +168,10 @@ pub(crate) fn lossy_name_count() -> u64 {
 )]
 #[expect(
     clippy::indexing_slicing,
-    reason = "base_ri validated by ensure_record; bounds checked inline"
+    reason = "remaining [] are internal arena indices (index.records[base_ri], \
+              index.streams[..], index.internal_streams[..]) keyed by indices \
+              minted by this fn via ensure_record/push; not attacker-controlled. \
+              All untrusted-`data` reads go through .get()/rd_u* (WI-5.2)."
 )]
 pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mut String) -> bool {
     if data.len() < size_of::<FileRecordSegmentHeader>() {
@@ -185,15 +208,29 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
     let mut offset = usize::from(header.first_attribute_offset);
     let max_offset = core::cmp::min(u32_as_usize(header.bytes_in_use), data.len());
 
-    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(&data[offset..]) else {
+    // WI-5.2: every offset advance and slice below is derived from
+    // attacker-controllable record bytes, so all arithmetic uses
+    // `checked_*` and all slicing uses `data.get(..)` (fallible) — a
+    // malformed record `break`s the loop / skips the field instead of
+    // panicking. The daemon runs `panic = "abort"`, so a parser panic is a
+    // whole-process DoS.
+    while offset
+        .checked_add(size_of::<AttributeRecordHeader>())
+        .is_some_and(|end| end <= max_offset)
+    {
+        let Some(attr_slice) = data.get(offset..) else {
+            break;
+        };
+        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(attr_slice) else {
             break;
         };
 
         if attr_header.type_code == AttributeType::END_MARKER {
             break;
         }
-        if attr_header.length == 0 || offset + u32_as_usize(attr_header.length) > data.len() {
+        let attr_len = u32_as_usize(attr_header.length);
+        let attr_end = offset.checked_add(attr_len);
+        if attr_len == 0 || attr_end.is_none_or(|end| end > data.len()) {
             break;
         }
 
@@ -201,10 +238,10 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
             // ── $STANDARD_INFORMATION (0x10) ─────────────────────────
             Some(AttributeType::StandardInformation) => {
                 if attr_header.is_non_resident == 0 {
-                    let vo = usize::from(rd_u16(data, offset + 20));
-                    let si_off = offset + vo;
-                    if si_off + size_of::<StandardInformation>() <= data.len()
-                        && let Ok((si, _)) = StandardInformation::read_from_prefix(&data[si_off..])
+                    let vo = usize::from(rd_u16(data, offset.saturating_add(20)));
+                    if let Some(si_off) = offset.checked_add(vo)
+                        && let Some(si_slice) = data.get(si_off..)
+                        && let Ok((si, _)) = StandardInformation::read_from_prefix(si_slice)
                     {
                         // Fast path: map raw NTFS flags directly to our
                         // compact bitmask — skips the intermediate
@@ -227,20 +264,27 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
             // Push-to-front: each new $FILE_NAME overwrites first_name.
             Some(AttributeType::FileName) => {
                 if attr_header.is_non_resident == 0 {
-                    let vo = usize::from(rd_u16(data, offset + 20));
-                    let fn_off = offset + vo;
-                    if fn_off + size_of::<FileNameAttribute>() <= data.len()
-                        && let Ok((fn_attr, _)) =
-                            FileNameAttribute::read_from_prefix(&data[fn_off..])
+                    let vo = usize::from(rd_u16(data, offset.saturating_add(20)));
+                    if let Some(fn_off) = offset.checked_add(vo)
+                        && let Some(fn_slice) = data.get(fn_off..)
+                        && let Ok((fn_attr, _)) = FileNameAttribute::read_from_prefix(fn_slice)
                         && fn_attr.file_name_namespace != 2
                     {
                         // Skip DOS-only names (namespace 2)
                         let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
                         let name_len = usize::from(fn_attr.file_name_length);
-                        let ns = fn_off + size_of::<FileNameAttribute>();
+                        let ns = fn_off.saturating_add(size_of::<FileNameAttribute>());
 
-                        if ns + name_len * 2 <= data.len() {
-                            let nb = &data[ns..ns + name_len * 2];
+                        // `name_len` is a u16 (≤ 65535); `*2` and `+ ns` cannot
+                        // overflow usize on any supported target, but use the
+                        // checked form so the parser is provably total, and let
+                        // `data.get(..)` do the bounds check (None on a
+                        // declared-length that overruns the record → skip name).
+                        if let Some(nb) = name_len
+                            .checked_mul(2)
+                            .and_then(|byte_len| ns.checked_add(byte_len))
+                            .and_then(|name_end| data.get(ns..name_end))
+                        {
                             decode_utf16le_into(nb, name_buf);
 
                             // Push old first_name to chain
@@ -293,7 +337,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
 
                             // Increment name_count (zero-based, always increment)
                             // (including the first name).
-                            index.records[base_ri].name_count += 1;
+                            index.records[base_ri].name_count =
+                                index.records[base_ri].name_count.saturating_add(1);
                         }
                     }
                 }
@@ -305,9 +350,14 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true
                 } else {
-                    let nr = offset + 16;
-                    nr + 8 <= data.len()
-                        && i64::from_le_bytes(data[nr..nr + 8].try_into().unwrap_or([0; 8])) == 0
+                    // Non-resident header's StartingVcn (offset+16, 8 bytes) ==
+                    // 0 marks the primary run. Fallible slice → not-primary on
+                    // a truncated record.
+                    offset
+                        .checked_add(16)
+                        .and_then(|nr| nr.checked_add(8).and_then(|end| data.get(nr..end)))
+                        .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
+                        .is_some_and(|bytes| i64::from_le_bytes(bytes) == 0)
                 };
 
                 if is_primary {
@@ -323,20 +373,29 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                                 | AttributeType::IndexAllocation
                         )
                     ) && aname_len == 4
-                        && {
-                            let no = offset + usize::from(attr_header.name_offset);
-                            no + 8 <= data.len() && &data[no..no + 8] == b"$\x00I\x003\x000\x00"
-                        };
+                        && offset
+                            .checked_add(usize::from(attr_header.name_offset))
+                            .and_then(|no| no.checked_add(8).and_then(|end| data.get(no..end)))
+                            .is_some_and(|sl| sl == b"$\x00I\x003\x000\x00");
 
                     // Read stream name (non-$I30, named attributes)
                     let has_stream_name = !is_i30 && aname_len > 0;
                     if has_stream_name {
-                        let no = offset + usize::from(attr_header.name_offset);
-                        if no + aname_len * 2 <= data.len() {
-                            let nb = &data[no..no + aname_len * 2];
-                            decode_utf16le_into(nb, name_buf);
-                        } else {
-                            name_buf.clear();
+                        // Fallible: a declared name length that overruns the
+                        // record clears the buffer instead of panicking.
+                        let name_bytes = offset
+                            .checked_add(usize::from(attr_header.name_offset))
+                            .and_then(|no| {
+                                aname_len
+                                    .checked_mul(2)
+                                    .and_then(|byte_len| no.checked_add(byte_len))
+                                    .and_then(|end| data.get(no..end))
+                            });
+                        match name_bytes {
+                            Some(bytes) => {
+                                decode_utf16le_into(bytes, name_buf);
+                            }
+                            None => name_buf.clear(),
                         }
                     }
 
@@ -345,27 +404,30 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                         frs_base == 8 && aname_len == 4 && has_stream_name && name_buf == "$Bad";
 
                     let (size, alloc) = if attr_header.is_non_resident != 0 {
-                        let nr = offset + 16;
-                        if nr + 48 <= data.len() {
-                            let cu = rd_u16(data, nr + 18); // CompressionUnit
-                            let alloc_size = if cu > 0 {
-                                rd_u64(data, nr + 48) // CompressedSize
-                            } else if is_badclus_bad {
-                                rd_u64(data, nr + 40) // InitializedSize
-                            } else {
-                                rd_u64(data, nr + 24) // AllocatedSize
-                            };
-                            let logical_size = if is_badclus_bad {
-                                rd_u64(data, nr + 40) // InitializedSize
-                            } else {
-                                rd_u64(data, nr + 32) // DataSize
-                            };
-                            (logical_size, alloc_size)
-                        } else {
-                            (0, 0)
-                        }
+                        // `rd_u*` are individually bounds-safe (return 0 OOB);
+                        // the `nr + 48 <= len` guard preserves the original
+                        // "all fields present" semantics. `nr` via checked_add.
+                        offset
+                            .checked_add(16)
+                            .filter(|nr| nr.saturating_add(48) <= data.len())
+                            .map_or((0, 0), |nr| {
+                                let cu = rd_u16(data, nr.saturating_add(18)); // CompressionUnit
+                                let alloc_size = if cu > 0 {
+                                    rd_u64(data, nr.saturating_add(48)) // CompressedSize
+                                } else if is_badclus_bad {
+                                    rd_u64(data, nr.saturating_add(40)) // InitializedSize
+                                } else {
+                                    rd_u64(data, nr.saturating_add(24)) // AllocatedSize
+                                };
+                                let logical_size = if is_badclus_bad {
+                                    rd_u64(data, nr.saturating_add(40)) // InitializedSize
+                                } else {
+                                    rd_u64(data, nr.saturating_add(32)) // DataSize
+                                };
+                                (logical_size, alloc_size)
+                            })
                     } else {
-                        (u64::from(rd_u32(data, offset + 16)), 0)
+                        (u64::from(rd_u32(data, offset.saturating_add(16))), 0)
                     };
 
                     // ── Classify and store ───────────────────────────
@@ -375,15 +437,17 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                         rec.stdinfo.set_directory(true);
                         rec.first_stream.flags = 0; // type_name_id=0 for $I30
 
-                        rec.first_stream.size.length += size;
-                        rec.first_stream.size.allocated += alloc;
+                        rec.first_stream.size.length =
+                            rec.first_stream.size.length.saturating_add(size);
+                        rec.first_stream.size.allocated =
+                            rec.first_stream.size.allocated.saturating_add(alloc);
                         // Increment counts once for the first $I30 attribute;
                         // subsequent $I30 attrs ($INDEX_ALLOCATION, $BITMAP)
                         // accumulate size without creating new stream entries.
                         if !rec.has_i30_stream() {
                             rec.set_has_i30_stream();
-                            rec.stream_count += 1;
-                            rec.total_stream_count += 1;
+                            rec.stream_count = rec.stream_count.saturating_add(1);
+                            rec.total_stream_count = rec.total_stream_count.saturating_add(1);
                         }
                     } else if attr_type == AttributeType::DATA_TYPE && aname_len == 0 {
                         // Unnamed $DATA: default stream
@@ -392,12 +456,14 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                         // subsequent unnamed $DATA (from extension records)
                         // accumulate size only.
                         if !rec.has_default_data() {
-                            rec.stream_count += 1;
-                            rec.total_stream_count += 1;
+                            rec.stream_count = rec.stream_count.saturating_add(1);
+                            rec.total_stream_count = rec.total_stream_count.saturating_add(1);
                         }
                         rec.set_has_default_data();
-                        rec.first_stream.size.length += size;
-                        rec.first_stream.size.allocated += alloc;
+                        rec.first_stream.size.length =
+                            rec.first_stream.size.length.saturating_add(size);
+                        rec.first_stream.size.allocated =
+                            rec.first_stream.size.allocated.saturating_add(alloc);
                         rec.first_stream.flags = 8_u8 << 2_u8; // type_name_id=8 for $DATA
                     } else if attr_type == AttributeType::DATA_TYPE && aname_len > 0 {
                         // Named $DATA: ADS (user-visible stream).
@@ -436,8 +502,10 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                                 }
                                 index.streams[u32_as_usize(tail)].next_entry = si;
                             }
-                            index.records[base_ri].stream_count += 1;
-                            index.records[base_ri].total_stream_count += 1;
+                            index.records[base_ri].stream_count =
+                                index.records[base_ri].stream_count.saturating_add(1);
+                            index.records[base_ri].total_stream_count =
+                                index.records[base_ri].total_stream_count.saturating_add(1);
                         }
                     } else {
                         // All other attribute types: internal stream
@@ -465,20 +533,20 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
                             index.internal_streams[u32_as_usize(tail)].next_entry = ist_idx;
                         }
                         let rec = &mut index.records[base_ri];
-                        rec.internal_streams_size += size;
-                        rec.internal_streams_allocated += alloc;
-                        rec.total_stream_count += 1;
+                        rec.internal_streams_size = rec.internal_streams_size.saturating_add(size);
+                        rec.internal_streams_allocated =
+                            rec.internal_streams_allocated.saturating_add(alloc);
+                        rec.total_stream_count = rec.total_stream_count.saturating_add(1);
                     }
 
                     // Extract reparse tag from $REPARSE_POINT
                     if attr_type == AttributeType::REPARSE_POINT_TYPE
                         && attr_header.is_non_resident == 0
                     {
-                        let vo = usize::from(rd_u16(data, offset + 20));
-                        let rp = offset + vo;
-                        if rp + 4 <= data.len() {
-                            let tag =
-                                u32::from_le_bytes(data[rp..rp + 4].try_into().unwrap_or([0; 4]));
+                        // Fallible: a value offset that overruns the record
+                        // leaves the reparse tag unset rather than panicking.
+                        let vo = usize::from(rd_u16(data, offset.saturating_add(20)));
+                        if let Some(tag) = offset.checked_add(vo).map(|rp| rd_u32(data, rp)) {
                             index.records[base_ri].reparse_tag = tag;
                         }
                     }
@@ -486,7 +554,10 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
             }
         }
 
-        offset += u32_as_usize(attr_header.length);
+        // `attr_len` (== attr_header.length) was validated above:
+        // `offset + attr_len <= data.len()`, so this advance cannot overflow.
+        // `saturating_add` keeps it total even on a pathological length.
+        offset = offset.saturating_add(attr_len);
     }
 
     // Set directory flag from header if not already set
@@ -503,7 +574,8 @@ pub fn process_record(data: &[u8], frs: u64, index: &mut MftIndex, name_buf: &mu
 /// bounds.
 #[inline]
 fn rd_u16(buf: &[u8], off: usize) -> u16 {
-    buf.get(off..off + 2)
+    off.checked_add(2)
+        .and_then(|end| buf.get(off..end))
         .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
         .map_or(0, u16::from_le_bytes)
 }
@@ -512,7 +584,8 @@ fn rd_u16(buf: &[u8], off: usize) -> u16 {
 /// bounds.
 #[inline]
 fn rd_u32(buf: &[u8], off: usize) -> u32 {
-    buf.get(off..off + 4)
+    off.checked_add(4)
+        .and_then(|end| buf.get(off..end))
         .and_then(|sl| <[u8; 4]>::try_from(sl).ok())
         .map_or(0, u32::from_le_bytes)
 }
@@ -521,7 +594,8 @@ fn rd_u32(buf: &[u8], off: usize) -> u32 {
 /// bounds.
 #[inline]
 fn rd_u64(buf: &[u8], off: usize) -> u64 {
-    buf.get(off..off + 8)
+    off.checked_add(8)
+        .and_then(|end| buf.get(off..end))
         .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
         .map_or(0, u64::from_le_bytes)
 }

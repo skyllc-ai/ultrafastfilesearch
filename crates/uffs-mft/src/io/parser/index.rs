@@ -10,7 +10,18 @@
 //! an `MftIndex` directly from raw MFT bytes. It parses records into `MftIndex`
 //! without creating intermediate `ParsedRecord` allocations, which is critical
 //! for IOCP performance.
-
+//!
+//! # Hardening (WI-5.2)
+//! This module parses **untrusted on-disk bytes**. Every offset/length
+//! derived from those bytes is combined with `checked_add`/`checked_mul`
+//! (or `saturating_*` where overflow is provably unreachable) and every
+//! slice into `data` goes through `.get()` / the `rd_u*` helpers — never
+//! `data[a..b]` indexing. The daemon builds with `panic = "abort"`, so a
+//! single parser panic on a malformed record would be a whole-process
+//! denial of service.
+//! `arithmetic_side_effects` is enabled module-wide as a regression guard:
+//! any new raw `+`/`*` on a byte-derived value is a compile error here.
+#![warn(clippy::arithmetic_side_effects)]
 // Performance-critical hot-path parser — minimal, scoped lint suppressions.
 // Each suppression is justified with a reason.
 #![expect(
@@ -67,8 +78,9 @@ use crate::parse::index_helpers::{
 #[expect(
     clippy::indexing_slicing,
     clippy::missing_asserts_for_indexing,
-    reason = "all slice access is bounds-guarded: while-loop checks offset + HEADER_SIZE <= max_offset, \
-              and each attribute access validates offset + field_len <= data.len() before indexing"
+    reason = "remaining [] are internal arena indices (index.records[..]/stream_indices[..]/\
+              link_indices[..]) keyed by indices minted by this fn; not attacker-controlled. \
+              All untrusted-`data` reads go through .get()/rd_u* (WI-5.2)."
 )]
 pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::MftIndex) -> bool {
     use crate::index::{IndexNameRef, LinkInfo, NO_ENTRY, SizeInfo, StandardInfo};
@@ -127,8 +139,20 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     let mut dir_index_size: u64 = 0;
     let mut dir_index_allocated: u64 = 0;
 
-    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        let attr_header = match AttributeRecordHeader::read_from_prefix(&data[offset..]) {
+    // WI-5.2: every offset advance and slice below is derived from
+    // attacker-controllable record bytes, so all arithmetic uses
+    // `checked_*` and all slicing uses `data.get(..)` (fallible) — a
+    // malformed record `break`s the loop / skips the field instead of
+    // panicking. The daemon runs `panic = "abort"`, so a parser panic is a
+    // whole-process DoS.
+    while offset
+        .checked_add(size_of::<AttributeRecordHeader>())
+        .is_some_and(|end| end <= max_offset)
+    {
+        let Some(attr_slice) = data.get(offset..) else {
+            break;
+        };
+        let attr_header = match AttributeRecordHeader::read_from_prefix(attr_slice) {
             Ok((attr_header, _)) => attr_header,
             Err(_) => break,
         };
@@ -137,13 +161,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             break;
         }
 
-        if attr_header.length == 0 || offset + u32_as_usize(attr_header.length) > max_offset {
+        let attr_len = u32_as_usize(attr_header.length);
+        let attr_end = offset.checked_add(attr_len);
+        if attr_header.length == 0 || attr_end.is_none_or(|end| end > max_offset) {
             break;
         }
 
         // Validate that the attribute's declared length fits within the record data
         // This prevents reading past record boundaries when attributes are truncated
-        if offset + u32_as_usize(attr_header.length) > data.len() {
+        if attr_end.is_none_or(|end| end > data.len()) {
             break; // Attribute extends past record — stop processing
         }
 
@@ -152,13 +178,15 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             Some(AttributeType::StandardInformation) => {
                 if attr_header.is_non_resident == 0 {
                     // Parse $STANDARD_INFORMATION
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
-                    let si_offset = offset + value_offset;
-                    if si_offset + size_of::<StandardInformation>() <= data.len() {
-                        let si = match StandardInformation::read_from_prefix(&data[si_offset..]) {
+                    let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
+                    if let Some(si_slice) = offset
+                        .checked_add(value_offset)
+                        .filter(|si_off| {
+                            si_off.saturating_add(size_of::<StandardInformation>()) <= data.len()
+                        })
+                        .and_then(|si_off| data.get(si_off..))
+                    {
+                        let si = match StandardInformation::read_from_prefix(si_slice) {
                             Ok((si, _)) => si,
                             Err(_) => break,
                         };
@@ -180,22 +208,31 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
             Some(AttributeType::FileName) => {
                 if attr_header.is_non_resident == 0 {
                     // Parse $FILE_NAME
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
-                    let fn_offset = offset + value_offset;
-                    if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
-                        let fn_attr = match FileNameAttribute::read_from_prefix(&data[fn_offset..])
-                        {
+                    let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
+                    let fn_offset = offset.checked_add(value_offset);
+                    if let Some(fn_slice) = fn_offset
+                        .filter(|fn_off| {
+                            fn_off.saturating_add(size_of::<FileNameAttribute>()) <= data.len()
+                        })
+                        .and_then(|fn_off| data.get(fn_off..))
+                        && let Some(fn_off) = fn_offset
+                    {
+                        let fn_attr = match FileNameAttribute::read_from_prefix(fn_slice) {
                             Ok((fn_attr, _)) => fn_attr,
                             Err(_) => break,
                         };
                         let name_len = usize::from(fn_attr.file_name_length);
-                        let name_bytes_offset = fn_offset + size_of::<FileNameAttribute>();
-                        if name_bytes_offset + name_len * 2 <= data.len() {
-                            let name_bytes =
-                                &data[name_bytes_offset..name_bytes_offset + name_len * 2];
+                        let name_bytes_offset =
+                            fn_off.saturating_add(size_of::<FileNameAttribute>());
+                        // `name_len` is a u16 (<= 65535); `*2` and `+ offset` use
+                        // checked form so the parser is provably total, and let
+                        // `data.get(..)` do the bounds check (None on a
+                        // declared-length that overruns the record → skip name).
+                        if let Some(name_bytes) = name_len
+                            .checked_mul(2)
+                            .and_then(|byte_len| name_bytes_offset.checked_add(byte_len))
+                            .and_then(|name_end| data.get(name_bytes_offset..name_end))
+                        {
                             // SmallVec avoids heap allocation for typical filenames (<= 64 chars)
                             let name_u16: SmallVec<[u16; 64]> = name_bytes
                                 .chunks_exact(2)
@@ -208,7 +245,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             // Skip DOS-only names (namespace 2)
                             if namespace != 2 {
                                 let parse_idx = name_parse_counter;
-                                name_parse_counter += 1;
+                                // Monotonic name counter; one $FILE_NAME per record
+                                // iteration, bounded by record size — cannot overflow u16.
+                                name_parse_counter = name_parse_counter.saturating_add(1);
                                 let is_better = match namespace {
                                     1 | 3 => true,               // Win32 or Win32+DOS
                                     0 => primary_name.is_none(), // POSIX only if no name yet
@@ -241,20 +280,17 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
-                    let nr_offset = offset + 16;
-                    if nr_offset + 8 <= data.len() {
-                        let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
-                        );
-                        lowest_vcn == 0
-                    } else {
-                        true // Assume primary if can't read LowestVCN
-                    }
+                    // Assume primary if can't read LowestVCN (None → true).
+                    offset
+                        .checked_add(16)
+                        .and_then(|nr| nr.checked_add(8).and_then(|end| data.get(nr..end)))
+                        .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
+                        .is_none_or(|bytes| i64::from_le_bytes(bytes) == 0)
                 };
 
                 if !is_primary {
                     // Skip continuation extents - they don't count as new streams
-                    offset += u32_as_usize(attr_header.length);
+                    offset = offset.saturating_add(u32_as_usize(attr_header.length));
                     continue;
                 }
 
@@ -263,70 +299,42 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
                     // Non-resident: size at offset 48, allocated at offset 40
                     // For compressed/sparse files, use CompressedSize at offset 64
-                    let nr_offset = offset + 16;
-                    let alloc_offset = offset + 40;
-                    let size_offset = offset + 48;
-                    if size_offset + 8 <= data.len() {
+                    let nr_offset = offset.saturating_add(16);
+                    let alloc_offset = offset.saturating_add(40);
+                    let size_offset = offset.saturating_add(48);
+                    if size_offset.saturating_add(8) <= data.len() {
                         // Check if compressed or sparse
                         let is_compressed_or_sparse = (attr_header.flags & 0x8001) != 0;
-                        let compression_unit_offset = nr_offset + 18;
-                        let has_compression_unit = if compression_unit_offset + 2 <= data.len() {
-                            let compression_unit = u16::from_le_bytes(
-                                data[compression_unit_offset..compression_unit_offset + 2]
-                                    .try_into()
-                                    .unwrap_or([0; 2]),
-                            );
-                            compression_unit > 0
-                        } else {
-                            false
-                        };
+                        let compression_unit = rd_u16(data, nr_offset.saturating_add(18));
+                        let has_compression_unit = compression_unit > 0;
 
                         let use_compressed_size = is_compressed_or_sparse || has_compression_unit;
-                        let compressed_size_offset = nr_offset + 48; // offset + 64
+                        let compressed_size_offset = nr_offset.saturating_add(48); // offset + 64
 
-                        let allocated =
-                            if use_compressed_size && compressed_size_offset + 8 <= data.len() {
-                                // Read CompressedSize for compressed/sparse files
-                                u64::from_le_bytes(
-                                    data[compressed_size_offset..compressed_size_offset + 8]
-                                        .try_into()
-                                        .unwrap_or([0; 8]),
-                                )
-                            } else {
-                                // Read AllocatedLength for normal files
-                                u64::from_le_bytes(
-                                    data[alloc_offset..alloc_offset + 8]
-                                        .try_into()
-                                        .unwrap_or([0; 8]),
-                                )
-                            };
+                        let allocated = if use_compressed_size
+                            && compressed_size_offset.saturating_add(8) <= data.len()
+                        {
+                            // Read CompressedSize for compressed/sparse files
+                            rd_u64(data, compressed_size_offset)
+                        } else {
+                            // Read AllocatedLength for normal files
+                            rd_u64(data, alloc_offset)
+                        };
 
-                        let size = u64::from_le_bytes(
-                            data[size_offset..size_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
+                        let size = rd_u64(data, size_offset);
                         (size, allocated)
-                    } else if alloc_offset + 8 <= data.len() {
+                    } else if alloc_offset.saturating_add(8) <= data.len() {
                         // Can read AllocatedSize but not DataSize — use AllocatedSize for both
-                        let allocated = u64::from_le_bytes(
-                            data[alloc_offset..alloc_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
+                        let allocated = rd_u64(data, alloc_offset);
                         (allocated, allocated)
                     } else {
                         (0, 0)
                     }
                 } else {
                     // Resident: value_length at offset 16
-                    let len_offset = offset + 16;
-                    if len_offset + 4 <= data.len() {
-                        let len = u32::from_le_bytes(
-                            data[len_offset..len_offset + 4]
-                                .try_into()
-                                .unwrap_or([0; 4]),
-                        );
+                    let len_offset = offset.saturating_add(16);
+                    if len_offset.saturating_add(4) <= data.len() {
+                        let len = rd_u32(data, len_offset);
                         (u64::from(len), 0) // allocated_size = 0 for resident files
                     } else {
                         (0, 0)
@@ -343,9 +351,12 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                     default_allocated = allocated;
                 } else {
                     // Alternate Data Stream (ADS)
-                    let name_offset = offset + usize::from(attr_header.name_offset);
-                    if name_offset + name_len * 2 <= data.len() {
-                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                    let name_offset = offset.saturating_add(usize::from(attr_header.name_offset));
+                    if let Some(name_bytes) = name_len
+                        .checked_mul(2)
+                        .and_then(|byte_len| name_offset.checked_add(byte_len))
+                        .and_then(|name_end| data.get(name_offset..name_end))
+                    {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
                             .chunks_exact(2)
                             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
@@ -360,13 +371,9 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             && stream_name == "$Bad"
                             && attr_header.is_non_resident != 0
                         {
-                            let init_size_offset = offset + 56;
-                            if init_size_offset + 8 <= data.len() {
-                                let init_size = u64::from_le_bytes(
-                                    data[init_size_offset..init_size_offset + 8]
-                                        .try_into()
-                                        .unwrap_or([0; 8]),
-                                );
+                            let init_size_offset = offset.saturating_add(56);
+                            if init_size_offset.saturating_add(8) <= data.len() {
+                                let init_size = rd_u64(data, init_size_offset);
                                 (init_size, init_size)
                             } else {
                                 (0, 0)
@@ -390,33 +397,21 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 // $REPARSE_POINT is counted as a stream (affects descendants).
                 let (rp_size, rp_allocated) = if attr_header.is_non_resident == 0 {
                     // Resident reparse point (common case)
-                    let value_length_bytes = &data[offset + 16..offset + 20];
-                    let value_length = u64::from(u32::from_le_bytes(
-                        value_length_bytes.try_into().unwrap_or([0, 0, 0, 0]),
-                    ));
+                    let value_length = u64::from(rd_u32(data, offset.saturating_add(16)));
 
-                    let value_offset_bytes = &data[offset + 20..offset + 22];
-                    let value_offset = usize::from(u16::from_le_bytes(
-                        value_offset_bytes.try_into().unwrap_or([0, 0]),
-                    ));
-                    let rp_offset = offset + value_offset;
-                    if rp_offset + 4 <= data.len() {
+                    let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
+                    if let Some(rp_offset) = offset.checked_add(value_offset) {
                         // Read reparse tag (first 4 bytes of reparse point data)
-                        let tag_bytes = &data[rp_offset..rp_offset + 4];
-                        reparse_tag =
-                            u32::from_le_bytes(tag_bytes.try_into().unwrap_or([0, 0, 0, 0]));
+                        reparse_tag = rd_u32(data, rp_offset);
                     }
                     (value_length, 0_u64) // Resident, allocated=0
                 } else {
                     // Non-resident reparse point (rare - large reparse data)
-                    let nr_offset = offset + 16;
-                    if nr_offset + 48 <= data.len() {
-                        let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
-                        let allocated =
-                            i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
-                        let size_bytes = &data[nr_offset + 32..nr_offset + 40];
-                        let data_size = i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
-                        (nonneg_to_u64(data_size), nonneg_to_u64(allocated))
+                    let nr_offset = offset.saturating_add(16);
+                    if nr_offset.saturating_add(48) <= data.len() {
+                        let allocated = nonneg_to_u64(rd_i64(data, nr_offset.saturating_add(24)));
+                        let data_size = nonneg_to_u64(rd_i64(data, nr_offset.saturating_add(32)));
+                        (data_size, allocated)
                     } else {
                         (0_u64, 0_u64)
                     }
@@ -434,10 +429,21 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
 
                 // Extract attribute name
                 let name_len = usize::from(attr_header.name_length);
-                let (is_i30, _attr_name) = if name_len > 0 {
-                    let name_offset = offset + usize::from(attr_header.name_offset);
-                    if name_offset + name_len * 2 <= data.len() {
-                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                let name_offset = offset.saturating_add(usize::from(attr_header.name_offset));
+                // None when name_len == 0 or the declared length overruns the
+                // record → treated as non-$I30 with an empty name (matches the
+                // original guarded-out behavior).
+                let name_bytes_opt = if name_len > 0 {
+                    name_len
+                        .checked_mul(2)
+                        .and_then(|byte_len| name_offset.checked_add(byte_len))
+                        .and_then(|name_end| data.get(name_offset..name_end))
+                } else {
+                    None
+                };
+                let (is_i30, _attr_name) = name_bytes_opt.map_or_else(
+                    || (false, String::new()),
+                    |name_bytes| {
                         // Check for "$I30" in UTF-16LE
                         let is_i30 =
                             attr_header.name_length == 4 && name_bytes == b"$\x00I\x003\x000\x00";
@@ -452,73 +458,26 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };
                         (is_i30, name)
-                    } else {
-                        (false, String::new())
-                    }
-                } else {
-                    (false, String::new())
-                };
+                    },
+                );
 
                 if is_i30 {
                     // Accumulate $I30 sizes for directories
                     if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        dir_index_size += value_length;
+                        let value_length = u64::from(rd_u32(data, offset.saturating_add(16)));
+                        // Directory index sizes are bounded by the volume; accumulating
+                        // them cannot overflow u64 in practice — saturate to stay total.
+                        dir_index_size = dir_index_size.saturating_add(value_length);
                     } else {
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
-                            let allocated =
-                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
-                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
-                            let data_size =
-                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
-                            dir_index_size += nonneg_to_u64(data_size);
-                            dir_index_allocated += nonneg_to_u64(allocated);
-                        }
+                        let (size, allocated) = read_nonresident_size_alloc(data, offset);
+                        dir_index_size = dir_index_size.saturating_add(size);
+                        dir_index_allocated = dir_index_allocated.saturating_add(allocated);
                     }
                 } else {
                     // Non-$I30 index - count as stream
                     // Check if primary attribute (LowestVCN == 0)
-                    let is_primary = if attr_header.is_non_resident == 0 {
-                        true
-                    } else {
-                        let nr_offset = offset + 16;
-                        if nr_offset + 8 <= data.len() {
-                            let lowest_vcn = i64::from_le_bytes(
-                                data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
-                            );
-                            lowest_vcn == 0
-                        } else {
-                            false
-                        }
-                    };
-
-                    if is_primary {
-                        let (size, allocated) = if attr_header.is_non_resident == 0 {
-                            let value_length_bytes = &data[offset + 16..offset + 20];
-                            let value_length = u64::from(u32::from_le_bytes(
-                                value_length_bytes.try_into().unwrap_or([0; 4]),
-                            ));
-                            (value_length, 0_u64)
-                        } else {
-                            let nr_offset = offset + 16;
-                            if nr_offset + 48 <= data.len() {
-                                let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
-                                let allocated =
-                                    i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
-                                let size_bytes = &data[nr_offset + 32..nr_offset + 40];
-                                let data_size =
-                                    i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
-                                (nonneg_to_u64(data_size), nonneg_to_u64(allocated))
-                            } else {
-                                (0_u64, 0_u64)
-                            }
-                        };
-
+                    if is_nonresident_primary(data, offset, &attr_header) {
+                        let (size, allocated) = read_size_alloc(data, offset, &attr_header);
                         // Non-$I30 index attributes are internal streams
                         internal_streams.push((size, allocated));
                     }
@@ -538,42 +497,8 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 // All these are internal streams — tracked for tree metrics but
                 // not emitted as user-visible output rows.
                 // Check if primary attribute (LowestVCN == 0)
-                let is_primary = if attr_header.is_non_resident == 0 {
-                    true
-                } else {
-                    let nr_offset = offset + 16;
-                    if nr_offset + 8 <= data.len() {
-                        let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
-                        );
-                        lowest_vcn == 0
-                    } else {
-                        false
-                    }
-                };
-
-                if is_primary {
-                    let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
-                    } else {
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
-                            let allocated =
-                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
-                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
-                            let data_size =
-                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
-                            (nonneg_to_u64(data_size), nonneg_to_u64(allocated))
-                        } else {
-                            (0_u64, 0_u64)
-                        }
-                    };
-
+                if is_nonresident_primary(data, offset, &attr_header) {
+                    let (size, allocated) = read_size_alloc(data, offset, &attr_header);
                     internal_streams.push((size, allocated));
                 }
             }
@@ -581,48 +506,16 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 // Unknown attribute types are internal streams — tracked for
                 // tree metrics but not emitted as user-visible output rows.
                 // Check if primary attribute (LowestVCN == 0)
-                let is_primary = if attr_header.is_non_resident == 0 {
-                    true
-                } else {
-                    let nr_offset = offset + 16;
-                    if nr_offset + 8 <= data.len() {
-                        let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
-                        );
-                        lowest_vcn == 0
-                    } else {
-                        false
-                    }
-                };
-
-                if is_primary {
-                    let (size, allocated) = if attr_header.is_non_resident == 0 {
-                        let value_length_bytes = &data[offset + 16..offset + 20];
-                        let value_length = u64::from(u32::from_le_bytes(
-                            value_length_bytes.try_into().unwrap_or([0; 4]),
-                        ));
-                        (value_length, 0_u64)
-                    } else {
-                        let nr_offset = offset + 16;
-                        if nr_offset + 48 <= data.len() {
-                            let alloc_bytes = &data[nr_offset + 24..nr_offset + 32];
-                            let allocated =
-                                i64::from_le_bytes(alloc_bytes.try_into().unwrap_or([0; 8]));
-                            let size_bytes = &data[nr_offset + 32..nr_offset + 40];
-                            let data_size =
-                                i64::from_le_bytes(size_bytes.try_into().unwrap_or([0; 8]));
-                            (nonneg_to_u64(data_size), nonneg_to_u64(allocated))
-                        } else {
-                            (0_u64, 0_u64)
-                        }
-                    };
-
+                if is_nonresident_primary(data, offset, &attr_header) {
+                    let (size, allocated) = read_size_alloc(data, offset, &attr_header);
                     internal_streams.push((size, allocated));
                 }
             }
         }
 
-        offset += u32_as_usize(attr_header.length);
+        // `attr_header.length` was validated above (`offset + length <= data.len()`),
+        // so this advance cannot overflow; `saturating_add` keeps it total.
+        offset = offset.saturating_add(u32_as_usize(attr_header.length));
     }
 
     // Set directory flag in std_info BEFORE checking for filename
@@ -701,9 +594,11 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                 rec_chain.first_stream.next_entry = stream_indices[0];
             }
             let rec_counts = index.get_or_create(frs_typed);
-            rec_counts.stream_count = 1 + len_to_u16(additional_stream_count);
-            rec_counts.total_stream_count =
-                1 + len_to_u16(additional_stream_count) + len_to_u16(internal_stream_count);
+            // Stream counts are bounded by attributes-per-record; saturate to stay total.
+            rec_counts.stream_count = len_to_u16(additional_stream_count).saturating_add(1);
+            rec_counts.total_stream_count = len_to_u16(additional_stream_count)
+                .saturating_add(1)
+                .saturating_add(len_to_u16(internal_stream_count));
 
             // Merge extension data
             merge_extension_streams(
@@ -799,10 +694,13 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
         // Typed `ParentFrs` slot — lift raw `u64` parser local.
         parent_frs: crate::frs::ParentFrs::new(parent_frs),
     };
-    record.name_count = 1 + len_to_u16(additional_count);
-    record.stream_count = 1 + len_to_u16(additional_stream_count);
-    record.total_stream_count =
-        1 + len_to_u16(additional_stream_count) + len_to_u16(internal_stream_count);
+    // Name/stream counts are bounded by attributes-per-record; saturate to stay
+    // total.
+    record.name_count = len_to_u16(additional_count).saturating_add(1);
+    record.stream_count = len_to_u16(additional_stream_count).saturating_add(1);
+    record.total_stream_count = len_to_u16(additional_stream_count)
+        .saturating_add(1)
+        .saturating_add(len_to_u16(internal_stream_count));
     record.internal_streams_size = internal_size_total;
     record.internal_streams_allocated = internal_alloc_total;
     record.first_internal_stream = first_internal;
@@ -839,4 +737,103 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
     }
 
     true
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+/// Read a little-endian u16 from the given offset, returning 0 if out of
+/// bounds.
+#[inline]
+fn rd_u16(buf: &[u8], off: usize) -> u16 {
+    off.checked_add(2)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
+        .map_or(0, u16::from_le_bytes)
+}
+
+/// Read a little-endian u32 from the given offset, returning 0 if out of
+/// bounds.
+#[inline]
+fn rd_u32(buf: &[u8], off: usize) -> u32 {
+    off.checked_add(4)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 4]>::try_from(sl).ok())
+        .map_or(0, u32::from_le_bytes)
+}
+
+/// Read a little-endian u64 from the given offset, returning 0 if out of
+/// bounds.
+#[inline]
+fn rd_u64(buf: &[u8], off: usize) -> u64 {
+    off.checked_add(8)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
+        .map_or(0, u64::from_le_bytes)
+}
+
+/// Read a little-endian i64 from the given offset, returning 0 if out of
+/// bounds.
+#[inline]
+fn rd_i64(buf: &[u8], off: usize) -> i64 {
+    off.checked_add(8)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
+        .map_or(0, i64::from_le_bytes)
+}
+
+/// Determine whether a non-`$DATA` attribute is the primary extent
+/// (`LowestVCN == 0`).
+///
+/// Resident attributes are always primary. For non-resident attributes the
+/// `LowestVCN` lives at `offset + 16` (8 bytes); a truncated record that
+/// cannot supply it is treated as **not** primary (preserves the original
+/// `else { false }` semantics of the internal-stream branches).
+#[inline]
+fn is_nonresident_primary(
+    data: &[u8],
+    offset: usize,
+    attr_header: &crate::ntfs::AttributeRecordHeader,
+) -> bool {
+    if attr_header.is_non_resident == 0 {
+        return true;
+    }
+    offset
+        .checked_add(16)
+        .filter(|nr| nr.saturating_add(8) <= data.len())
+        .is_some_and(|nr| rd_i64(data, nr) == 0)
+}
+
+/// Read the `(DataSize, AllocatedSize)` pair from a non-resident attribute's
+/// header at `offset`, clamping negative values to 0.
+///
+/// Returns `(0, 0)` if the header is truncated (the `nr + 48 <= len` guard
+/// preserves the original "all fields present" semantics).
+#[inline]
+fn read_nonresident_size_alloc(data: &[u8], offset: usize) -> (u64, u64) {
+    let nr_offset = offset.saturating_add(16);
+    if nr_offset.saturating_add(48) <= data.len() {
+        let allocated = nonneg_to_u64(rd_i64(data, nr_offset.saturating_add(24)));
+        let data_size = nonneg_to_u64(rd_i64(data, nr_offset.saturating_add(32)));
+        (data_size, allocated)
+    } else {
+        (0, 0)
+    }
+}
+
+/// Read the `(size, allocated)` pair for an internal-stream attribute,
+/// dispatching on residency.
+///
+/// Resident attributes report `(value_length@offset+16, 0)`; non-resident
+/// attributes delegate to [`read_nonresident_size_alloc`].
+#[inline]
+fn read_size_alloc(
+    data: &[u8],
+    offset: usize,
+    attr_header: &crate::ntfs::AttributeRecordHeader,
+) -> (u64, u64) {
+    if attr_header.is_non_resident == 0 {
+        (u64::from(rd_u32(data, offset.saturating_add(16))), 0)
+    } else {
+        read_nonresident_size_alloc(data, offset)
+    }
 }

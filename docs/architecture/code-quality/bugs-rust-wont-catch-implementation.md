@@ -98,8 +98,8 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ⬜ | | |
 | WI-4.3 | 4 Bytes | Strict-parse subprocess stdout used for decisions (PID/name) | ✅ | `harden/bugs` | ✅ |
 | WI-4.4 | 4 Bytes | **RFC + impl:** lossless name storage (binary/WTF-8 column) | 🟨 RFC landed | `harden/bugs` | RFC ✅ / impl pending sign-off |
-| WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ⬜ | | |
-| WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | ⬜ | | |
+| WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ✅ | `harden/wi-5.2-parser-checked` | ✅ |
+| WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | 🟨 partial | `harden/wi-5.2-parser-checked` | parser malformed-record regression test landed with WI-5.2; cache-deserialize fuzz pending |
 | WI-6.1 | 6 Errors | `daemon_ctl` control writes: surface/log instead of bare `drop` | ✅ | `harden/bugs` | ✅ |
 | WI-6.2 | 6 Errors | Log dir-create failures (`log_init`, `mft/logging`) to stderr once | ✅ | `harden/bugs` | ✅ |
 | WI-6.3 | 6 Errors | Audit remaining `.ok()`/`let _ =`; add justification comments | ✅ | `harden/bugs-2` | ✅ |
@@ -123,7 +123,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | 2 | Perms-after-create | Every secret/dir **born** with final perms; zero chmod-after on secrets | 2.1–2.4 | **100%** |
 | 3 | Path string identity | No safety decision on path strings; identity helper exists + tested | 3.1 | **100%** |
 | 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | ~40% (4.3 ✅ + 4.4 RFC ✅; 4.1 decoder + 4.2 argv pending — gate still red on 36 byte sites) |
-| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ~33% (5.1 ✅; 5.2 parser-hardening + 5.3 fuzz pending) |
+| 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ~85% (5.1 ✅; 5.2 ✅ all 5 parsers hardened + module-scoped `arithmetic_side_effects`; 5.3 🟨 parser malformed-record regression test landed, cache-deserialize fuzz pending) |
 | 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
 | 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% (Windows-only, pending) |
 | 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | ~50% (8.2 ✅; 8.1 broker single-handle Windows-only, pending) |
@@ -742,6 +742,44 @@ crate-level or block-level `#![allow(clippy::indexing_slicing)]`.
 
 **Verify:** `just lint-prod && cargo nextest run -p uffs-mft`
 
+**Implementation notes (as landed, branch `harden/wi-5.2-parser-checked`):**
+
+- **Deviation from steps 1/3 (error type):** the plan assumed converting to
+  `buf.get(..).ok_or(ParseError::Truncated)?`. The five parser entry points
+  (`process_record`, `parse_record_to_index`, `parse_extension_to_index`, and
+  the deprecated `parse_*_to_fragment` pair) do **not** return a `Result` — their
+  established contract is "parse what is valid, skip/leave-default what is not,
+  return a `bool`/unit and let the caller continue indexing". Introducing a new
+  error type would change that public contract. Instead, every untrusted-`data`
+  read was converted to `.get()` / the bounds-safe `rd_u16/rd_u32/rd_u64` helpers
+  (which return `0` on OOB), and every byte-derived offset/length to
+  `checked_add`/`checked_mul` (or `saturating_*` where overflow is provably
+  unreachable, with an inline justification comment). On a malformed field the
+  result is **exactly the same skip/default the original `if X+N <= len` guards
+  produced** — behaviour-preserving, panic-free. This satisfies the goal (no
+  byte sequence panics the parser) and step 4 (caller skips the record).
+- **Deviation from step 2 / acceptance (lint mechanism):** rather than removing
+  the block-level `indexing_slicing` expects outright, they were **narrowed**:
+  all untrusted-`data` slicing now goes through `.get()`, so the only `[]` left
+  is on internal arena vectors (`index.records[base_ri]`, `fragment.streams[..]`,
+  `frs_to_idx[..]`) keyed by indices this code itself mints — not attacker
+  controlled. Each retained expect's `reason` now states this. `arithmetic_side_effects`
+  was enabled **module-scoped** (`#![warn(clippy::arithmetic_side_effects)]` in
+  each of the five parser files) instead of workspace-wide: at workspace level it
+  flags 1766 benign sites which, under `-D warnings`, would be a hard error
+  (see audit note at line ~461). Module-scoped + the workspace `-D warnings` makes
+  it effectively `deny` **inside the parsers** (any new raw `+`/`*`/`[..]` on a
+  byte-derived value fails the build there) — the intended regression guard,
+  scoped to where it matters. The workspace `Cargo.toml` `arithmetic_side_effects`
+  follow-up (raise to deny globally) remains **not done** for this reason.
+- **Behaviour parity checked:** the index/fragment parser families have a known
+  pre-existing divergence in the extension-name index formula
+  (`existing_name_count + name_idx` vs the legacy `existing_name_count - 1 + name_idx`);
+  each file's existing formula was preserved verbatim (only `+`→`saturating_add`),
+  so this WI introduces **no** semantic change. All 191 `uffs-mft` tests pass
+  (190 pre-existing + the new malformed-record regression test); native and
+  `cargo xwin` (Windows) `--all-targets -D warnings` clippy are clean.
+
 ---
 
 ### WI-5.3 — Malformed-input regression/fuzz tests
@@ -777,6 +815,26 @@ entry and the cache deserializer; all return errors without panicking; suite is
 deterministic (seeded) and runs in CI.
 
 **Verify:** `cargo nextest run -p uffs-mft -- malformed`
+
+**Implementation notes (partial, landed with WI-5.2 on `harden/wi-5.2-parser-checked`):**
+
+- **Done:** a deterministic, table-driven malformed-record regression test
+  (`io::parser::tests::malformed_records_do_not_panic`) feeds 8 crafted records —
+  each passing the FILE-record header gate so the attribute loop runs — through
+  **all three live parser entry points** (`parse_record_to_index`,
+  `process_record`, and the deprecated `parse_record_to_fragment`). The cases
+  target every edge WI-5.2 converted: first-attribute-offset past EOF, attribute
+  length overrunning the record, `name_length * 2` overflow, non-resident size
+  fields past EOF, reparse value-offset past EOF, zero-length attribute (loop
+  termination), and a full garbage body. The asserted property is **no panic**
+  (records may legitimately parse or skip; the contract under test is liveness,
+  not a specific return). A `RecordBuilder` constructs records by append, so the
+  fixture itself is index-free and panic-free.
+- **Pending (follow-up):** seeded-`rand` fuzz vectors and the **cache-deserializer**
+  malformed-input cases (`index/storage/deserialize.rs`). The deserializer was
+  not part of the WI-5.2 parser surface and is deferred to a dedicated WI-5.3
+  commit; a `cargo-fuzz` target is intentionally **not** added (would introduce a
+  toolchain dependency without sign-off, per the plan's own caveat).
 
 ---
 
