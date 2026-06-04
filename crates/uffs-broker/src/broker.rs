@@ -29,6 +29,14 @@ mod service;
 #[cfg(windows)]
 use service::{install_service, uninstall_service};
 
+// Client process-handle acquisition + identity verification (WI-8.1), split
+// out to keep this file under the 800-LOC ceiling. See
+// `broker/process_handle.rs`.
+#[path = "broker/process_handle.rs"]
+mod process_handle;
+#[cfg(windows)]
+use process_handle::{OwnedProcessHandle, query_process_image_name, verify_client_handle};
+
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
@@ -150,21 +158,41 @@ fn handle_one_connection(
         return;
     };
 
-    let exe_path = get_client_exe_path(pid);
-    if !check_client_identity(pid, exe_path.as_deref()) {
+    // WI-8.1: open the client process exactly ONCE here. The same handle is
+    // used to read the image name, make the identity decision, AND serve as
+    // the `DuplicateHandle` target — so a PID-reuse race cannot redirect the
+    // grant to a different (unverified) process between verify and duplicate.
+    let Some(client_process) = OwnedProcessHandle::open_client(pid) else {
+        audit_log("REJECTED", pid, None, None, "could not open client process");
+        tracing::warn!(pid, "Could not open client process — rejecting");
+        return;
+    };
+
+    // Read the exe path from the SAME handle we just opened (not a fresh
+    // PID→handle resolution). The identity decision uses the lossless path
+    // inside `verify_client_handle`; this `String` form is for the audit log
+    // only (display), so `to_string_lossy` is acceptable here.
+    let exe_path: Option<String> =
+        query_process_image_name(client_process.raw()).map(|os| os.to_string_lossy().into_owned());
+    if !check_client_identity(&client_process, pid, exe_path.as_deref()) {
         return;
     }
 
-    process_drive_request(pipe, pid, exe_path.as_deref(), rate_limit);
+    process_drive_request(pipe, &client_process, pid, exe_path.as_deref(), rate_limit);
 }
 
-/// Verify the client's identity (`verify_client` whitelist + Authenticode
-/// signature check).  Emits the appropriate REJECTED audit log on failure.
+/// Verify the client's identity (`verify_client_handle` name allowlist +
+/// Authenticode signature check).  Emits the appropriate REJECTED audit log on
+/// failure.
+///
+/// Takes the already-open `client_process` handle (WI-8.1) and verifies the
+/// image name read from **that** handle — the same handle the grant will
+/// duplicate into — rather than re-resolving the PID.
 ///
 /// Returns `true` when identity is confirmed, `false` otherwise.
 #[cfg(windows)]
-fn check_client_identity(pid: u32, exe: Option<&str>) -> bool {
-    if !verify_client(pid) {
+fn check_client_identity(client_process: &OwnedProcessHandle, pid: u32, exe: Option<&str>) -> bool {
+    if !verify_client_handle(client_process.raw()) {
         audit_log("REJECTED", pid, exe, None, "identity verification failed");
         tracing::warn!(pid, "Rejected broker client — not uffsd");
         return false;
@@ -193,11 +221,12 @@ fn check_client_identity(pid: u32, exe: Option<&str>) -> bool {
 #[cfg(windows)]
 fn process_drive_request(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     pid: u32,
     exe: Option<&str>,
     rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
 ) {
-    match handle_pipe_request_with_rate_limit(pipe, pid, rate_limit) {
+    match handle_pipe_request_with_rate_limit(pipe, client_process, pid, rate_limit) {
         Ok(drive) => {
             audit_log("GRANTED", pid, exe, Some(drive), "handle issued");
         }
@@ -212,6 +241,7 @@ fn process_drive_request(
 #[cfg(windows)]
 fn handle_pipe_request_with_rate_limit(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     client_pid: u32,
     rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
 ) -> anyhow::Result<char> {
@@ -242,7 +272,7 @@ fn handle_pipe_request_with_rate_limit(
     rate_limit.insert(drive_letter, now);
 
     // Delegate to actual handle brokering (drive letter already read)
-    handle_pipe_request_inner(pipe, client_pid, drive_letter)?;
+    handle_pipe_request_inner(pipe, client_process, client_pid, drive_letter)?;
     Ok(drive_letter)
 }
 
@@ -279,50 +309,6 @@ fn verify_authenticode(exe_path: &str) -> bool {
         }
         Err(_) => true, // PowerShell not available — allow (graceful degradation)
     }
-}
-
-/// Get the exe path for a PID (for audit logging).
-#[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "Win32 process-image-name query requires unsafe FFI"
-)]
-fn get_client_exe_path(pid: u32) -> Option<String> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
-
-    // SAFETY: OpenProcess is a read-only query with
-    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns an Error (caught by
-    // ok()?), not a dangling handle.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let mut buf = vec![0_u16; 4096];
-    let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    // SAFETY: `handle` is a valid open process handle; `buf` is a fixed 4096-wide
-    // allocation; `size` is an owned u32 whose address is exclusive to this call.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT(0),
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &raw mut size,
-        )
-    };
-    // SAFETY: `handle` was obtained from OpenProcess above and is no longer needed.
-    if let Err(close_err) = unsafe { CloseHandle(handle) } {
-        tracing::debug!(err = ?close_err, "CloseHandle failed in get_client_exe_path");
-    }
-    if result.is_err() || size == 0 {
-        return None;
-    }
-    // u32→usize lossless on 64-bit; use get() to satisfy indexing_slicing.
-    let len = size as usize;
-    // AUDIT-OK(bytes): display only — used solely for `audit_log`, never a
-    // trust decision (the real check is `verify_client(pid)`, queried
-    // independently), so a lossy name cannot weaken security (WI-4.2).
-    buf.get(..len).map(String::from_utf16_lossy)
 }
 
 /// S5.3: Audit log entry to tracing (and Windows Event Log if available).
@@ -445,72 +431,6 @@ fn get_pipe_client_pid(pipe: windows::Win32::Foundation::HANDLE) -> Option<u32> 
     (result.is_ok() && pid != 0).then_some(pid)
 }
 
-/// Verify that a client process is a legitimate uffs-daemon.
-#[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "Win32 process-image-name query requires unsafe FFI"
-)]
-fn verify_client(pid: u32) -> bool {
-    use std::os::windows::ffi::OsStringExt as _;
-
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
-
-    // SAFETY: OpenProcess is a read-only query with
-    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns Err (handled by the
-    // let-else) rather than an invalid handle.
-    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
-        return false;
-    };
-
-    let mut buf = vec![0_u16; 4096];
-    let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    // SAFETY: `handle` is a valid open process handle; `buf` is a 4096-wide
-    // owned allocation; `size` is a stack-owned u32 accessed exclusively here.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT(0),
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &raw mut size,
-        )
-    };
-    // SAFETY: `handle` came from OpenProcess above and is no longer used.
-    if let Err(close_err) = unsafe { CloseHandle(handle) } {
-        tracing::debug!(err = ?close_err, "CloseHandle failed in verify_client");
-    }
-
-    if result.is_err() || size == 0 {
-        return false;
-    }
-    // u32→usize lossless on 64-bit; get() keeps us out of indexing_slicing.
-    let len = size as usize;
-    let Some(slice) = buf.get(..len) else {
-        return false;
-    };
-    // Lossless `from_wide` (not `from_utf16_lossy`): this exe path drives a
-    // daemon-identity decision, so a non-UTF-8/WTF-8 component must not be
-    // mangled to U+FFFD first. Daemon names are ASCII; a non-UTF-8 name simply
-    // fails `to_str()` below and is rejected (WI-4.2).
-    let exe_name = std::ffi::OsString::from_wide(slice);
-
-    let name = std::path::Path::new(&exe_name)
-        .file_name()
-        .and_then(|file_name| file_name.to_str())
-        .unwrap_or("");
-
-    name == "uffsd"
-        || name == "uffsd.exe"
-        || name == "uffs-daemon.exe"
-        || name == "uffs-daemon"
-        || name.starts_with("uffs-daemon")
-        || name.starts_with("uffs_daemon")
-}
-
 // ── D7.5: Handle Brokering ──────────────────────────────────────────────
 
 /// Open the NTFS volume for a drive letter with read-only backup semantics.
@@ -543,49 +463,44 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
 
 /// Duplicate `volume_handle` into the client process with read-only access.
 ///
-/// The caller retains ownership of `volume_handle` and is responsible for
-/// closing it; this function only opens / closes the transient client-process
-/// handle it needs for the `DuplicateHandle` call.
+/// **WI-8.1:** the duplicate target is the **same** `client_process` handle
+/// that was verified in `check_client_identity` — passed in by the caller, not
+/// re-opened from the PID. This closes the verify-then-reopen race: there is no
+/// window in which a recycled PID could point the grant at a different process.
+///
+/// The caller retains ownership of both `volume_handle` and `client_process`.
 #[cfg(windows)]
 #[expect(
     unsafe_code,
-    reason = "OpenProcess + GetCurrentProcess + DuplicateHandle + CloseHandle are FFI calls"
+    reason = "GetCurrentProcess + DuplicateHandle are FFI calls"
 )]
 fn duplicate_volume_handle_to_client(
     volume_handle: windows::Win32::Foundation::HANDLE,
-    client_pid: u32,
+    client_process: &OwnedProcessHandle,
 ) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
-
-    // SAFETY: `client_pid` is an integer; OpenProcess returns Err on invalid PID.
-    let client_process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, client_pid) }
-        .map_err(|err| anyhow::anyhow!("OpenProcess for client {client_pid} failed: {err}"))?;
+    use windows::Win32::System::Threading::GetCurrentProcess;
 
     // SAFETY: GetCurrentProcess is a Win32 pseudo-handle getter (never fails).
     let current_process = unsafe { GetCurrentProcess() };
 
     let mut client_handle = HANDLE::default();
-    // SAFETY: `current_process`, `volume_handle`, and `client_process` are all
-    // valid handles; `client_handle` is a stack-owned HANDLE passed via
+    // SAFETY: `current_process`, `volume_handle`, and `client_process.raw()`
+    // are all valid handles (the client handle is kept alive by the caller's
+    // `OwnedProcessHandle`); `client_handle` is a stack-owned HANDLE passed via
     // exclusive &raw mut.
     let dup_ok = unsafe {
         windows::Win32::Foundation::DuplicateHandle(
             current_process,
             volume_handle,
-            client_process,
+            client_process.raw(),
             &raw mut client_handle,
             FILE_GENERIC_READ.0,
             false,
             windows::Win32::Foundation::DUPLICATE_HANDLE_OPTIONS(0),
         )
     };
-
-    // SAFETY: `client_process` came from OpenProcess above; we're done with it.
-    if let Err(close_err) = unsafe { CloseHandle(client_process) } {
-        tracing::debug!(err = ?close_err, "CloseHandle(client_process) failed after dup");
-    }
 
     dup_ok.map_err(|err| anyhow::anyhow!("DuplicateHandle failed: {err}"))?;
     Ok(client_handle)
@@ -618,6 +533,7 @@ fn write_success_response(
 #[expect(unsafe_code, reason = "CloseHandle is an FFI call")]
 fn handle_pipe_request_inner(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     client_pid: u32,
     drive_letter: char,
 ) -> anyhow::Result<()> {
@@ -633,7 +549,7 @@ fn handle_pipe_request_inner(
         }
     };
 
-    let dup_result = duplicate_volume_handle_to_client(volume_handle, client_pid);
+    let dup_result = duplicate_volume_handle_to_client(volume_handle, client_process);
 
     // Close our copy of the volume handle regardless of whether the duplicate
     // succeeded — the client has its own handle now, or the whole request

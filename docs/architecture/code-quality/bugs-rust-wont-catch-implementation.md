@@ -103,7 +103,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-6.1 | 6 Errors | `daemon_ctl` control writes: surface/log instead of bare `drop` | ✅ | `harden/bugs` | ✅ |
 | WI-6.2 | 6 Errors | Log dir-create failures (`log_init`, `mft/logging`) to stderr once | ✅ | `harden/bugs` | ✅ |
 | WI-6.3 | 6 Errors | Audit remaining `.ok()`/`let _ =`; add justification comments | ✅ | `harden/bugs-2` | ✅ |
-| WI-8.1 | 8 Trust | Broker: thread one process handle verify→`DuplicateHandle` (no PID re-open) | ⬜ | | |
+| WI-8.1 | 8 Trust | Broker: thread one process handle verify→`DuplicateHandle` (no PID re-open) | ✅ | `harden/wi-8.1-broker-single-handle` | single `OpenProcess` via RAII `OwnedProcessHandle`; verify + duplicate share it; `broker/process_handle.rs` split; name-predicate unit tests |
 | WI-8.2 | 8 Trust | Document daemon-nonce security property (depends on WI-2.2) | ✅ | `harden/bugs` | ✅ |
 | WI-7.1 | 7 Parity | Parity corpus: pathological names; assert vs Windows enumeration | ⬜ | | |
 | WI-3.1 | 3 Identity | `paths_identical` (dev,inode) helper + invariant doc/test for scoping | ✅ | `harden/bugs` | ✅ |
@@ -995,6 +995,41 @@ handle) documents the invariant.
 
 **Verify:** `cargo nextest run -p uffs-broker` (Windows, elevated for the ignored
 case).
+
+**Implementation notes (landed on `harden/wi-8.1-broker-single-handle`):**
+
+- **One `OpenProcess` per grant.** Before this WI the broker opened the client
+  process by PID **three times** — `get_client_exe_path` (audit name),
+  `verify_client` (identity decision), and `duplicate_volume_handle_to_client`
+  (the `DuplicateHandle` target). The window between verify and duplicate was a
+  PID-reuse race: a recycled PID could point the grant at a different,
+  unverified process. Now `handle_one_connection` opens the client **once** via
+  the new RAII `OwnedProcessHandle::open_client` (with
+  `PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE`) and threads that
+  single handle through `check_client_identity` → `handle_pipe_request_inner` →
+  `duplicate_volume_handle_to_client`. The handle verified is the handle the
+  grant duplicates into — no second PID→handle resolution exists.
+- **`broker/process_handle.rs`** (new submodule via `#[path]`) holds the
+  trust-boundary machinery: `OwnedProcessHandle` (RAII; `Drop` closes on every
+  path), `query_process_image_name` (one shared image-name read),
+  `is_uffs_daemon_image` (the pure name allow-list predicate), and
+  `verify_client_handle`. The split also keeps `broker.rs` under the 800-LOC
+  ceiling (721 LOC).
+- **Lossless image-name decode (folds in WI-4.2 intent):** the unified
+  `query_process_image_name` returns `OsString` via `OsString::from_wide`, and
+  `is_uffs_daemon_image` matches on `&OsStr`, so the daemon-identity decision is
+  never made on a `from_utf16_lossy`-mangled path. This also removed the broker
+  `from_utf16_lossy` site from the anti-pattern gate.
+- **Tests:** `is_uffs_daemon_image` has cross-platform unit tests (accepts the
+  daemon-name forms incl. versioned prefixes; rejects other images and a path
+  whose *directory* — not file name — contains `uffsd`). They compile into the
+  Windows test binary (`cargo xwin test --no-run` confirms discovery); the
+  broker is a Windows-only `[[bin]]`, so they run on the Windows CI test job.
+  The single-handle invariant is additionally enforced at compile time:
+  `duplicate_volume_handle_to_client` takes `&OwnedProcessHandle`, so it
+  **cannot** be called with a bare PID.
+- **Verify:** native + `cargo xwin` (Windows) `--all-targets -D warnings` clippy
+  clean; file-size + anti-pattern gates green for broker.
 
 ---
 
