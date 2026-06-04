@@ -78,24 +78,30 @@ pub fn write_secret_file(path: &Path, data: &[u8]) -> io::Result<()> {
 
 /// Creates a directory (and parents) with owner-only permissions.
 ///
-/// - **Unix** (macOS + Linux): mode `0700` (`drwx------`)
-/// - **Windows**: creates the directory; sets read-only attribute as a basic
-///   protection layer (full DACL requires elevated context)
+/// - **Unix** (macOS + Linux): each component we create is **born** `0700`
+///   (`drwx------`) via `DirBuilderExt::mode`, so there is no window where the
+///   dir exists at default perms. `recursive(true)` makes the call succeed if
+///   the dir already exists; components that already existed keep their current
+///   perms (we only guarantee birth perms for what we create).
+/// - **Windows**: creates the directory; applies an owner-only ACL (falling
+///   back to the hidden attribute) since full DACL control requires elevation.
 ///
 /// # Errors
 ///
 /// Returns an error if directory creation or permission setting fails.
 pub fn create_secure_dir(path: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(path)?;
-
     #[cfg(unix)]
     return {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
     };
 
     #[cfg(windows)]
     return {
+        std::fs::create_dir_all(path)?;
         // Try icacls first — works without elevation, sets proper DACL
         if !win_set_owner_only_acl(path) {
             // Fallback: at least mark hidden (best-effort, infallible).
@@ -592,5 +598,28 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         assert_eq!(std::fs::read(&path).unwrap(), b"deadbeef");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_secure_dir_births_0700() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+        create_secure_dir(&nested).unwrap();
+        // Each component WE created is born 0700.
+        for comp in [dir.path().join("a"), dir.path().join("a").join("b"), nested] {
+            let mode = std::fs::metadata(&comp).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{} mode {mode:o} != 0700", comp.display());
+        }
+    }
+
+    #[test]
+    fn create_secure_dir_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x").join("y");
+        create_secure_dir(&target).unwrap();
+        // Second call on an existing dir must still succeed.
+        create_secure_dir(&target).unwrap();
     }
 }
