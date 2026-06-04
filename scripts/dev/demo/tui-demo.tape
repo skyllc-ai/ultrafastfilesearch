@@ -11,7 +11,7 @@
 #
 # Prereqs:
 #   - `uffs-tui` (and `uffs`/`uffsd`) on PATH, ideally from an unzipped release
-#   - daemon warmed:  pwsh -File scripts/dev/demo/record_demo_prep.ps1 -Mode hot
+#   - daemon warmed:  rust-script scripts/windows/record-demo-prep.rs --mode hot
 #
 # Honesty: the demo TUI caps result counts and disables exports (DEMO-LICENSE.txt).
 # Don't imply uncapped/export behaviour in this clip.

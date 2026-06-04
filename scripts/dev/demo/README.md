@@ -7,20 +7,21 @@ Tooling and shot lists for the two Phase 1 launch GIFs:
 
 Everything here is built so the clips are **reproducible**, **honest**, and **re-renderable** each release. Capture must run on the Windows box with live NTFS (the only place `uffs` reads the MFT directly); macOS/Linux can only show offline-MFT analysis.
 
+> **Two binaries gotcha.** Releases ship both the Rust daemon client (`uffs.exe`) and the legacy C++ reference (`uffs.com`). On Windows, `PATHEXT` ranks `.COM` before `.EXE`, so a bare `uffs` runs the C++ tool — which has no `daemon` subcommand and uses `--drives=`/`--columns=` syntax. The prep tool (`scripts/windows/record-demo-prep.rs`) resolves `uffs.exe` **by name** (the standard `default_binary()` discovery shared by the validation scripts) and gates on a `>= 0.5.0` semver parsed from `uffs --version`, so the C++ tool or an old build is refused up front. Override with `--bin <path>`.
+
 ---
 
 ## TL;DR
 
 ```powershell
 # 1. Put the machine in a known, honest recording state (Windows, elevated)
-pwsh -File scripts/dev/demo/record_demo_prep.ps1 -Mode hot
+rust-script scripts/windows/record-demo-prep.rs --mode hot --drives C,D,E,F,G,M,S
 
-# 2a. Scripted, reproducible CLI GIF (recommended — re-render every release):
-vhs scripts/dev/demo/cli-demo.tape      # -> uffs-cli.gif
+# 2. Record BOTH clips on Windows with ScreenToGif (see "TUI capture" / shot lists).
+#    VHS is NOT available natively on Windows (it needs `ttyd`, Linux/macOS only).
 
-# 2b. TUI GIF — record interactively with ScreenToGif (see "TUI capture") ,
-#     or try the VHS skeleton once keybindings are filled in:
-vhs scripts/dev/demo/tui-demo.tape       # -> uffs-tui.gif
+# 2-alt. Reproducible CLI GIF via VHS — only under WSL/Linux/macOS:
+vhs scripts/dev/demo/cli-demo.tape       # -> uffs-cli.gif   (needs ttyd + ffmpeg)
 
 # 3. Drop outputs into both repos and wire them in (see "Where the GIFs go")
 ```
@@ -31,11 +32,11 @@ vhs scripts/dev/demo/tui-demo.tape       # -> uffs-tui.gif
 
 | Tool | Use for | Why | Platform |
 |---|---|---|---|
-| **[VHS](https://github.com/charmbracelet/vhs)** (`charmbracelet/vhs`) | CLI clip (primary) | Scripted `.tape` files → deterministic, pixel-stable GIF/MP4/WebM you can re-render every release. Drives the **real** binary, so all timings are genuine. | Best on Linux/macOS; Windows support is best-effort (needs `ttyd` + `ffmpeg`). If VHS misbehaves on Windows, record the CLI with ScreenToGif using the same shot list. |
-| **[ScreenToGif](https://www.screentogif.com/)** | TUI clip (primary), CLI fallback | Free, Windows-native, captures a real interactive TUI session faithfully; built-in crop/trim/optimize + palette reduction. | Windows |
+| **[ScreenToGif](https://www.screentogif.com/)** | TUI clip **and** CLI clip on Windows (primary) | Free, Windows-native, captures a real interactive session faithfully; built-in crop/trim/optimize + palette reduction. | Windows |
+| **[VHS](https://github.com/charmbracelet/vhs)** (`charmbracelet/vhs`) | Reproducible CLI clip (optional) | Scripted `.tape` files → deterministic, pixel-stable GIF/MP4/WebM you can re-render every release. Drives the **real** binary, so all timings are genuine. | Requires `ttyd`, which has **no native Windows build** — run the tape under **WSL/Linux/macOS** only. On the Windows NTFS box, record the CLI with ScreenToGif using the same shot list. |
 | `ffmpeg` | post-processing | Trim, scale, palette-optimize any capture (snippets below). | All |
 
-Install on Windows: `winget install charmbracelet.vhs` (if available) and `winget install NickeManarin.ScreenToGif`.
+Install on Windows: `winget install NickeManarin.ScreenToGif`. VHS is Linux/macOS-only for our purposes (`brew install vhs ttyd` / `apt install ttyd` + `go install ...`); it will not drive a native Windows terminal.
 
 ---
 
@@ -44,7 +45,7 @@ Install on Windows: `winget install charmbracelet.vhs` (if available) and `winge
 These clips are marketing for a **benchmark-honest** project. Do not undermine that.
 
 - **Never fake or speed-edit latency.** VHS runs the real binary; with ScreenToGif, do not cut frames to make a query look faster than it is.
-- **State the daemon tier.** The "instant" story is a **hot/warm daemon**. `record_demo_prep.ps1 -Mode hot` warms it first; the caption must say so (e.g. "hot daemon, 25.9M records"). If you want to show the cold build, use `-Mode cold` and label it COLD.
+- **State the daemon tier.** The "instant" story is a **hot/warm daemon**. `record-demo-prep.rs --mode hot` warms it first; the caption must say so (e.g. "hot daemon, 25.9M records"). If you want to show the cold build, use `--mode cold --confirm-destructive` and label it COLD.
 - **Show real counts.** Don't trim the result count or the "N results in X ms" line out of frame.
 - **Match the published numbers.** Latency on screen should be consistent with `docs/benchmarks/`. If it drifts, update the benchmark hub too — don't cherry-pick.
 - **No doctored prompt.** Use a clean but real shell; don't hand-edit the recorded text.

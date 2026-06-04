@@ -4,7 +4,7 @@
 # Runs the REAL `uffs` binary, so every latency on screen is genuine.
 # Prereqs:
 #   - `uffs` (and `uffsd`) on PATH
-#   - daemon WARMED before recording:  pwsh -File scripts/dev/demo/record_demo_prep.ps1 -Mode hot
+#   - daemon WARMED before recording:  rust-script scripts/windows/record-demo-prep.rs --mode hot
 #   - VHS + ffmpeg installed
 #
 # Honesty: this clip shows the HOT-DAEMON path. Keep the "hot daemon" caption
