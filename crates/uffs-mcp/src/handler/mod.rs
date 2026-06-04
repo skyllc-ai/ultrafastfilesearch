@@ -67,7 +67,7 @@ enum ClientSlot {
     /// [`UffsClient::connect_with_args`] on every daemon-backed call.
     Active {
         /// Args forwarded to `uffs daemon run` on auto-start.
-        spawn_args: Vec<String>,
+        spawn_args: Vec<std::ffi::OsString>,
     },
     /// No daemon — metadata-only / testing.
     None,
@@ -112,7 +112,7 @@ impl UffsMcpServer {
     /// connection.  See the private `ClientSlot` enum for the
     /// rationale behind the per-call connection model.
     #[must_use]
-    pub fn new(spawn_args: Vec<String>) -> Self {
+    pub fn new(spawn_args: Vec<std::ffi::OsString>) -> Self {
         Self::with_stats(
             ClientSlot::Active { spawn_args },
             Arc::new(McpStats::default()),
@@ -125,13 +125,16 @@ impl UffsMcpServer {
     /// connection model; retained as a distinct constructor because the
     /// HTTP gateway factory closure calls it explicitly.
     #[must_use]
-    pub fn new_lazy(spawn_args: Vec<String>) -> Self {
+    pub fn new_lazy(spawn_args: Vec<std::ffi::OsString>) -> Self {
         Self::new_lazy_with_stats(spawn_args, Arc::new(McpStats::default()))
     }
 
     /// Create a lazy server with shared stats (for HTTP gateway).
     #[must_use]
-    pub(crate) fn new_lazy_with_stats(spawn_args: Vec<String>, stats: Arc<McpStats>) -> Self {
+    pub(crate) fn new_lazy_with_stats(
+        spawn_args: Vec<std::ffi::OsString>,
+        stats: Arc<McpStats>,
+    ) -> Self {
         stats.session_started();
         Self::with_stats(ClientSlot::Active { spawn_args }, stats)
     }

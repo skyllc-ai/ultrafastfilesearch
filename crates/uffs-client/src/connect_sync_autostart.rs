@@ -24,7 +24,7 @@ use crate::error::ClientError;
 ///
 /// Propagates spawn failures from [`spawn_daemon`].
 pub(crate) fn auto_start_daemon(
-    spawn_args: &[String],
+    spawn_args: &[std::ffi::OsString],
     policy: ElevationPolicy,
 ) -> Result<Option<crate::daemon_child::DaemonChildHandle>, ClientError> {
     let pid_path = pid_file_path();
@@ -44,8 +44,7 @@ pub(crate) fn auto_start_daemon(
     }
 
     let daemon_exe = find_daemon_exe();
-    let str_args: Vec<&str> = spawn_args.iter().map(String::as_str).collect();
-    let handle = spawn_daemon(&daemon_exe, &str_args, policy)?;
+    let handle = spawn_daemon(&daemon_exe, spawn_args, policy)?;
     Ok(Some(handle))
 }
 

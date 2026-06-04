@@ -22,6 +22,13 @@
 #[cfg(windows)]
 use uffs_broker_protocol::{HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN};
 
+// Windows Service registration helpers, split out to keep this file under the
+// 800-LOC ceiling (see `broker/service.rs`).
+#[path = "broker/service.rs"]
+mod service;
+#[cfg(windows)]
+use service::{install_service, uninstall_service};
+
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
@@ -312,6 +319,9 @@ fn get_client_exe_path(pid: u32) -> Option<String> {
     }
     // u32→usize lossless on 64-bit; use get() to satisfy indexing_slicing.
     let len = size as usize;
+    // AUDIT-OK(bytes): display only — used solely for `audit_log`, never a
+    // trust decision (the real check is `verify_client(pid)`, queried
+    // independently), so a lossy name cannot weaken security (WI-4.2).
     buf.get(..len).map(String::from_utf16_lossy)
 }
 
@@ -330,68 +340,6 @@ fn audit_log(action: &str, pid: u32, exe: Option<&str>, drive: Option<char>, det
         "AUDIT"
     );
     // Future: also write to Windows Event Log via ReportEventW
-}
-
-// ── Windows Service Install/Uninstall ───────────────────────────────────
-
-/// Register the broker as a Windows Service via `sc create`.
-///
-/// Writes a one-line result to stdout — this is a CLI admin command whose
-/// user-facing output is its only observable product, so `println!` is the
-/// idiomatic sink rather than the `tracing` subscriber used by the
-/// long-running service modes.
-#[cfg(windows)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI admin command — stdout is the user-visible result channel"
-)]
-fn install_service() -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?;
-    let output = std::process::Command::new("sc")
-        .args([
-            "create",
-            "UffsAccessBroker",
-            &format!("binPath= \"{}\"", exe.display()),
-            "start=",
-            "demand",
-            "DisplayName=",
-            "UFFS Access Broker",
-        ])
-        .output()?;
-
-    if output.status.success() {
-        println!("Service installed. Start with: sc start UffsAccessBroker");
-    } else {
-        // AUDIT-OK(bytes): `sc` command stderr surfaced verbatim in an
-        // error message for the operator — display only, no decision.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Install failed: {stderr}");
-    }
-    Ok(())
-}
-
-/// Deregister the broker Windows Service via `sc delete`.
-///
-/// See [`install_service`] for why stdout is the output channel.
-#[cfg(windows)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI admin command — stdout is the user-visible result channel"
-)]
-fn uninstall_service() -> anyhow::Result<()> {
-    let output = std::process::Command::new("sc")
-        .args(["delete", "UffsAccessBroker"])
-        .output()?;
-
-    if output.status.success() {
-        println!("Service uninstalled.");
-    } else {
-        // AUDIT-OK(bytes): `sc` command stderr surfaced verbatim in an
-        // error message for the operator — display only, no decision.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Uninstall failed: {stderr}");
-    }
-    Ok(())
 }
 
 // ── D7.3: Named Pipe Operations ─────────────────────────────────────────
@@ -504,6 +452,8 @@ fn get_pipe_client_pid(pipe: windows::Win32::Foundation::HANDLE) -> Option<u32> 
     reason = "Win32 process-image-name query requires unsafe FFI"
 )]
 fn verify_client(pid: u32) -> bool {
+    use std::os::windows::ffi::OsStringExt as _;
+
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -542,7 +492,11 @@ fn verify_client(pid: u32) -> bool {
     let Some(slice) = buf.get(..len) else {
         return false;
     };
-    let exe_name = String::from_utf16_lossy(slice);
+    // Lossless `from_wide` (not `from_utf16_lossy`): this exe path drives a
+    // daemon-identity decision, so a non-UTF-8/WTF-8 component must not be
+    // mangled to U+FFFD first. Daemon names are ASCII; a non-UTF-8 name simply
+    // fails `to_str()` below and is rejected (WI-4.2).
+    let exe_name = std::ffi::OsString::from_wide(slice);
 
     let name = std::path::Path::new(&exe_name)
         .file_name()

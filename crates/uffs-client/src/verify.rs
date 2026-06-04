@@ -179,6 +179,8 @@ fn get_process_exe_path(pid: u32) -> Option<PathBuf> {
 /// Windows: uses `QueryFullProcessImageNameW()`.
 #[cfg(target_os = "windows")]
 fn get_process_exe_path(pid: u32) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -218,7 +220,11 @@ fn get_process_exe_path(pid: u32) -> Option<PathBuf> {
     // `QueryFullProcessImageNameW` and is always ≤ `buf.len()` on success.
     // Use `.get()` to stay panic-free against any future reallocation.
     let slice = buf.get(..size as usize)?;
-    Some(PathBuf::from(String::from_utf16_lossy(slice)))
+    // Decode losslessly via `OsString::from_wide` (not `from_utf16_lossy`):
+    // this path is compared for process-identity verification, so a
+    // non-UTF-8/WTF-8 exe path must not be silently mangled to U+FFFD before
+    // the comparison (Category 4, WI-4.2).
+    Some(PathBuf::from(std::ffi::OsString::from_wide(slice)))
 }
 
 // ── Fallback for other platforms ────────────────────────────────────────

@@ -562,6 +562,10 @@ unsafe fn pwstr_to_string(ptr: PWSTR) -> String {
     // SAFETY: `ptr.0 .. ptr.0 + len` is contiguous valid UTF-16 per the
     // caller's contract; we do not include the trailing null.
     let slice = unsafe { core::slice::from_raw_parts(ptr.0, len) };
+    // AUDIT-OK(bytes): the only caller decodes a SID string from
+    // `ConvertSidToStringSidW`, whose output is by specification pure ASCII
+    // (`S-1-5-21-...`). Lossy and lossless decoding are therefore identical
+    // here; `from_utf16_lossy` cannot alter a valid SID (Category 4, WI-4.2).
     String::from_utf16_lossy(slice)
 }
 

@@ -169,7 +169,7 @@ impl UffsClientSync {
     ///
     /// Returns `ConnectionFailed`, `DaemonStartFailed`, or
     /// `DaemonNeedsElevation` (Windows, non-admin shell only).
-    pub fn connect_with_args(spawn_args: &[String]) -> Result<Self, ClientError> {
+    pub fn connect_with_args(spawn_args: &[std::ffi::OsString]) -> Result<Self, ClientError> {
         Self::connect_with_args_inner(spawn_args, resolve_elevation_policy(false))
     }
 
@@ -183,7 +183,7 @@ impl UffsClientSync {
     ///
     /// Same as [`Self::connect_with_args`], minus
     /// `DaemonNeedsElevation` (converted into a UAC prompt).
-    pub fn connect_with_elevation(spawn_args: &[String]) -> Result<Self, ClientError> {
+    pub fn connect_with_elevation(spawn_args: &[std::ffi::OsString]) -> Result<Self, ClientError> {
         Self::connect_with_args_inner(spawn_args, ElevationPolicy::AllowUacPrompt)
     }
 
@@ -194,7 +194,7 @@ impl UffsClientSync {
     /// point can decide whether a missing elevated context is a
     /// hard error (the default) or a prompt request.
     fn connect_with_args_inner(
-        spawn_args: &[String],
+        spawn_args: &[std::ffi::OsString],
         policy: ElevationPolicy,
     ) -> Result<Self, ClientError> {
         let sock = socket_path();
@@ -220,10 +220,15 @@ impl UffsClientSync {
         #[cfg(not(windows))]
         {
             let has_data_source = spawn_args.iter().any(|arg| {
-                arg == "--data-dir"
-                    || arg == "--mft-file"
-                    || arg.starts_with("--data-dir=")
-                    || arg.starts_with("--mft-file=")
+                // A data-source flag is always ASCII; a non-UTF-8 `OsString`
+                // (e.g. a raw path arg) is by definition not one of these
+                // flags, so `to_str()` → `None` → `false` is correct.
+                arg.to_str().is_some_and(|flag| {
+                    flag == "--data-dir"
+                        || flag == "--mft-file"
+                        || flag.starts_with("--data-dir=")
+                        || flag.starts_with("--mft-file=")
+                })
             });
             if !has_data_source {
                 return Err(ClientError::ConnectionFailed(

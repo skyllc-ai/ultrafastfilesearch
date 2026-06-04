@@ -95,7 +95,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-5.1 | 5 Panic | Enable `arithmetic_side_effects`; `overflow-checks=true` for `dist` | ✅ | `harden/bugs` | ✅ |
 | WI-G.1 | Guard | CI grep-gate script forbidding the anti-patterns from returning | ✅ | `harden/bugs` | ✅ |
 | WI-4.1 | 4 Bytes | Single instrumented UTF-16 decoder; per-index `lossy_name_count` stat + warn | ✅ | `harden/bugs-2` | ✅ |
-| WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ⬜ | | |
+| WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ✅ | `harden/wi-4.2-osstring-argv` | full `&[OsString]` spawn chain (incl. Windows `CreateProcessW`/`ShellExecuteW` via `encode_wide`) + 4 `from_utf16_lossy` decode sites (2 lossless, 2 AUDIT-OK); gate now fully green |
 | WI-4.3 | 4 Bytes | Strict-parse subprocess stdout used for decisions (PID/name) | ✅ | `harden/bugs` | ✅ |
 | WI-4.4 | 4 Bytes | **RFC + impl:** lossless name storage (binary/WTF-8 column) | 🟨 RFC landed | `harden/bugs` | RFC ✅ / impl pending sign-off |
 | WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ✅ | PR #349 (merged) | ✅ |
@@ -127,7 +127,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
 | 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% (Windows-only, pending) |
 | 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | ~50% (8.2 ✅; 8.1 broker single-handle Windows-only, pending) |
-| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | Gate built ✅; **not yet wired into the pipeline** (still red on the 36 byte sites until WI-4.1/4.2 land) |
+| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | Gate built ✅ and **now fully green** (all byte sites resolved by WI-4.1/4.2/4.3); pipeline-wiring (`just audit-gate` into the `go`/ship lane in `uffs-ci-pipeline`) is the remaining follow-up |
 
 > **Note on WI-4.4 (🟨 Deferred-but-tracked):** literal *lossless* name handling
 > requires a binary/WTF-8 name column that ripples through the Polars query
@@ -628,6 +628,44 @@ containing a non-UTF-8 byte (Unix: `OsString::from_vec(vec![0x66, 0x80, 0x66])`)
 preserves the exact bytes in the resulting `OsString` argv entry.
 
 **Verify:** `cargo nextest run -p uffs-cli -p uffs-client -p uffs-mcp`
+
+**Implementation notes (landed on `harden/wi-4.2-osstring-argv`):**
+
+- **Full `&[&str]`/`&[String]` → `&[OsString]` spawn chain.** The spawn argv now
+  carries OS-native bytes end to end: `process::build_daemon_args` (mcp) and the
+  two `daemon_mgmt.rs` builders + `extract_spawn_args` (cli) produce
+  `Vec<OsString>` (flag literals via `OsString::from`, path values via
+  `path.as_os_str().to_os_string()` — no `to_string_lossy`); the public client
+  API `UffsClient`/`UffsClientSync::connect_with_args`/`connect_with_elevation`,
+  `auto_start_daemon`, `log_spawn_details`, and the whole `daemon_spawn.rs`
+  chain (`spawn_daemon`, `spawn_daemon_unix`/`_windows`, `spawn_via_uac_prompt`,
+  `spawn_detached_no_inherit`, `shell_execute_elevated`) all take `&[OsString]`.
+  The `McpConfig`/`HttpGatewayConfig`/`UffsMcpServer` `daemon_spawn_args` fields
+  and the handler `ClientSlot` became `Vec<OsString>` too.
+- **Windows `CreateProcessW` / `ShellExecuteW` rewritten to UTF-16.**
+  `quote_arg_for_createprocess` now operates on `&[u16]` (was `&str → String`)
+  and a shared `build_wide_command_line` builds the command line from
+  `OsStr::encode_wide`, so a path with unpaired surrogates / non-UTF-8 bytes
+  reaches the child's argv **losslessly** instead of being `to_string_lossy`
+  mangled to U+FFFD. The MSVCRT backslash/quote/empty-arg escaping rules are
+  preserved (now expressed over code units). The `process.rs` `uffsmcp`-restart
+  spawn args switched from `cmd.args(["--data-dir", &dir.to_string_lossy()])` to
+  `cmd.arg("--data-dir"); cmd.arg(dir.as_os_str())`.
+- **The 4 `from_utf16_lossy` decode sites (clears the gate):** `verify.rs`
+  (process exe path → identity check) and `broker.rs` exe-name identity check
+  now decode **losslessly** via `OsString::from_wide`; `broker.rs`
+  `get_client_exe_path` (audit-log display only — the real check is
+  `verify_client`) and `pipe.rs` `pwstr_to_string` (decodes an ASCII-by-spec SID
+  string) are marked `// AUDIT-OK(bytes)` with rationale.
+- **Verification:** native + `cargo xwin` (Windows) `--all-targets -D warnings`
+  clippy clean across uffs-broker/client/security/cli/mcp; 390 tests pass; the
+  anti-pattern gate is now **fully green** (no remaining byte sites). New
+  `lone_surrogate_arg_survives_losslessly` test proves a 0xD800-bearing arg
+  round-trips through the quoting routine unchanged.
+- **Deviation from the suggested test:** the plan suggested a Unix
+  `OsString::from_vec` non-UTF-8 argv test; the lossless property was instead
+  proven at the Windows quoting layer (the platform whose `to_string_lossy`
+  path was the actual bug), which is where the conversion logic lives.
 
 ---
 

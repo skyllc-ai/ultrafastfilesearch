@@ -45,7 +45,7 @@ pub(crate) struct AppState {
     boot: Instant,
     /// Daemon spawn args forwarded to lazy `UffsClient` connections.
     #[expect(dead_code, reason = "reserved for lazy UffsClient connection init")]
-    spawn_args: Arc<[String]>,
+    spawn_args: Arc<[std::ffi::OsString]>,
     /// Shared MCP stats across all sessions.
     stats: Arc<McpStats>,
 }
@@ -57,7 +57,7 @@ pub(crate) struct AppState {
 /// All three fields are `pub` because this is a **configuration DTO**.
 /// `bind_addr` is a required parameter (no default that makes sense);
 /// `auth_token` is genuinely optional; `daemon_spawn_args` is a
-/// forwarded vector with no invariants to protect.
+/// forwarded `Vec<OsString>` with no invariants to protect.
 ///
 /// # `#[non_exhaustive]` decision (Phase 3b §3.6)
 ///
@@ -72,14 +72,14 @@ pub struct HttpGatewayConfig {
     /// Optional bearer token for authenticating MCP requests.
     pub auth_token: Option<String>,
     /// Extra CLI args forwarded to `uffs daemon run` on auto-start.
-    pub daemon_spawn_args: Vec<String>,
+    pub daemon_spawn_args: Vec<std::ffi::OsString>,
 }
 
 /// Build the axum [`Router`] with MCP, health, and status endpoints.
 ///
 /// The router is returned without binding — call [`run_gateway`] to serve.
 pub(crate) fn build_router(config: &HttpGatewayConfig) -> Router {
-    let spawn_args: Arc<[String]> = config.daemon_spawn_args.clone().into();
+    let spawn_args: Arc<[std::ffi::OsString]> = config.daemon_spawn_args.clone().into();
     let spawn_args_clone = Arc::clone(&spawn_args);
     let stats = Arc::new(McpStats::default());
     let stats_for_factory = Arc::clone(&stats);

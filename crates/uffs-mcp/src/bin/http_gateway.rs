@@ -138,7 +138,11 @@ async fn main() -> anyhow::Result<()> {
     let config = uffs_mcp::http::HttpGatewayConfig {
         bind_addr: args.bind,
         auth_token: args.auth_token,
-        daemon_spawn_args: args.daemon_args,
+        daemon_spawn_args: args
+            .daemon_args
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect(),
     };
 
     uffs_mcp::http::run_gateway(config).await

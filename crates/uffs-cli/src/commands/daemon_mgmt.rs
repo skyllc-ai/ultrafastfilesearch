@@ -145,21 +145,23 @@ fn daemon_start(
     );
 
     // Build spawn args — forward raw, let daemon handle discovery.
-    let mut spawn_args = Vec::new();
+    // Use `OsString` so non-UTF-8 / WTF-8 paths survive losslessly to the
+    // spawned daemon's argv (WI-4.2).
+    let mut spawn_args: Vec<std::ffi::OsString> = Vec::new();
     if let Some(dir) = data_dir {
-        spawn_args.push("--data-dir".to_owned());
-        spawn_args.push(dir.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--data-dir"));
+        spawn_args.push(dir.as_os_str().to_os_string());
     }
     for mft_path in mft_files {
-        spawn_args.push("--mft-file".to_owned());
-        spawn_args.push(mft_path.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--mft-file"));
+        spawn_args.push(mft_path.as_os_str().to_os_string());
     }
     for letter in drives {
-        spawn_args.push("--drive".to_owned());
-        spawn_args.push(letter.to_string());
+        spawn_args.push(std::ffi::OsString::from("--drive"));
+        spawn_args.push(std::ffi::OsString::from(letter.to_string()));
     }
     if no_cache {
-        spawn_args.push("--no-cache".to_owned());
+        spawn_args.push(std::ffi::OsString::from("--no-cache"));
     }
 
     // ── Env-var forwarding ────────────────────────────────────────────────
@@ -193,8 +195,8 @@ fn daemon_start(
         log_level.to_owned()
     };
     if effective_log_level != "info" {
-        spawn_args.push("--log-level".to_owned());
-        spawn_args.push(effective_log_level.clone());
+        spawn_args.push(std::ffi::OsString::from("--log-level"));
+        spawn_args.push(std::ffi::OsString::from(effective_log_level.clone()));
     }
 
     // Effective log file: CLI arg wins; fall back to $UFFS_LOG_DIR/uffsd.log.
@@ -210,8 +212,8 @@ fn daemon_start(
         .map(std::path::Path::to_path_buf)
         .or(derived_log_file);
     if let Some(path) = &effective_log_file {
-        spawn_args.push("--log-file".to_owned());
-        spawn_args.push(path.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--log-file"));
+        spawn_args.push(path.as_os_str().to_os_string());
     }
 
     // [diag] Print every diagnostic variable so we can trace the full chain.
@@ -567,11 +569,11 @@ fn daemon_restart() -> Result<()> {
             .drives()
             .with_context(|| "Failed to query drives before restart")?;
 
-        let mut args = Vec::new();
+        let mut args: Vec<std::ffi::OsString> = Vec::new();
         for dr in &drives_resp.drives {
             if let Some(path) = dr.source.strip_prefix("file:") {
-                args.push("--mft-file".to_owned());
-                args.push(path.to_owned());
+                args.push(std::ffi::OsString::from("--mft-file"));
+                args.push(std::ffi::OsString::from(path));
             }
         }
 
@@ -599,7 +601,7 @@ fn daemon_restart() -> Result<()> {
         "Restarting daemon with {} data source(s)...",
         spawn_args
             .iter()
-            .filter(|arg| *arg == "--mft-file" || *arg == "--data-dir")
+            .filter(|arg| arg.as_os_str() == "--mft-file" || arg.as_os_str() == "--data-dir")
             .count()
     );
 

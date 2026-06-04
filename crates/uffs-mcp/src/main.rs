@@ -274,7 +274,7 @@ async fn mcp_start(
     let daemon_args = {
         let mut args = process::build_daemon_args(mft_files, data_dir);
         if no_cache {
-            args.push("--no-cache".to_owned());
+            args.push(std::ffi::OsString::from("--no-cache"));
         }
         args
     };
@@ -357,7 +357,11 @@ async fn port_is_occupied(bind: &str, port: u16) -> bool {
 
 /// Deep health check when target port is occupied.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-async fn preflight_reclaim_or_reuse(bind: &str, port: u16, daemon_args: &[String]) -> Result<bool> {
+async fn preflight_reclaim_or_reuse(
+    bind: &str,
+    port: u16,
+    daemon_args: &[std::ffi::OsString],
+) -> Result<bool> {
     let health_url = format!("http://{bind}:{port}/health");
     let gateway_ok = process::reqwest_lite_get(&health_url)
         .await

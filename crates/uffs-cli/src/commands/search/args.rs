@@ -24,14 +24,14 @@
 ///
 /// The daemon auto-start needs `--data-dir`, `--mft-file`, `--no-cache`,
 /// `--drive`, and log env vars. Everything else is irrelevant for spawn.
-pub(crate) fn extract_spawn_args(args: &[String]) -> Vec<String> {
-    let mut spawn = Vec::new();
+pub(crate) fn extract_spawn_args(args: &[String]) -> Vec<std::ffi::OsString> {
+    let mut spawn: Vec<std::ffi::OsString> = Vec::new();
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         let flag = arg.split('=').next().unwrap_or(arg.as_str());
         match flag {
             "--data-dir" | "--mft-file" | "--drive" | "--drives" | "--log-level" | "--log-file" => {
-                spawn.push(arg.clone());
+                spawn.push(std::ffi::OsString::from(arg));
                 // If not `--flag=val` form, consume the next token as value.
                 if !arg.contains('=')
                     && iter.peek().is_some_and(|peeked| {
@@ -39,22 +39,25 @@ pub(crate) fn extract_spawn_args(args: &[String]) -> Vec<String> {
                     })
                 {
                     // peek() confirmed the value exists, so next() is safe.
-                    spawn.push(iter.next().map_or_else(String::new, String::clone));
+                    spawn.push(
+                        iter.next()
+                            .map_or_else(std::ffi::OsString::new, std::ffi::OsString::from),
+                    );
                 }
             }
-            "--no-cache" => spawn.push(arg.clone()),
+            "--no-cache" => spawn.push(std::ffi::OsString::from(arg)),
             _ => {}
         }
     }
 
     // Forward log env vars.
     if let Ok(ll) = std::env::var("UFFS_LOG") {
-        spawn.push("--log-level".to_owned());
-        spawn.push(ll);
+        spawn.push(std::ffi::OsString::from("--log-level"));
+        spawn.push(std::ffi::OsString::from(ll));
     }
     if let Ok(lf) = std::env::var("UFFS_LOG_FILE") {
-        spawn.push("--log-file".to_owned());
-        spawn.push(lf);
+        spawn.push(std::ffi::OsString::from("--log-file"));
+        spawn.push(std::ffi::OsString::from(lf));
     }
 
     spawn

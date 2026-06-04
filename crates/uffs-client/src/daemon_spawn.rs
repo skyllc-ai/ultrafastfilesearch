@@ -114,7 +114,7 @@ pub(crate) fn resolve_elevation_policy(force_allow: bool) -> ElevationPolicy {
 #[cfg(unix)]
 pub(crate) fn spawn_daemon(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
     _policy: ElevationPolicy,
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     // `policy` is Windows-only; the Unix spawn never prompts for
@@ -140,7 +140,7 @@ pub(crate) fn spawn_daemon(
 #[cfg(windows)]
 pub(crate) fn spawn_daemon(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
     policy: ElevationPolicy,
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     spawn_daemon_windows(exe, args, policy)
@@ -160,7 +160,7 @@ pub(crate) fn spawn_daemon(
 )]
 fn spawn_daemon_unix(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     let child = std::process::Command::new(exe)
         .args(args)
@@ -185,7 +185,7 @@ fn spawn_daemon_unix(
 )]
 fn spawn_daemon_windows(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
     policy: ElevationPolicy,
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     let elevated = is_elevated();
@@ -222,7 +222,7 @@ fn spawn_daemon_windows(
 #[cfg(windows)]
 fn spawn_via_uac_prompt(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     tracing::debug!("NOT elevated, using ShellExecuteW runas (policy allows UAC)");
     tracing::info!("Not elevated — requesting elevation via UAC prompt");
@@ -252,54 +252,104 @@ fn spawn_via_uac_prompt(
 ///   backslashes just before the closing `"` must also be doubled so the
 ///   closing quote is not interpreted as escaped.
 ///
-/// This function is pure string manipulation and is compiled (and unit
-/// tested) on every platform, even though it is only *called* from
+/// This function operates on **UTF-16 code units** (`&[u16]`), the native
+/// width of a `CreateProcessW` command line, and appends the escaped result
+/// to `out` (also `&mut Vec<u16>`).  Working in UTF-16 — rather than the old
+/// `&str` → `String` form — means a path containing unpaired surrogates or
+/// other non-UTF-8 (WTF-8) sequences survives **losslessly** from the caller's
+/// `OsStr` all the way to the child's argv (Category 4, WI-4.2).  The caller
+/// derives the `&[u16]` via `OsStr::encode_wide`.
+///
+/// It is pure code-unit manipulation and is compiled (and unit tested) on
+/// every platform even though it is only *called* from
 /// [`spawn_detached_no_inherit`] on Windows.  We gate the item on
 /// `any(windows, test)` so macOS/Linux release builds don't emit a
 /// `dead_code` warning, while `cargo test` still compiles it everywhere
 /// and the unit tests run on the ship box.
 #[cfg(any(windows, test))]
-#[must_use]
-fn quote_arg_for_createprocess(arg: &str) -> String {
+fn quote_arg_for_createprocess(arg: &[u16], out: &mut Vec<u16>) {
+    // UTF-16 code units for the ASCII metacharacters we test against.
+    const SPACE: u16 = b' ' as u16;
+    const TAB: u16 = b'\t' as u16;
+    const NEWLINE: u16 = b'\n' as u16;
+    const VTAB: u16 = 0x000B; // vertical tab (\x0b)
+    const QUOTE: u16 = b'"' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+
     if arg.is_empty() {
-        return "\"\"".to_owned();
+        // An empty argument must become `""` — otherwise it collapses into the
+        // separating space and disappears from the child's argv.
+        out.push(QUOTE);
+        out.push(QUOTE);
+        return;
     }
-    // Fast path: nothing that needs escaping.
+    // Fast path: nothing that needs escaping — emit the code units verbatim.
     let needs_quoting = arg
-        .chars()
-        .any(|chr| chr == ' ' || chr == '\t' || chr == '\n' || chr == '\x0b' || chr == '"');
+        .iter()
+        .any(|&unit| matches!(unit, SPACE | TAB | NEWLINE | VTAB | QUOTE));
     if !needs_quoting {
-        return arg.to_owned();
+        out.extend_from_slice(arg);
+        return;
     }
 
-    let mut out = String::with_capacity(arg.len() + 2);
-    out.push('"');
+    out.push(QUOTE);
     let mut pending_backslashes: usize = 0;
-    for chr in arg.chars() {
-        if chr == '\\' {
+    for &unit in arg {
+        if unit == BACKSLASH {
             pending_backslashes += 1;
-        } else if chr == '"' {
+        } else if unit == QUOTE {
             // Double the pending backslashes, then escape the quote.
             for _ in 0..=(pending_backslashes * 2) {
-                out.push('\\');
+                out.push(BACKSLASH);
             }
-            out.push('"');
+            out.push(QUOTE);
             pending_backslashes = 0;
         } else {
             for _ in 0..pending_backslashes {
-                out.push('\\');
+                out.push(BACKSLASH);
             }
-            out.push(chr);
+            out.push(unit);
             pending_backslashes = 0;
         }
     }
     // Trailing backslashes must be doubled so the closing quote is not
     // swallowed as an escape target.
     for _ in 0..(pending_backslashes * 2) {
-        out.push('\\');
+        out.push(BACKSLASH);
     }
-    out.push('"');
-    out
+    out.push(QUOTE);
+}
+
+/// Build a space-separated, MSVCRT-quoted, **null-terminated** UTF-16 command
+/// line from an optional leading program token followed by `args`.
+///
+/// Each token is run through [`quote_arg_for_createprocess`] so the result is
+/// safe to hand to `CreateProcessW` (`lead = Some(exe)`) or to
+/// `ShellExecuteW` as the parameter list (`lead = None`). Building from
+/// `OsStr` code units keeps non-UTF-8/WTF-8 path bytes intact (WI-4.2).
+#[cfg(windows)]
+fn build_wide_command_line(
+    lead: Option<&std::ffi::OsStr>,
+    args: &[std::ffi::OsString],
+) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let mut wide: Vec<u16> = Vec::new();
+    if let Some(program) = lead {
+        let program_wide: Vec<u16> = program.encode_wide().collect();
+        quote_arg_for_createprocess(&program_wide, &mut wide);
+    }
+    for arg in args {
+        // A space separates tokens; emit one before every token except the
+        // very first written (i.e. when `wide` is still empty).
+        if !wide.is_empty() {
+            wide.push(u16::from(b' '));
+        }
+        let arg_wide: Vec<u16> = arg.encode_wide().collect();
+        quote_arg_for_createprocess(&arg_wide, &mut wide);
+    }
+    wide.push(0); // CreateProcessW / ShellExecuteW require null termination.
+    wide
 }
 
 // ── CreateProcessW spawn ──────────────────────────────────────────────────
@@ -318,25 +368,21 @@ fn quote_arg_for_createprocess(arg: &str) -> String {
 #[cfg(windows)]
 fn spawn_detached_no_inherit(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
 ) -> Result<DaemonChildHandle, crate::error::ClientError> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
         CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
     };
 
-    // Build the command-line string using full MSVCRT-compatible escaping.
-    // The previous naive implementation dropped empty args entirely and
+    // Build the command-line as UTF-16 directly, using full MSVCRT-compatible
+    // escaping (the program token leads). Working in UTF-16 — rather than
+    // `to_string_lossy()` → `String` — preserves non-UTF-8/WTF-8 path bytes
+    // losslessly through to the child's argv (Category 4, WI-4.2). The
+    // previous naive implementation also dropped empty args entirely and
     // mangled any arg containing spaces or quotes — see
     // `quote_arg_for_createprocess` for the gory details.
-    let mut cmd_line = String::new();
-    cmd_line.push_str(&quote_arg_for_createprocess(&exe.to_string_lossy()));
-    for arg in args {
-        cmd_line.push(' ');
-        cmd_line.push_str(&quote_arg_for_createprocess(arg));
-    }
-
-    let mut cmd_wide: Vec<u16> = cmd_line.encode_utf16().chain(core::iter::once(0)).collect();
+    let mut cmd_wide: Vec<u16> = build_wide_command_line(Some(exe.as_os_str()), args);
 
     let si = STARTUPINFOW {
         cb: u32::try_from(size_of::<STARTUPINFOW>()).unwrap_or(u32::MAX),
@@ -451,21 +497,27 @@ fn is_elevated() -> bool {
 #[cfg(windows)]
 fn shell_execute_elevated(
     exe: &std::path::Path,
-    args: &[&str],
+    args: &[std::ffi::OsString],
 ) -> Result<(), crate::error::ClientError> {
+    use std::os::windows::ffi::OsStrExt as _;
+
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::core::PCWSTR;
 
     let verb: Vec<u16> = "runas\0".encode_utf16().collect();
-    let exe_str = exe.to_string_lossy();
-    let file: Vec<u16> = format!("{exe_str}\0").encode_utf16().collect();
-    let params_str = args.join(" ");
-    let params: Vec<u16> = format!("{params_str}\0").encode_utf16().collect();
+    // Build `file` and `params` as UTF-16 directly so non-UTF-8/WTF-8 path
+    // bytes survive losslessly (Category 4, WI-4.2). `params` reuses the same
+    // MSVCRT-compatible quoting as the CreateProcessW path so args with spaces
+    // or quotes are not mangled by the elevated re-parse.
+    let mut file: Vec<u16> = exe.as_os_str().encode_wide().collect();
+    file.push(0); // null terminator
+
+    // No leading program token: `file` is the program; `params` is the args.
+    let params: Vec<u16> = build_wide_command_line(None, args);
 
     tracing::debug!(
         verb = "runas",
-        file = %exe_str,
-        params = %params_str,
+        file = %exe.display(),
         "ShellExecuteW"
     );
 
@@ -583,6 +635,17 @@ mod elevation_policy_tests {
 mod quote_arg_tests {
     use super::quote_arg_for_createprocess;
 
+    /// Ergonomic wrapper: quote a `&str` argument and return the result as a
+    /// `String`, so the UTF-16 `quote_arg_for_createprocess` can be asserted
+    /// against readable string literals. Encodes input to UTF-16, runs the
+    /// real quoting routine, then decodes the produced code units back.
+    fn quote_str(arg: &str) -> String {
+        let wide: Vec<u16> = arg.encode_utf16().collect();
+        let mut out: Vec<u16> = Vec::new();
+        quote_arg_for_createprocess(&wide, &mut out);
+        String::from_utf16(&out).expect("ASCII quoting output is always valid UTF-16")
+    }
+
     /// **Regression (silent `daemon start` failure, `LOG/Output`):** an
     /// empty argument must round-trip as `""` so `CreateProcessW`'s child
     /// sees it as a zero-length argv entry instead of skipping it
@@ -594,7 +657,7 @@ mod quote_arg_tests {
     /// its IPC transports.
     #[test]
     fn empty_arg_becomes_explicit_empty_quotes() {
-        assert_eq!(quote_arg_for_createprocess(""), "\"\"");
+        assert_eq!(quote_str(""), "\"\"");
     }
 
     /// Plain alphanumeric / punctuation arguments pass through unquoted.
@@ -602,12 +665,9 @@ mod quote_arg_tests {
     /// `tracing::debug!` consumers.
     #[test]
     fn plain_arg_passes_through_unquoted() {
-        assert_eq!(quote_arg_for_createprocess("debug"), "debug");
-        assert_eq!(quote_arg_for_createprocess("--log-level"), "--log-level");
-        assert_eq!(
-            quote_arg_for_createprocess("C:\\Users\\rnio"),
-            "C:\\Users\\rnio"
-        );
+        assert_eq!(quote_str("debug"), "debug");
+        assert_eq!(quote_str("--log-level"), "--log-level");
+        assert_eq!(quote_str("C:\\Users\\rnio"), "C:\\Users\\rnio");
     }
 
     /// Arguments containing whitespace must be wrapped in double quotes.
@@ -616,8 +676,8 @@ mod quote_arg_tests {
     #[test]
     fn whitespace_arg_gets_quoted() {
         assert_eq!(
-            quote_arg_for_createprocess(r"C:\Program Files\uffs"),
-            "\"C:\\Program Files\\uffs\"",
+            quote_str(r"C:\Program Files\uffs"),
+            "\"C:\\Program Files\\uffs\""
         );
     }
 
@@ -626,10 +686,7 @@ mod quote_arg_tests {
     /// terminator.
     #[test]
     fn embedded_quote_is_escaped() {
-        assert_eq!(
-            quote_arg_for_createprocess(r#"he said "hi""#),
-            r#""he said \"hi\"""#
-        );
+        assert_eq!(quote_str(r#"he said "hi""#), r#""he said \"hi\"""#);
     }
 
     /// MSVCRT rule: each backslash that precedes a quote must be
@@ -639,10 +696,10 @@ mod quote_arg_tests {
     fn backslashes_before_quote_are_doubled() {
         // Single backslash followed by a quote → two backslashes then an
         // escaped quote inside the quoted string.
-        assert_eq!(quote_arg_for_createprocess(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(quote_str(r#"a\"b"#), r#""a\\\"b""#);
         // Two backslashes followed by a quote → four backslashes then an
         // escaped quote.
-        assert_eq!(quote_arg_for_createprocess(r#"a\\"b"#), r#""a\\\\\"b""#);
+        assert_eq!(quote_str(r#"a\\"b"#), r#""a\\\\\"b""#);
     }
 
     /// Trailing backslashes inside a quoted arg must be doubled so the
@@ -653,10 +710,7 @@ mod quote_arg_tests {
     fn trailing_backslash_in_quoted_arg_is_doubled() {
         // "path has\" → needs quoting (space), and the trailing \
         // must be doubled so the closing " stands on its own.
-        assert_eq!(
-            quote_arg_for_createprocess("path with\\"),
-            "\"path with\\\\\"",
-        );
+        assert_eq!(quote_str("path with\\"), "\"path with\\\\\"");
     }
 
     /// End-to-end: simulate the exact args list that caused the bug.
@@ -668,9 +722,30 @@ mod quote_arg_tests {
         let args = ["--log-level", "", "--log-file", "uffsd.log"];
         let cmd: String = args
             .iter()
-            .map(|arg| quote_arg_for_createprocess(arg))
+            .map(|arg| quote_str(arg))
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(cmd, "--log-level \"\" --log-file uffsd.log");
+    }
+
+    /// **WI-4.2 lossless round-trip:** a UTF-16 argument containing an
+    /// unpaired surrogate (0xD800) — i.e. a Windows path that is *not*
+    /// representable in UTF-8 — must survive quoting verbatim. The old
+    /// `to_string_lossy()` path would have replaced 0xD800 with U+FFFD,
+    /// silently mangling the path before it reached the child's argv. The
+    /// surrogate is not a metacharacter, so it passes through the fast path
+    /// unchanged, code unit for code unit.
+    #[test]
+    fn lone_surrogate_arg_survives_losslessly() {
+        let arg: Vec<u16> = vec![
+            u16::from(b'C'),
+            u16::from(b':'),
+            0xD800, // lone high surrogate — not valid UTF-8/UTF-16 scalar
+            u16::from(b'x'),
+        ];
+        let mut out: Vec<u16> = Vec::new();
+        quote_arg_for_createprocess(&arg, &mut out);
+        // No metacharacters → emitted verbatim, surrogate preserved.
+        assert_eq!(out, arg, "lone surrogate must round-trip unchanged");
     }
 }

@@ -172,7 +172,7 @@ impl UffsClient {
     /// Returns `ConnectionFailed`, `DaemonStartFailed`, or
     /// `DaemonNeedsElevation` (Windows, non-admin shell only).
     pub async fn connect_with_args(
-        spawn_args: &[String],
+        spawn_args: &[std::ffi::OsString],
     ) -> Result<Self, crate::error::ClientError> {
         Self::connect_with_args_inner(spawn_args, resolve_elevation_policy(false)).await
     }
@@ -190,7 +190,7 @@ impl UffsClient {
     /// Same as [`Self::connect_with_args`], minus
     /// `DaemonNeedsElevation` (which is turned into a UAC prompt).
     pub async fn connect_with_elevation(
-        spawn_args: &[String],
+        spawn_args: &[std::ffi::OsString],
     ) -> Result<Self, crate::error::ClientError> {
         Self::connect_with_args_inner(spawn_args, ElevationPolicy::AllowUacPrompt).await
     }
@@ -202,7 +202,7 @@ impl UffsClient {
     /// point can decide whether a missing elevated context is a
     /// hard error (the default) or a prompt request.
     async fn connect_with_args_inner(
-        spawn_args: &[String],
+        spawn_args: &[std::ffi::OsString],
         policy: ElevationPolicy,
     ) -> Result<Self, crate::error::ClientError> {
         let sock = socket_path();
@@ -264,24 +264,20 @@ impl UffsClient {
     /// executable cannot be found, the spawn fails, or the policy
     /// forbids elevation in the current context.
     fn auto_start_daemon(
-        spawn_args: &[String],
+        spawn_args: &[std::ffi::OsString],
         policy: ElevationPolicy,
     ) -> Result<(), crate::error::ClientError> {
         tracing::info!(?policy, "Daemon not running, auto-starting via `uffsd`...");
 
         let daemon_exe = find_daemon_exe();
-        let mut cmd_args: Vec<&str> = Vec::new();
-        for arg in spawn_args {
-            cmd_args.push(arg.as_str());
-        }
-        log_spawn_details(&daemon_exe, &cmd_args);
+        log_spawn_details(&daemon_exe, spawn_args);
 
         // On Windows, reading the MFT requires Administrator privileges.
         // The default policy is `RequireExistingElevation` — if we are
         // not already elevated, we return `DaemonNeedsElevation` and let
         // the CLI render an actionable message.  Callers opt in to a
         // UAC prompt via `connect_with_elevation` or `UFFS_ELEVATE=1`.
-        spawn_daemon(&daemon_exe, &cmd_args, policy)?;
+        spawn_daemon(&daemon_exe, spawn_args, policy)?;
         tracing::debug!("auto_start_daemon: spawn returned OK");
         Ok(())
     }

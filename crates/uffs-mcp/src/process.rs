@@ -8,19 +8,24 @@
 use anyhow::Result;
 
 /// Build `--mft-file` / `--data-dir` args for daemon auto-start.
+///
+/// Returns `OsString` entries so a path containing non-UTF-8 / WTF-8 bytes is
+/// forwarded to the spawned daemon verbatim, never `to_string_lossy`-mangled
+/// (Category 4, WI-4.2). Flag literals are ASCII; only the path values carry
+/// the OS-native bytes.
 #[must_use]
 pub(crate) fn build_daemon_args(
     mft_files: &[std::path::PathBuf],
     data_dir: Option<&std::path::Path>,
-) -> Vec<String> {
+) -> Vec<std::ffi::OsString> {
     let mut args = Vec::new();
     if let Some(dir) = data_dir {
-        args.push("--data-dir".to_owned());
-        args.push(dir.to_string_lossy().into_owned());
+        args.push(std::ffi::OsString::from("--data-dir"));
+        args.push(dir.as_os_str().to_os_string());
     }
     for path in mft_files {
-        args.push("--mft-file".to_owned());
-        args.push(path.to_string_lossy().into_owned());
+        args.push(std::ffi::OsString::from("--mft-file"));
+        args.push(path.as_os_str().to_os_string());
     }
     args
 }
@@ -276,10 +281,12 @@ pub(crate) async fn mcp_reload() -> Result<()> {
                     &config.port.to_string(),
                 ]);
                 if let Some(dir) = &config.data_dir {
-                    cmd.args(["--data-dir", &dir.to_string_lossy()]);
+                    cmd.arg("--data-dir");
+                    cmd.arg(dir.as_os_str());
                 }
                 for mft in &config.mft_files {
-                    cmd.args(["--mft-file", &mft.to_string_lossy()]);
+                    cmd.arg("--mft-file");
+                    cmd.arg(mft.as_os_str());
                 }
                 if config.no_cache {
                     cmd.arg("--no-cache");
