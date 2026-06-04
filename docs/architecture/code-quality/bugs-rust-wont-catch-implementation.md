@@ -106,7 +106,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-8.1 | 8 Trust | Broker: thread one process handle verify→`DuplicateHandle` (no PID re-open) | ⬜ | | |
 | WI-8.2 | 8 Trust | Document daemon-nonce security property (depends on WI-2.2) | ✅ | `harden/bugs` | ✅ |
 | WI-7.1 | 7 Parity | Parity corpus: pathological names; assert vs Windows enumeration | ⬜ | | |
-| WI-3.1 | 3 Identity | `paths_identical` (dev,inode) helper + invariant doc/test for scoping | ⬜ | | |
+| WI-3.1 | 3 Identity | `paths_identical` (dev,inode) helper + invariant doc/test for scoping | ✅ | `harden/bugs` | ✅ |
 
 ### 1.2 Category coverage rollup (fill as phases close)
 

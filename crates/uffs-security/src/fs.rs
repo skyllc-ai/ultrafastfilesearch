@@ -373,6 +373,58 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Path identity (Category 3)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Answer "are these two paths the **same file**?" by filesystem identity,
+/// not by string comparison.
+///
+/// String equality on paths is not filesystem identity: two different
+/// strings can name the same file (hardlink, symlink, `.`/`..`, case-fold,
+/// trailing separators), and two equal strings can name different files
+/// across mounts. Where a *safety/scoping* decision turns on "same file",
+/// compare the OS identity instead:
+///
+/// - **Unix:** `(st_dev, st_ino)` from `MetadataExt`.
+/// - **Windows:** the volume serial + file index from
+///   `BY_HANDLE_FILE_INFORMATION` (via `std::os::windows::fs::MetadataExt`).
+///
+/// This **follows symlinks** (uses `metadata`, not `symlink_metadata`): it
+/// answers "do these resolve to the same file", which is the question a
+/// scoping/identity check actually has.
+///
+/// # Errors
+///
+/// Returns an error if either path cannot be `stat`'d (e.g. missing).
+pub fn paths_identical(first: &Path, second: &Path) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta_a = std::fs::metadata(first)?;
+        let meta_b = std::fs::metadata(second)?;
+        Ok(meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino())
+    }
+    #[cfg(windows)]
+    {
+        // Windows file identity is `(dwVolumeSerialNumber, nFileIndex)` from
+        // `BY_HANDLE_FILE_INFORMATION`. The `std::os::windows::fs::MetadataExt`
+        // accessors for these (`volume_serial_number` / `file_index`) are
+        // still unstable (rust-lang/rust#63010, `windows_by_handle`), so a
+        // stable implementation must go through `GetFileInformationByHandle`
+        // directly. That FFI is deferred until a caller actually needs
+        // same-file identity on Windows (the WI-3.1 audit found the
+        // drive-scoping path uses the typed `DriveLetter`, not this helper).
+        // Until then, be explicit rather than silently wrong.
+        let _: (&Path, &Path) = (first, second);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "paths_identical: Windows file-identity comparison not yet implemented \
+             (needs stable GetFileInformationByHandle FFI; no caller requires it yet)",
+        ))
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // File Locking (S3.2)
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -575,180 +627,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn create_new_secure_file_is_0600() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("secret.bin");
-        let file = create_new_secure_file(&path).unwrap();
-        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "file must be born 0600, got {mode:o}");
-    }
-
-    #[test]
-    fn create_new_secure_file_rejects_existing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("exists.bin");
-        std::fs::write(&path, b"pre-existing").unwrap();
-        let err = create_new_secure_file(&path).expect_err("must refuse existing path");
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn create_new_secure_file_rejects_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("target.bin");
-        std::fs::write(&target, b"sentinel").unwrap();
-        let link = dir.path().join("link.bin");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-
-        // create_new must refuse to follow/replace the symlink.
-        let err = create_new_secure_file(&link).expect_err("must refuse symlink");
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
-        // The symlink's target content is untouched.
-        assert_eq!(std::fs::read(&target).unwrap(), b"sentinel");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_secret_file_is_0600_with_content() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("key.bin");
-        write_secret_file(&path, b"deadbeef").unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        assert_eq!(std::fs::read(&path).unwrap(), b"deadbeef");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn create_secure_dir_births_0700() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("a").join("b").join("c");
-        create_secure_dir(&nested).unwrap();
-        // Each component WE created is born 0700.
-        for comp in [dir.path().join("a"), dir.path().join("a").join("b"), nested] {
-            let mode = std::fs::metadata(&comp).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "{} mode {mode:o} != 0700", comp.display());
-        }
-    }
-
-    #[test]
-    fn create_secure_dir_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("x").join("y");
-        create_secure_dir(&target).unwrap();
-        // Second call on an existing dir must still succeed.
-        create_secure_dir(&target).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn atomic_write_sets_0600() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("data.bin");
-        atomic_write(&path, b"payload").unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            mode, 0o600,
-            "atomic_write final file must be 0600, got {mode:o}"
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"payload");
-    }
-
-    #[test]
-    fn atomic_write_overwrites_existing_target() {
-        // The TARGET may pre-exist (rename replaces it); only the randomised
-        // TEMP uses create_new. Confirms we didn't break replace semantics.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("data.bin");
-        atomic_write(&path, b"first").unwrap();
-        atomic_write(&path, b"second").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"second");
-    }
-
-    #[test]
-    fn atomic_write_concurrent_no_collision() {
-        // `tempdir` outlives the threads because we join all of them before
-        // it drops at end-of-scope — so each thread can take an owned
-        // `PathBuf` clone without needing `Arc`.
-        let tempdir = tempfile::tempdir().unwrap();
-        let target = tempdir.path().join("shared.bin");
-
-        let handles: Vec<_> = (0_u8..8)
-            .map(|writer_id| {
-                let thread_target = target.clone();
-                std::thread::spawn(move || {
-                    let payload = vec![writer_id; 256];
-                    atomic_write(&thread_target, &payload).unwrap();
-                })
-            })
-            .collect();
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Final content must be exactly one writer's payload (256 equal bytes),
-        // never an interleaving of two writers (randomised temps must not
-        // collide).
-        let final_bytes = std::fs::read(&target).unwrap();
-        assert_eq!(final_bytes.len(), 256);
-        let first = final_bytes.first().copied().unwrap();
-        assert!(
-            final_bytes.iter().all(|&byte| byte == first),
-            "final file must be one writer's payload, not interleaved"
-        );
-
-        // No leftover temp files in the dir.
-        let leftover = std::fs::read_dir(tempdir.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().contains(".uffs.tmp"))
-            .count();
-        assert_eq!(leftover, 0, "no temp files should remain");
-    }
-
-    #[test]
-    fn secure_remove_zeroes_then_unlinks() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("victim.bin");
-        std::fs::write(&path, vec![0xFF_u8; 4096]).unwrap();
-        secure_remove(&path).unwrap();
-        assert!(!path.exists(), "file must be unlinked after secure_remove");
-    }
-
-    #[test]
-    fn secure_remove_absent_is_ok() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("does-not-exist.bin");
-        // Removing a missing path is a no-op success.
-        secure_remove(&path).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn secure_remove_follows_symlink_to_target_then_unlinks_link() {
-        // Documents the chosen semantics: `secure_remove` opens the path for
-        // write (following a symlink to its target, the OS default), zeroes
-        // the TARGET's bytes via the fd, then unlinks the LINK. We assert the
-        // observable end state: the link is gone. (The pre-stat removal in
-        // WI-1.1 means size + overwrite now go through one fd, eliminating the
-        // metadata→open re-resolution.)
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("target.bin");
-        std::fs::write(&target, vec![0xAB_u8; 1024]).unwrap();
-        let link = dir.path().join("link.bin");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-
-        secure_remove(&link).unwrap();
-        assert!(!link.exists(), "the symlink itself must be removed");
-    }
-}
+#[path = "fs/tests.rs"]
+mod tests;
