@@ -4546,6 +4546,7 @@ dependencies = [
  "hex",
  "hostname",
  "indicatif",
+ "libc",
  "proptest",
  "rand 0.10.1",
  "rand_chacha 0.10.0",
