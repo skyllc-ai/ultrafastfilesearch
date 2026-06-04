@@ -606,8 +606,26 @@ impl LifecycleManager {
         hash
     }
 
-    /// Generate a random 16-char hex nonce for shutdown authentication
+    /// Generate a random 16-char hex nonce for the shutdown handshake
     /// (S4.4.9).
+    ///
+    /// # Security property (WI-8.2)
+    ///
+    /// This nonce is **not** a cryptographic authenticator. It provides
+    /// *liveness* / accidental-cross-talk protection — proving the shutdown
+    /// caller read the current PID file and is talking to *this* daemon
+    /// incarnation, not a stale one. Its confidentiality rests **entirely**
+    /// on the `0700` runtime/PID-file directory (see
+    /// [`uffs_security::fs::create_secure_dir`], hardened in WI-2.2): any
+    /// process that can *read* the PID file already learns the nonce, so the
+    /// nonce defends only against callers that cannot read it. The FNV-1a
+    /// exe-path hash on the same PID line is likewise an integrity/sanity
+    /// check, not a signature.
+    ///
+    /// If the threat model ever requires *authenticating* the shutdown peer
+    /// (e.g. a multi-user box where another user can read the runtime dir),
+    /// replace this scheme with an HMAC over a shared secret delivered out of
+    /// band — do not add bits to the nonce and call it authentication.
     #[expect(
         clippy::single_call_fn,
         reason = "nonce generation — clarity over inlining"
