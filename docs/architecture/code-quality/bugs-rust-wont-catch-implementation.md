@@ -101,7 +101,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ⬜ | | |
 | WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | ⬜ | | |
 | WI-6.1 | 6 Errors | `daemon_ctl` control writes: surface/log instead of bare `drop` | ⬜ | | |
-| WI-6.2 | 6 Errors | Log dir-create failures (`log_init`, `mft/logging`) to stderr once | ⬜ | | |
+| WI-6.2 | 6 Errors | Log dir-create failures (`log_init`, `mft/logging`) to stderr once | ✅ | `harden/bugs` | ✅ |
 | WI-6.3 | 6 Errors | Audit remaining `.ok()`/`let _ =`; add justification comments | ⬜ | | |
 | WI-8.1 | 8 Trust | Broker: thread one process handle verify→`DuplicateHandle` (no PID re-open) | ⬜ | | |
 | WI-8.2 | 8 Trust | Document daemon-nonce security property (depends on WI-2.2) | ✅ | `harden/bugs` | ✅ |
