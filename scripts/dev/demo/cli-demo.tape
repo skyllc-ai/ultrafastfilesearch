@@ -13,9 +13,9 @@
 Output uffs-cli.gif
 
 Set Shell "pwsh"
-Set FontSize 20
-Set Width 1200
-Set Height 640
+Set FontSize 14
+Set Width 1400
+Set Height 560
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
