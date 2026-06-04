@@ -18,6 +18,15 @@
 vet-discipline:
     bash scripts/ci/check_vet_audit_discipline.sh range origin/main..HEAD
 
+# Run the "Bugs Rust Won't Catch" anti-pattern regression gate
+# (scripts/ci/anti_pattern_gate.sh).  Fails if any forbidden anti-pattern
+# (silent lossy UTF decode, predictable temp, perms-after-create on
+# secrets, raw key write, discarded control writes) is reintroduced into
+# production code.  Deliberate exceptions carry an inline
+# `// AUDIT-OK(<category>): <reason>` marker.  Wired into the `go` lane.
+audit-gate:
+    bash scripts/ci/anti_pattern_gate.sh
+
 # Guided cargo-vet exemption bump — prints a step-by-step recipe to
 # replace a "lazy" exemption version bump (the PR #166 anti-pattern)
 # with a proper delta audit anchored on the existing exemption.

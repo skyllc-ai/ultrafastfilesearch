@@ -93,7 +93,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-1.1 | 1 TOCTOU | `secure_remove`: single fd (open once, `file.metadata()`) | ✅ | `harden/bugs` | ✅ |
 | WI-1.2 | 1 TOCTOU | Randomised, `create_new` temp in `atomic_write` + daemon `--out` export | ✅ | `harden/bugs` | ✅ |
 | WI-5.1 | 5 Panic | Enable `arithmetic_side_effects`; `overflow-checks=true` for `dist` | ✅ | `harden/bugs` | ✅ |
-| WI-G.1 | Guard | CI grep-gate script forbidding the anti-patterns from returning | ⬜ | | |
+| WI-G.1 | Guard | CI grep-gate script forbidding the anti-patterns from returning | ✅ | `harden/bugs` | ✅ |
 | WI-4.1 | 4 Bytes | Single instrumented UTF-16 decoder; per-index `lossy_name_count` stat + warn | ⬜ | | |
 | WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ⬜ | | |
 | WI-4.3 | 4 Bytes | Strict-parse subprocess stdout used for decisions (PID/name) | ⬜ | | |
