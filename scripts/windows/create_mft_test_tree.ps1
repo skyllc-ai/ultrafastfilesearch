@@ -189,7 +189,41 @@ Write-Host "  ReadOnly: $root\Documents\doc2.txt"
 Write-Host "  Hidden+System: $root\Media\Videos"
 
 # 8. Delete some items (to create "not in use" MFT records)
-Write-Host "`n[8/8] Deleting items (creates unused MFT records)..." -ForegroundColor Green
+# WI-7.1: pathological names that exercise the name-parity corpus. The Win32
+# layer strips trailing dots/spaces and remaps reserved device names, so these
+# must be created via the `\\?\` extended-length prefix (which bypasses Win32
+# path normalisation) to land verbatim in the on-disk $FILE_NAME. A raw MFT
+# reader (UFFS) must report them byte-for-byte; this is what the Rust
+# `parity_tests` Tier-1 pins assert at the decode boundary.
+Write-Host "`n[8/9] Creating pathological names (trailing dot/space, reserved, max-length)..." -ForegroundColor Green
+$pathoDir = "$root\Pathological"
+New-Item -ItemType Directory -Path $pathoDir -Force | Out-Null
+# Trailing dot / trailing space (Win32 would strip these; `\\?\` preserves).
+$patho = @(
+    "$pathoDir\trailing_dot.",
+    "$pathoDir\trailing_space ",
+    "$pathoDir\dots...",
+    # Reserved Win32 device names are ordinary on disk under `\\?\`.
+    "$pathoDir\CON",
+    "$pathoDir\NUL.txt",
+    # Maximum-length 255-char component.
+    ("$pathoDir\" + ("a" * 255))
+)
+foreach ($p in $patho) {
+    $extended = "\\?\$p"
+    try {
+        # Use .NET to honour the `\\?\` prefix (New-Item normalises it away).
+        [System.IO.File]::WriteAllText($extended, "patho")
+        Write-Host "  Created (verbatim): $p"
+    } catch {
+        Write-Host "  WARN: could not create $p : $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+# Note: an unpaired-surrogate name cannot be created through the Win32/.NET
+# string APIs (they validate UTF-16); it is exercised directly at the decoder
+# in `parity_tests::tier1_decoder_corpus::unpaired_surrogate_*` instead.
+
+Write-Host "`n[9/9] Deleting items (creates unused MFT records)..." -ForegroundColor Green
 Remove-Item -Path "$root\ToDelete\temp1.tmp" -Force
 Remove-Item -Path "$root\ToDelete\temp2.tmp" -Force
 Remove-Item -Path "$root\ToDelete" -Recurse -Force
@@ -210,6 +244,7 @@ Summary:
   - Symbolic links: $($symlinks.Count)
   - Junction points: $($junctions.Count)
   - Alternate Data Streams: $($ads.Count)
+  - Pathological names: $($patho.Count) (trailing dot/space, reserved, max-length)
   - Deleted items: 3
 
 Expected MFT entries (approx):

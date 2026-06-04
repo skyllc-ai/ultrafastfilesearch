@@ -240,6 +240,13 @@ pub mod cache;
 
 mod reader;
 
+// WI-7.1 — pathological-name parity corpus (Tier 1 decoder pins + Tier 2
+// offline-capture-vs-golden). Crate-internal so it can reach the `pub(crate)`
+// instrumented decoder; test-only.
+#[cfg(test)]
+#[path = "parity_tests.rs"]
+mod parity_tests;
+
 // ============================================================================
 // Public API re-exports
 // ============================================================================

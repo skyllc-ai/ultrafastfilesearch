@@ -105,7 +105,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-6.3 | 6 Errors | Audit remaining `.ok()`/`let _ =`; add justification comments | ✅ | `harden/bugs-2` | ✅ |
 | WI-8.1 | 8 Trust | Broker: thread one process handle verify→`DuplicateHandle` (no PID re-open) | ✅ | `harden/wi-8.1-broker-single-handle` | single `OpenProcess` via RAII `OwnedProcessHandle`; verify + duplicate share it; `broker/process_handle.rs` split; name-predicate unit tests |
 | WI-8.2 | 8 Trust | Document daemon-nonce security property (depends on WI-2.2) | ✅ | `harden/bugs` | ✅ |
-| WI-7.1 | 7 Parity | Parity corpus: pathological names; assert vs Windows enumeration | ⬜ | | |
+| WI-7.1 | 7 Parity | Parity corpus: pathological names; assert vs Windows enumeration | ✅ | `harden/wi-7.1-parity-corpus` | Tier-1 decoder pins (CI) + Tier-2 offline-capture-vs-`cpp_*.txt` golden (env-gated, validated on real capture: 15049 paths matched, ADS + hard-link diffs asserted); corpus generator extended |
 | WI-3.1 | 3 Identity | `paths_identical` (dev,inode) helper + invariant doc/test for scoping | ✅ | `harden/bugs` | ✅ |
 
 ### 1.2 Category coverage rollup (fill as phases close)
@@ -1082,6 +1082,40 @@ CI (Windows lane); divergences are either fixed or explicitly asserted as known.
 
 **Verify:** Windows: `scripts/trial_run.ps1` (elevated) + `cargo nextest run -p
 uffs-mft -- parity`.
+
+**Implementation notes (landed on `harden/wi-7.1-parity-corpus`):**
+
+- **Not Windows-only after all.** UFFS reads **offline** `.iocp` MFT captures on
+  any platform (`load_iocp_to_index`), so the parity check runs on macOS against
+  the pre-captured local corpus — no live elevated Windows volume required.
+- **`crates/uffs-mft/src/parity_tests.rs`** (crate-internal `#[cfg(test)]`, so it
+  can reach the `pub(crate)` decoder) holds two tiers:
+  - **Tier 1 (always-on, CI):** feeds pathological `$FILE_NAME` UTF-16 through
+    the WI-4.1 `decode_name_u16` and pins the documented behaviour — trailing
+    dot/space, reserved device names (`CON`/`NUL`/…), and 255-char max-length
+    components decode **verbatim** (Win32 stripping/remapping is above the FS,
+    not in the MFT); valid Unicode is lossless; an unpaired surrogate becomes a
+    **counted** U+FFFD (pins WI-4.1 until WI-4.4 lands).
+  - **Tier 2 (env-gated):** when `UFFS_PARITY_DATA_DIR` points at captured
+    `.iocp` + `cpp_<drive>.txt` artifacts, loads a drive offline via the
+    production `process_record` path and asserts UFFS enumerates **every**
+    file/dir path the C++ reference does. Skips cleanly in vanilla CI (corpus is
+    gitignored).
+- **Real divergences found and asserted (the test's whole point):** running
+  Tier 2 against the live `drive_g` capture surfaced (1) a trailing-`\`
+  directory-presentation difference (normalised away on both sides), (2) **ADS**
+  — C++ lists `path:stream`, UFFS tracks streams outside the path namespace
+  (filtered + asserted absent from the path set), and (3) **hard links** — UFFS
+  enumerates every link name while C++ lists the inode once (UFFS path set is a
+  legitimate superset; extras asserted well-formed). Result on `drive_g`: 15049
+  reference file/dir paths all found, 2 ADS-only, 3 hard-link aliases.
+- **Corpus generator** `scripts/windows/create_mft_test_tree.ps1` extended with a
+  pathological-names step (trailing dot/space, reserved, max-length) created via
+  the `\\?\` extended-length prefix so they land verbatim on disk; surrogate
+  names are exercised at the decoder (Win32 string APIs reject them).
+- **Verify:** `cargo nextest run -p uffs-mft -- parity` (CI / skip mode) +
+  `UFFS_PARITY_DATA_DIR=<dir> cargo nextest run -p uffs-mft -- parity` (offline,
+  validated on the local corpus). Native clippy `--all-targets -D warnings` clean.
 
 ---
 
