@@ -24,6 +24,58 @@ use std::path::Path;
 // Directory & File Permissions (S1.2)
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Create a brand-new file with owner-only permissions, failing if the
+/// path already exists (including as a dangling symlink).
+///
+/// On Unix the file is born `0o600` via `O_CREAT | O_EXCL` + `mode()`, so
+/// there is never a window where it is world-readable (cf.
+/// `set_permissions`-after-create). On Windows `create_new` likewise refuses
+/// to follow/replace an existing path; owner-only ACL is applied immediately.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
+/// error from the underlying open.
+pub fn create_new_secure_file(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(windows)]
+    {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        // Apply owner-only ACL immediately (best-effort, same as elsewhere).
+        if !win_set_owner_only_acl(path) {
+            win_set_hidden(path);
+        }
+        Ok(file)
+    }
+}
+
+/// Write `data` to a **new** secret file born with owner-only permissions.
+///
+/// Refuses to overwrite an existing path; callers that intend to replace an
+/// existing secret must remove it first (so a symlink cannot be followed).
+///
+/// # Errors
+///
+/// Returns an error if creation, writing, or syncing fails.
+pub fn write_secret_file(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut file = create_new_secure_file(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 /// Creates a directory (and parents) with owner-only permissions.
 ///
 /// - **Unix** (macOS + Linux): mode `0700` (`drwx------`)
@@ -488,4 +540,57 @@ where
 {
     let _guard = FileLock::acquire(lock_path, kind, timeout)?;
     func()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn create_new_secure_file_is_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.bin");
+        let file = create_new_secure_file(&path).unwrap();
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "file must be born 0600, got {mode:o}");
+    }
+
+    #[test]
+    fn create_new_secure_file_rejects_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exists.bin");
+        std::fs::write(&path, b"pre-existing").unwrap();
+        let err = create_new_secure_file(&path).expect_err("must refuse existing path");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_new_secure_file_rejects_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.bin");
+        std::fs::write(&target, b"sentinel").unwrap();
+        let link = dir.path().join("link.bin");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        // create_new must refuse to follow/replace the symlink.
+        let err = create_new_secure_file(&link).expect_err("must refuse symlink");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        // The symlink's target content is untouched.
+        assert_eq!(std::fs::read(&target).unwrap(), b"sentinel");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secret_file_is_0600_with_content() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.bin");
+        write_secret_file(&path, b"deadbeef").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read(&path).unwrap(), b"deadbeef");
+    }
 }

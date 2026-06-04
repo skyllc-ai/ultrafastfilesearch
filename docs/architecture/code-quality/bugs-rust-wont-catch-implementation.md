@@ -86,7 +86,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 
 | WI | Category | Description | Status | Commit | Verified |
 |----|----------|-------------|:------:|--------|:--------:|
-| WI-2.1 | 2 Perms | Add `create_new_secure_file` + `write_secret_file` helpers in `uffs-security::fs` | ⬜ | | |
+| WI-2.1 | 2 Perms | Add `create_new_secure_file` + `write_secret_file` helpers in `uffs-security::fs` | ✅ | `harden/bugs` | ✅ |
 | WI-2.2 | 2 Perms | `create_secure_dir`: per-component `0700` via `DirBuilderExt::mode` | ⬜ | | |
 | WI-2.3 | 2 Perms | Keystore: write `key.bin` / DPAPI blob born `0600` (no chmod-after) | ⬜ | | |
 | WI-2.4 | 2 Perms | `atomic_write`: temp born `0600` + randomised name (also feeds WI-1.2) | ⬜ | | |
