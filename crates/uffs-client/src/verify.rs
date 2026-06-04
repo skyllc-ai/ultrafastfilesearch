@@ -272,6 +272,10 @@ fn classify_codesign_output(exe_path: &std::path::Path, out: &std::process::Outp
         return true;
     }
 
+    // AUDIT-OK(bytes): substring probe of codesign stderr. A lossy decode
+    // can only FAIL to match "not signed", which routes to the `false`
+    // (tampered/reject) branch below — the fail-closed direction. So lossy
+    // here cannot turn a tampered binary into an accepted one. (WI-4.3)
     let stderr = String::from_utf8_lossy(&out.stderr);
     let unsigned = stderr.contains("not signed") || stderr.contains("code object is not signed");
     if unsigned {
@@ -306,8 +310,14 @@ pub(crate) fn verify_code_signature(exe_path: &std::path::Path) -> bool {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    classify_authenticode_status(exe_path, &stdout)
+    // Strict decode: this status drives the code-signature trust decision,
+    // so invalid UTF-8 fails closed (treat as not-verified) rather than
+    // feeding a U+FFFD-mangled status into the classifier. (WI-4.3)
+    let Ok(stdout) = core::str::from_utf8(&out.stdout) else {
+        tracing::warn!("signature-verify output was not valid UTF-8; treating as unverified");
+        return false;
+    };
+    classify_authenticode_status(exe_path, stdout.trim())
 }
 
 /// Classify an Authenticode status string from PowerShell.

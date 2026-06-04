@@ -194,9 +194,18 @@ pub(crate) fn keepalive_send_blocking(sock_path: &std::path::Path) {
         use std::os::unix::net::UnixStream;
         if let Ok(mut stream) = UnixStream::connect(sock_path) {
             let msg = r#"{"jsonrpc":"2.0","id":0,"method":"keepalive"}"#;
-            drop(stream.write_all(msg.as_bytes()));
-            drop(stream.write_all(b"\n"));
-            drop(stream.flush());
+            // Surface a failed keepalive at debug level instead of silently
+            // dropping it: a write failure here means the daemon connection
+            // is gone. It is NOT propagated (the keepalive task has no return
+            // channel and the next cycle/connection-check self-corrects), but
+            // it is no longer invisible. (WI-6.1)
+            if let Err(err) = stream
+                .write_all(msg.as_bytes())
+                .and_then(|()| stream.write_all(b"\n"))
+                .and_then(|()| stream.flush())
+            {
+                tracing::debug!(error = %err, "keepalive write failed (daemon may be gone)");
+            }
         }
     }
     #[cfg(windows)]
@@ -219,9 +228,16 @@ pub(crate) fn keepalive_send_blocking(sock_path: &std::path::Path) {
             .open(name.as_str())
         {
             let msg = r#"{"jsonrpc":"2.0","id":0,"method":"keepalive"}"#;
-            drop(pipe.write_all(msg.as_bytes()));
-            drop(pipe.write_all(b"\n"));
-            drop(pipe.flush());
+            // See the Unix arm: surface a failed keepalive write at debug
+            // level (daemon likely gone) rather than dropping it silently;
+            // not propagated — the next cycle self-corrects. (WI-6.1)
+            if let Err(err) = pipe
+                .write_all(msg.as_bytes())
+                .and_then(|()| pipe.write_all(b"\n"))
+                .and_then(|()| pipe.flush())
+            {
+                tracing::debug!(error = %err, "keepalive write failed (daemon may be gone)");
+            }
         }
     }
 }

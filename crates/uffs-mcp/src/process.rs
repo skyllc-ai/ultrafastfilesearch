@@ -77,6 +77,11 @@ pub(crate) fn kill_process_on_port(port: u16, skip_pid: u32) {
         else {
             return;
         };
+        // AUDIT-OK(bytes): per-line PID scan of `lsof` output. The actual
+        // targeting decision is `line.trim().parse::<u32>()`, which fails
+        // closed on any U+FFFD-mangled line (a corrupted digit string does
+        // not parse). Whole-buffer strict from_utf8 would instead discard
+        // every line if one byte were invalid — a worse, less-robust result.
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
             if let Ok(pid) = line.trim().parse::<u32>()
@@ -98,6 +103,10 @@ pub(crate) fn kill_process_on_port(port: u16, skip_pid: u32) {
         else {
             return;
         };
+        // AUDIT-OK(bytes): per-line scan of `netstat` output; the decision is
+        // the `LISTENING` substring + PID parse per line. A mangled line
+        // simply fails to match; whole-buffer strict decode would drop all
+        // lines on a single bad byte.
         let stdout = String::from_utf8_lossy(&output.stdout);
         let port_suffix = format!(":{port}");
         for line in stdout.lines() {
@@ -136,6 +145,9 @@ pub(crate) async fn reqwest_lite_get(raw_url: &str) -> Result<String> {
     writer.write_all(request.as_bytes()).await?;
     let mut response = Vec::new();
     reader.read_to_end(&mut response).await?;
+    // AUDIT-OK(bytes): HTTP health-probe response body returned for
+    // display/logging to the operator, not used for a trust/targeting
+    // decision; lossy decode is acceptable here.
     let text = String::from_utf8_lossy(&response);
     Ok(text
         .split_once("\r\n\r\n")
@@ -331,7 +343,10 @@ pub(crate) fn read_gateway_config(pid: u32) -> Option<GatewayConfig> {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    let cmdline = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    // Strict decode: the command line is parsed for bind/port below, so a
+    // lossy decode must fail closed rather than mis-parse a corrupted arg.
+    // (WI-4.3)
+    let cmdline = core::str::from_utf8(&output.stdout).ok()?.trim().to_owned();
     if cmdline.is_empty() {
         return None;
     }
@@ -428,7 +443,9 @@ pub(crate) fn process_start_time(pid: u32) -> Option<std::time::SystemTime> {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    let etime_str = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    // Strict decode: etime is parsed into a duration used for the process
+    // start-time decision, so invalid UTF-8 fails closed. (WI-4.3)
+    let etime_str = core::str::from_utf8(&output.stdout).ok()?.trim().to_owned();
     let uptime = parse_ps_etime(&etime_str);
     Some(std::time::SystemTime::now() - uptime)
 }
@@ -467,6 +484,10 @@ pub(crate) fn find_mcp_run_pids() -> Vec<u32> {
     else {
         return Vec::new();
     };
+    // AUDIT-OK(bytes): per-line `pid,args` scan; each line's PID is parsed
+    // (fails closed on a mangled line) and args matched by substring. A
+    // single bad byte must not discard the whole process list, so per-line
+    // lossy decode is the correct, more-robust choice here.
     let text = String::from_utf8_lossy(&raw_output.stdout);
     let my_pid = std::process::id();
     text.lines()
@@ -497,7 +518,11 @@ fn resolve_parent_name(child_pid: u32) -> Option<String> {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    let ppid: u32 = String::from_utf8_lossy(&ppid_output.stdout)
+    // Strict parse: this PID targets a follow-up `ps` call, so a lossy
+    // U+FFFD-mangled digit string must fail closed (return None), never a
+    // wrong PID. (WI-4.3)
+    let ppid: u32 = core::str::from_utf8(&ppid_output.stdout)
+        .ok()?
         .trim()
         .parse()
         .ok()?;
@@ -510,7 +535,11 @@ fn resolve_parent_name(child_pid: u32) -> Option<String> {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    let name = String::from_utf8_lossy(&comm_output.stdout)
+    // Strict decode: the name feeds a comparison/targeting decision, so
+    // invalid UTF-8 fails closed rather than producing a U+FFFD-corrupted
+    // match. (WI-4.3)
+    let name = core::str::from_utf8(&comm_output.stdout)
+        .ok()?
         .trim()
         .to_owned();
     if name.is_empty() {

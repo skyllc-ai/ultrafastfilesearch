@@ -24,26 +24,84 @@ use std::path::Path;
 // Directory & File Permissions (S1.2)
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Create a brand-new file with owner-only permissions, failing if the
+/// path already exists (including as a dangling symlink).
+///
+/// On Unix the file is born `0o600` via `O_CREAT | O_EXCL` + `mode()`, so
+/// there is never a window where it is world-readable (cf.
+/// `set_permissions`-after-create). On Windows `create_new` likewise refuses
+/// to follow/replace an existing path; owner-only ACL is applied immediately.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
+/// error from the underlying open.
+pub fn create_new_secure_file(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(windows)]
+    {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        // Apply owner-only ACL immediately (best-effort, same as elsewhere).
+        if !win_set_owner_only_acl(path) {
+            win_set_hidden(path);
+        }
+        Ok(file)
+    }
+}
+
+/// Write `data` to a **new** secret file born with owner-only permissions.
+///
+/// Refuses to overwrite an existing path; callers that intend to replace an
+/// existing secret must remove it first (so a symlink cannot be followed).
+///
+/// # Errors
+///
+/// Returns an error if creation, writing, or syncing fails.
+pub fn write_secret_file(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut file = create_new_secure_file(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 /// Creates a directory (and parents) with owner-only permissions.
 ///
-/// - **Unix** (macOS + Linux): mode `0700` (`drwx------`)
-/// - **Windows**: creates the directory; sets read-only attribute as a basic
-///   protection layer (full DACL requires elevated context)
+/// - **Unix** (macOS + Linux): each component we create is **born** `0700`
+///   (`drwx------`) via `DirBuilderExt::mode`, so there is no window where the
+///   dir exists at default perms. `recursive(true)` makes the call succeed if
+///   the dir already exists; components that already existed keep their current
+///   perms (we only guarantee birth perms for what we create).
+/// - **Windows**: creates the directory; applies an owner-only ACL (falling
+///   back to the hidden attribute) since full DACL control requires elevation.
 ///
 /// # Errors
 ///
 /// Returns an error if directory creation or permission setting fails.
 pub fn create_secure_dir(path: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(path)?;
-
     #[cfg(unix)]
     return {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
     };
 
     #[cfg(windows)]
     return {
+        std::fs::create_dir_all(path)?;
         // Try icacls first — works without elevation, sets proper DACL
         if !win_set_owner_only_acl(path) {
             // Fallback: at least mark hidden (best-effort, infallible).
@@ -197,11 +255,16 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 // Atomic Writes (S1.3)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Writes data atomically: write to `.uffs.tmp`, `sync_all()`, rename over
-/// the target.
+/// Writes data atomically: write to a **randomised** temp in the same
+/// directory, `sync_all()`, rename over the target.
 ///
 /// If the process is killed mid-write, the original file remains intact.
-/// Stale `.uffs.tmp` files are cleaned up on the next `cache_dir()` call.
+/// Stale temp files are cleaned up on the next `cache_dir()` call.
+///
+/// The temp file is **born** `0600` via [`create_new_secure_file`] and carries
+/// a random suffix, so there is no perms-after-create window and no
+/// predictable name an attacker could pre-plant as a symlink (`create_new`
+/// refuses to follow it).
 ///
 /// Works on all platforms: POSIX `rename` is atomic on the same filesystem;
 /// on Windows `std::fs::rename` uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
@@ -212,17 +275,32 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
 
-    let tmp_path = path.with_extension("uffs.tmp");
+    use rand::Rng as _;
 
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
+    // Unique temp name in the SAME directory as `path` (same-FS rename stays
+    // atomic). `unwrap_or_default` here is on `Option`, not `Result`.
+    // Use `fill_bytes` (the API the keystore/crypto already use) for the
+    // random suffix rather than the version-sensitive `random()` helper.
+    let mut suffix_bytes = [0_u8; 8];
+    rand::rng().fill_bytes(&mut suffix_bytes);
+    let suffix = u64::from_le_bytes(suffix_bytes);
+    let file_name = path.file_name().unwrap_or_default();
+    let tmp_name = format!("{}.{:016x}.uffs.tmp", file_name.to_string_lossy(), suffix);
+    let tmp_path = path.with_file_name(tmp_name);
 
-    set_file_permissions_owner_only(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)?;
+    let write_result = (|| -> io::Result<()> {
+        let mut file = create_new_secure_file(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp_path, path)
+    })();
 
-    Ok(())
+    if write_result.is_err() {
+        // Best-effort cleanup of the temp on any failure before rename.
+        let _ignore = std::fs::remove_file(&tmp_path);
+    }
+    write_result
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -247,22 +325,28 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
     /// Size of the zero-fill buffer for secure wipe.
     const ZERO_BUF_SIZE: usize = 64 * 1024;
 
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-
-    let file_len = meta.len();
-    // `meta` goes out of scope at end-of-function; no explicit drop needed.
-
-    // On Windows, ensure the file isn't read-only before we try to write.
-    // See `win_clear_readonly` docs for why we don't use
-    // `std::fs::Permissions::set_readonly(false)` here.
+    // On Windows, ensure the file isn't read-only before we try to open it
+    // for write. This is a path-based attribute clear that necessarily
+    // precedes the fd anchor below — acceptable because it only toggles an
+    // attribute, not content. See `win_clear_readonly` docs for why we don't
+    // use `std::fs::Permissions::set_readonly(false)` here.
     #[cfg(windows)]
     win_clear_readonly(path)?;
 
-    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    // Anchor on a single fd: open once, then read the length from the OPEN
+    // file (not a separate `std::fs::metadata(path)` stat). This closes the
+    // TOCTOU window where the path could be re-pointed between the size we
+    // overwrite and the bytes we write. NotFound is a no-op, as before.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let file_len = file.metadata()?.len();
 
     let zeros = vec![0_u8; ZERO_BUF_SIZE];
     let mut remaining = file_len;
@@ -286,6 +370,58 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
     drop(file);
 
     std::fs::remove_file(path)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Path identity (Category 3)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Answer "are these two paths the **same file**?" by filesystem identity,
+/// not by string comparison.
+///
+/// String equality on paths is not filesystem identity: two different
+/// strings can name the same file (hardlink, symlink, `.`/`..`, case-fold,
+/// trailing separators), and two equal strings can name different files
+/// across mounts. Where a *safety/scoping* decision turns on "same file",
+/// compare the OS identity instead:
+///
+/// - **Unix:** `(st_dev, st_ino)` from `MetadataExt`.
+/// - **Windows:** the volume serial + file index from
+///   `BY_HANDLE_FILE_INFORMATION` (via `std::os::windows::fs::MetadataExt`).
+///
+/// This **follows symlinks** (uses `metadata`, not `symlink_metadata`): it
+/// answers "do these resolve to the same file", which is the question a
+/// scoping/identity check actually has.
+///
+/// # Errors
+///
+/// Returns an error if either path cannot be `stat`'d (e.g. missing).
+pub fn paths_identical(first: &Path, second: &Path) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta_a = std::fs::metadata(first)?;
+        let meta_b = std::fs::metadata(second)?;
+        Ok(meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino())
+    }
+    #[cfg(windows)]
+    {
+        // Windows file identity is `(dwVolumeSerialNumber, nFileIndex)` from
+        // `BY_HANDLE_FILE_INFORMATION`. The `std::os::windows::fs::MetadataExt`
+        // accessors for these (`volume_serial_number` / `file_index`) are
+        // still unstable (rust-lang/rust#63010, `windows_by_handle`), so a
+        // stable implementation must go through `GetFileInformationByHandle`
+        // directly. That FFI is deferred until a caller actually needs
+        // same-file identity on Windows (the WI-3.1 audit found the
+        // drive-scoping path uses the typed `DriveLetter`, not this helper).
+        // Until then, be explicit rather than silently wrong.
+        let _: (&Path, &Path) = (first, second);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "paths_identical: Windows file-identity comparison not yet implemented \
+             (needs stable GetFileInformationByHandle FFI; no caller requires it yet)",
+        ))
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -489,3 +625,7 @@ where
     let _guard = FileLock::acquire(lock_path, kind, timeout)?;
     func()
 }
+
+#[cfg(test)]
+#[path = "fs/tests.rs"]
+mod tests;

@@ -258,10 +258,17 @@ fn verify_authenticode(exe_path: &str) -> bool {
 
     match output {
         Ok(out) => {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            // Strict decode: this status drives a trust decision (reject
+            // tampered binaries). Invalid UTF-8 must fail CLOSED (treat as
+            // HashMismatch → reject) rather than slip through the
+            // `!= "HashMismatch"` accept path via a U+FFFD-mangled string.
+            // (WI-4.3)
+            let Ok(status_raw) = core::str::from_utf8(&out.stdout) else {
+                return false;
+            };
             // Accept Valid and NotSigned (dev builds)
             // Reject HashMismatch (tampered)
-            status != "HashMismatch"
+            status_raw.trim() != "HashMismatch"
         }
         Err(_) => true, // PowerShell not available — allow (graceful degradation)
     }
@@ -355,6 +362,8 @@ fn install_service() -> anyhow::Result<()> {
     if output.status.success() {
         println!("Service installed. Start with: sc start UffsAccessBroker");
     } else {
+        // AUDIT-OK(bytes): `sc` command stderr surfaced verbatim in an
+        // error message for the operator — display only, no decision.
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Install failed: {stderr}");
     }
@@ -377,6 +386,8 @@ fn uninstall_service() -> anyhow::Result<()> {
     if output.status.success() {
         println!("Service uninstalled.");
     } else {
+        // AUDIT-OK(bytes): `sc` command stderr surfaced verbatim in an
+        // error message for the operator — display only, no decision.
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Uninstall failed: {stderr}");
     }

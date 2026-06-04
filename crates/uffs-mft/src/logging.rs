@@ -23,6 +23,10 @@ use tracing_subscriber::{EnvFilter, Layer as _};
     clippy::single_call_fn,
     reason = "logical separation of logging initialization"
 )]
+#[expect(
+    clippy::print_stderr,
+    reason = "WI-6.2: log-dir create failure must surface before tracing is up; stderr is the only honest channel"
+)]
 pub(crate) fn init_logging(verbose: bool) -> tracing_appender::non_blocking::WorkerGuard {
     use std::fs;
 
@@ -31,8 +35,15 @@ pub(crate) fn init_logging(verbose: bool) -> tracing_appender::non_blocking::Wor
     // honoring the UFFS_LOG_DIR override.
     let log_dir = uffs_security::log_dir::log_dir();
 
-    // Create log directory if it doesn't exist
-    drop(fs::create_dir_all(&log_dir));
+    // Create log directory if it doesn't exist. Logging isn't up yet, so a
+    // failure can only be surfaced on stderr — say so once and degrade to
+    // terminal-only logging rather than vanishing silently (WI-6.2).
+    if let Err(err) = fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "uffs-mft: could not create log dir {} ({err}); file logging may be disabled",
+            log_dir.display()
+        );
+    }
 
     // Create rolling file appender (daily rotation).
     // Use the builder API which returns Result instead of panicking, and retry
