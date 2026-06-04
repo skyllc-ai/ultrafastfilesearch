@@ -125,9 +125,9 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | ~40% (4.3 ✅ + 4.4 RFC ✅; 4.1 decoder + 4.2 argv pending — gate still red on 36 byte sites) |
 | 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ✅ 100% (5.1 ✅; 5.2 ✅ all 5 parsers hardened + module-scoped `arithmetic_side_effects`; 5.3 ✅ parser malformed-record test + deserializer truncation/boundary/seeded-fuzz corpus) |
 | 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
-| 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | 0% (Windows-only, pending) |
-| 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | ~50% (8.2 ✅; 8.1 broker single-handle Windows-only, pending) |
-| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | Gate built ✅ and **now fully green** (all byte sites resolved by WI-4.1/4.2/4.3); pipeline-wiring (`just audit-gate` into the `go`/ship lane in `uffs-ci-pipeline`) is the remaining follow-up |
+| 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | **100%** (7.1 ✅: Tier-1 decoder pins in CI + Tier-2 offline-capture-vs-golden, validated on real capture) |
+| 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | **100%** (8.1 ✅ single `OpenProcess` RAII handle threaded verify→duplicate; 8.2 ✅) |
+| G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | **100%** (gate fully green + **wired into the pipeline**: runs as "Anti-pattern gate" in `phase1_fanout_validation`, enforced by `just go` / ship) |
 
 > **Note on WI-4.4 (🟨 Deferred-but-tracked):** literal *lossless* name handling
 > requires a binary/WTF-8 name column that ripples through the Polars query
@@ -513,6 +513,13 @@ with the known hits; after all WIs land it passes; adding a fresh
 gate flags it — or a documented manual check in the script header.
 
 **Verify:** `just audit-gate`
+
+**Pipeline wiring (landed once the gate went green):** the gate is invoked as the
+**"Anti-pattern gate"** parallel command in
+`scripts/ci-pipeline/src/phases.rs::phase1_fanout_validation` (alongside the
+clippy trio, `cargo deny`, doctests, rustdoc), so `just go` / `just ship`
+Phase 1 fail if any anti-pattern returns. Verified end-to-end:
+`cargo run -p uffs-ci-pipeline -- phase1` shows `✅ Anti-pattern gate (2s)`.
 
 ---
 

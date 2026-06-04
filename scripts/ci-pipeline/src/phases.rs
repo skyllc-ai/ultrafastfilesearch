@@ -205,6 +205,15 @@ async fn phase1_fanout_validation(ctx: &PipelineContext) -> Result<()> {
             "clippy::expect_used",
         ]),
         ("Dependency security", "cargo", vec!["deny", "check"]),
+        // WI-G.1 regression gate: fail if any "Bugs Rust Won't Catch"
+        // anti-pattern (lossy UTF decode feeding a decision, predictable temp,
+        // perms-after-create on a secret, discarded control-channel write, …)
+        // is reintroduced into production code. Wired in here (now that the
+        // gate is green) so `just go` / the ship lane enforce it alongside the
+        // clippy trio + cargo-deny.
+        ("Anti-pattern gate", "bash", vec![
+            "scripts/ci/anti_pattern_gate.sh",
+        ]),
         ("Rustdoc link validation", "cargo", vec![
             "doc",
             "--workspace",
