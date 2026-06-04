@@ -201,7 +201,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .chunks_exact(2)
                                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                                 .collect();
-                            let name = String::from_utf16_lossy(&name_u16);
+                            let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                             let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
                             let namespace = fn_attr.file_name_namespace;
 
@@ -350,7 +350,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                             .chunks_exact(2)
                             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                             .collect();
-                        let stream_name = String::from_utf16_lossy(&name_u16);
+                        let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
 
                         // $BadClus:$Bad (FRS 8) uses InitializedSize
                         // instead of DataSize/AllocatedSize to avoid counting the
@@ -449,7 +449,7 @@ pub fn parse_record_to_index(data: &[u8], frs: u64, index: &mut crate::index::Mf
                                 .chunks_exact(2)
                                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                                 .collect();
-                            String::from_utf16_lossy(&name_u16)
+                            crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };
                         (is_i30, name)
                     } else {

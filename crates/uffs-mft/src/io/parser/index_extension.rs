@@ -130,7 +130,7 @@ pub(super) fn parse_extension_to_index(
                                     .chunks_exact(2)
                                     .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                                     .collect();
-                                let name = String::from_utf16_lossy(&name_u16);
+                                let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                                 let parent_frs = fn_attr.parent_directory & 0x0000_FFFF_FFFF_FFFF;
                                 names.push((name, parent_frs));
                             }
@@ -252,7 +252,7 @@ pub(super) fn parse_extension_to_index(
                             .chunks_exact(2)
                             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                             .collect();
-                        let stream_name = String::from_utf16_lossy(&name_u16);
+                        let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular
                         // stream entries.  Internal ones are filtered from
                         // output by is_internal_windows_stream in the output layer.
@@ -304,7 +304,7 @@ pub(super) fn parse_extension_to_index(
                                 .chunks_exact(2)
                                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                                 .collect();
-                            String::from_utf16_lossy(&name_u16)
+                            crate::io::parser::unified::decode_name_u16(&name_u16).0
                         };
                         (is_i30, name)
                     } else {

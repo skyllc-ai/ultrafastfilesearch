@@ -87,6 +87,12 @@ pub struct MftStats {
     pub size_bucket_counts: [u32; 8],
     /// Total bytes per size bucket.
     pub size_bucket_bytes: [u64; 8],
+    /// Number of U+FFFD substitutions made while decoding NTFS names from
+    /// UTF-16 (Category 4, WI-4.1). `0` means every name decoded losslessly;
+    /// `> 0` means that many code units were not representable in UTF-8 and
+    /// were stored as the replacement character — surfaced via a `warn!` at
+    /// index-build time so the loss is visible, not silent.
+    pub lossy_name_count: u64,
 }
 
 impl MftStats {
@@ -113,6 +119,7 @@ impl MftStats {
             reparse_bytes: 0,
             size_bucket_counts: [0; 8],
             size_bucket_bytes: [0; 8],
+            lossy_name_count: 0,
         }
     }
 

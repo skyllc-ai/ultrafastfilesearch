@@ -223,6 +223,10 @@ fn is_ntfs_volume(drive_letter: DriveLetter) -> bool {
         return false;
     }
 
+    // AUDIT-OK(bytes): decodes the Windows filesystem TYPE label (e.g. "NTFS")
+    // for an `== "NTFS"` check — not an NTFS filename. A lossy decode could
+    // only fail the equality (fail-safe: treat as not-NTFS), never corrupt a
+    // stored name, so the instrumented name decoder does not apply here.
     let fs_name_raw = String::from_utf16_lossy(&fs_name_buffer);
     let fs_name = fs_name_raw.trim_end_matches('\0');
 

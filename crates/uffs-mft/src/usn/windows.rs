@@ -315,7 +315,7 @@ pub fn read_usn_journal(
                             ])
                         })
                         .collect();
-                    String::from_utf16_lossy(&name_u16)
+                    crate::io::parser::unified::decode_name_u16(&name_u16).0
                 });
             // On-disk → typed boundary.  NTFS file references are 64-bit
             // values whose low 48 bits encode the FRS; the high 16 bits

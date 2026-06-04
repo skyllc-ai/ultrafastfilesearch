@@ -67,6 +67,13 @@ run_rule() {
   local file lineno content
   while IFS=: read -r file lineno content; do
     [[ -n "$file" ]] || continue
+    # Skip matches inside line/doc comments: a `//` or `///` line cannot
+    # itself BE a lossy conversion / anti-pattern — it only mentions the
+    # token (e.g. doc comments on the approved decoder). Anti-patterns are
+    # about executable code, not prose.
+    if printf '%s\n' "$content" | grep -Eq '^[[:space:]]*//'; then
+      continue
+    fi
     if has_audit_ok "$file" "$lineno"; then
       continue
     fi

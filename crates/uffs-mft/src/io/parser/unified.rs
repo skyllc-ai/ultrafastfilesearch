@@ -21,13 +21,17 @@ use crate::ntfs::{
 };
 
 /// Decode a UTF-16LE byte slice into `out`, replacing unpaired surrogates
-/// with U+FFFD.  Returns the number of bytes written to `out`.
+/// with U+FFFD.  Returns the number of U+FFFD replacements emitted
+/// (`0` = lossless).
 ///
 /// This avoids the per-call `SmallVec` + `String` allocation that
-/// `String::from_utf16_lossy` requires.
+/// `String::from_utf16_lossy` requires, and — unlike `from_utf16_lossy` —
+/// surfaces the substitution count so name loss at the NTFS boundary is
+/// measured, not silent (Category 4, WI-4.1).
 #[inline]
-fn decode_utf16le_into(bytes: &[u8], out: &mut String) {
+fn decode_utf16le_into(bytes: &[u8], out: &mut String) -> u32 {
     out.clear();
+    let mut replacements: u32 = 0;
     let mut i = 0_usize;
     while let Some(pair) = bytes
         .get(i..i + 2)
@@ -52,17 +56,21 @@ fn decode_utf16le_into(bytes: &[u8], out: &mut String) {
                             out.push(ch);
                         } else {
                             out.push(char::REPLACEMENT_CHARACTER);
+                            replacements = replacements.saturating_add(1);
                         }
                     } else {
                         out.push(char::REPLACEMENT_CHARACTER);
+                        replacements = replacements.saturating_add(1);
                     }
                 } else {
                     out.push(char::REPLACEMENT_CHARACTER);
+                    replacements = replacements.saturating_add(1);
                 }
             }
             // Low surrogate without preceding high
             0xDC00..=0xDFFF => {
                 out.push(char::REPLACEMENT_CHARACTER);
+                replacements = replacements.saturating_add(1);
             }
             _ => {
                 // All non-surrogate u16 values are valid Unicode scalar values.
@@ -73,6 +81,50 @@ fn decode_utf16le_into(bytes: &[u8], out: &mut String) {
             }
         }
     }
+    replacements
+}
+
+/// Decode a `&[u16]` UTF-16 name into a fresh `String`, returning
+/// `(String, replacement_count)`.  Use this instead of
+/// `String::from_utf16_lossy` at NTFS name boundaries so loss is counted,
+/// not silent (Category 4, WI-4.1).
+///
+/// Most NTFS-name call sites already hold a `Vec<u16>` / `SmallVec<[u16; N]>`
+/// (the attribute decoder collects code units before stringifying), so this
+/// `&[u16]` entry point avoids re-deriving a byte slice. There is exactly
+/// ONE surrogate-handling implementation: this re-encodes to LE bytes and
+/// routes through `decode_utf16le_into`.
+#[inline]
+pub(crate) fn decode_name_u16(units: &[u16]) -> (String, u32) {
+    let mut bytes = Vec::with_capacity(units.len().saturating_mul(2));
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    let mut out = String::new();
+    let count = decode_utf16le_into(&bytes, &mut out);
+    if count > 0 {
+        LOSSY_NAME_COUNT.fetch_add(u64::from(count), core::sync::atomic::Ordering::Relaxed);
+    }
+    (out, count)
+}
+
+/// Process-global tally of U+FFFD substitutions emitted by
+/// [`decode_name_u16`] across all NTFS-name decodes (Category 4, WI-4.1).
+///
+/// The parser call sites are spread across nine modules and do not thread a
+/// stats accumulator through their (hot-path) signatures, so the count is
+/// gathered here with a single relaxed atomic — cheap, lock-free, and read
+/// at index-build time into [`crate::index::stats::MftStats::lossy_name_count`]
+/// for the "N filenames were stored with U+FFFD" warning. `Relaxed` is
+/// sufficient: it is a monotonic diagnostic counter, not a synchronisation
+/// point.
+pub(crate) static LOSSY_NAME_COUNT: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Snapshot the current global lossy-name tally.
+#[inline]
+pub(crate) fn lossy_name_count() -> u64 {
+    LOSSY_NAME_COUNT.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Process a single MFT record (base OR extension) in one pass.
@@ -472,4 +524,55 @@ fn rd_u64(buf: &[u8], off: usize) -> u64 {
     buf.get(off..off + 8)
         .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
         .map_or(0, u64::from_le_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_name_u16, lossy_name_count};
+
+    #[test]
+    fn decode_name_u16_lossless_bmp_and_astral() {
+        // "Aé😀" — BMP + an astral char (valid surrogate pair). No loss.
+        // 'A'=0x0041, 'é'=0x00E9, '😀'=U+1F600 → D83D DE00.
+        let units = [0x0041_u16, 0x00E9, 0xD83D, 0xDE00];
+        let (name, count) = decode_name_u16(&units);
+        assert_eq!(count, 0, "well-formed UTF-16 must decode losslessly");
+        assert_eq!(name, "Aé😀");
+        assert!(!name.contains(char::REPLACEMENT_CHARACTER));
+    }
+
+    #[test]
+    fn decode_name_u16_unpaired_surrogate_is_counted_and_replaced() {
+        // A lone high surrogate (0xD800) with no following low surrogate —
+        // legal on NTFS, illegal in UTF-8. Must NOT panic; must substitute
+        // exactly one U+FFFD and report the count.
+        let units = [
+            0x0066_u16, // 'f'
+            0xD800,     // unpaired high
+            0x006F,     // 'o'
+        ];
+        let before = lossy_name_count();
+        let (name, count) = decode_name_u16(&units);
+        assert_eq!(count, 1, "one unpaired surrogate → one replacement");
+        assert!(
+            name.contains(char::REPLACEMENT_CHARACTER),
+            "decoded name must contain U+FFFD"
+        );
+        // The process-global tally increased by the replacement count, so the
+        // index-build warn/stat sees the loss (WI-4.1).
+        assert_eq!(
+            lossy_name_count(),
+            before + u64::from(count),
+            "global lossy tally must increase by the replacement count"
+        );
+    }
+
+    #[test]
+    fn decode_name_u16_lone_low_surrogate_is_counted() {
+        // A lone LOW surrogate (0xDC00) with no preceding high surrogate.
+        let units = [0xDC00_u16];
+        let (name, count) = decode_name_u16(&units);
+        assert_eq!(count, 1);
+        assert_eq!(name, "\u{FFFD}");
+    }
 }

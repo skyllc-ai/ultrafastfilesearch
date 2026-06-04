@@ -209,6 +209,19 @@ impl MftIndex {
             stats.total_name_bytes += u64::from(record.first_name.name.length());
         }
 
+        // WI-4.1: surface NTFS-name decode loss. The shared decoder
+        // (`io::parser::unified::decode_name_u16`) tallies every U+FFFD
+        // substitution into a process-global counter; snapshot it into the
+        // stats and warn once when non-zero so the loss is measured, not
+        // silent. (Eliminating the loss entirely is the WI-4.4 RFC.)
+        stats.lossy_name_count = crate::io::parser::unified::lossy_name_count();
+        if stats.lossy_name_count > 0 {
+            tracing::warn!(
+                lossy_name_count = stats.lossy_name_count,
+                "filenames contained characters not representable in UTF-8 and were stored with U+FFFD"
+            );
+        }
+
         self.stats = stats;
     }
 
