@@ -151,7 +151,11 @@ struct Cli {
 /// it is a directory. The name is `Vec<u16>` so it can carry lone surrogates
 /// that no `String`/`OsString`-from-`&str` could represent.
 struct PlannedEntry {
-    /// UTF-16 code units of the entry's leaf name (no path separators).
+    /// UTF-16 code units of the entry's name, RELATIVE to the root folder.
+    /// A flat entry is a single leaf with no separators; a NESTED entry encodes
+    /// its path components separated by a backslash (`0x005C`) — `materialize`
+    /// creates each ancestor directory before the leaf. Components may carry
+    /// lone surrogates, which no `String`/`OsString`-from-`&str` could hold.
     name_utf16: Vec<u16>,
     /// Human-readable description of WHY this name is hostile (for the report).
     why: &'static str,
@@ -211,7 +215,7 @@ fn run() -> Result<()> {
         print_header(&root, marker, plan.len());
 
         if cli.dry_run {
-            windows_impl::report_plan(&plan, /*created=*/ false);
+            windows_impl::report_plan(&plan, /*created=*/ None);
             println!(
                 "\n{} dry run — nothing written. Re-run without {} to create the tree.",
                 "note:".yellow().bold(),
@@ -220,8 +224,9 @@ fn run() -> Result<()> {
             return Ok(());
         }
 
-        let created = windows_impl::materialize(&root, &root_win, &plan)?;
-        windows_impl::report_plan(&plan, /*created=*/ true);
+        let created_mask = windows_impl::materialize(&root, &root_win, &plan)?;
+        windows_impl::report_plan(&plan, /*created=*/ Some(&created_mask));
+        let created = created_mask.iter().filter(|&&ok| ok).count();
         print_footer(&drive, marker, created, plan.len());
         Ok(())
     }
@@ -437,6 +442,51 @@ fn build_plan(marker: &str) -> Vec<PlannedEntry> {
         is_dir: true,
     });
 
+    // ── 6. NESTED structures — mid-path corruption (NOT flat) ───────────────
+    // Until now every entry was a direct child of the root, so the only crooked
+    // component was ever the LEAF. These plant crooked names at INTERIOR levels
+    // so the path resolver must walk THROUGH an ill-formed ancestor. `name_utf16`
+    // here is a RELATIVE PATH: components separated by `\` (0x005C); `materialize`
+    // creates each ancestor dir first. The intermediate GOOD dirs are auto-created
+    // (not separate plan rows) but appear on disk and are verified all the same.
+
+    // (a) WELL-FORMED leaf buried under a CROOKED interior dir — the headline
+    //     resolver torture: good/good/BAD/good/leaf. The leaf is fine, but an
+    //     ANCESTOR is crooked → a row with malformed:false yet malformed_path:true
+    //     whose displayed path silently drops the crooked middle component.
+    plan.push(PlannedEntry {
+        name_utf16: join(&[
+            &m, &ascii("_nestA1\\"),
+            &m, &ascii("_nestA2\\"),
+            &m, &ascii("_nestBad_"), &[0xD800], &ascii("\\"),
+            &m, &ascii("_nestA3\\"),
+            &m, &ascii("_nestLeaf.txt"),
+        ]),
+        why: "WELL-FORMED leaf under a CROOKED interior dir (good/good/BAD/good/leaf)",
+        is_dir: false,
+    });
+
+    // (b) WELL-FORMED file DIRECTLY inside a CROOKED parent dir: BAD/good.txt.
+    plan.push(PlannedEntry {
+        name_utf16: join(&[
+            &m, &ascii("_nestBadParent_"), &[0xDC00], &ascii("\\"),
+            &m, &ascii("_nestGoodChild.txt"),
+        ]),
+        why: "WELL-FORMED file directly inside a CROOKED parent dir (BAD/good)",
+        is_dir: false,
+    });
+
+    // (c) CROOKED leaf nested under a GOOD subdir: good/BAD-leaf.txt (a crooked
+    //     leaf below depth 1, so the parent chain is well-formed but the leaf is not).
+    plan.push(PlannedEntry {
+        name_utf16: join(&[
+            &m, &ascii("_nestGoodSub\\"),
+            &m, &ascii("_nestDeepBad_"), &[0xD800], &ascii(".txt"),
+        ]),
+        why: "CROOKED leaf nested under a GOOD subdir (good/BAD-leaf, below depth 1)",
+        is_dir: false,
+    });
+
     plan
 }
 
@@ -597,15 +647,60 @@ mod windows_impl {
         v
     }
 
+    /// Split a (possibly nested) relative name on the backslash separator
+    /// (`0x005C`) into its path components. A flat leaf yields one component; a
+    /// nested entry yields one per directory level plus the leaf. The backslash
+    /// is never a legal NTFS filename character, so the split is unambiguous.
+    fn split_components(name: &[u16]) -> Vec<&[u16]> {
+        name.split(|&u| u == 0x005C).collect()
+    }
+
+    /// Build a NUL-terminated `\\?\drive:\root\c0\c1\…` wide path by appending
+    /// each raw UTF-16 `component` (which may contain lone surrogates) under
+    /// `root_win`, backslash-separated. Used to create the ancestor directories
+    /// of a nested entry before its leaf.
+    fn wide_join_z(root_win: &str, components: &[&[u16]]) -> Vec<u16> {
+        let mut v: Vec<u16> = std::ffi::OsStr::new(root_win).encode_wide().collect();
+        for comp in components {
+            v.push(u16::from(b'\\'));
+            v.extend_from_slice(comp);
+        }
+        v.push(0);
+        v
+    }
+
     /// Create the root folder (normal path — its name is ASCII) and then every
-    /// planned child. Returns the count successfully created (or already
-    /// present). Names NTFS itself rejects are reported and skipped, not fatal.
-    pub fn materialize(root: &str, root_win: &str, plan: &[PlannedEntry]) -> Result<usize> {
+    /// planned child. Returns a per-entry success mask aligned 1:1 with `plan`
+    /// (`true` → that entry landed on disk, or was already present). Names NTFS
+    /// itself rejects are reported and left `false`, not fatal — so callers can
+    /// report and list only the entries that actually exist.
+    pub fn materialize(root: &str, root_win: &str, plan: &[PlannedEntry]) -> Result<Vec<bool>> {
         create_dir_str(root_win)
             .with_context(|| format!("creating root folder {root}"))?;
 
-        let mut created = 0_usize;
-        for entry in plan {
+        let mut created = vec![false; plan.len()];
+        for (idx, entry) in plan.iter().enumerate() {
+            // A nested entry's `name_utf16` is a RELATIVE PATH whose components
+            // are backslash-separated (0x005C); create each ancestor directory
+            // first (idempotently) so the leaf's parent chain exists. A flat
+            // entry has a single component and this loop body is a no-op.
+            let components = split_components(&entry.name_utf16);
+            let mut ancestor_failed = false;
+            for depth in 1..components.len() {
+                let dir_z = wide_join_z(root_win, &components[..depth]);
+                if let Err(code) = create_dir_wide(&dir_z) {
+                    eprintln!(
+                        "  {} NTFS rejected an ancestor dir (GetLastError={code}): {}",
+                        "skip:".yellow(),
+                        entry.why
+                    );
+                    ancestor_failed = true;
+                    break;
+                }
+            }
+            if ancestor_failed {
+                continue;
+            }
             let path_z = wide_child_z(root_win, &entry.name_utf16);
             let ok = if entry.is_dir {
                 create_dir_wide(&path_z)
@@ -613,7 +708,7 @@ mod windows_impl {
                 create_file_wide(&path_z)
             };
             match ok {
-                Ok(()) => created += 1,
+                Ok(()) => created[idx] = true,
                 Err(code) => {
                     eprintln!(
                         "  {} NTFS rejected an entry (GetLastError={code}): {}",
@@ -687,11 +782,22 @@ mod windows_impl {
 
     /// Print the plan as a numbered list with the WTF-8 byte preview for each
     /// name (so corrupted names are visible even though the terminal can't
-    /// render them).
-    pub fn report_plan(plan: &[PlannedEntry], created: bool) {
-        let verb = if created { "Created" } else { "Would create" };
-        println!("{verb} {} entries:", plan.len());
+    /// render them). `created` is the per-entry success mask from `materialize`
+    /// (aligned 1:1 with `plan`): when `Some`, only the entries that actually
+    /// landed are counted and listed (header verb "Created"); when `None`, the
+    /// full plan is shown as a preview (verb "Would create"), e.g. for dry runs.
+    pub fn report_plan(plan: &[PlannedEntry], created: Option<&[bool]>) {
+        let verb = if created.is_some() { "Created" } else { "Would create" };
+        let landed = |i: usize| created.is_none_or(|mask| mask.get(i).copied().unwrap_or(false));
+        let count = (0..plan.len()).filter(|&i| landed(i)).count();
+        println!("{verb} {count} entries:");
+        let mut shown = 0_usize;
         for (i, e) in plan.iter().enumerate() {
+            // Skip entries NTFS rejected so the listing matches the count above.
+            if !landed(i) {
+                continue;
+            }
+            shown += 1;
             let kind = if e.is_dir { "dir " } else { "file" };
             // Show the lossy display form + the raw UTF-16 units (hex) so the
             // exact bytes are auditable regardless of terminal capability.
@@ -700,7 +806,7 @@ mod windows_impl {
                 e.name_utf16.iter().map(|u| format!("{u:04X}")).collect();
             println!(
                 "  {:>2}. [{}] {}",
-                i + 1,
+                shown,
                 kind.magenta(),
                 e.why
             );
@@ -748,14 +854,28 @@ mod windows_impl {
         }
     }
 
-    /// Enumerate the real entries in `root_win` via `FindFirstFileW`/
-    /// `FindNextFileW`, skipping `.`/`..`. This reads the names the kernel
-    /// actually stored, so ill-formed (surrogate-bearing) names survive verbatim
-    /// — unlike Explorer, `dir`, or any `String`-based walk. Shared by `--list`
-    /// and `--verify`.
+    /// Enumerate the real entries under `root_win`, RECURSIVELY, via
+    /// `FindFirstFileW`/`FindNextFileW`, skipping `.`/`..`. Reads the names the
+    /// kernel actually stored, so ill-formed (surrogate-bearing) names — at any
+    /// depth — survive verbatim, unlike Explorer, `dir`, or any `String`-based
+    /// walk. Returns files AND directories at every level so nested torture
+    /// trees are covered. Shared by `--list` and `--verify`.
     pub fn enumerate_on_disk(root: &str, root_win: &str) -> Result<Vec<DiskEntry>> {
-        let pattern = format!(r"{root_win}\*");
-        let pattern_z = wide_z(&pattern);
+        let base: Vec<u16> = std::ffi::OsStr::new(root_win).encode_wide().collect();
+        let mut entries = Vec::new();
+        enumerate_dir(root, &base, &mut entries)?;
+        Ok(entries)
+    }
+
+    /// Enumerate a single directory (given as a raw wide path, so crooked-named
+    /// dirs stay traversable) and recurse depth-first into every subdirectory,
+    /// appending each non-`.`/`..` entry to `out`.
+    fn enumerate_dir(root: &str, dir_wide: &[u16], out: &mut Vec<DiskEntry>) -> Result<()> {
+        // Search pattern: `<dir_wide>\*` + NUL.
+        let mut pattern_z: Vec<u16> = dir_wide.to_vec();
+        pattern_z.push(u16::from(b'\\'));
+        pattern_z.push(u16::from(b'*'));
+        pattern_z.push(0);
 
         // SAFETY: `find_data` is zeroed and the kernel fully initialises it on a
         // successful call; `pattern_z` is a valid NUL-terminated wide string.
@@ -766,15 +886,14 @@ mod windows_impl {
             // SAFETY: immediately after a failed Win32 call.
             let err = unsafe { ffi::GetLastError() };
             if err == ffi::ERROR_NO_MORE_FILES {
-                return Ok(Vec::new());
+                return Ok(());
             }
             anyhow::bail!(
-                "FindFirstFileW on {root} failed (GetLastError={err}); does the folder exist? \
+                "FindFirstFileW under {root} failed (GetLastError={err}); does the folder exist? \
                  create it first (run without --list/--verify), or check the drive."
             );
         }
 
-        let mut entries = Vec::new();
         loop {
             // The kernel writes a NUL-terminated name into a fixed 260-unit
             // buffer; take everything up to the first NUL.
@@ -787,10 +906,18 @@ mod windows_impl {
             // Skip the `.` and `..` pseudo-entries.
             let is_dot = matches!(leaf.as_slice(), [0x002E] | [0x002E, 0x002E]);
             if !is_dot {
-                entries.push(DiskEntry {
-                    is_dir: find_data.dwFileAttributes & ffi::FILE_ATTRIBUTE_DIRECTORY != 0,
-                    name_utf16: leaf,
-                });
+                let is_dir = find_data.dwFileAttributes & ffi::FILE_ATTRIBUTE_DIRECTORY != 0;
+                if is_dir {
+                    // Build the child's raw wide path BEFORE moving `leaf`, then
+                    // recurse depth-first into it (its own FindFirst handle).
+                    let mut child = dir_wide.to_vec();
+                    child.push(u16::from(b'\\'));
+                    child.extend_from_slice(&leaf);
+                    out.push(DiskEntry { is_dir, name_utf16: leaf });
+                    enumerate_dir(root, &child, out)?;
+                } else {
+                    out.push(DiskEntry { is_dir, name_utf16: leaf });
+                }
             }
             // SAFETY: `handle` is valid; `find_data` is a live, owned struct.
             let more = unsafe { ffi::FindNextFileW(handle, &raw mut find_data) };
@@ -800,7 +927,7 @@ mod windows_impl {
         }
         // SAFETY: `handle` came from a successful FindFirstFileW.
         unsafe { ffi::FindClose(handle) };
-        Ok(entries)
+        Ok(())
     }
 
     /// Print each true on-disk name as display + raw UTF-16 hex, flagging
