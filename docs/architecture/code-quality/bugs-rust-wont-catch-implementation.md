@@ -1197,4 +1197,39 @@ The effort is complete when **all** of the following hold:
 - **§7 Parity:** pathological-name corpus in CI. ✔ when WI-7.1 ✅.
 - **§8 Trust boundary:** single threaded handle; nonce property documented. ✔ when
   WI-8.1–2 ✅.
+- **§G Guard:** grep-gate authored, green, **and wired into the pipeline**. ✔ when
+  WI-G.1 ✅.
+
+---
+
+## 4. Closeout & validation record (2026-06-04)
+
+The effort is **complete**. All 20 work items landed across PRs **#345–#355**;
+WI-4.4 alone remains 🟨 by design (RFC `refactor/lossless-name-column-rfc.md`
+landed; *elimination* implementation is a maintainer-gated follow-up — WI-4.1
+already ships the required non-silent/measured/tested mitigation).
+
+**Definition-of-done verification (§2):**
+
+| # | Clause | Result |
+|---|--------|--------|
+| 1 | Every WI ✅ (or 🟨+RFC for 4.4) | ✅ — 19 ✅, WI-4.4 🟨 (permitted) |
+| 2 | §1.2 rollup 100% | ✅ — categories 1/2/3/5/6/7/8/G = 100%; cat 4 = 100% for non-silent+argv (4.4 elimination tracked) |
+| 3 | `just go` green | ✅ — `just go` PHASE 1 COMPLETE, 151s, all steps green |
+| 4 | `audit-gate` passes + wired | ✅ — `just go` ran **6** fanout commands incl. `✅ Anti-pattern gate (2s)` |
+| 5 | Per-WI healing logs | ✅ — `LOG/*_CHANGELOG_HEALING.md` (gitignored) |
+| 6 | No blanket `#[allow]` | ✅ — all exceptions scoped `#[expect(reason)]` / `// AUDIT-OK` |
+
+**Incident learned during closeout — stale pipeline binary silently dropped the
+gate.** The v0.5.111 ship run (`LOG/Output`) executed a *cached* release build
+of `uffs-ci-pipeline` that predated the WI-G.1 wiring: it ran only **5** fanout
+commands and the "Anti-pattern gate" step never fired, yet the run shipped
+green. Root cause: `cargo run --release` reused a stale binary, and the forced
+`cargo clean` on toolchain bumps had been wiping/rebuilding `target/` around it.
+**Fix (PR #355):** `just go`/`ship`/`phase2` build the pipeline into a
+`--target-dir target/ci-bootstrap` sibling that `cargo clean` never touches, so
+the binary is fresh every run. Verified: the subsequent `just go` ran **6**
+fanout commands with the gate present and passing. *Lesson: adding a pipeline
+validation step is not enough — confirm the running binary is rebuilt, or a
+stale artifact can silently skip it.*
 - **§G Guard:** grep-gate in CI. ✔ when WI-G.1 ✅.
