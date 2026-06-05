@@ -31,6 +31,9 @@ audit-as-crates-io = true
 [policy.polars-compute]
 audit-as-crates-io = true
 
+[policy.polars-config]
+audit-as-crates-io = true
+
 [policy.polars-core]
 audit-as-crates-io = true
 
@@ -53,6 +56,9 @@ audit-as-crates-io = true
 audit-as-crates-io = true
 
 [policy.polars-mem-engine]
+audit-as-crates-io = true
+
+[policy.polars-ooc]
 audit-as-crates-io = true
 
 [policy.polars-ops]
@@ -186,6 +192,10 @@ criteria = "safe-to-deploy"
 version = "2.0.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.bitflags]]
+version = "2.12.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.blake3]]
 version = "1.8.5"
 criteria = "safe-to-deploy"
@@ -199,11 +209,11 @@ version = "0.2.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.brotli]]
-version = "8.0.2"
+version = "8.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.brotli-decompressor]]
-version = "5.0.0"
+version = "5.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.bstr]]
@@ -263,7 +273,7 @@ version = "7.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.compact_str]]
-version = "0.9.0"
+version = "0.9.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.concurrent-queue]]
@@ -364,6 +374,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.dirs-sys-next]]
 version = "0.1.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.displaydoc]]
+version = "0.2.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.dyn-clone]]
@@ -610,6 +624,10 @@ criteria = "safe-to-deploy"
 version = "0.4.14"
 criteria = "safe-to-deploy"
 
+[[exemptions.log]]
+version = "0.4.32"
+criteria = "safe-to-deploy"
+
 [[exemptions.lru-slab]]
 version = "0.1.2"
 criteria = "safe-to-deploy"
@@ -635,7 +653,7 @@ version = "0.1.50"
 criteria = "safe-to-deploy"
 
 [[exemptions.mio]]
-version = "1.2.0"
+version = "1.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.now]]
@@ -730,6 +748,10 @@ criteria = "safe-to-deploy"
 version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
 criteria = "safe-to-deploy"
 
+[[exemptions.polars-config]]
+version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+criteria = "safe-to-deploy"
+
 [[exemptions.polars-core]]
 version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
 criteria = "safe-to-deploy"
@@ -759,6 +781,10 @@ version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-mem-engine]]
+version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+criteria = "safe-to-deploy"
+
+[[exemptions.polars-ooc]]
 version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
 criteria = "safe-to-deploy"
 
@@ -935,7 +961,7 @@ version = "0.23.40"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
-version = "0.8.3"
+version = "0.8.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-pki-types]]
@@ -1010,6 +1036,10 @@ criteria = "safe-to-deploy"
 version = "0.11.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.shlex]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.signal-hook]]
 version = "0.4.4"
 criteria = "safe-to-deploy"
@@ -1047,7 +1077,7 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.socket2]]
-version = "0.6.3"
+version = "0.6.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.sqlparser]]
@@ -1463,7 +1493,7 @@ version = "0.8.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
-version = "0.8.48"
+version = "0.8.50"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy-derive]]

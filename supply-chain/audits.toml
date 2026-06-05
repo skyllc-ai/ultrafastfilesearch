@@ -7,11 +7,41 @@ criteria = "safe-to-run"
 delta = "2.2.1 -> 2.2.2"
 notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow] — see docs/architecture/security/supply-chain-posture.md). Changes: (1) #[track_caller] attributes on assert/failure/success paths + replacement of `.unwrap_or_else(AssertError::panic)` chains with explicit `match` blocks so caller location is preserved through panic; (2) edition-2024 idiom updates (Self::Variant / Self {..}); (3) include-list path normalization in Cargo.toml (/build.rs etc.); (4) internal lints.clippy config tightening. No semantic changes to assertion logic, no new unsafe, no new network/FS access paths. assert_cmd is test-only (safe-to-run)."
 
+[[audits.autocfg]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.5.0 -> 1.5.1"
+notes = "Delta audit (cargo vet diff 1.5.0 -> 1.5.1). TEST-ONLY change: ZERO src/ library changes. README adds the 1.5.1 changelog line ('Refactor the test_wrappers test without any shell script'). Cargo.toml(.orig) declares explicit [[test]] targets and sets harness=false for the wrappers test. The bash helper tests/wrap_ignored is deleted and replaced by a Rust main() in tests/wrappers.rs that acts as the rustc-wrapper stand-in. No change to autocfg's build-probe library logic, no new unsafe, no new runtime deps; the changed code runs only under `cargo test`. autocfg is a build-dependency (via num-traits). Publisher cuviper (Josh Stone), already trusted by isrg/mozilla/bytecode-alliance."
+
+[[audits.brotli]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.2 -> 8.0.3"
+notes = "Delta audit (cargo vet diff 8.0.2 -> 8.0.3). Bulk of the diff is tests (src/enc/threading/test.rs +309, src/bin/test_broccoli.rs +292, test_custom_dict.rs) and the CLI binary src/bin/brotli.rs (the TMPDIR/TEMP std::env::var + std::fs::File::create probe flagged by scanning lives in the bin/test harness, NOT the library — bins are not linked when brotli is consumed as a dependency). Library changes: src/concat/mod.rs adds a fallible BroCatli::try_new_with_window_size(u8) -> Result<BroCatli, BroCatliResult> constructor (returns InvalidWindowSize for ws not in 10..=24-style range) and reduces the legacy panicking new_with_window_size to a thin .expect() wrapper over it; src/ffi/broccoli.rs mirrors the window-size handling at the C-ABI boundary. src/enc/{threading,encode,backward_references/{mod,hash_to_binary_tree,hq}}.rs is internal compression-encoder refactoring that threads a `ringbuffer_break` parameter through the H10 hasher path (initialize_h10 / StitchToPreviousBlockH10). Pure-Rust codec; no NEW unsafe, extern, network, or process capability added to the library path. Publisher danielrh (Dropbox, brotli-rust maintainer)."
+
+[[audits.brotli-decompressor]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "5.0.0 -> 5.0.1"
+notes = 'Delta audit (cargo vet diff 5.0.0 -> 5.0.1, small). src/decode.rs + src/writer.rs: adds a few #[cfg(feature="std")] gates and a buffer-size fallback (`if buffer_size == 0 { 4096 } else { buffer_size }`) so a zero requested buffer size no longer yields a zero-length allocation, plus a loop `break;` fix. src/bin/error_handling_tests.rs + src/test.rs are test/bin only. No new unsafe, no new deps, no new I/O/FFI/process/network capability — defensive bugfix release of the pure-Rust brotli decoder. Publisher danielrh (Dropbox, brotli-rust maintainer).'
+
+[[audits.chrono]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.44 -> 0.4.45"
+notes = 'Delta audit (cargo vet diff 0.4.44 -> 0.4.45). Cargo.toml(.orig)/CITATION.cff: version bump + dev-dep similar-asserts 1.6.1 -> 2.0.0 (test-only). src/offset/local/tz_data.rs: Android-only (#[cfg(target_os="android")]) — adds an ANDROID_TZDATA_ROOT (/etc/tz) probe ahead of the existing ANDROID_DATA/ANDROID_ROOT env lookups, reusing the same std::env::var + File::open pattern (no new capability class). src/offset/local/tz_info/rule.rs: bugfix tightening the POSIX TZ transition-rule offset-hour bound from 0..=24 to 0..=23 (a 24h offset cannot fit in a FixedOffset, which is ±23:59:59), with a new test_invalid_offset_hour unit test covering FOO24/+24/-24 rejection and 23:59:59 acceptance. No new unsafe, no FFI/network/process; Android is not a shipping UFFS target. Publisher djc (chrono maintainer).'
+
 [[audits.colored]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "3.1.1"
 notes = "Reviewed v3.1.1 source. Scope: ANSI terminal coloring. One unsafe block in control.rs (Windows Console FFI via windows-sys: GetStdHandle / GetConsoleMode / SetConsoleMode) — standard Win32 terminal setup, properly cfg(windows)-gated. No network I/O, no filesystem writes, no process spawning. Only std types plus windows-sys on Windows. Dev-deps (rspec, insta, ansiterm) are standard testing crates. MPL-2.0 licensed, same as our workspace."
+
+[[audits.compact_str]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.0 -> 0.9.1"
+notes = """Delta audit (cargo vet diff 0.9.0 -> 0.9.1, 3 src files). src/lib.rs: CompactString::repeat now computes capacity with self.len().checked_mul(n).expect("capacity overflow") instead of an unchecked multiply — an overflow-safety hardening. src/repr/heap.rs: realloc uses Capacity::new(new_capacity) and adds a regression test (test_realloc_shrink_to_min_heap_gap) covering the shrink-to-MIN_HEAP_SIZE boundary. src/tests.rs additions are test-only. No NEW unsafe blocks (the crate's existing inline-repr unsafe is unchanged), no new deps, no new ambient capability. Publisher ParkMyCar (compact_str maintainer)."""
 
 [[audits.crypto-common]]
 who = "Robert Nio <robert_nio@intuit.com>"
@@ -49,6 +79,12 @@ criteria = "safe-to-deploy"
 delta = "0.1.48 -> 0.1.49"
 notes = "Delta audit (cargo vet diff 0.1.48 -> 0.1.49). ZERO vendored-C files changed (no v2/v3 tree edits this release). build.rs unchanged. src/extended.rs adds exactly one new FFI binding: 'pub fn mi_stats_get_json(buf_size: usize, buf: *mut c_char) -> *mut c_char' (#[cfg(not(feature=v2))], v3-only) backing mimalloc's stats-to-JSON feature, plus a test 'use super::super::mi_malloc'. The C implementation already existed upstream; this is just the Rust extern declaration. No new ambient capability / I/O / process / network / env access."
 
+[[audits.libredox]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.16 -> 0.1.17"
+notes = """Delta audit (cargo vet diff 0.1.16 -> 0.1.17). Cargo.toml(.orig): version bump + redox_syscall dep 0.7 -> 0.8. src/lib.rs: (a) cosmetic reorder of a libc MSG_* re-export list (no semantic change); (b) adds one Redox kernel FFI binding redox_relpathat_v0(dirfd, fd, dst_base, dst_len) -> RawResult plus the safe wrappers Fd::relpathat / call::relpathat, mirroring the existing redox_fpath_v1 binding exactly (Error::demux over an unsafe extern call using the caller-provided &mut [u8] buffer's ptr+len). The single new unsafe block is a like-for-like copy of the adjacent fpath binding. libredox is the Redox stable-ABI shim, reachable only via redox_users on target_os="redox"; the extern symbols are never linked on UFFS shipping targets (Windows/macOS). No network/FS-path/process/env additions. Publisher 4lDO2 (Redox maintainer)."""
+
 [[audits.mimalloc]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
@@ -60,6 +96,12 @@ who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "0.1.51 -> 0.1.52"
 notes = "Delta audit (cargo vet diff 0.1.51 -> 0.1.52). Cargo.toml(.orig): version bump + libmimalloc-sys dep 0.1.48->0.1.49. src/lib.rs + src/extended.rs add a v3-only (#[cfg(not(feature=v2))]) 'stats_json() -> Result<StatsJson, &str>' wrapper plus a StatsJson newtype with Deref/Drop. The unsafe blocks are allocator FFI into mimalloc's own functions (the new mi_stats_get_json getter and mi_free for the returned buffer) — standard mimalloc-sys FFI, no new ambient capability / I/O / network."
+
+[[audits.mio]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.0 -> 1.2.1"
+notes = """Delta audit (cargo vet diff 1.2.0 -> 1.2.1). Portability + correctness patch: adds target_os="horizon" (Nintendo 3DS) cfg gating and a WASI p1/p2 waker path split across src/sys/* and src/poll.rs; src/sys/unix/selector/poll.rs introduces a per-platform PollFlagInt type alias (c_short vs c_int) with 0-valued fallbacks for POLLRDHUP/POLLPRI/POLLRDBAND/POLLWRBAND on platforms lacking them; and a poll-timeout rounding fix that rounds sub-millisecond Durations up via checked_add(Duration::from_nanos(999_999)) before as_millis(), clamped to libc::c_int::MAX. All changes are libc-constant/cfg plumbing over the existing epoll/poll/IOCP backends; no NEW unsafe logic, no new deps, no new process/network capability beyond mio's existing readiness-I/O purpose. Publisher Thomasdezeeuw (mio/tokio maintainer)."""
 
 [[audits.num-conv]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -121,11 +163,23 @@ Delta audit (Apr 2026, v0.5.71):
   No runtime behavior change.
 - No unsafe additions, no API changes, no new ambient capabilities."""
 
+[[audits.rustls-native-certs]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.3 -> 0.8.4"
+notes = "Delta audit (cargo vet diff 0.8.3 -> 0.8.4). Most of the diff is CI/workflow/example/test files (.github/*, examples/*, tests/*, integration-tests/*). The only library change in src/lib.rs: a rustls_native_certs_docsrs doc_cfg feature attribute, and a refinement of the SSL_CERT_DIR-style directory handling to use env::split_paths(&dirs).filter(|p| !p.as_os_str().is_empty()) so multiple (OS-separator-delimited) cert directories are parsed and empty entries skipped. Reading SSL_CERT_FILE/SSL_CERT_DIR env + OS trust stores is rustls-native-certs's existing and sole purpose — no NEW capability class is introduced. No new unsafe, no new deps. Publisher (rustls project, ctz/djc)."
+
 [[audits.siphasher]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.2 -> 1.0.3"
 notes = "Delta audit (cargo vet diff 1.0.2 -> 1.0.3, 5 files +105/-36). .gitignore: adds .swival editor tmpdir (no runtime effect). Cargo.toml/Cargo.toml.orig: version bump only. src/sip.rs + src/sip128.rs: single-shot fast-path optimization for the existing SipHasher{,13,24}::hash() and ::hash() (Hash128) public APIs. The old impls cloned the Hasher state, called .write(bytes), then .finish() — going through the buffered short_write codepath byte-by-byte even though the full message was available up-front. The new impls add private Hasher<S>::hash(msg) / hash128(msg) fast paths that, when ntail==0 (no buffered tail bytes from a prior write), XOR-fold msg's 8-byte chunks directly into the SipHash state in a tight loop, then finalize with the standard tail handling. When ntail!=0 the impl falls back to the original clone-write-finish path so correctness is preserved for partially-streamed hashers. The fast path's two unsafe blocks (load_int_le! and u8to64_le) were already present in the pre-existing .write() path and are reused unchanged: the 'while i < len - left' loop with 'left = len & 0x7' guarantees i + 8 <= len, so load_int_le! is in bounds; u8to64_le's 3rd arg 'left' is bounded to 0..8 by construction. Also adds Hasher::write_u16 (was missing — previously fell through to the default Hasher trait impl, which is byte-by-byte). write_u16 mirrors the existing write_u32/_u64/_usize pattern: short_write(i, i.to_le() as u64). finish()/finish128() are refactored to delegate to static finish{,128}_with_state(state,length,tail) helpers — pure structural extraction, output bytes unchanged for any given (state,length,tail). Net result: speed-up for single-shot byte-array hashing; no public-API additions beyond write_u16 (which is part of the std::hash::Hasher trait, not a new surface); no new unsafe operations beyond what already existed; no FFI / FS / network / process — pure crypto primitive, used here only via phf_shared for compile-time string hashing in transitive deps. Author jedisct1 (Frank Denis) is a well-known cryptography maintainer."
+
+[[audits.socket2]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.6.3 -> 0.6.4"
+notes = """Delta audit (cargo vet diff 0.6.3 -> 0.6.4). The overwhelming majority of changes add target_os="horizon" (Nintendo 3DS) to existing cfg exclusion lists and refine QNX gating to all(target_os="nto", any(target_env="nto70","nto71")). Two genuinely new items: `unsafe impl Send for MsgHdr<'_,'_,'_>` and `unsafe impl Send for MsgHdrMut<'_,'_,'_>` — these wrapper types hold a platform msghdr plus PhantomData lifetime markers over caller-borrowed buffers; Send is sound because the struct is plain data referencing borrow-checked buffers (no interior !Send handles), matching the established pattern for the sibling SockAddr/iovec wrappers. Also type-correctness fixes: getsockopt::<Bool> (was c_int) for IPV6_V6ONLY, and `!= 0` instead of `!= false as Bool`. No new extern symbols, no new process/network capability beyond socket2's existing socket-syscall purpose. Publisher Thomasdezeeuw (socket2/tokio maintainer)."""
 
 [[audits.tokio]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -133,11 +187,35 @@ criteria = "safe-to-deploy"
 delta = "1.52.2 -> 1.52.3"
 notes = "Delta audit reviewed via cargo vet diff. Replaces the silent exemption bump from PR #166 (which was a supply-chain #[allow]). Changes scoped to src/sync/mpsc/* and src/sync/rwlock.rs, implementing four documented upstream bug-fix PRs per tokio 1.52.3 release notes (May 2026): tokio#8062 fix mpsc len() underflow; tokio#8074 return TryRecvError::Empty from try_recv() when mpsc closed with outstanding permits; tokio#8075 notify receivers in mpsc OwnedPermit::release() by reusing non-owned Permit Drop impl; tokio#8076 reject RwLock::new max_readers==0 (prevents div-by-zero in semaphore fast path). Companion tests in tests/sync_mpsc.rs + tests/sync_rwlock.rs. No feature additions, no new unsafe, no public API signature changes."
 
+[[audits.typenum]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.20.0 -> 1.20.1"
+notes = "Delta audit (cargo vet diff 1.20.0 -> 1.20.1). Cargo.toml(.orig)/README: version bump + key reordering and URL/formatting touch-ups (no runtime effect). src/lib.rs: html_root_url 1.20.0 -> 1.20.1 doc attribute only. src/array.rs: macro-hygiene bugfix — the recursive arms of the tarr! macro now invoke $crate::tarr![...] instead of bare tarr![...], so the macro resolves correctly in downstream crates that have not imported tarr into scope (the 'Fixed tarr import resolution' changelog entry). Pure compile-time type-level macro change; no unsafe, no deps, no I/O/FFI/process/network. Publisher paholg (typenum maintainer)."
+
 [[audits.uuid]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "1.23.1 -> 1.23.2"
 notes = "Delta audit (cargo vet diff 1.23.1 -> 1.23.2). Files: Cargo.toml(.orig) version bump, README, src/{error,fmt,parser,lib,external/serde_support}.rs. Patch release by KodrAus (uuid maintainer): formatting/parser refinements + serde tweak. The single unsafe is std::str::from_utf8_unchecked(self.0) on the crate's own fixed-size format buffer, which uuid populates exclusively with ASCII hex digits + hyphens before formatting — sound zero-copy formatting (same pattern as the vetted 1.23.1). No new I/O / FFI / process / network / ambient capability."
+
+[[audits.yoke]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.2 -> 0.8.3"
+notes = "Delta audit (cargo vet diff 0.8.2 -> 0.8.3). Cargo.toml(.orig): version bump, edition.workspace -> edition=2021, and a 'bool-assert-comparison = allow' clippy lint relaxation (dev-time only). src/cartable_ptr.rs: SOUNDNESS FIX — the unsafe Send/Sync impls for CartableOptionPointer<C> had swapped bounds (previously 'Send where C: Sync' and 'Sync where C: Send'); they are corrected to 'Send where C: Send' and 'Sync where C: Sync', matching the documented 'logically an Option<C>' invariant. This tightens (not loosens) the conditions under which the type crosses threads. A new Miri test (test_send_drops_on_another_thread) constructs a Send + !Sync cart and drops it on another thread, which compiles under the corrected bounds and would fail under the old swapped bounds. No new unsafe blocks introduced (the two impls already existed), no FFI/FS/network/process. Publisher Manishearth (ICU4X)."
+
+[[audits.zerocopy]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.48 -> 0.8.50"
+notes = "Delta audit (cargo vet diff 0.8.48 -> 0.8.50). The bulk of the diff is committed codegen-snapshot fixtures under benches/*.x86-64 and *.mca (machine-code-analyzer output) reflecting a multiply-overflow-check optimization — test fixtures, not shipped code. Library changes (src/): (1) centralizes the scattered `isize::MAX as usize` allocation bound into a new pub(crate) const DstLayout::MAX_SIZE and a new is_valid_metadata/maximum_trailing_slice_len helper, used in layout.rs/util/mod.rs and Kani proof harnesses; (2) replaces a checked Layout::from_size_align + manual saturating max_alloc check with `unsafe { Layout::from_size_align_unchecked(size, align) }` guarded by an explicit `if !T::is_valid_metadata(meta) { return Err(AllocError) }` precondition — the new SAFETY comment correctly establishes align is a non-zero power of two (KnownLayout invariant) and size <= isize::MAX (the is_valid_metadata gate); (3) widens many pointer-internal items from pub(crate) to pub behind #[cfg_attr(not(zerocopy_unstable_ptr), doc(hidden))] / allow(unreachable_pub) — the affected `unsafe fn`s (with_meta, split_at_unchecked, slice_unchecked) and `unsafe trait TryWithError` already existed with identical bodies; this is visibility-only, no new unsafe LOGIC; (4) adds PointerMetadata: + Ord, a slice Ptr is_empty()/len(), iter() now takes self by value with strengthened disjoint-aliasing safety comments and a new test (test_iter_exclusive_yields_disjoint_ptrs). No new extern/process/network/fs capability. Publisher joshlf (Google, zerocopy maintainer; crate is Kani-proof-backed)."
+
+[[audits.zerocopy-derive]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.48 -> 0.8.50"
+notes = "Delta audit (cargo vet diff 0.8.48 -> 0.8.50). The diff is limited to Cargo.toml and Cargo.toml.orig version-string bumps 0.8.48 -> 0.8.50 — ZERO source (src/) changes across both patch releases. No proc-macro logic change, no new deps, no new unsafe, no new ambient capability. Publisher joshlf (zerocopy maintainer, Google)."
 
 [[audits.zerofrom]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
