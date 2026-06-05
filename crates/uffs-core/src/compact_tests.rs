@@ -579,7 +579,9 @@ fn ads_on_directory_strips_directory_flag() {
 
 /// WTF-8 of `evil` + lone-high-surrogate(U+D800) + `.exe`
 /// (`0xD800` → 3-byte WTF-8 `ED A0 80`). Not valid UTF-8.
-const CROOKED_NAME_WTF8: &[u8] = &[b'e', b'v', b'i', b'l', 0xED, 0xA0, 0x80, b'.', b'e', b'x', b'e'];
+const CROOKED_NAME_WTF8: &[u8] = &[
+    b'e', b'v', b'i', b'l', 0xED, 0xA0, 0x80, b'.', b'e', b'x', b'e',
+];
 
 /// Like `push_name`, but stores raw WTF-8 bytes (the lossless ingestion path)
 /// for an ill-formed NTFS name.
@@ -612,14 +614,15 @@ fn crooked_surrogate_name_is_visible_in_compact_index() {
     let found = drive
         .records
         .iter()
-        .find(|r| r.name_bytes(&drive.names) == CROOKED_NAME_WTF8);
-    assert!(
-        found.is_some(),
-        "crooked surrogate-named file must be present + byte-recoverable in the search index"
-    );
+        .find(|cr| cr.name_bytes(&drive.names) == CROOKED_NAME_WTF8)
+        .expect(
+            "crooked surrogate-named file must be present + byte-recoverable in the search index",
+        );
 
-    let found = found.expect("present");
-    assert_eq!(found.size, 1337, "the crooked file's metadata transfers too");
+    assert_eq!(
+        found.size, 1337,
+        "the crooked file's metadata transfers too"
+    );
     // Its lossy &str view is empty (not valid UTF-8) — display degrades, but
     // the file is NOT hidden (it is enumerated above).
     assert_eq!(found.name(&drive.names), "");
@@ -628,7 +631,7 @@ fn crooked_surrogate_name_is_visible_in_compact_index() {
         !found
             .name_bytes(&drive.names)
             .windows(3)
-            .any(|w| w == [0xEF, 0xBF, 0xBD]),
+            .any(|win| win == [0xEF, 0xBF, 0xBD]),
         "the search index must hold the true bytes, not a lossy replacement"
     );
 }
