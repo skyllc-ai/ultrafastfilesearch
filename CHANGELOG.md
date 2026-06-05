@@ -803,7 +803,7 @@ hunting for the wrong things.
 
 Plan §1 goal-4 ("no regression on CLI hot path vs the v0.5.35
 baseline") verified end-to-end on the Windows 7-drive reference
-box.  Current v0.5.111 (post-Phase-8 tiered architecture) is
+box.  Current v0.5.113 (post-Phase-8 tiered architecture) is
 **universally faster** than v0.5.35 across every benchmarked
 pattern, with the largest result set (`*.dll`, 44 529 rows)
 showing a **2.7× speedup**:
@@ -811,7 +811,7 @@ showing a **2.7× speedup**:
 ```
 Drive D, 7.07 M records, 30 rounds, HOT phase, p50 / p95 wall_ms:
 
-                              v0.5.35      v0.5.111       Δ p50
+                              v0.5.35      v0.5.113       Δ p50
     exact      (3 rows)       20 / 23   →  18 / 19      −10 %
     prefix     (8 732)        46 / 50   →  40 / 46      −13 %
     ext_rare   (11)           18 / 20   →  17 / 18       −6 %
@@ -987,7 +987,7 @@ log-message renames fail CI before reaching another 24-h soak.
   2026-05-13.  No new operator-surface features land on `main`
   until v0.6.0 ships.
 
-## [0.5.111] - 2026-05-08
+## [0.5.113] - 2026-05-08
 
 > **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
 > reached a published GitHub Release: the `release.yml` finalize step hit
@@ -996,7 +996,7 @@ log-message renames fail CI before reaching another 24-h soak.
 > partial release was deleted, the tag name became permanently locked by
 > GitHub's *immutable releases* feature (the pre-receive hook refuses any
 > future ref creation under that name even after a clean delete).  The
-> public release sequence therefore jumps `v0.5.90 → v0.5.111`; all
+> public release sequence therefore jumps `v0.5.90 → v0.5.113`; all
 > intended v0.5.91 changes are rolled forward into this release.
 
 ### Fixed
