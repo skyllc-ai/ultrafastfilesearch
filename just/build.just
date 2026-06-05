@@ -146,9 +146,29 @@ use-local:
 # are bit-identical to what your end users download.  For local dev builds
 # from source, use `just use-local` instead.
 #
+# Smart status: before installing, the recipe gathers four facts (all
+# read-only, all degrade gracefully) and prints a status report:
+#   • origin/main wants  — version on `origin/main` Cargo.toml (offline target)
+#   • latest published   — newest FINISHED GitHub release (the install target)
+#   • in flight (CI)     — version of any queued/in_progress release.yml run
+#   • installed (~/bin)  — what `uffs --version` currently reports
+# Decisions:
+#   • Already on the target with all binaries present → no-op (exit 0).
+#   • A strictly-newer release is mid-build → warn it's "not settled yet",
+#     install the current published version, and tell the user to re-run later.
+#
+# Target version: the binaries are downloaded from GitHub Releases, so the
+# local branch / working tree is irrelevant to *what* gets installed — only
+# the version number matters.  The target is the latest *published* release
+# when `gh` is online; offline we fall back to the `origin/main` Cargo.toml
+# version (via `git fetch` + `git show FETCH_HEAD:Cargo.toml`), which works
+# from ANY branch and never switches branches or modifies the working tree.
+# This avoids the stale-local-`main` trap (a release PR merged on GitHub but
+# never pulled).
+#
 # Resilience strategy (each tier falls through to the next on miss):
-#   A. Exact cache hit on `dist/vX.Y.Z` matching workspace `Cargo.toml`.
-#   B. `gh release download vX.Y.Z` for the workspace version.
+#   A. Exact cache hit on `dist/vX.Y.Z` matching the resolved version.
+#   B. `gh release download vX.Y.Z` for the resolved version.
 #   C. `gh release download <latest-published-tag>` — graceful older-version
 #      install when the workspace version's release PR is still in CI
 #      (the exact failure mode that motivated this recipe: `just ship`
@@ -166,8 +186,98 @@ use:
     set -euo pipefail
     printf "\033[0;34m📦 Installing UFFS binaries from dist/ cache...\033[0m\n"
 
-    # Read workspace version from Cargo.toml
-    CARGO_VER=$(awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print "v"$3; exit}' Cargo.toml | tr -d '"')
+    # ── Gather release facts (all read-only, all degrade gracefully) ──
+    # `just use` installs binaries from GitHub Releases, so the local
+    # branch / working tree is irrelevant to *what gets installed* — only
+    # version numbers matter.  We collect four facts, report them, and make
+    # a smart decision (no-op when current, warn when a newer release is
+    # mid-build).  Every git/gh step is read-only: NEVER switches branches,
+    # touches the index, or modifies the working tree, so any WIP /
+    # detached-HEAD / mid-rebase state is safe.  GIT_TERMINAL_PROMPT=0 makes
+    # a credential-less fetch fail fast instead of hanging on an auth prompt.
+    read_ws_ver() { awk '/^\[workspace\.package\]/{f=1; next} f && /^version/{print "v"$3; exit}' | tr -d '"'; }
+    extract_ver() { grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true; }
+
+    BIN_DIR="$HOME/bin"
+    declare -A BINARIES=(
+        ["uffs-macos-arm64"]="uffs"
+        ["uffsd-macos-arm64"]="uffsd"
+        ["uffsmcp-macos-arm64"]="uffsmcp"
+        ["uffs-mft-macos-arm64"]="uffs-mft"
+    )
+
+    # 1. What origin/main wants (informational + offline-fallback target).
+    MAIN_VER=""
+    if git rev-parse --is-inside-work-tree &>/dev/null \
+        && git remote get-url origin &>/dev/null \
+        && GIT_TERMINAL_PROMPT=0 git fetch --quiet origin main 2>/dev/null; then
+        MAIN_CARGO=$(git show FETCH_HEAD:Cargo.toml 2>/dev/null || true)
+        [[ -n "$MAIN_CARGO" ]] && MAIN_VER=$(printf '%s\n' "$MAIN_CARGO" | read_ws_ver)
+    fi
+    [[ -z "$MAIN_VER" ]] && MAIN_VER=$(read_ws_ver < Cargo.toml)
+
+    # 2. Latest FINISHED published release (the primary install target).
+    PUBLISHED_VER=""
+    GH_OK=0
+    if command -v gh &>/dev/null; then
+        PUBLISHED_VER=$(gh release view --json tagName -q .tagName 2>/dev/null | extract_ver)
+        [[ -n "$PUBLISHED_VER" ]] && GH_OK=1
+    fi
+
+    # 3. In-flight release (queued / in_progress release.yml run); the run
+    #    title embeds the version, e.g. "🚀 UFFS Release v0.5.114".
+    INFLIGHT_VER=""
+    if command -v gh &>/dev/null; then
+        INFLIGHT_VER=$(gh run list --workflow=release.yml --limit 10 \
+            --json status,displayTitle \
+            -q '.[] | select(.status=="in_progress" or .status=="queued") | .displayTitle' 2>/dev/null \
+            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 || true)
+    fi
+
+    # 4. What's currently installed in ~/bin.
+    INSTALLED_VER=""
+    if [[ -x "$BIN_DIR/uffs" ]]; then
+        INSTALLED_VER=$("$BIN_DIR/uffs" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        [[ -n "$INSTALLED_VER" ]] && INSTALLED_VER="v$INSTALLED_VER"
+    fi
+
+    # ── Target: latest published when online, else origin/main offline ──
+    if [[ "$GH_OK" -eq 1 ]]; then
+        CARGO_VER="$PUBLISHED_VER"
+    else
+        CARGO_VER="$MAIN_VER"
+    fi
+
+    # ── Status report ────────────────────────────────────────────────
+    printf "\033[0;34m  ── Release status ──────────────────────────\033[0m\n"
+    printf "    origin/main wants : %s\n" "${MAIN_VER:-unknown}"
+    printf "    latest published  : %s\n" "${PUBLISHED_VER:-unknown (gh offline)}"
+    printf "    in flight (CI)    : %s\n" "${INFLIGHT_VER:-none}"
+    printf "    installed (~/bin) : %s\n" "${INSTALLED_VER:-none}"
+    printf "\033[0;34m  ────────────────────────────────────────────\033[0m\n"
+
+    # ── In-flight notice: a strictly-newer release is mid-build ──────
+    # Compare via `sort -V`; only flag when in-flight > published.
+    if [[ -n "$INFLIGHT_VER" ]]; then
+        NEWER=$(printf '%s\n%s\n' "$INFLIGHT_VER" "$PUBLISHED_VER" | sort -V | tail -1)
+        if [[ "$INFLIGHT_VER" != "$PUBLISHED_VER" ]] && [[ "$NEWER" == "$INFLIGHT_VER" ]]; then
+            printf "\033[1;33m  ⏳ Release %s is in flight — not published yet.\033[0m\n" "$INFLIGHT_VER"
+            printf "\033[1;33m     Installing current published %s now; re-run 'just use' once %s lands.\033[0m\n" "${PUBLISHED_VER:-latest}" "$INFLIGHT_VER"
+        fi
+    fi
+
+    # ── No-op: already on target with a complete install ─────────────
+    if [[ -n "$INSTALLED_VER" ]] && [[ -n "$CARGO_VER" ]] && [[ "$INSTALLED_VER" == "$CARGO_VER" ]]; then
+        ALL_PRESENT=1
+        for DEST_NAME in "${BINARIES[@]}"; do
+            [[ -x "$BIN_DIR/$DEST_NAME" ]] || { ALL_PRESENT=0; break; }
+        done
+        if [[ "$ALL_PRESENT" -eq 1 ]]; then
+            printf "\033[0;32m  ✅ Already up to date: %s installed in ~/bin — nothing to do.\033[0m\n" "$INSTALLED_VER"
+            exit 0
+        fi
+        printf "\033[1;33m  ⚠️  %s installed but some binaries are missing — reinstalling.\033[0m\n" "$INSTALLED_VER"
+    fi
 
     DIST_DIR=""
     STALE_NOTE=""
@@ -254,16 +364,8 @@ use:
         printf "\033[0;34m  → Source: %s\033[0m\n" "$DIST_DIR"
     fi
 
-    BIN_DIR="$HOME/bin"
+    # BIN_DIR and BINARIES were defined up top (gather block).
     mkdir -p "$BIN_DIR"
-
-    # Map release asset names → install names
-    declare -A BINARIES=(
-        ["uffs-macos-arm64"]="uffs"
-        ["uffsd-macos-arm64"]="uffsd"
-        ["uffsmcp-macos-arm64"]="uffsmcp"
-        ["uffs-mft-macos-arm64"]="uffs-mft"
-    )
     INSTALLED=0
     SKIPPED=0
 
@@ -312,29 +414,129 @@ use:
 # Resilience strategy (mirrors the unix recipe — see its docstring for
 # the motivating failure mode and the design rationale).  Each tier
 # falls through to the next on miss:
-#   A. Exact cache hit on `dist/vX.Y.Z` matching workspace `Cargo.toml`.
-#   B. `gh release download vX.Y.Z` for the workspace version.
+#   A. Exact cache hit on `dist/vX.Y.Z` matching the resolved version.
+#   B. `gh release download vX.Y.Z` for the resolved version.
 #   C. `gh release download <latest-published-tag>` (older fallback).
 #   D. Latest populated `dist/v*` cache (offline / gh missing).
 #
+# Target version is resolved from `origin/main` (branch-agnostic, never
+# touches the working tree); see the unix recipe docstring.
 # Prerequisite for B/C: `gh` CLI (winget install GitHub.cli).
 [windows]
 use:
     #!powershell
     Write-Host "[use] Installing UFFS binaries from dist/ cache..." -ForegroundColor Blue
 
-    # Read workspace version from Cargo.toml
-    $cargoVer = $null
-    $inPkg = $false
-    foreach ($line in Get-Content "Cargo.toml") {
-        if ($line -match '^\[workspace\.package\]') { $inPkg = $true; continue }
-        if ($inPkg -and $line -match '^version\s*=\s*"([^"]+)"') { $cargoVer = "v$($Matches[1])"; break }
-        if ($line -match '^\[' -and $inPkg) { break }
+    # Gather release facts (all read-only, all degrade gracefully) — see
+    # unix recipe.  Deliberately read-only: NEVER switches branches, touches
+    # the index, or modifies the working tree, so WIP / detached-HEAD state
+    # is safe.  Only side effect is `git fetch` updating remote-tracking refs
+    # under .git.  GIT_TERMINAL_PROMPT=0 makes a credential-less fetch fail
+    # fast instead of hanging on an auth prompt.
+    function Get-WorkspaceVersion($lines) {
+        $inPkg = $false
+        foreach ($line in $lines) {
+            if ($line -match '^\[workspace\.package\]') { $inPkg = $true; continue }
+            if ($inPkg -and $line -match '^version\s*=\s*"([^"]+)"') { return "v$($Matches[1])" }
+            if ($line -match '^\[' -and $inPkg) { break }
+        }
+        return $null
+    }
+    function Get-SemVer($text) {
+        if ($text -and ($text -match 'v?\d+\.\d+\.\d+')) { return "v$($Matches[0] -replace '^v','')" }
+        return $null
+    }
+
+    $ghAvailable = [bool](Get-Command gh -ErrorAction SilentlyContinue)
+    $binDir = Join-Path $env:USERPROFILE 'bin'
+    $binaries = @{
+        'uffs-windows-x64.exe' = 'uffs.exe'
+        'uffsd-windows-x64.exe' = 'uffsd.exe'
+        'uffsmcp-windows-x64.exe' = 'uffsmcp.exe'
+        'uffs-mft-windows-x64.exe' = 'uffs-mft.exe'
+    }
+
+    # 1. What origin/main wants (informational + offline-fallback target).
+    $mainCargo = $null
+    git rev-parse --is-inside-work-tree 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        git remote get-url origin 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $env:GIT_TERMINAL_PROMPT = "0"
+            git fetch --quiet origin main 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $mainCargo = (git show FETCH_HEAD:Cargo.toml 2>$null) }
+        }
+    }
+    if ($mainCargo) {
+        $mainVer = Get-WorkspaceVersion $mainCargo
+    } else {
+        $mainVer = Get-WorkspaceVersion (Get-Content "Cargo.toml")
+    }
+
+    # 2. Latest FINISHED published release (the primary install target).
+    $publishedVer = $null
+    $ghOk = $false
+    if ($ghAvailable) {
+        $publishedVer = Get-SemVer (gh release view --json tagName -q ".tagName" 2>$null)
+        if ($publishedVer) { $ghOk = $true }
+    }
+
+    # 3. In-flight release (queued / in_progress release.yml run); the run
+    #    title embeds the version, e.g. "UFFS Release v0.5.114".
+    $inflightVer = $null
+    if ($ghAvailable) {
+        $titles = gh run list --workflow=release.yml --limit 10 `
+            --json status,displayTitle `
+            -q ".[] | select(.status==`"in_progress`" or .status==`"queued`") | .displayTitle" 2>$null
+        $cands = @()
+        foreach ($t in @($titles)) { $sv = Get-SemVer $t; if ($sv) { $cands += $sv } }
+        if ($cands.Count -gt 0) {
+            $inflightVer = ($cands | Sort-Object { [version]($_ -replace '^v','') })[-1]
+        }
+    }
+
+    # 4. What's currently installed in ~/bin.
+    $installedVer = $null
+    $uffsExe = Join-Path $binDir 'uffs.exe'
+    if (Test-Path $uffsExe) { $installedVer = Get-SemVer (& $uffsExe --version 2>$null) }
+
+    # Target: latest published when online, else origin/main offline.
+    if ($ghOk) { $cargoVer = $publishedVer } else { $cargoVer = $mainVer }
+
+    # ── Status report ────────────────────────────────────────────────
+    Write-Host "  -- Release status --------------------------" -ForegroundColor Blue
+    Write-Host "    origin/main wants : $(if ($mainVer) {$mainVer} else {'unknown'})"
+    Write-Host "    latest published  : $(if ($publishedVer) {$publishedVer} else {'unknown (gh offline)'})"
+    Write-Host "    in flight (CI)    : $(if ($inflightVer) {$inflightVer} else {'none'})"
+    Write-Host "    installed (~/bin) : $(if ($installedVer) {$installedVer} else {'none'})"
+    Write-Host "  --------------------------------------------" -ForegroundColor Blue
+
+    # ── In-flight notice: a strictly-newer release is mid-build ──────
+    if ($inflightVer -and ($inflightVer -ne $publishedVer)) {
+        $infV = [version]($inflightVer -replace '^v','')
+        $pubV = if ($publishedVer) { [version]($publishedVer -replace '^v','') } else { [version]'0.0.0' }
+        if ($infV -gt $pubV) {
+            Write-Host "  IN FLIGHT: Release $inflightVer is building - not published yet." -ForegroundColor Yellow
+            $pubDisplay = if ($publishedVer) { $publishedVer } else { 'latest' }
+            Write-Host "    Installing current published $pubDisplay now; re-run 'just use' once $inflightVer lands." -ForegroundColor Yellow
+        }
+    }
+
+    # ── No-op: already on target with a complete install ─────────────
+    if ($installedVer -and $cargoVer -and ($installedVer -eq $cargoVer)) {
+        $allPresent = $true
+        foreach ($d in $binaries.Values) {
+            if (-not (Test-Path (Join-Path $binDir $d))) { $allPresent = $false; break }
+        }
+        if ($allPresent) {
+            Write-Host "  OK: Already up to date: $installedVer installed in ~/bin - nothing to do." -ForegroundColor Green
+            exit 0
+        }
+        Write-Host "  WARNING: $installedVer installed but some binaries are missing - reinstalling." -ForegroundColor Yellow
     }
 
     $distDir = $null
     $staleNote = ""
-    $ghAvailable = [bool](Get-Command gh -ErrorAction SilentlyContinue)
 
     # Helper: does `dir` exist AND contain at least one entry?
     function Test-Populated($path) {
@@ -429,7 +631,7 @@ use:
     } else {
         Write-Host "  Source: $distDir" -ForegroundColor Cyan
     }
-    $binDir = Join-Path $env:USERPROFILE 'bin'
+    # $binDir and $binaries were defined up top (gather block).
     if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 
     # Kill running UFFS processes before copying to avoid file locks.
@@ -442,12 +644,6 @@ use:
         }
     }
 
-    $binaries = @{
-        'uffs-windows-x64.exe' = 'uffs.exe'
-        'uffsd-windows-x64.exe' = 'uffsd.exe'
-        'uffsmcp-windows-x64.exe' = 'uffsmcp.exe'
-        'uffs-mft-windows-x64.exe' = 'uffs-mft.exe'
-    }
     $installed = 0; $skipped = 0
     foreach ($src in $binaries.Keys) {
         $srcPath = Join-Path $distDir $src
