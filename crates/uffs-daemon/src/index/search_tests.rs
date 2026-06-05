@@ -165,3 +165,44 @@ fn write_rows_to_file_ignores_pre_planted_predictable_tmp() {
     #[cfg(unix)]
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"DO NOT TOUCH");
 }
+
+// ── resolve_search_limit ───────────────────────────────────────────
+
+/// With no post-scan filter, the user's limit flows straight through so
+/// the backend can stop early (the common, cheap path).
+#[test]
+fn resolve_search_limit_passes_user_limit_when_no_post_filter() {
+    assert_eq!(
+        resolve_search_limit(false, false, false, Some(10)),
+        Some(10)
+    );
+    assert_eq!(resolve_search_limit(false, false, false, None), None);
+}
+
+/// A wire post-filter or a display-row filter lifts the cap so the
+/// post-scan pass can still satisfy the user's limit.
+#[test]
+fn resolve_search_limit_lifts_cap_for_post_and_display_filters() {
+    assert_eq!(resolve_search_limit(true, false, false, Some(10)), None);
+    assert_eq!(resolve_search_limit(false, true, false, Some(10)), None);
+}
+
+/// `--malformed` (near-zero hit rate) lifts the cap so name/regex/tree
+/// scans don't under-return.  Safe for match-all because
+/// `collect_global_top_n` filters during the heap scan.
+#[test]
+fn resolve_search_limit_lifts_cap_for_malformed_positive() {
+    assert_eq!(resolve_search_limit(false, false, true, Some(10)), None);
+}
+
+/// `--well-formed` (~100% hit rate) must NOT lift the cap: an unbounded
+/// match-all scan would admit the whole index into the heap.  The caller
+/// passes `malformed_positive = false` for `Some(false)`, so the user
+/// limit is preserved.
+#[test]
+fn resolve_search_limit_keeps_cap_for_well_formed() {
+    assert_eq!(
+        resolve_search_limit(false, false, false, Some(10)),
+        Some(10)
+    );
+}
