@@ -124,8 +124,13 @@ pub fn resolve_path_cached_with_malformed(
             break;
         };
 
-        let name = record.name(&drive.names);
-        if name.is_empty() || name == "." {
+        // Emptiness is judged on the LOSSLESS bytes, not the lossy `&str`:
+        // an ill-formed (surrogate) directory name has a non-empty byte form
+        // but an empty `&str` view, and must NOT be treated as a chain
+        // terminator — otherwise a crooked directory would truncate the path
+        // (and hide the malformity) of everything beneath it.
+        let bytes = record.name_bytes(&drive.names);
+        if bytes.is_empty() || bytes == b"." {
             break;
         }
 
@@ -144,11 +149,13 @@ pub fn resolve_path_cached_with_malformed(
         .iter()
         .filter_map(|&idx| {
             let rec = drive.records.get(idx)?;
-            let name = rec.name(&drive.names);
-            if name.is_empty() || name == "." {
+            let bytes = rec.name_bytes(&drive.names);
+            if bytes.is_empty() || bytes == b"." {
                 None
             } else {
-                Some(1 + name.len())
+                // `name()` (lossy) is what is pushed into the displayed path;
+                // reserve for its length, which may differ from `bytes.len()`.
+                Some(1 + rec.name(&drive.names).len())
             }
         })
         .sum();
@@ -164,13 +171,16 @@ pub fn resolve_path_cached_with_malformed(
         let Some(rec) = drive.records.get(idx) else {
             continue;
         };
-        let name = rec.name(&drive.names);
-        if name.is_empty() || name == "." {
+        let bytes = rec.name_bytes(&drive.names);
+        if bytes.is_empty() || bytes == b"." {
             continue;
         }
         // The single byte-level check: the lossless name bytes are not UTF-8.
-        let component_malformed = core::str::from_utf8(rec.name_bytes(&drive.names)).is_err();
+        let component_malformed = core::str::from_utf8(bytes).is_err();
         malformed |= component_malformed;
+        // Displayed component is the lossy view (ill-formed → empty segment),
+        // but the path STRUCTURE and the malformed bit reflect the true name.
+        let name = rec.name(&drive.names);
 
         if !path.ends_with('\\') && !path.is_empty() {
             path.push('\\');

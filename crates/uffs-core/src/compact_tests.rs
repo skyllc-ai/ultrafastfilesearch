@@ -635,3 +635,82 @@ fn crooked_surrogate_name_is_visible_in_compact_index() {
         "the search index must hold the true bytes, not a lossy replacement"
     );
 }
+
+// ── WI-4.4: forensic facts on the resolved DisplayRow ────────────────────
+//   A CLEAN-named file living under a CROOKED (surrogate-named) directory:
+//   its own leaf is well-formed (malformed=false) but its PATH is poisoned
+//   (malformed_path=true). This is the "clean file under a crooked dir is
+//   still flagged" guarantee, and it exercises the real search → resolve →
+//   row-forensics path end to end.
+
+#[test]
+fn clean_child_under_crooked_dir_is_path_malformed_not_leaf_malformed() {
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
+
+    // Root.
+    let root_name = push_name(&mut idx, ".");
+    let root = idx.get_or_create(ROOT_FRS.into());
+    root.stdinfo.set_directory(true);
+    root.first_name.name = root_name;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    // A directory whose NAME is ill-formed (lone surrogate), under root.
+    let crooked_dir = push_name_bytes(&mut idx, CROOKED_NAME_WTF8);
+    let dir = idx.get_or_create(500.into());
+    dir.stdinfo.set_directory(true);
+    dir.first_name.name = crooked_dir;
+    dir.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    // A CLEAN-named child file under the crooked directory.
+    let child_name = push_name(&mut idx, "report.txt");
+    let child = idx.get_or_create(501.into());
+    child.first_name.name = child_name;
+    child.first_name.parent_frs = Into::into(500);
+    child.first_stream.size = SizeInfo {
+        length: 42,
+        allocated: 64,
+    };
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+
+    // Match-all enumeration through the real search/resolve/forensics path.
+    let drives = vec![drive];
+    let mut filters = crate::search::filters::SearchFilters::default();
+    let (rows, _) = crate::search::query::collect_global_top_n(
+        &drives,
+        100,
+        crate::search::field::FieldId::Name,
+        false,
+        crate::search::backend::FilterMode::All,
+        &mut filters,
+    );
+
+    // The CLEAN child: leaf well-formed, but PATH malformed (ancestor crooked).
+    let child_row = rows
+        .iter()
+        .find(|row| row.name() == "report.txt")
+        .expect("clean-named child must be enumerated");
+    assert!(
+        !child_row.malformed,
+        "the child's own leaf name is well-formed"
+    );
+    assert!(
+        child_row.malformed_path,
+        "a clean file under a crooked directory must be flagged malformed_path"
+    );
+    // A clean leaf carries no name_hex evidence (only ill-formed leaves do).
+    assert!(child_row.name_hex.is_none());
+
+    // The crooked DIRECTORY itself: leaf malformed + name_hex evidence present.
+    // Its lossy `&str` view is empty, so match it by its true bytes via name_hex.
+    let dir_row = rows
+        .iter()
+        .find(|row| row.malformed)
+        .expect("the crooked directory must itself be enumerated and flagged");
+    assert!(dir_row.malformed_path);
+    assert_eq!(
+        dir_row.name_hex.as_deref(),
+        Some("6576696ceda0802e657865"),
+        "name_hex is the lowercase hex of the true WTF-8 bytes of `evil<D800>.exe`"
+    );
+}

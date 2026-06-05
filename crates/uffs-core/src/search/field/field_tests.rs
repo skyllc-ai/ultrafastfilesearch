@@ -434,3 +434,43 @@ fn field_id_matches_output_column_variant_count() {
         "FieldId::ALL and uffs_format::OutputColumn::ALL must have identical variant counts"
     );
 }
+
+// ── WI-4.4 forensic fields ───────────────────────────────────────────
+
+#[test]
+fn malformed_fields_parse_canonical_and_aliases() {
+    let cases = [
+        ("malformed", FieldId::Malformed),
+        ("ill_formed", FieldId::Malformed),
+        ("illformed", FieldId::Malformed),
+        ("malformed_path", FieldId::MalformedPath),
+        ("ill_formed_path", FieldId::MalformedPath),
+        ("name_hex", FieldId::NameHex),
+        ("namehex", FieldId::NameHex),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(FieldId::parse(input), Some(expected), "alias '{input}'");
+    }
+}
+
+#[test]
+fn malformed_field_metadata_shapes() {
+    // `malformed`: hot-path bool, filterable + sortable + projectable.
+    let m = FieldId::Malformed.metadata();
+    assert_eq!(m.field_type, FieldType::Bool);
+    assert_eq!(m.access, FieldAccess::Hot);
+    assert!(m.filterable && m.sortable && m.projectable);
+
+    // `malformed_path`: derived bool (post-filtered), still projectable.
+    let mp = FieldId::MalformedPath.metadata();
+    assert_eq!(mp.field_type, FieldType::Bool);
+    assert_eq!(mp.access, FieldAccess::Derived);
+    assert!(mp.filterable && mp.projectable);
+
+    // `name_hex`: projection-only string — never filtered or sorted.
+    let nh = FieldId::NameHex.metadata();
+    assert_eq!(nh.field_type, FieldType::String);
+    assert!(nh.projectable);
+    assert!(!nh.filterable, "name_hex must not be filterable");
+    assert!(!nh.sortable, "name_hex must not be sortable");
+}

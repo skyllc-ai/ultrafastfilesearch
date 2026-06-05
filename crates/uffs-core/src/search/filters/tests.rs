@@ -1165,3 +1165,6 @@ fn is_ext_only_false_with_type_filter() {
 
 #[path = "tests_ext.rs"]
 mod tests_ext;
+
+#[path = "tests_malformed.rs"]
+mod tests_malformed;

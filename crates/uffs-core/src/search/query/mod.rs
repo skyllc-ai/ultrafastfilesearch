@@ -6,6 +6,7 @@
 //! Per-drive search (trigram, regex, tree) and global top-N collection
 //! for match-all queries. Called by `MultiDriveBackend::search()`.
 
+mod numeric_sort_key;
 mod numeric_top_n;
 mod path_only_top_n;
 mod path_sorted_top_n;
