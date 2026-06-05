@@ -63,12 +63,13 @@ pub fn resolve_path_cached(
     resolve_path_inner(drive, record_idx, volume_prefix, Some(dir_cache))
 }
 
-/// Cache of "is this directory's resolved path ill-formed?" keyed by record
-/// index, parallel to [`DirCache`]. Kept separate so the existing string cache
-/// (and its many users) is untouched; both caches are consulted/filled in the
-/// same parent-chain walk by [`resolve_path_cached_with_malformed`], so the
-/// malformed bit stays coherent with the cached prefix even when the walk stops
-/// early at a cached ancestor.
+/// Cache of "is this directory's resolved path ill-formed?", keyed by record
+/// index, parallel to [`DirCache`].
+///
+/// Kept separate so the existing string cache (and its many users) is
+/// untouched; both caches are consulted/filled in the same parent-chain walk by
+/// [`resolve_path_cached_with_malformed`], so the malformed bit stays coherent
+/// with the cached prefix even when the walk stops early at a cached ancestor.
 pub type MalformedCache = FxHashMap<u32, bool>;
 
 /// Construct a [`MalformedCache`] with the given capacity.
@@ -77,9 +78,12 @@ pub(crate) fn malformed_cache_with_capacity(capacity: usize) -> MalformedCache {
     MalformedCache::with_capacity_and_hasher(capacity, FxBuildHasher)
 }
 
-/// Resolve a record's full path AND report whether any component of that path
-/// (including the leaf) is ill-formed UTF-16 (its true bytes are not valid
-/// UTF-8 — an unpaired surrogate). WI-4.4 forensic `malformed_path`.
+/// Resolve a record's full path, also reporting the WI-4.4 `malformed_path`
+/// bit.
+///
+/// `malformed_path` is `true` when any component of the resolved path
+/// (including the leaf) is ill-formed UTF-16 — its true bytes are not valid
+/// UTF-8 (an unpaired surrogate).
 ///
 /// Uses the same `dir_cache` as [`resolve_path_cached`] for the path string and
 /// a parallel `mal_cache` for the per-directory malformed bit, so the extra

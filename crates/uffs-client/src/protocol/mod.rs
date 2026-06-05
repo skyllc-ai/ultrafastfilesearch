@@ -404,6 +404,17 @@ pub struct SearchParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_months: Vec<u32>,
 
+    // ── WI-4.4 malformed-name filter ───────────────────────────────
+    /// Filter on whether the leaf name is ill-formed (not valid UTF-8).
+    /// `Some(true)` = only malformed names, `Some(false)` = only well-formed,
+    /// `None` = no filter. Emitted as a `malformed` predicate (hot-path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malformed: Option<bool>,
+    /// Filter on whether any path component is ill-formed. Emitted as a
+    /// `malformed_path` predicate (post-filter, since it is path-derived).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malformed_path: Option<bool>,
+
     // ── Misc ───────────────────────────────────────────────────────
     /// Hide system meta-files (names starting with `$`).
     #[serde(default)]
@@ -576,6 +587,8 @@ impl Default for SearchParams {
             min_tree_allocated: None,
             max_tree_allocated: None,
             allowed_months: vec![],
+            malformed: None,
+            malformed_path: None,
             hide_system: false,
             hide_ads: false,
             profile: false,

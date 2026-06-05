@@ -43,6 +43,7 @@ impl SearchParams {
         self.push_legacy_time_predicates(&mut predicates);
         self.push_extension_and_exclude(&mut predicates);
         self.push_attr_predicates(&mut predicates);
+        self.push_malformed_predicates(&mut predicates);
 
         // NOTE: `hide_system` is NOT emitted as a predicate.  It is already
         // compiled into the hot-path `SearchFilters.hide_system` flag by
@@ -178,6 +179,26 @@ impl SearchParams {
                 field: "attributes".to_owned(),
                 op: SearchPredicateOp::HasNone,
                 value: SearchPredicateValue::StringList(excluded),
+            });
+        }
+    }
+
+    /// Push the WI-4.4 malformed-name predicates from `--malformed` /
+    /// `--malformed-path`. `malformed` (leaf) compiles into the hot path on the
+    /// daemon; `malformed_path` is post-filtered (it is path-derived).
+    fn push_malformed_predicates(&self, predicates: &mut Vec<SearchPredicate>) {
+        if let Some(want) = self.malformed {
+            predicates.push(SearchPredicate {
+                field: "malformed".to_owned(),
+                op: SearchPredicateOp::Eq,
+                value: SearchPredicateValue::Bool(want),
+            });
+        }
+        if let Some(want) = self.malformed_path {
+            predicates.push(SearchPredicate {
+                field: "malformed_path".to_owned(),
+                op: SearchPredicateOp::Eq,
+                value: SearchPredicateValue::Bool(want),
             });
         }
     }

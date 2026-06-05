@@ -218,11 +218,7 @@ pub(super) fn collect_path_only_sorted_top_n<D: AsRef<DriveCompactIndex> + Sync>
 /// siblings — depth-first recursion in name-ASC.
 #[expect(
     clippy::too_many_arguments,
-    reason = "shared state between walk and emit: drive, roots, fold, filters, output"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "borrowed per-walk state incl. the parallel dir/malformed caches"
+    reason = "shared walk/emit state incl. the parallel dir + malformed caches"
 )]
 fn walk_drive_asc(
     drive: &DriveCompactIndex,
@@ -331,11 +327,7 @@ enum DescTask {
 /// to encode the "recurse-then-emit" phase ordering.
 #[expect(
     clippy::too_many_arguments,
-    reason = "shared state between walk and emit: drive, roots, fold, filters, output"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "borrowed per-walk state incl. the parallel dir/malformed caches"
+    reason = "shared walk/emit state incl. the parallel dir + malformed caches"
 )]
 fn walk_drive_desc(
     drive: &DriveCompactIndex,

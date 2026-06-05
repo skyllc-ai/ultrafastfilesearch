@@ -33,7 +33,9 @@ use super::super::field::FieldId;
 use super::super::filters::{SearchFilters, row_passes_filters};
 use super::super::tree::{self, DirCache, MalformedCache};
 use super::numeric_top_n::sort_indices_by_name;
-use super::{make_display_row, passes_filter_mode, row_forensics, stack_volume_prefix};
+use super::{
+    build_row_cached, make_display_row, passes_filter_mode, row_forensics, stack_volume_prefix,
+};
 use crate::compact::DriveCompactIndex;
 
 /// Target chunk size for parallel path resolution inside
@@ -332,21 +334,14 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 let mal_cache = local_mal_caches
                     .entry(drive_idx)
                     .or_insert_with(|| tree::malformed_cache_with_capacity(256));
-                let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+                local_rows.push(build_row_cached(
                     drive,
-                    rec_idx as usize,
+                    rec_idx,
+                    rec,
+                    name,
                     volume_prefix,
                     cache,
                     mal_cache,
-                );
-                let forensics = row_forensics(rec, &drive.names, path_malformed);
-                local_rows.push(make_display_row(
-                    rec_idx,
-                    drive.letter,
-                    rec,
-                    name,
-                    path,
-                    forensics,
                 ));
             }
             local_rows

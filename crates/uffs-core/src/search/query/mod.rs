@@ -563,6 +563,29 @@ pub(super) fn make_display_row(
     )
 }
 
+/// Resolve `rec_idx`'s path (with the malformed-path bit) using the supplied
+/// caches, compute its forensic facts, and build the `DisplayRow` — the shared
+/// "resolve → forensics → row" step used by the cached par-chunk row builders.
+pub(super) fn build_row_cached(
+    drive: &DriveCompactIndex,
+    rec_idx: u32,
+    rec: &CompactRecord,
+    name: &str,
+    volume_prefix: &str,
+    dir_cache: &mut tree::DirCache,
+    mal_cache: &mut tree::MalformedCache,
+) -> DisplayRow {
+    let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+        drive,
+        rec_idx as usize,
+        volume_prefix,
+        dir_cache,
+        mal_cache,
+    );
+    let forensics = row_forensics(rec, &drive.names, path_malformed);
+    make_display_row(rec_idx, drive.letter, rec, name, path, forensics)
+}
+
 /// WI-4.4 forensic facts computed against a record's lossless name bytes at
 /// result-materialization time (the one place with both the record and the
 /// WTF-8 `names` arena). Bundled so [`make_display_row`] keeps a small arg
@@ -598,22 +621,23 @@ pub(super) fn row_forensics(
         // A path is malformed if any ancestor is OR the leaf itself is.
         malformed_path: path_malformed || malformed,
         // Evidence hex only for ill-formed leaves (rare → near-zero cost).
-        name_hex: if malformed {
-            Some(hex_encode(bytes))
-        } else {
-            None
-        },
+        name_hex: malformed.then(|| hex_encode(bytes)),
     }
 }
 
 /// Lowercase, separator-free hex of `bytes` (e.g. `[0xED,0xA0,0x80]` →
 /// `"eda080"`). The forensic evidence form: compact, diffable, and
-/// `xxd -r -p`-decodable. `format!` is allowed (no panic path).
+/// `xxd -r -p`-decodable.
 #[must_use]
 fn hex_encode(bytes: &[u8]) -> String {
+    /// Lowercase hex digit for a 0..=15 nibble (out-of-range → '?').
+    fn nibble(value: u8) -> char {
+        char::from_digit(u32::from(value), 16).unwrap_or('?')
+    }
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        out.push(nibble(byte >> 4));
+        out.push(nibble(byte & 0x0F));
     }
     out
 }

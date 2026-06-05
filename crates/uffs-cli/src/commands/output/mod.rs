@@ -383,6 +383,14 @@ static COL_TABLE: &[ColDef] = &[
     ("attributes", &["parity_attributes"], "Attributes"),
     ("attribute_value", &[], "AttributeValue"),
     ("flags", &[], "Flags"),
+    // WI-4.4 forensic columns (opt-in; never in `--columns all`).
+    ("malformed", &["ill_formed", "illformed"], "Malformed"),
+    (
+        "malformed_path",
+        &["malformedpath", "ill_formed_path"],
+        "Malformed Path",
+    ),
+    ("name_hex", &["namehex"], "Name (hex)"),
 ];
 
 /// Column order used when `--columns all` is specified (matches
@@ -477,7 +485,9 @@ fn resolve_columns(columns: &str) -> Vec<&'static str> {
 fn is_quoted_column(canonical: &str) -> bool {
     matches!(
         canonical,
-        "path" | "name" | "path_only" | "type" | "extension"
+        // `name_hex` is a string column (quoted in uffs_format::writer); the
+        // malformed bools render as raw 0/1 like the attribute-flag columns.
+        "path" | "name" | "path_only" | "type" | "extension" | "name_hex"
     )
 }
 
@@ -627,6 +637,13 @@ fn extract_field(row: &Value, field: &str, tz_offset_secs: i32) -> String {
         "virtual" => flag_bit(flags, 0x0001_0000),
         "attributes" | "parity_attributes" => (flags & parity_flags::PARITY_MASK).to_string(),
         "attribute_value" | "flags" => flags.to_string(),
+        // WI-4.4 forensic columns. The booleans render 0/1 in their own
+        // column (like the attribute flags), read from the daemon-projected
+        // JSON — never recomputed from `name`/`path` (those are the already-
+        // lossy view, always valid UTF-8, which would always read 0/empty).
+        "malformed" => if vb(row, "malformed") { "1" } else { "0" }.to_owned(),
+        "malformed_path" => if vb(row, "malformed_path") { "1" } else { "0" }.to_owned(),
+        "name_hex" => vs(row, "name_hex"),
         _ => String::new(),
     }
 }

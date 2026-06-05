@@ -51,6 +51,10 @@ impl SearchParams {
                 "--dirs-only" => raw.dirs_only = true,
                 "--hide-system" => raw.hide_system = true,
                 "--hide-ads" => raw.hide_ads = true,
+                // WI-4.4 forensic filters: find ill-formed (non-UTF-8) names.
+                "--malformed" => raw.malformed = Some(true),
+                "--well-formed" => raw.malformed = Some(false),
+                "--malformed-path" => raw.malformed_path = Some(true),
                 "--profile" => raw.profile = true,
                 "--benchmark" => raw.benchmark = true,
                 "--no-cache" => raw.no_cache = true,
@@ -299,6 +303,11 @@ struct RawCliArgs {
     dirs_only: bool,
     hide_system: bool,
     hide_ads: bool,
+    /// WI-4.4: `Some(true)` from `--malformed`, `Some(false)` from
+    /// `--well-formed`, `None` if neither (no filter).
+    malformed: Option<bool>,
+    /// WI-4.4: `Some(true)` from `--malformed-path`.
+    malformed_path: Option<bool>,
     profile: bool,
     benchmark: bool,
     no_cache: bool,
@@ -699,6 +708,9 @@ impl RawCliArgs {
             max_tree_allocated: self.max_tree_allocated,
             // Month
             allowed_months,
+            // WI-4.4 malformed-name filters
+            malformed: self.malformed,
+            malformed_path: self.malformed_path,
             // Misc
             hide_system: self.hide_system,
             hide_ads: self.hide_ads,
