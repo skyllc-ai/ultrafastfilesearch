@@ -775,6 +775,11 @@ impl SearchFilters {
             && self.min_tree_allocated.is_none()
             && self.max_tree_allocated.is_none()
             && self.allowed_months.is_empty()
+            // WI-4.4: a malformed-name toggle (`--malformed` / `--well-formed`)
+            // is a real filter — omitting it here makes the numeric match-all
+            // gate (`has_filters = !is_empty()`) skip `matches_record`, so the
+            // filter silently no-ops on `uffs "*" --malformed`.
+            && self.malformed.is_none()
     }
 }
 

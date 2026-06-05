@@ -551,6 +551,77 @@ fn apply_type_filter_rejects_wrong_extension() {
     assert_eq!(rows.first().expect("rows non-empty").name(), "main.rs");
 }
 
+/// WI-4.4 regression: the `DisplayRow` filter path (Path/PathOnly tree-walk and
+/// the regex/trigram post-filter pass) must honor `--malformed` /
+/// `--well-formed`. Before the fix `is_empty()` ignored `malformed`, so
+/// `apply_search_filters` early-returned, and `row_passes_filters` had no
+/// malformed arm — the toggle silently no-opped.
+#[test]
+fn apply_malformed_filter_keeps_only_ill_formed_rows() {
+    let bad = DisplayRow::new(
+        0,
+        uffs_mft::platform::DriveLetter::C,
+        "C:\\dir\\\u{fffd}.txt".to_owned(),
+        100,
+        false,
+        0,
+        0,
+        0,
+        0x20,
+        4096,
+        0,
+        0,
+        0,
+    )
+    .with_forensics(true, true, None);
+    let good = DisplayRow::new(
+        0,
+        uffs_mft::platform::DriveLetter::C,
+        "C:\\dir\\readme.txt".to_owned(),
+        100,
+        false,
+        0,
+        0,
+        0,
+        0x20,
+        4096,
+        0,
+        0,
+        0,
+    )
+    .with_forensics(false, false, None);
+
+    let mut keep_malformed = vec![bad.clone(), good.clone()];
+    apply_search_filters(&mut keep_malformed, &SearchFilters {
+        malformed: Some(true),
+        ..Default::default()
+    });
+    assert_eq!(
+        keep_malformed.len(),
+        1,
+        "only the ill-formed row should remain"
+    );
+    assert!(
+        keep_malformed.first().expect("row kept").malformed,
+        "kept row must be the malformed one"
+    );
+
+    let mut keep_well_formed = vec![bad, good];
+    apply_search_filters(&mut keep_well_formed, &SearchFilters {
+        malformed: Some(false),
+        ..Default::default()
+    });
+    assert_eq!(
+        keep_well_formed.len(),
+        1,
+        "only the well-formed row should remain"
+    );
+    assert!(
+        !keep_well_formed.first().expect("row kept").malformed,
+        "kept row must be the well-formed one"
+    );
+}
+
 /// Regression T88h/T95: --in-path filter must match resolved path substring.
 #[test]
 fn apply_path_contains_filters_by_substring() {

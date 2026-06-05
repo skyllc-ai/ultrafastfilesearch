@@ -120,3 +120,31 @@ fn malformed_filter_uses_lossless_bytes_not_lossy_view() {
     };
     assert!(filters.matches_record(&bad, &names, &mut Vec::new(), CaseFold::default_table()));
 }
+
+#[test]
+fn malformed_makes_is_empty_false() {
+    // Regression: a malformed-only query must NOT count as "no filters".
+    // The numeric match-all gate is `has_filters = !is_empty()`, so if
+    // `is_empty()` ignored `malformed`, `matches_record` would be skipped and
+    // `uffs "*" --malformed` would return every (well-formed) record.
+    assert!(
+        SearchFilters::default().is_empty(),
+        "default has no filters"
+    );
+    assert!(
+        !SearchFilters {
+            malformed: Some(true),
+            ..Default::default()
+        }
+        .is_empty(),
+        "--malformed must register as an active filter"
+    );
+    assert!(
+        !SearchFilters {
+            malformed: Some(false),
+            ..Default::default()
+        }
+        .is_empty(),
+        "--well-formed must register as an active filter"
+    );
+}

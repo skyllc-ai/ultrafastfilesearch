@@ -43,6 +43,15 @@ pub(crate) fn row_passes_filters(
     if filters.hide_ads && row.name().contains(':') {
         return false;
     }
+    // WI-4.4: malformed-name toggle for the DisplayRow paths (Path/PathOnly
+    // tree-walk and the regex/trigram post-filter pass). The `malformed` bit
+    // is precomputed against the lossless name bytes in `make_display_row`, so
+    // we read the carrier here rather than re-deriving from the lossy `path`.
+    if let Some(want) = filters.malformed
+        && row.malformed != want
+    {
+        return false;
+    }
     if let Some(min) = filters.min_size
         && row.size < min
     {
