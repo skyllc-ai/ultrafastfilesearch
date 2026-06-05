@@ -122,6 +122,82 @@ pub(super) fn classify_usn_state(
     }
 }
 
+/// Default ceiling, in seconds, for serving a freshly-loaded cache whose
+/// drive has **no active USN journal**.  Without a journal there is no
+/// incremental-update mechanism, so a cache older than this is rebuilt from
+/// a full MFT read rather than served stale.  Chosen to track the daemon's
+/// 300 s USN refresh cadence (`shards.usn_refresh_interval_secs`).
+#[cfg(any(windows, test))]
+const NO_JOURNAL_MAX_AGE_SECS_DEFAULT: u64 = 300;
+
+/// Parse a raw `UFFS_NO_JOURNAL_MAX_AGE_SECS` value into an effective ceiling,
+/// falling back to [`NO_JOURNAL_MAX_AGE_SECS_DEFAULT`] when the value is absent
+/// or not a valid `u64`.  Split from [`no_journal_max_age_secs`] so the
+/// override-parsing logic is host-testable without mutating process env.
+#[cfg(any(windows, test))]
+fn parse_no_journal_max_age(raw: Option<&str>) -> u64 {
+    raw.and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(NO_JOURNAL_MAX_AGE_SECS_DEFAULT)
+}
+
+/// Effective no-journal cache-age ceiling, honouring the
+/// `UFFS_NO_JOURNAL_MAX_AGE_SECS` environment override.  Falls back to
+/// [`NO_JOURNAL_MAX_AGE_SECS_DEFAULT`] when the variable is unset or
+/// unparseable.
+#[cfg(windows)]
+pub(super) fn no_journal_max_age_secs() -> u64 {
+    parse_no_journal_max_age(
+        std::env::var("UFFS_NO_JOURNAL_MAX_AGE_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Pure boundary predicate: a no-journal cache strictly older than
+/// `max_age_seconds` must be rebuilt; at or under the ceiling it is served
+/// as-is.  Extracted so the off-by-one boundary (`>`, not `>=`) is pinned by a
+/// host test independent of the Windows-only [`UsnDecision`] mapping.
+#[cfg(any(windows, test))]
+const fn no_journal_cache_is_stale(age_seconds: u64, max_age_seconds: u64) -> bool {
+    age_seconds > max_age_seconds
+}
+
+/// Decide what to do with a freshly-loaded cache when the drive's USN
+/// journal is **unavailable** (e.g. `query_usn_journal` returned
+/// os error 1179 — "the volume change journal is not active").
+///
+/// Without a journal there is no incremental refresh path, so the cache's
+/// own age is the only freshness evidence:
+/// - within [`no_journal_max_age_secs`] → [`UsnDecision::UseCached`] (serve
+///   as-is; a full rescan would dominate latency for a sub-window cache).
+/// - older than the ceiling → [`UsnDecision::Rebuild`] (full MFT read) so files
+///   created since the snapshot cannot stay invisible until the long safety-net
+///   TTL elapses.
+#[cfg(windows)]
+pub(super) fn classify_without_journal(
+    drive: crate::platform::DriveLetter,
+    age_seconds: u64,
+) -> UsnDecision {
+    let max_age = no_journal_max_age_secs();
+    if no_journal_cache_is_stale(age_seconds, max_age) {
+        warn!(
+            drive = %drive,
+            age_seconds,
+            max_age_seconds = max_age,
+            "🔄 USN Journal unavailable and cache past no-journal window - rebuilding index"
+        );
+        UsnDecision::Rebuild
+    } else {
+        warn!(
+            drive = %drive,
+            age_seconds,
+            max_age_seconds = max_age,
+            "⚠️ USN Journal unavailable - serving cache within no-journal window"
+        );
+        UsnDecision::UseCached
+    }
+}
+
 /// Issue targeted MFT reads for the FRSes the delete pass left behind so
 /// non-delete changes can be folded into `index`.  Failures are logged but
 /// do not abort the wider USN-update flow — the next refresh will pick up
@@ -211,5 +287,64 @@ pub(super) fn persist_usn_checkpoint(
             next_usn = %next_usn,
             "💾 Cache updated with new USN checkpoint"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        NO_JOURNAL_MAX_AGE_SECS_DEFAULT, no_journal_cache_is_stale, parse_no_journal_max_age,
+    };
+
+    #[test]
+    fn no_journal_cache_below_ceiling_is_served() {
+        assert!(!no_journal_cache_is_stale(
+            0,
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT
+        ));
+        assert!(!no_journal_cache_is_stale(
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT - 1,
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT,
+        ));
+    }
+
+    #[test]
+    fn no_journal_cache_at_ceiling_is_not_stale() {
+        // Boundary is strictly `>`, so age == ceiling is still fresh.
+        assert!(!no_journal_cache_is_stale(
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT,
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT,
+        ));
+    }
+
+    #[test]
+    fn no_journal_cache_above_ceiling_is_stale() {
+        // One second past the ceiling forces a rebuild.
+        assert!(no_journal_cache_is_stale(
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT + 1,
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT,
+        ));
+    }
+
+    #[test]
+    fn parse_no_journal_max_age_uses_default_when_absent() {
+        assert_eq!(
+            parse_no_journal_max_age(None),
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn parse_no_journal_max_age_uses_default_when_unparseable() {
+        assert_eq!(
+            parse_no_journal_max_age(Some("not-a-number")),
+            NO_JOURNAL_MAX_AGE_SECS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn parse_no_journal_max_age_honours_override() {
+        assert_eq!(parse_no_journal_max_age(Some("600")), 600);
+        assert_eq!(parse_no_journal_max_age(Some("0")), 0);
     }
 }

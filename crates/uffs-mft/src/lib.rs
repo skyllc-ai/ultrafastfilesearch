@@ -118,6 +118,7 @@
 //! | `RUST_LOG_FILE` | `path` | (none) | Optional log-file path override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
 //! | `UFFS_LOG_DIR` | `path` | platform default | Log directory override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
 //! | `UFFS_CACHE_PROFILE` | `bool` (`env::var_os(…).is_some()`) | `false` (unset) | Emits per-phase cache I/O timings to stderr (`[CACHE_PROFILE]` prefix) from `cache`, `index/storage/{deserialize,file_io}`, and `reader/persistence`.  Dev / benchmark only.  INTERNAL semver class. |
+//! | `UFFS_NO_JOURNAL_MAX_AGE_SECS` | `u64` (seconds) | `300` | Max age a cached index is served when the drive has **no active USN journal** (os error 1179); older caches trigger a full MFT rebuild instead of serving stale, in `reader::usn_apply`.  INTERNAL semver class. |
 //! | `UFFS_MFT_TEST_DIR` | `path` | (none) | Optional test-fixture directory for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
 //! | `UFFS_MFT_TEST_FILE` | `path` | (none) | Optional test-fixture file path for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
 //! | `UFFS_PARITY_DEBUG` | `bool` | `false` | Enables verbose chaos-order parity debugging in the LIVE parser (`io::readers::parallel::to_index`).  INTERNAL semver class (dev only). |

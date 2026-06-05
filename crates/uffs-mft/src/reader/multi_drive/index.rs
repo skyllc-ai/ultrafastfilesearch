@@ -15,7 +15,7 @@ use crate::index::{IndexHeader, MftIndex};
 use crate::platform::VolumeHandle;
 use crate::reader::usn_apply::{
     UsnDecision, apply_targeted_usn_reads, classify_usn_state as classify_with_journal_info,
-    persist_usn_checkpoint, rebuild_derived_after_usn,
+    classify_without_journal, persist_usn_checkpoint, rebuild_derived_after_usn,
 };
 use crate::reader::{MftProgress, MftReader};
 use crate::usn::{aggregate_changes, query_usn_journal, read_usn_journal};
@@ -82,35 +82,7 @@ impl MultiDriveMftReader {
             if let Some(drive) = pending_drives.next() {
                 let ttl = ttl_seconds;
 
-                join_set.spawn(async move {
-                    match check_cache_status(drive, ttl) {
-                        CacheStatus::Fresh {
-                            index,
-                            header,
-                            age_seconds,
-                        } => {
-                            info!(
-                                drive = %drive,
-                                age_seconds,
-                                records = index.len(),
-                                "📦 Cache HIT - applying USN updates"
-                            );
-                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
-                        }
-                        CacheStatus::Stale { age_seconds } => {
-                            info!(
-                                drive = %drive,
-                                age_seconds = ?age_seconds,
-                                "🔄 Cache STALE - rebuilding index"
-                            );
-                            Self::read_and_cache_single_drive(drive).await
-                        }
-                        CacheStatus::Missing => {
-                            info!(drive = %drive, "🆕 Cache MISS - building index");
-                            Self::read_and_cache_single_drive(drive).await
-                        }
-                    }
-                });
+                join_set.spawn(async move { Self::load_one_cached_drive(drive, ttl).await });
             }
         }
 
@@ -132,35 +104,7 @@ impl MultiDriveMftReader {
             if let Some(drive) = pending_drives.next() {
                 let ttl = ttl_seconds;
 
-                join_set.spawn(async move {
-                    match check_cache_status(drive, ttl) {
-                        CacheStatus::Fresh {
-                            index,
-                            header,
-                            age_seconds,
-                        } => {
-                            info!(
-                                drive = %drive,
-                                age_seconds,
-                                records = index.len(),
-                                "📦 Cache HIT - applying USN updates"
-                            );
-                            Self::apply_usn_updates_to_cached_index(drive, index, header).await
-                        }
-                        CacheStatus::Stale { age_seconds } => {
-                            info!(
-                                drive = %drive,
-                                age_seconds = ?age_seconds,
-                                "🔄 Cache STALE - rebuilding index"
-                            );
-                            Self::read_and_cache_single_drive(drive).await
-                        }
-                        CacheStatus::Missing => {
-                            info!(drive = %drive, "🆕 Cache MISS - building index");
-                            Self::read_and_cache_single_drive(drive).await
-                        }
-                    }
-                });
+                join_set.spawn(async move { Self::load_one_cached_drive(drive, ttl).await });
             }
         }
 
@@ -172,6 +116,56 @@ impl MultiDriveMftReader {
         }
 
         Ok(indices)
+    }
+
+    /// Load a single drive's index honouring the cache.
+    ///
+    /// Fresh caches are served after applying USN updates (which themselves
+    /// fall back to a rebuild when the journal is unavailable and the cache
+    /// has aged past the no-journal window); stale or missing caches trigger
+    /// a full rebuild.
+    async fn load_one_cached_drive(
+        drive: crate::platform::DriveLetter,
+        ttl_seconds: u64,
+    ) -> Result<MftIndex> {
+        match check_cache_status(drive, ttl_seconds) {
+            CacheStatus::Fresh {
+                index,
+                header,
+                age_seconds,
+            } => Self::serve_fresh_cache(drive, index, header, age_seconds).await,
+            CacheStatus::Stale { age_seconds } => {
+                info!(
+                    drive = %drive,
+                    age_seconds = ?age_seconds,
+                    "🔄 Cache STALE - rebuilding index"
+                );
+                Self::read_and_cache_single_drive(drive).await
+            }
+            CacheStatus::Missing => {
+                info!(drive = %drive, "🆕 Cache MISS - building index");
+                Self::read_and_cache_single_drive(drive).await
+            }
+        }
+    }
+
+    /// Serve a fresh cached `index` for `drive`, applying any pending USN
+    /// updates before returning it.  Split out of
+    /// [`Self::load_one_cached_drive`] to keep that dispatcher under the
+    /// cognitive-complexity bar.
+    async fn serve_fresh_cache(
+        drive: crate::platform::DriveLetter,
+        index: MftIndex,
+        header: IndexHeader,
+        age_seconds: u64,
+    ) -> Result<MftIndex> {
+        info!(
+            drive = %drive,
+            age_seconds,
+            records = index.len(),
+            "📦 Cache HIT - applying USN updates"
+        );
+        Self::apply_usn_updates_to_cached_index(drive, index, header, age_seconds).await
     }
 
     /// Internal implementation for concurrent lean index reading.
@@ -291,9 +285,10 @@ impl MultiDriveMftReader {
         drive: crate::platform::DriveLetter,
         index: MftIndex,
         header: IndexHeader,
+        age_seconds: u64,
     ) -> Result<MftIndex> {
         tokio::task::spawn_blocking(move || {
-            Self::apply_usn_updates_to_cached_index_sync(drive, index, &header)
+            Self::apply_usn_updates_to_cached_index_sync(drive, index, &header, age_seconds)
         })
         .await
         .map_err(|error| MftError::InvalidInput(format!("Task join error: {error}")))?
@@ -304,8 +299,9 @@ impl MultiDriveMftReader {
         drive: crate::platform::DriveLetter,
         index: MftIndex,
         header: &IndexHeader,
+        age_seconds: u64,
     ) -> Result<MftIndex> {
-        match Self::classify_usn_state(drive, header) {
+        match Self::classify_usn_state(drive, header, age_seconds) {
             UsnDecision::UseCached => Ok(index),
             UsnDecision::Rebuild => Self::read_and_cache_single_drive_sync(drive),
             UsnDecision::Apply {
@@ -322,11 +318,15 @@ impl MultiDriveMftReader {
     ///
     /// Thin adapter over [`crate::reader::usn_apply::classify_usn_state`]
     /// that handles the `query_usn_journal` failure path here: when the
-    /// journal is unavailable we fall back to [`UsnDecision::UseCached`]
-    /// so the cached index is still served instead of erroring out.
+    /// journal is unavailable the decision is delegated to
+    /// [`classify_without_journal`], which rebuilds a cache older than the
+    /// no-journal window (`age_seconds` vs
+    /// [`crate::reader::usn_apply::no_journal_max_age_secs`]) and otherwise
+    /// serves it as-is.
     fn classify_usn_state(
         drive: crate::platform::DriveLetter,
         header: &IndexHeader,
+        age_seconds: u64,
     ) -> UsnDecision {
         match query_usn_journal(drive) {
             Ok(info) => classify_with_journal_info(drive, header, &info),
@@ -334,9 +334,9 @@ impl MultiDriveMftReader {
                 warn!(
                     drive = %drive,
                     error = %error,
-                    "⚠️ USN Journal unavailable - using cached index as-is"
+                    "⚠️ USN Journal unavailable - evaluating cache age"
                 );
-                UsnDecision::UseCached
+                classify_without_journal(drive, age_seconds)
             }
         }
     }
