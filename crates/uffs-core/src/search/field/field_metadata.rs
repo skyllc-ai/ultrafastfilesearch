@@ -883,7 +883,11 @@ impl FieldId {
                     default_top: 0,
                 },
             },
-            // ── WI-4.4 forensic name-validity fields (opt-in, never default) ──
+            // ── WI-4.4 forensic name-validity fields ──────────────────────
+            // Opt-in only on the `--columns` (CSV/columnar) surface — none of
+            // these are in `BASELINE_COLUMN_ORDER`. The `--format json`
+            // surface emits `malformed`/`malformed_path` always and `name_hex`
+            // for every malformed row, independent of this projection metadata.
             // `malformed` is a hot-path bool computed against the lossless name
             // bytes (`name_bytes`), modelled on the `hidden`/`readonly` flags.
             Self::Malformed => FieldMeta {
@@ -932,8 +936,9 @@ impl FieldId {
                     default_top: 2,
                 },
             },
-            // `name_hex` is a projection-only string (the true name bytes as
-            // hex); never filtered or sorted, never aggregated.
+            // `name_hex` is the true name bytes as hex; never filtered, sorted,
+            // or aggregated. Opt-in as a `--columns` text column, but carried
+            // by default in JSON for malformed rows (see `RowForensics`).
             Self::NameHex => FieldMeta {
                 id: self,
                 canonical_name: "name_hex",

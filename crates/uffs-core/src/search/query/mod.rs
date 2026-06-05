@@ -596,7 +596,7 @@ pub(super) struct RowForensics {
     pub malformed: bool,
     /// Some component of the resolved path is ill-formed (⊇ `malformed`).
     pub malformed_path: bool,
-    /// Hex of the true (WTF-8) leaf bytes; `Some` only when projected.
+    /// Hex of the true (WTF-8) leaf bytes; `Some` only for malformed leaves.
     pub name_hex: Option<String>,
 }
 

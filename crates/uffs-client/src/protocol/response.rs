@@ -508,7 +508,12 @@ pub struct SearchRow {
     #[serde(default)]
     pub malformed_path: bool,
     /// WI-4.4 forensic evidence: hex of the true (WTF-8) leaf-name bytes.
-    /// Present only when the `name_hex` column is projected; omitted otherwise.
+    /// `Some` for every malformed row, `None` otherwise — it is keyed on
+    /// name validity, not on column projection. `skip_serializing_if` drops
+    /// the `None` case so well-formed rows stay lean, but malformed rows
+    /// carry `name_hex` in `--format json` by DEFAULT (no `--columns`
+    /// needed). The CSV/columnar surface still treats it as an opt-in
+    /// column (it is not in `BASELINE_COLUMN_ORDER`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_hex: Option<String>,
 }

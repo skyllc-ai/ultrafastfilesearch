@@ -22,14 +22,21 @@
 // searchable marker token (default `UFFSZZQ`) so the whole set is recoverable
 // in one query:
 //
-//     uffs search UFFSZZQ --drives G
+//     uffs UFFSZZQ --drives G
 //
 // **The point.** UFFS's WI-4.4 work claims a malicious actor cannot hide a file
 // from UFFS behind an ill-formed name. This script manufactures exactly those
-// files so you can PROVE it: count how many you created, then count how many
-// UFFS finds by the common marker. They must match. If a surrogate-named file
-// is missing from the UFFS result, it was hidden — and that is the bug WI-4.4
-// exists to prevent.
+// files so you can PROVE it, with `--verify` running two complementary proofs:
+//
+//   Proof 1 (well-formed names): `uffs <marker>` must report every well-formed
+//     entry by its marker substring (its lossy &str view is faithful).
+//   Proof 2 (ill-formed names): `uffs * --malformed` must return every
+//     surrogate-bearing entry, matched by its forensic `name_hex` (the lossless
+//     WTF-8 bytes), because an ill-formed name's lossy &str view is empty and
+//     thus carries no searchable marker text.
+//
+// If any planted name is missing from its proof, it was hidden — and that is
+// exactly the bug WI-4.4 exists to prevent.
 //
 // **Why a raw Win32 path for the corrupted names.** Rust's `std::fs` ultimately
 // hands the OS a UTF-16 path, but the public API channels names through `Path`/
@@ -68,9 +75,9 @@
 // **Proving it WITH UFFS, automatically.** `--verify` enumerates the on-disk
 // entries (ground truth), then runs two cross-checks and exits non-zero on any
 // failure:
-//   1. `uffs search <marker> --filter all` — every on-disk name MUST appear
+//   1. `uffs <marker>` — every on-disk name MUST appear
 //      (nothing is hidden behind a crooked name).
-//   2. `uffs search * --malformed` — must return EXACTLY the ill-formed
+//   2. `uffs * --malformed` — must return EXACTLY the ill-formed
 //      entries on disk (the forensic malformed-name filter finds the crooked
 //      names and only those).
 // This is the WI-4.4 findability claim AND the --malformed filter, checked in
@@ -126,7 +133,7 @@ struct Cli {
     #[arg(long)]
     list: bool,
 
-    /// Run `uffs search <marker>` and compare what UFFS finds against what is
+    /// Run `uffs <marker>` and compare what UFFS finds against what is
     /// actually on disk. Exits non-zero if UFFS hides any on-disk entry — the
     /// WI-4.4 findability claim, checked automatically. Implies the tree already
     /// exists (run without flags first to create it).
@@ -473,7 +480,7 @@ fn print_footer(drive: &char, marker: &str, created: usize, planned: usize) {
     println!();
     println!(
         "  Manual: {}",
-        format!("uffs search {marker} --drives {drive} --filter all --limit 200").cyan()
+        format!("uffs {marker} --drives {drive} --limit 200").cyan()
     );
     println!(
         "      expected: {} results (every created name embeds the marker). If a \
@@ -728,6 +735,17 @@ mod windows_impl {
         pub fn is_ill_formed(&self) -> bool {
             has_unpaired_surrogate(&self.name_utf16)
         }
+        /// Lowercase, separator-free hex of the name's lossless WTF-8 bytes —
+        /// the exact value UFFS reports as `name_hex` for an ill-formed row
+        /// (its `name_bytes` are WTF-8, hex-encoded the same way; e.g. a lone
+        /// U+D800 → `eda080`). This is the forensic ground truth the
+        /// `--malformed` cross-check compares UFFS's output against.
+        pub fn wtf8_hex(&self) -> String {
+            wtf8_from_utf16(&self.name_utf16)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        }
     }
 
     /// Enumerate the real entries in `root_win` via `FindFirstFileW`/
@@ -853,6 +871,61 @@ mod windows_impl {
         false
     }
 
+    /// Encode a UTF-16 sequence (which may contain unpaired surrogates) as
+    /// WTF-8 — the same lossless byte form UFFS stores in `name_bytes` and
+    /// reports (hex-encoded) as `name_hex`. A valid surrogate pair decodes to
+    /// its astral scalar (4-byte UTF-8); a lone surrogate (`0xD800..=0xDFFF`)
+    /// is emitted as its 3-byte generalised-UTF-8 form (e.g. U+D800 →
+    /// `ED A0 80`); every other code unit encodes as ordinary UTF-8. This is
+    /// the script-side mirror of `uffs-mft`'s `wtf8_from_utf16le`.
+    fn wtf8_from_utf16(units: &[u16]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0_usize;
+        while i < units.len() {
+            let u = units[i];
+            let cp: u32 = if (0xD800..=0xDBFF).contains(&u) {
+                // High surrogate: decode the pair only if a low surrogate
+                // immediately follows; otherwise emit the lone high verbatim.
+                match units.get(i + 1) {
+                    Some(&low) if (0xDC00..=0xDFFF).contains(&low) => {
+                        i += 2;
+                        0x1_0000 + (((u as u32 - 0xD800) << 10) | (low as u32 - 0xDC00))
+                    }
+                    _ => {
+                        i += 1;
+                        u as u32 // lone high surrogate → 3-byte WTF-8
+                    }
+                }
+            } else {
+                i += 1;
+                u as u32 // BMP scalar or lone low surrogate
+            };
+            encode_wtf8_scalar(cp, &mut out);
+        }
+        out
+    }
+
+    /// Push the generalised-UTF-8 (WTF-8) bytes of a single code point. Unlike
+    /// `char::encode_utf8`, this accepts surrogate code points
+    /// (`0xD800..=0xDFFF`) so lone surrogates round-trip losslessly.
+    fn encode_wtf8_scalar(cp: u32, out: &mut Vec<u8>) {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x1_0000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            out.push(0xF0 | (cp >> 18) as u8);
+            out.push(0x80 | ((cp >> 12) & 0x3F) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        }
+    }
+
     /// Resolve the `uffs` binary: explicit `--bin`, then
     /// `%USERPROFILE%\bin\uffs.exe`, then `target\release\uffs.exe`, then bare
     /// `uffs.exe` on PATH (mirrors the sibling validation scripts so it dodges
@@ -874,14 +947,24 @@ mod windows_impl {
         "uffs.exe".to_owned()
     }
 
-    /// Run `uffs search <marker>` and compare what UFFS finds against the actual
-    /// on-disk entries. The on-disk enumeration (via `FindFirstFileW`) is the
-    /// ground truth; UFFS's reported `name` is its lossy `&str` view, which is
-    /// byte-for-byte the same lossy view this tool computes for each disk entry
-    /// (`get_name() -> &str` in uffs-mft == `String::from_utf16_lossy` here), so
-    /// the two are directly comparable. Any on-disk entry whose name UFFS does
-    /// NOT report is a HIDDEN file — the WI-4.4 failure. Returns an error
-    /// (non-zero exit) on any hidden entry.
+    /// Compare what UFFS finds against the actual on-disk entries (enumerated
+    /// via `FindFirstFileW` — the ground truth). Two independent proofs run,
+    /// reflecting how UFFS surfaces the two name classes:
+    ///
+    /// * **Proof 1 (marker, well-formed names).** `uffs <marker>` must report
+    ///   every WELL-FORMED entry. UFFS's reported `name` is its lossy `&str`
+    ///   view, byte-for-byte the same lossy view this tool computes per disk
+    ///   entry (`get_name() -> &str` == `String::from_utf16_lossy` here), so the
+    ///   two are directly comparable. Ill-formed names are excluded here — their
+    ///   lossy view is empty, so they carry no searchable marker text.
+    /// * **Proof 2 (`--malformed`, ill-formed names).** `uffs * --malformed`
+    ///   must return every ILL-FORMED entry, matched by its forensic `name_hex`
+    ///   (lossless WTF-8 bytes) computed from the raw UTF-16 ground truth — not a
+    ///   lossy view. See [`verify_malformed_filter`].
+    ///
+    /// Any entry UFFS fails to surface through its appropriate proof is a HIDDEN
+    /// file — the WI-4.4 failure. Returns an error (non-zero exit) on any hidden
+    /// entry.
     pub fn verify(
         root: &str,
         root_win: &str,
@@ -903,12 +986,9 @@ mod windows_impl {
         let limit = (disk.len() * 4).max(200).to_string();
         let drive_s = drive.to_string();
         let args = [
-            "search",
             marker,
             "--drives",
             &drive_s,
-            "--filter",
-            "all",
             "--limit",
             &limit,
             "--format",
@@ -925,7 +1005,7 @@ mod windows_impl {
             .with_context(|| format!("running {bin} (is uffs on PATH, or pass --bin)?"))?;
         anyhow::ensure!(
             out.status.success(),
-            "uffs search exited with {}: {}",
+            "uffs marker search exited with {}: {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
         );
@@ -957,12 +1037,18 @@ mod windows_impl {
             );
         }
 
-        // 4. Cross-reference. For each on-disk entry, is its lossy display name
-        // present in the UFFS results? (A marker-bearing file that UFFS does not
-        // report is hidden.) We match on the leaf display; UFFS reports the leaf
-        // name, so a contains-check on the reported name is exact for our leaves.
+        // 4. Cross-reference — PROOF 1 (well-formed names via the ASCII marker).
+        // Only WELL-FORMED on-disk entries can be matched by the marker
+        // substring: UFFS reports a name through its lossy `&str` view, which is
+        // empty for an ill-formed name (no UTF-8 form), so a surrogate-bearing
+        // name carries no searchable marker text. Ill-formed entries are proven
+        // separately in PROOF 2 (the `--malformed` filter + `name_hex`), where
+        // their lossless bytes — not a lossy view — are the evidence. We match
+        // on the leaf display; UFFS reports the leaf name, so an equality check
+        // on the reported name is exact for our leaves.
+        let well_formed: Vec<&DiskEntry> = disk.iter().filter(|e| !e.is_ill_formed()).collect();
         let mut hidden: Vec<&DiskEntry> = Vec::new();
-        for entry in &disk {
+        for &entry in &well_formed {
             let want = entry.display();
             let seen = found_names.iter().any(|got| got == &want);
             if !seen {
@@ -973,12 +1059,13 @@ mod windows_impl {
         // 5. Report.
         println!();
         println!(
-            "  on disk : {} entries ({} ill-formed)",
+            "  on disk    : {} entries ({} well-formed, {} ill-formed)",
             disk.len().to_string().bold(),
+            well_formed.len(),
             disk.iter().filter(|e| e.is_ill_formed()).count()
         );
         println!(
-            "  UFFS    : {} entries reported for marker {}",
+            "  UFFS marker: {} entries reported for marker {}",
             found_names.len().to_string().bold(),
             marker.green()
         );
@@ -986,57 +1073,63 @@ mod windows_impl {
 
         if !hidden.is_empty() {
             println!(
-                "{} UFFS did NOT report {} of {} on-disk entries — these files are HIDDEN:",
+                "{} UFFS did NOT report {} of {} WELL-FORMED on-disk entries — \
+                 these files are HIDDEN:",
                 "FAIL:".red().bold(),
                 hidden.len(),
-                disk.len()
+                well_formed.len()
             );
             for e in &hidden {
                 let kind = if e.is_dir { "dir " } else { "file" };
-                let flag = if e.is_ill_formed() {
-                    " <ILL-FORMED>".red().bold().to_string()
-                } else {
-                    String::new()
-                };
-                println!("    [{}] {}{flag}", kind.magenta(), e.display());
+                println!("    [{}] {}", kind.magenta(), e.display());
                 println!("      utf16: {}", e.hex().dimmed());
             }
             anyhow::bail!(
-                "{} on-disk entr{} hidden from UFFS — the WI-4.4 findability claim is VIOLATED",
+                "{} well-formed on-disk entr{} hidden from UFFS — the WI-4.4 \
+                 findability claim is VIOLATED",
                 hidden.len(),
                 if hidden.len() == 1 { "y is" } else { "ies are" }
             );
         }
 
         println!(
-            "{} UFFS reported every on-disk entry — including all ill-formed names. \
-             No file can hide behind a crooked name. {}",
+            "{} UFFS reported every WELL-FORMED on-disk entry by its marker. {}",
             "PASS:".green().bold(),
-            "(findability holds)".green()
+            "(proof 1: marker findability holds)".green()
         );
 
-        // 6. Second proof — the `--malformed` filter. Every ILL-FORMED on-disk
-        // entry must be returned by `uffs search * --malformed`, and the count
-        // must match (the filter finds exactly the crooked names — no more, no
-        // fewer). This exercises the WI-4.4-followup forensic filter directly.
+        // 6. PROOF 2 — the `--malformed` filter + `name_hex`. Every ILL-FORMED
+        // on-disk entry must be returned by `uffs * --malformed`, with its true
+        // WTF-8 bytes echoed in `name_hex`. We match on that hex (computed here
+        // from the raw UTF-16 ground truth) rather than a lossy name, so a
+        // surrogate-bearing file is proven findable by its faithful bytes — no
+        // file can hide behind a crooked name. This exercises the WI-4.4
+        // forensic filter directly.
         verify_malformed_filter(&disk, &bin, drive)
     }
 
-    /// Cross-check the `uffs search * --malformed` filter against the
-    /// ill-formed entries actually on disk.
+    /// PROOF 2: cross-check `uffs * --malformed` against the ill-formed entries
+    /// actually on disk, matching on the forensic `name_hex` (the lossless WTF-8
+    /// bytes) rather than any lossy display name.
+    ///
+    /// The check is a SUBSET test, not an equality count: `--malformed --drives
+    /// <D>` scans the entire drive, which may legitimately contain other
+    /// ill-formed names outside our torture tree, so we require that EVERY
+    /// crooked name WE planted appears in UFFS's output (by its exact hex). We
+    /// also assert each returned malformed row carries `name_hex` by DEFAULT
+    /// (no `--columns` requested) and `malformed:true`, proving the forensic
+    /// evidence ships in `--format json` without opt-in.
     fn verify_malformed_filter(disk: &[DiskEntry], bin: &str, drive: char) -> Result<()> {
+        use std::collections::HashSet;
         use std::process::Command;
 
         let on_disk_ill: Vec<&DiskEntry> = disk.iter().filter(|e| e.is_ill_formed()).collect();
         let drive_s = drive.to_string();
         let args = [
-            "search",
             "*",
             "--malformed",
             "--drives",
             &drive_s,
-            "--filter",
-            "all",
             "--limit",
             "1000",
             "--format",
@@ -1050,32 +1143,97 @@ mod windows_impl {
             .with_context(|| format!("running {bin} --malformed"))?;
         anyhow::ensure!(
             out.status.success(),
-            "uffs search --malformed exited with {}: {}",
+            "uffs --malformed exited with {}: {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
         );
+
+        // Parse NDJSON → set of returned `name_hex` values. Every row the
+        // filter returns must be flagged `malformed:true` and carry a default
+        // `name_hex`; a missing hex means the forensic evidence is NOT shipping
+        // by default — a regression we must catch.
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let returned = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+        let mut returned_hexes: HashSet<String> = HashSet::new();
+        let mut rows = 0_usize;
+        let mut rows_missing_hex = 0_usize;
+        let mut rows_not_flagged = 0_usize;
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            rows += 1;
+            if v.get("malformed").and_then(|m| m.as_bool()) != Some(true) {
+                rows_not_flagged += 1;
+            }
+            match v.get("name_hex").and_then(|h| h.as_str()) {
+                Some(hex) => {
+                    returned_hexes.insert(hex.to_ascii_lowercase());
+                }
+                None => rows_missing_hex += 1,
+            }
+        }
 
         println!(
-            "  on disk : {} ill-formed entries",
+            "  on disk            : {} ill-formed entries",
             on_disk_ill.len().to_string().bold()
         );
         println!(
-            "  --malformed returned: {} rows",
-            returned.to_string().bold()
+            "  --malformed returned: {} rows ({} distinct name_hex)",
+            rows.to_string().bold(),
+            returned_hexes.len()
         );
+
+        // Every malformed row must self-identify as malformed.
         anyhow::ensure!(
-            returned == on_disk_ill.len(),
-            "--malformed returned {returned} rows but {} ill-formed entries are on disk — \
-             the malformed filter is not matching exactly the crooked names",
-            on_disk_ill.len()
+            rows_not_flagged == 0,
+            "{rows_not_flagged} of {rows} --malformed rows were NOT flagged malformed:true"
         );
+        // Every malformed row must carry name_hex BY DEFAULT (no --columns).
+        anyhow::ensure!(
+            rows_missing_hex == 0,
+            "{rows_missing_hex} of {rows} --malformed rows lacked a default name_hex — \
+             forensic evidence is not shipping by default in --format json"
+        );
+
+        // SUBSET test: each crooked name WE planted must be present by its exact
+        // lossless hex (computed from the raw UTF-16 ground truth).
+        let mut missing: Vec<&DiskEntry> = Vec::new();
+        for &e in &on_disk_ill {
+            if !returned_hexes.contains(&e.wtf8_hex()) {
+                missing.push(e);
+            }
+        }
+        if !missing.is_empty() {
+            println!(
+                "{} {} of {} planted ill-formed entries were NOT returned by --malformed:",
+                "FAIL:".red().bold(),
+                missing.len(),
+                on_disk_ill.len()
+            );
+            for e in &missing {
+                let kind = if e.is_dir { "dir " } else { "file" };
+                println!("    [{}] {}", kind.magenta(), e.display());
+                println!("      utf16    : {}", e.hex().dimmed());
+                println!("      name_hex : {}", e.wtf8_hex().dimmed());
+            }
+            anyhow::bail!(
+                "{} planted ill-formed entr{} not found by `uffs --malformed` — \
+                 a file is hiding behind a crooked name (WI-4.4 VIOLATED)",
+                missing.len(),
+                if missing.len() == 1 { "y is" } else { "ies are" }
+            );
+        }
+
         println!(
-            "{} `uffs search --malformed` returned exactly the {} crooked names. {}",
+            "{} `uffs --malformed` returned every one of the {} planted crooked names \
+             by its exact WTF-8 name_hex. {}",
             "PASS:".green().bold(),
             on_disk_ill.len(),
-            "(--malformed filter verified)".green()
+            "(proof 2: forensic findability holds)".green()
         );
         Ok(())
     }

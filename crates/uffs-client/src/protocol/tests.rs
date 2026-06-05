@@ -244,6 +244,62 @@ fn search_response_inline_rows_round_trip() {
     assert!(parsed.projected_rows.is_some());
 }
 
+/// WI-4.4: `name_hex` is forensic evidence keyed on name validity, not on
+/// column projection — so the DEFAULT `--format json` output (no `--columns`)
+/// carries it for every malformed row and omits it for well-formed ones.
+///
+/// This pins the exact CLI conversion (`serde_json::to_value(&SearchRow)` in
+/// `uffs-cli`'s `main.rs`, then `write_json`): a malformed row's hex must be
+/// present without the caller having to request the `name_hex` column.
+#[test]
+fn search_row_default_json_carries_name_hex_for_malformed_only() {
+    let base = SearchRow {
+        drive: uffs_mft::platform::DriveLetter::G,
+        path: "G:\\corrupted\\file.txt".to_owned(),
+        name: "file.txt".to_owned(),
+        size: 0,
+        is_directory: false,
+        modified: 0,
+        created: 0,
+        accessed: 0,
+        flags: 0x20,
+        allocated: 0,
+        descendants: 0,
+        treesize: 0,
+        tree_allocated: 0,
+        malformed: false,
+        malformed_path: false,
+        name_hex: None,
+    };
+
+    // Well-formed row: no hex evidence, so the key is dropped entirely.
+    let well_formed = serde_json::to_value(&base).expect("SearchRow serialises");
+    assert!(
+        well_formed.get("name_hex").is_none(),
+        "well-formed rows must omit name_hex from default JSON: {well_formed}"
+    );
+
+    // Malformed row (lone-high-surrogate leaf `ED A0 80`): hex must appear in
+    // the default object with no projection requested.
+    let malformed = SearchRow {
+        malformed: true,
+        malformed_path: true,
+        name_hex: Some("eda080".to_owned()),
+        ..base
+    };
+    let value = serde_json::to_value(&malformed).expect("SearchRow serialises");
+    assert_eq!(
+        value.get("name_hex").and_then(serde_json::Value::as_str),
+        Some("eda080"),
+        "malformed rows must carry name_hex in default JSON (no --columns): {value}"
+    );
+    assert_eq!(
+        value.get("malformed").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "malformed flag must also be present by default: {value}"
+    );
+}
+
 /// `SearchResponse` round-trip with the `ShmemBlob` payload.
 ///
 /// Covers the binary-transport fast path for large path-only

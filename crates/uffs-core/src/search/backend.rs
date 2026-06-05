@@ -88,8 +88,10 @@ pub struct DisplayRow {
     /// of [`Self::malformed`]; computed during parent-chain resolution.
     pub malformed_path: bool,
     /// WI-4.4 forensic evidence: hex of the true (WTF-8) leaf-name bytes.
-    /// `None` unless the `name_hex` column is projected, so normal queries pay
-    /// no hex-encode or allocation cost.
+    /// `Some` for every malformed leaf and `None` otherwise, so the
+    /// hex-encode/allocation cost is paid only for the vanishing fraction of
+    /// ill-formed names — it is keyed on name validity, never on projection.
+    /// JSON output therefore carries it by default for malformed rows.
     pub name_hex: Option<String>,
 }
 
