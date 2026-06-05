@@ -45,7 +45,7 @@ phase2-ship:
     @printf "\033[0;34m🚀 PHASE 2: Explicit Ship Lane\033[0m\n"
     @printf "\033[1;33mThis lane performs version bump, deploy, commit, and push behavior.\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- phase2
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- phase2
 
 # Backward compatibility alias for phase2-ship.
 phase2-commit: phase2-ship
@@ -57,7 +57,7 @@ go:
     @printf "\033[1;33mNo version bump, deploy, commit, or push in this default lane.\033[0m\n"
     @printf "\033[0;36m📝 Lints macOS code paths — Linux cfg() paths validated by CI on push.\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- go
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- go
 
 # Full ship pipeline: Phase 1 validation + Phase 2 deploy (resumable).
 # Re-runs automatically skip already-completed steps.
@@ -68,7 +68,7 @@ ship *ARGS:
     @printf "\033[1;33mValidates and ships. Re-runs skip completed steps.\033[0m\n"
     @printf "\033[0;36m📝 Lints macOS code paths — Linux cfg() paths validated by CI on push.\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- ship {{ ARGS }}
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- ship {{ ARGS }}
 
 # Full ship pipeline from scratch (ignores previous progress).
 # Pass flags like: just ship-fresh -v
@@ -76,7 +76,7 @@ ship-fresh *ARGS:
     @printf "\033[0;34m🚢 Full Ship Pipeline (Fresh Start)\033[0m\n"
     @printf "\033[1;33mIgnoring previous progress, starting from scratch.\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- ship --fresh {{ ARGS }}
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- ship --fresh {{ ARGS }}
 
 # Safe-by-default validation workflow (justfile fallback).
 go-justfile:
@@ -105,14 +105,14 @@ check-all:
     @printf "\033[0;34m📋 Comprehensive Validation (RUST OPTIMIZED)\033[0m\n"
     @printf "\033[1;33mUsing high-performance Rust script with parallel execution...\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- check-all
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- check-all
 
 # Generate coverage report (Rust optimized).
 coverage-report:
     @printf "\033[0;34m📊 Coverage Report Generation (RUST OPTIMIZED)\033[0m\n"
     @printf "\033[1;33mSmart detection: generates from existing data or runs tests if needed...\033[0m\n"
     @echo "========================================================"
-    cargo run -q --release -p uffs-ci-pipeline -- coverage-report
+    cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- coverage-report
 
 # Watch the latest release workflow run.
 release-watch:
@@ -127,15 +127,15 @@ release-status:
 # Check current workflow status.
 workflow-status:
     @printf "\033[0;34m📊 Checking workflow status...\033[0m\n"
-    @cargo run -q --release -p uffs-ci-pipeline -- workflow-status
+    @cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- workflow-status
 
 # Reset workflow state.
 workflow-reset:
     @printf "\033[0;33m⚠️  Resetting workflow state...\033[0m\n"
-    @cargo run -q --release -p uffs-ci-pipeline -- workflow-reset
+    @cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- workflow-reset
 
 # Resume incomplete workflow.
 workflow-resume:
     @printf "\033[0;34m🔄 Resuming workflow...\033[0m\n"
-    @cargo run -q --release -p uffs-ci-pipeline -- workflow-resume
+    @cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- workflow-resume
 
