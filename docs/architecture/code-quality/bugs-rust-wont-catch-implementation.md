@@ -97,7 +97,7 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 | WI-4.1 | 4 Bytes | Single instrumented UTF-16 decoder; per-index `lossy_name_count` stat + warn | ✅ | `harden/bugs-2` | ✅ |
 | WI-4.2 | 4 Bytes | Pass `OsString` (not `to_string_lossy`) to spawn argv / IPC paths | ✅ | `harden/wi-4.2-osstring-argv` | full `&[OsString]` spawn chain (incl. Windows `CreateProcessW`/`ShellExecuteW` via `encode_wide`) + 4 `from_utf16_lossy` decode sites (2 lossless, 2 AUDIT-OK); gate now fully green |
 | WI-4.3 | 4 Bytes | Strict-parse subprocess stdout used for decisions (PID/name) | ✅ | `harden/bugs` | ✅ |
-| WI-4.4 | 4 Bytes | **RFC + impl:** lossless name storage (binary/WTF-8 column) | 🟨 RFC landed | `harden/bugs` | RFC ✅ / impl pending sign-off |
+| WI-4.4 | 4 Bytes | **RFC + impl:** lossless name storage (binary/WTF-8 column) | ✅ | `feat/wi-4.4-lossless-names` | bytes-native `MftIndex.names: Vec<u8>` (WTF-8) + `get_name_bytes` / `CompactRecord::name_bytes`; lossless `wtf8_from_utf16le`; cache v14/v11 bump; surrogate-named file is enumerated + byte-recoverable (not hidable). RFC §8 records the revised (bytes-native, not sidecar) design. Live-Windows find+open test = follow-up. |
 | WI-5.2 | 5 Panic | Replace parser arithmetic with `checked_*`; remove parser `indexing_slicing` allows → `.get()` | ✅ | PR #349 (merged) | ✅ |
 | WI-5.3 | 5 Panic | In-tree malformed-input fuzz/regression tests (parsers + cache deserialize) | ✅ | `harden/wi-5.3-malformed-tests` | parser malformed-record test (PR #349) + deserializer truncation/boundary/seeded-fuzz corpus |
 | WI-6.1 | 6 Errors | `daemon_ctl` control writes: surface/log instead of bare `drop` | ✅ | `harden/bugs` | ✅ |
@@ -711,7 +711,20 @@ it returns the "unverified / unknown" outcome (fail-closed), not a wrong match.
 
 ---
 
-### WI-4.4 — (RFC, then impl) Lossless name storage  🟨 tracked
+### WI-4.4 — (RFC, then impl) Lossless name storage  ✅ implemented
+
+> **Implemented (`feat/wi-4.4-lossless-names`).** Done **bytes-native**, not via
+> the RFC's Option B sidecar — see `refactor/lossless-name-column-rfc.md` §8 for
+> why (the search hot path was already byte-native; the only loss was the
+> upstream `MftIndex.names: String`). `MftIndex.names`/`MftIndexFragment.names`
+> are now `Vec<u8>` (WTF-8); `get_name` stays a lossy `&str` view, new
+> `get_name_bytes` / `CompactRecord::name_bytes` are the lossless accessors;
+> `wtf8_from_utf16le` + `store_name_lossless` retain ill-formed names
+> byte-faithfully; cache `INDEX_VERSION` 13→14 + `COMPACT_VERSION` 10→11
+> (pre-bump caches rebuild). A surrogate-named file is **enumerated and
+> byte-recoverable** (cannot hide from search). 11 new tests + 1031/548 existing
+> green; native + Windows clippy clean. The live-Windows "create a real
+> surrogate file → find+open" check below stays a Windows-CI follow-up.
 
 **Goal:** eliminate name loss entirely (true 100%), not just make it observable.
 

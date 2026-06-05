@@ -264,8 +264,7 @@ mod lossless_names {
         // blob must round-trip byte-for-byte (deserialize no longer demands
         // UTF-8). This is the on-disk persistence half of findability.
         let blob = index.serialize(1, 2, crate::usn::Usn::new(3));
-        let (restored, header) =
-            MftIndex::deserialize(&blob).expect("v14 index must round-trip");
+        let (restored, header) = MftIndex::deserialize(&blob).expect("v14 index must round-trip");
         assert_eq!(header.version, 14, "names-format break is v14");
         assert_eq!(
             restored.get_name_bytes(name_ref),

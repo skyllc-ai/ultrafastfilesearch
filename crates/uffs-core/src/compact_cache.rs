@@ -909,7 +909,9 @@ fn parse_compact_header(data: &[u8]) -> Result<(u64, usize, u16), &'static str> 
         //     names retained byte-faithfully) rather than guaranteed UTF-8.
         // Either way a pre-v11 cache must be rebuilt from the MFT; the
         // caller's full-rebuild fallback then writes a fresh v11 cache.
-        return Err("stale compact version (v<11 → rebuild for WI-4.4 WTF-8 names / Phase 8 frs_to_compact)");
+        return Err(
+            "stale compact version (v<11 → rebuild for WI-4.4 WTF-8 names / Phase 8 frs_to_compact)",
+        );
     }
     if version > COMPACT_VERSION {
         return Err("unsupported compact version (future)");

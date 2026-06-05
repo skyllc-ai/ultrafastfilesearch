@@ -30,8 +30,8 @@ pub struct MftIndexFragment {
     pub frs_to_idx: Vec<u32>,
     /// Filenames concatenated (local buffer), stored as **WTF-8 bytes** so
     /// ill-formed (surrogate-bearing) NTFS names survive the parallel-parse
-    /// path losslessly and merge byte-faithfully into [`MftIndex::names`]
-    /// (WI-4.4).
+    /// path losslessly and merge byte-faithfully into the final `MftIndex`
+    /// `names` buffer (WI-4.4).
     pub names: Vec<u8>,
     /// Overflow hard link entries
     pub links: Vec<LinkInfo>,

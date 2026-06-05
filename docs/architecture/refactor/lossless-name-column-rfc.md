@@ -5,7 +5,10 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # RFC — Lossless Filename Storage (WI-4.4)
 
-**Status:** 🟨 Proposed — awaiting maintainer sign-off before implementation.
+**Status:** ✅ **Implemented** (bytes-native, `feat/wi-4.4-lossless-names`).
+The implementation revised this RFC's recommendation after grounding it in the
+actual code — see [§8 Implementation outcome](#8-implementation-outcome).
+(Originally: 🟨 Proposed — awaiting maintainer sign-off.)
 **Companion:** [`bugs-rust-wont-catch-audit.md`](../code-quality/bugs-rust-wont-catch-audit.md) §4,
 [`bugs-rust-wont-catch-implementation.md`](../code-quality/bugs-rust-wont-catch-implementation.md) WI-4.1 / WI-4.4.
 
@@ -121,3 +124,58 @@ riskier rewrite for a case that affects a vanishingly small fraction of names.
 Implementation does **not** begin until a maintainer approves the chosen option
 (B) and the cache-format version-bump plan. Until then WI-4.4 stays 🟨 in the
 tracker; WI-4.1 (measured, non-silent loss) is the in-place mitigation.
+
+## 8. Implementation outcome
+
+The implementation **revised the recommendation** after grounding the design in
+the actual code rather than the RFC's original assumption.
+
+**Correction to §2's premise.** §2 said names live in a Polars **UTF-8 `String`
+column**, making any change maximal. That is only true of the legacy DataFrame
+path. The **search hot path** — `CompactIndex.names: ColumnStorage<u8>` with a
+trigram/bloom/`CaseFold` index — was **already byte-native and UTF-8-tolerant**
+(`from_utf8(..).unwrap_or("")`). The *only* place loss actually occurred was
+upstream: `MftIndex.names: String` (the ingestion store the WI-4.1 decoder
+wrote a lossy `String` into).
+
+**Chosen design — bytes-native (the "`OsStr` model"), not the §3 Option B
+sidecar.** With no released cache format and no API consumers to protect, a
+sidecar exception-table was the wrong long-term shape (permanent dual code
+paths for the rare case). Instead the true bytes became the single source of
+truth, mirroring how Rust's stdlib treats OS strings:
+
+- `MftIndex.names` / `MftIndexFragment.names`: `String` → `Vec<u8>` (WTF-8).
+- `get_name(..) -> &str` stays a **lossy view** (valid-UTF-8 zero-copy, else
+  `""`), so all existing `&str` callers were unchanged; new
+  `get_name_bytes(..) -> &[u8]` is the lossless accessor, mirrored on the
+  search store as `CompactRecord::name_bytes`.
+- Parser: `wtf8_from_utf16le` + `store_name_lossless` retain byte-faithful
+  WTF-8 for the rare ill-formed name; the well-formed common path stores the
+  identical `String` bytes with zero extra work.
+- Serialize writes the raw names blob; deserialize no longer requires UTF-8.
+- Cache-format breaks: `INDEX_VERSION` 13→14, `COMPACT_VERSION` 10→11 (pre-bump
+  caches are rejected → rebuilt from the MFT). Record layout unchanged.
+
+**Acceptance met (§5).** A file named with an unpaired surrogate is retained
+byte-faithfully, is **enumerated and byte-recoverable** in the compact/search
+index (proven by `compact_tests::crooked_surrogate_name_is_visible_in_compact_index`),
+survives a v14 serialize→deserialize round-trip, and renders as `""` for display
+without panicking. `lossy_name_count` (WI-4.1) now means "stored byte-faithfully",
+not "lost". Net security property: **a malicious actor cannot hide a file from
+UFFS behind an ill-formed name.**
+
+**Verification (macOS).** 1031 `uffs-mft`+`uffs-core` tests pass plus 11 new
+WI-4.4 tests; 548 consumer (`uffs-daemon`/`cli`/`client`) tests pass; native +
+`cargo xwin` (Windows) `--all-targets -D warnings` clippy clean; anti-pattern
+gate green. The live Windows "create a real surrogate-named file → find+open it
+via UFFS" end-to-end check (§5 final bullet) remains a Windows-CI follow-up;
+the offline/synthetic tests above exercise the same `process_record` →
+`store_name_lossless` → compact-index path used in production.
+
+## 6.→ Out of scope / follow-ups (updated)
+
+- The live Windows surrogate-file find+open integration test (above).
+- Substring/glob/**regex** search still operates on the UTF-8 `&str` view, so a
+  surrogate name is matched by **exact bytes / enumeration**, not by a UTF-8
+  regex (you cannot type an unpaired surrogate in a normal query anyway). The
+  file is never *hidden*; this is the documented matching boundary.
