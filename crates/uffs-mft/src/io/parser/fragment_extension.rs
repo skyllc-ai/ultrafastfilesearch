@@ -234,7 +234,7 @@ fn merge_extension_into_fragment(
     let mut link_indices: Vec<u32> = Vec::with_capacity(names.len());
     for (name, parent_frs) in names {
         let name_offset = len_to_u32(fragment.names.len());
-        fragment.names.push_str(name);
+        fragment.names.extend_from_slice(name.as_bytes());
         let name_len = name.len();
         let is_ascii = name.is_ascii();
         let link_ext_id = fragment.intern_extension(name);
@@ -255,7 +255,7 @@ fn merge_extension_into_fragment(
     let mut stream_indices: Vec<u32> = Vec::with_capacity(streams.len());
     for (stream_name, size, allocated) in streams {
         let name_offset = len_to_u32(fragment.names.len());
-        fragment.names.push_str(stream_name);
+        fragment.names.extend_from_slice(stream_name.as_bytes());
         let name_len = stream_name.len();
         let is_ascii = stream_name.is_ascii();
         let stream_ext_id = fragment.intern_extension(stream_name);

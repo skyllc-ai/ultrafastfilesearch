@@ -209,7 +209,10 @@ impl MftIndex {
             6 => 185,
             7 => 193,
             8 | 9 => 195,
-            10..=13 => 240, // Pod layout with padding
+            // v14 (WI-4.4) keeps the v10+ 240-byte Pod record layout unchanged;
+            // only the names blob became raw WTF-8, which doesn't affect record
+            // size. (Pre-v14 caches are rejected upstream in `validate`.)
+            10..=14 => 240, // Pod layout with padding
             _ => return Err("Unsupported index version"),
         };
         let record_bytes =
@@ -376,8 +379,12 @@ impl MftIndex {
             .checked_add(names_len)
             .ok_or("Names section too large")?;
         let names_bytes = data.get(pos..names_end).ok_or("Unexpected end of data")?;
-        let names = String::from_utf8(names_bytes.to_vec())
-            .map_err(|_utf8_err| "Invalid UTF-8 in names")?;
+        // Names are stored as raw WTF-8 bytes (WI-4.4): an ill-formed NTFS name
+        // with unpaired surrogates is not valid UTF-8, so we no longer reject
+        // the blob on a UTF-8 check — we retain the bytes verbatim. Display
+        // sites use the lossy `MftIndex::get_name` view; search uses the
+        // lossless `get_name_bytes`.
+        let names = names_bytes.to_vec();
         pos = names_end;
 
         // Read links (overflow links)

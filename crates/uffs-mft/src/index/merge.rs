@@ -84,7 +84,7 @@ impl MftIndex {
         let internal_stream_offset_adjustment = len_to_u32(self.internal_streams.len());
 
         let extension_id_map = self.build_extension_id_map(&fragment);
-        self.names.push_str(&fragment.names);
+        self.names.extend_from_slice(&fragment.names);
 
         let records_to_merge = self.merge_fragment_records_with_deferred_merge(
             fragment.records,

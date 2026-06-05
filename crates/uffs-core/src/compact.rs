@@ -843,7 +843,6 @@ pub fn build_compact_index(
                 path_len: 0,
                 name_first_byte: index
                     .names
-                    .as_bytes()
                     .get(name_ref.offset as usize)
                     .copied()
                     .unwrap_or(0),
@@ -853,7 +852,7 @@ pub fn build_compact_index(
         .collect();
 
     // Phase 2+3: expand hardlinks and ADS (sequential — rare, <1% of records).
-    let mut names = index.names.as_bytes().to_vec();
+    let mut names = index.names.clone();
     let expanded = expand_links_and_ads(index, &resolver, &resolve_parent, &mut names);
     records.extend(expanded);
 
