@@ -883,6 +883,79 @@ impl FieldId {
                     default_top: 0,
                 },
             },
+            // ── WI-4.4 forensic name-validity fields (opt-in, never default) ──
+            // `malformed` is a hot-path bool computed against the lossless name
+            // bytes (`name_bytes`), modelled on the `hidden`/`readonly` flags.
+            Self::Malformed => FieldMeta {
+                id: self,
+                canonical_name: "malformed",
+                aliases: &["ill_formed", "illformed", "bad_name"],
+                field_type: FieldType::Bool,
+                access: FieldAccess::Hot,
+                sortable: true,
+                default_sort_direction: Some(SortDirection::Descending),
+                filterable: true,
+                projectable: true,
+                tui_label: "Mal",
+                display_name: "Malformed",
+                df_column: "",
+                default_value: "0",
+                aggregate: AggregateMeta {
+                    aggregatable: false,
+                    groupable: true,
+                    bucket_support: false,
+                    cardinality: Cardinality::Fixed,
+                    default_top: 2,
+                },
+            },
+            // `malformed_path` is derived: it needs the resolved parent chain,
+            // so it is evaluated post-filter (not compiled to the hot path).
+            Self::MalformedPath => FieldMeta {
+                id: self,
+                canonical_name: "malformed_path",
+                aliases: &["malformedpath", "ill_formed_path", "bad_path"],
+                field_type: FieldType::Bool,
+                access: FieldAccess::Derived,
+                sortable: true,
+                default_sort_direction: Some(SortDirection::Descending),
+                filterable: true,
+                projectable: true,
+                tui_label: "MalP",
+                display_name: "Malformed Path",
+                df_column: "",
+                default_value: "0",
+                aggregate: AggregateMeta {
+                    aggregatable: false,
+                    groupable: true,
+                    bucket_support: false,
+                    cardinality: Cardinality::Fixed,
+                    default_top: 2,
+                },
+            },
+            // `name_hex` is a projection-only string (the true name bytes as
+            // hex); never filtered or sorted, never aggregated.
+            Self::NameHex => FieldMeta {
+                id: self,
+                canonical_name: "name_hex",
+                aliases: &["namehex", "name_bytes_hex"],
+                field_type: FieldType::String,
+                access: FieldAccess::Hot,
+                sortable: false,
+                default_sort_direction: None,
+                filterable: false,
+                projectable: true,
+                tui_label: "Hex",
+                display_name: "Name (hex)",
+                df_column: "",
+                default_value: "",
+                aggregate: AggregateMeta {
+                    aggregatable: false,
+                    groupable: false,
+                    bucket_support: false,
+                    cardinality: Cardinality::Unbounded,
+                    default_top: 0,
+                },
+            },
         }
     }
 }

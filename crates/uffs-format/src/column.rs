@@ -111,6 +111,12 @@ pub enum OutputColumn {
     NameLength,
     /// Full-path length in characters.
     PathLength,
+    /// Leaf name is ill-formed (not valid UTF-8). WI-4.4 forensic flag.
+    Malformed,
+    /// Any path component is ill-formed. WI-4.4 forensic flag.
+    MalformedPath,
+    /// Hex of the true (WTF-8) leaf-name bytes. WI-4.4 forensic evidence.
+    NameHex,
 }
 
 impl OutputColumn {
@@ -155,6 +161,9 @@ impl OutputColumn {
         Self::ParityAttributes,
         Self::NameLength,
         Self::PathLength,
+        Self::Malformed,
+        Self::MalformedPath,
+        Self::NameHex,
     ];
 
     /// Canonical wire / config name — matches `FieldMeta::canonical_name`
@@ -201,6 +210,9 @@ impl OutputColumn {
             Self::ParityAttributes => "parity_attributes",
             Self::NameLength => "name_length",
             Self::PathLength => "path_length",
+            Self::Malformed => "malformed",
+            Self::MalformedPath => "malformed_path",
+            Self::NameHex => "name_hex",
         }
     }
 
@@ -261,6 +273,9 @@ impl OutputColumn {
             Self::ParityAttributes => "Attributes",
             Self::NameLength => "Name Length",
             Self::PathLength => "Path Length",
+            Self::Malformed => "Malformed",
+            Self::MalformedPath => "Malformed Path",
+            Self::NameHex => "Name (hex)",
         }
     }
 
@@ -301,6 +316,9 @@ impl OutputColumn {
             Self::ParityAttributes => &["parityattributes"],
             Self::NameLength => &["namelength", "name_len", "namelen"],
             Self::PathLength => &["pathlength", "path_len", "pathlen"],
+            Self::Malformed => &["ill_formed", "illformed", "bad_name"],
+            Self::MalformedPath => &["malformedpath", "ill_formed_path", "bad_path"],
+            Self::NameHex => &["namehex", "name_bytes_hex"],
             // Variants with no aliases fall through to the empty slice.
             Self::Path
             | Self::Name

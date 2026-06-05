@@ -36,6 +36,9 @@ fn path_only_row(path: String) -> SearchRow {
         descendants: 0,
         treesize: 0,
         tree_allocated: 0,
+        malformed: false,
+        malformed_path: false,
+        name_hex: None,
     }
 }
 

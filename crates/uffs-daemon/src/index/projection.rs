@@ -33,6 +33,11 @@ impl IndexManager {
             descendants: row.descendants,
             treesize: row.treesize,
             tree_allocated: row.tree_allocated,
+            // WI-4.4 forensic facts, computed in the hot path against the
+            // lossless name bytes and carried verbatim onto the wire row.
+            malformed: row.malformed,
+            malformed_path: row.malformed_path,
+            name_hex: row.name_hex.clone(),
         }
     }
 
@@ -186,6 +191,13 @@ impl IndexManager {
             }
             FieldId::NameLength => serde_json::Value::from(row.name.chars().count()),
             FieldId::PathLength => serde_json::Value::from(row.path.chars().count()),
+            // ── WI-4.4 forensic fields (carried from the hot path) ──────
+            FieldId::Malformed => serde_json::Value::from(row.malformed),
+            FieldId::MalformedPath => serde_json::Value::from(row.malformed_path),
+            FieldId::NameHex => row
+                .name_hex
+                .clone()
+                .map_or(serde_json::Value::Null, serde_json::Value::String),
         }
     }
 }

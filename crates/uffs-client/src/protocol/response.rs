@@ -499,6 +499,18 @@ pub struct SearchRow {
     /// Sum of allocated sizes in entire subtree (directories only).
     #[serde(default)]
     pub tree_allocated: u64,
+    /// WI-4.4 forensic flag: the leaf name's true bytes are not valid UTF-8.
+    /// `#[serde(default)]` keeps the wire format backward/forward compatible —
+    /// an old daemon omits it (deserializes `false`); an old client ignores it.
+    #[serde(default)]
+    pub malformed: bool,
+    /// WI-4.4 forensic flag: some component of the resolved path is ill-formed.
+    #[serde(default)]
+    pub malformed_path: bool,
+    /// WI-4.4 forensic evidence: hex of the true (WTF-8) leaf-name bytes.
+    /// Present only when the `name_hex` column is projected; omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_hex: Option<String>,
 }
 
 /// Feed `SearchRow` directly into the shared `uffs-format` writer.
@@ -570,6 +582,18 @@ impl uffs_format::FormatRow for SearchRow {
     #[inline]
     fn tree_allocated(&self) -> u64 {
         self.tree_allocated
+    }
+    #[inline]
+    fn malformed(&self) -> bool {
+        self.malformed
+    }
+    #[inline]
+    fn malformed_path(&self) -> bool {
+        self.malformed_path
+    }
+    #[inline]
+    fn name_hex(&self) -> Option<&str> {
+        self.name_hex.as_deref()
     }
 }
 

@@ -73,4 +73,21 @@ pub trait FormatRow {
     fn treesize(&self) -> u64;
     /// Sum of allocated sizes in the subtree (directories only).
     fn tree_allocated(&self) -> u64;
+
+    /// WI-4.4 forensic flag: the leaf name's true bytes are not valid UTF-8
+    /// (an unpaired UTF-16 surrogate). Defaults to `false` for row types that
+    /// do not track name validity.
+    fn malformed(&self) -> bool {
+        false
+    }
+    /// WI-4.4 forensic flag: some component of the resolved path is ill-formed.
+    /// Defaults to `false` for row types that do not track it.
+    fn malformed_path(&self) -> bool {
+        false
+    }
+    /// WI-4.4 forensic evidence: hex of the true (WTF-8) leaf-name bytes, or
+    /// `None` when not requested/tracked. Borrowed to avoid allocation.
+    fn name_hex(&self) -> Option<&str> {
+        None
+    }
 }

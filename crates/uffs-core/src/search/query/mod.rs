@@ -141,7 +141,10 @@ pub(crate) fn collect_global_top_n<D: AsRef<DriveCompactIndex> + Sync>(
         | FieldId::RecallOnDataAccess
         | FieldId::ParityAttributes
         | FieldId::NameLength
-        | FieldId::PathLength => {
+        | FieldId::PathLength
+        | FieldId::Malformed
+        | FieldId::MalformedPath
+        | FieldId::NameHex => {
             let (rows, timings) = collect_global_top_n_numeric(
                 drives,
                 limit,

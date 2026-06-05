@@ -78,6 +78,19 @@ pub struct DisplayRow {
     pub treesize: u64,
     /// Sum of allocated sizes in entire subtree (directories only).
     pub tree_allocated: u64,
+    /// WI-4.4 forensic flag: this record's own leaf name is ill-formed (its
+    /// true bytes are not valid UTF-8 — an unpaired UTF-16 surrogate).
+    /// Computed in the hot path from the lossless name bytes; the lossy
+    /// `path`/`name()` view cannot recover this (it is always valid UTF-8).
+    pub malformed: bool,
+    /// WI-4.4 forensic flag: some component of the resolved path is ill-formed
+    /// (so a clean-named file under a crooked directory is flagged). Superset
+    /// of [`Self::malformed`]; computed during parent-chain resolution.
+    pub malformed_path: bool,
+    /// WI-4.4 forensic evidence: hex of the true (WTF-8) leaf-name bytes.
+    /// `None` unless the `name_hex` column is projected, so normal queries pay
+    /// no hex-encode or allocation cost.
+    pub name_hex: Option<String>,
 }
 
 impl DisplayRow {
@@ -118,7 +131,32 @@ impl DisplayRow {
             descendants,
             treesize,
             tree_allocated,
+            // Forensic carriers default to "well-formed / not requested"; the
+            // hot path overwrites them via `with_forensics` when it has the
+            // lossless name bytes. Keeping them out of `new()`'s arg list
+            // leaves the many existing call sites untouched.
+            malformed: false,
+            malformed_path: false,
+            name_hex: None,
         }
+    }
+
+    /// Attach the WI-4.4 forensic facts computed in the hot path against the
+    /// lossless name bytes. Chained after [`Self::new`] at the single result-
+    /// materialization chokepoint so the lossy `path` boundary is never the
+    /// source of these values.
+    #[must_use]
+    #[inline]
+    pub fn with_forensics(
+        mut self,
+        malformed: bool,
+        malformed_path: bool,
+        name_hex: Option<String>,
+    ) -> Self {
+        self.malformed = malformed;
+        self.malformed_path = malformed_path;
+        self.name_hex = name_hex;
+        self
     }
 
     /// Filename portion of the path (e.g., `file.txt`).
@@ -184,6 +222,9 @@ impl Default for DisplayRow {
             descendants: 0,
             treesize: 0,
             tree_allocated: 0,
+            malformed: false,
+            malformed_path: false,
+            name_hex: None,
         }
     }
 }
@@ -249,6 +290,18 @@ impl uffs_format::FormatRow for DisplayRow {
     #[inline]
     fn tree_allocated(&self) -> u64 {
         self.tree_allocated
+    }
+    #[inline]
+    fn malformed(&self) -> bool {
+        self.malformed
+    }
+    #[inline]
+    fn malformed_path(&self) -> bool {
+        self.malformed_path
+    }
+    #[inline]
+    fn name_hex(&self) -> Option<&str> {
+        self.name_hex.as_deref()
     }
 }
 

@@ -391,6 +391,15 @@ pub fn read_search_results(path: &Path) -> io::Result<SearchResponse> {
             descendants: rec.descendants,
             treesize: rec.treesize,
             tree_allocated: rec.tree_allocated,
+            // The compact shmem record does not (yet) carry the WI-4.4 forensic
+            // facts, and the blob's `string_table` is validated UTF-8 above
+            // (an ill-formed name cannot round-trip through it). The malformed
+            // columns / name_hex are therefore served via the JSON projection
+            // path, not the shmem fast path; default them here. Extending the
+            // binary shmem record to carry them is tracked as a follow-up.
+            malformed: false,
+            malformed_path: false,
+            name_hex: None,
         });
     }
 

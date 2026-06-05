@@ -108,8 +108,19 @@ fn extract_sort_key(rec: &CompactRecord, sort_column: FieldId, drive: &DriveComp
             i64::from(rec.flags)
         }
         FieldId::Virtual => i64::from(rec.flags & 0x0001_0000 != 0),
+        // WI-4.4: leaf-name malformity as 0/1, from the lossless bytes (matches
+        // the hot-path filter). `MalformedPath` needs the resolved parent chain
+        // (unavailable at this sort-key stage) and `NameHex` is not sortable, so
+        // both fall through to the `Modified` proxy below.
+        FieldId::Malformed => {
+            i64::from(core::str::from_utf8(rec.name_bytes(&drive.names)).is_err())
+        }
         // Modified is the default; Path/PathOnly handled by tree walk upstream.
-        FieldId::Path | FieldId::PathOnly | FieldId::Modified => rec.modified,
+        FieldId::Path
+        | FieldId::PathOnly
+        | FieldId::Modified
+        | FieldId::MalformedPath
+        | FieldId::NameHex => rec.modified,
         FieldId::NameLength => {
             i64::try_from(rec.name(&drive.names).chars().count()).unwrap_or(i64::MAX)
         }
