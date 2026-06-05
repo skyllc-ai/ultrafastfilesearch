@@ -110,21 +110,24 @@ means the acceptance criteria were checked off *and* the pipeline was green.
 
 ### 1.2 Category coverage rollup (fill as phases close)
 
-> **Status (partial landing — 13 WIs of 20):** this branch closes Phase A
-> entirely plus the surgical subset of B/C/E. The remaining WIs (4.1, 4.2, 5.2,
-> 5.3, 6.3, 7.1, 8.1) are larger / cross-cutting / Windows-only and are tracked
-> as follow-ups below — see §1.1 statuses and the per-WI deviation notes. The
-> plan's §2 "Definition of done" is therefore **not yet met**; this is
-> incremental, reviewable progress, not the finished effort.
+> **Status (effort complete):** all 20 work items are ✅, landed across
+> PRs #345–#354 (Phase-A foundation `harden/bugs*` plus WI-4.2 #351, WI-5.2
+> #349, WI-5.3 #350, WI-8.1 #352, WI-7.1 #353, and the WI-G.1 pipeline wiring
+> #354). The lone exception is **WI-4.4**, which is 🟨 by design: its RFC
+> (`refactor/lossless-name-column-rfc.md`) is landed and the *elimination*
+> implementation is a tracked, maintainer-gated follow-up — WI-4.1 already
+> ships the required mitigation (loss is non-silent, measured, and tested).
+> The §2 "Definition of done" is therefore **met** (per its own clause 1,
+> which permits WI-4.4 to remain 🟨 behind an approved RFC).
 
 | # | Category | Mitigation definition (acceptance) | WIs | Coverage |
 |---|----------|------------------------------------|-----|:--------:|
 | 1 | TOCTOU | No check→use on re-resolved paths; no predictable temp + `File::create` | 1.1, 1.2, 2.4 | **100%** |
 | 2 | Perms-after-create | Every secret/dir **born** with final perms; zero chmod-after on secrets | 2.1–2.4 | **100%** |
 | 3 | Path string identity | No safety decision on path strings; identity helper exists + tested | 3.1 | **100%** |
-| 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | ~40% (4.3 ✅ + 4.4 RFC ✅; 4.1 decoder + 4.2 argv pending — gate still red on 36 byte sites) |
+| 4 | UTF-8 byte boundary | Zero **silent** lossy conversions; argv/IPC use `OsString`; lossless storage RFC landed | 4.1–4.4 | **100%** for "non-silent + measured + argv/IPC correct" (4.1 instrumented decoder ✅, 4.2 `OsString` argv ✅, 4.3 strict-parse ✅, 4.4 RFC ✅; anti-pattern gate green). 4.4 *elimination* tracked separately as a 🟨 follow-up per §2 DoD. |
 | 5 | Panic = DoS | Missing lints on; parsers `.get()` + `checked_*`; fuzz tests green | 5.1–5.3 | ✅ 100% (5.1 ✅; 5.2 ✅ all 5 parsers hardened + module-scoped `arithmetic_side_effects`; 5.3 ✅ parser malformed-record test + deserializer truncation/boundary/seeded-fuzz corpus) |
-| 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | ~66% (6.1, 6.2 ✅; 6.3 workspace audit pending) |
+| 6 | Discarded errors | No bare `drop(write/flush)`; every intentional discard commented | 6.1–6.3 | **100%** (6.1 control writes surfaced ✅, 6.2 dir-create failures logged ✅, 6.3 `.ok()`/`let _` audit + justification comments ✅) |
 | 7 | Bug-for-bug parity | Parity test covers pathological names; runs in CI | 7.1 | **100%** (7.1 ✅: Tier-1 decoder pins in CI + Tier-2 offline-capture-vs-golden, validated on real capture) |
 | 8 | Resolve before trust boundary | One process handle threads verify→grant; nonce property documented | 8.1, 8.2 | **100%** (8.1 ✅ single `OpenProcess` RAII handle threaded verify→duplicate; 8.2 ✅) |
 | G | Regression guard | Grep-gate in CI blocks reintroduction of all anti-patterns | G.1 | **100%** (gate fully green + **wired into the pipeline**: runs as "Anti-pattern gate" in `phase1_fanout_validation`, enforced by `just go` / ship) |
