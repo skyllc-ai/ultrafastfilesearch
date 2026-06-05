@@ -31,9 +31,9 @@ use rayon::prelude::*;
 use super::super::backend::{self, DisplayRow, FilterMode};
 use super::super::field::FieldId;
 use super::super::filters::{SearchFilters, row_passes_filters};
-use super::super::tree::{self, DirCache};
+use super::super::tree::{self, DirCache, MalformedCache};
 use super::numeric_top_n::sort_indices_by_name;
-use super::{make_display_row, passes_filter_mode, stack_volume_prefix};
+use super::{make_display_row, passes_filter_mode, row_forensics, stack_volume_prefix};
 use crate::compact::DriveCompactIndex;
 
 /// Target chunk size for parallel path resolution inside
@@ -146,6 +146,7 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
         sort_indices_by_name(&mut roots, drive, sort_desc);
 
         let mut dir_cache = tree::dir_cache_with_capacity(256);
+        let mut mal_cache = tree::malformed_cache_with_capacity(256);
         let mut stack: Vec<u32> = roots.into_iter().rev().collect();
         while let Some(idx) = stack.pop() {
             if path_results.len() >= limit {
@@ -179,9 +180,15 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
 
             // Remaining filters need the full `DisplayRow` (resolved
             // path + semantic type).  Build it, then check.
-            let path =
-                tree::resolve_path_cached(drive, idx as usize, volume_prefix, &mut dir_cache);
-            let row = make_display_row(idx, drive.letter, rec, name, path);
+            let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+                drive,
+                idx as usize,
+                volume_prefix,
+                &mut dir_cache,
+                &mut mal_cache,
+            );
+            let forensics = row_forensics(rec, &drive.names, path_malformed);
+            let row = make_display_row(idx, drive.letter, rec, name, path, forensics);
             if !row_passes_filters(&row, search_filters, &fold, &mut fold_buf) {
                 continue;
             }
@@ -302,6 +309,8 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
         .map(|chunk| {
             let mut local_caches: std::collections::HashMap<u16, DirCache> =
                 std::collections::HashMap::new();
+            let mut local_mal_caches: std::collections::HashMap<u16, MalformedCache> =
+                std::collections::HashMap::new();
             let mut local_rows: Vec<DisplayRow> = Vec::with_capacity(chunk.len());
             for &(drive_idx, rec_idx) in chunk {
                 let Some(drive_ref) = drives.get(drive_idx as usize) else {
@@ -320,8 +329,25 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 let cache = local_caches
                     .entry(drive_idx)
                     .or_insert_with(|| tree::dir_cache_with_capacity(256));
-                let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
-                local_rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
+                let mal_cache = local_mal_caches
+                    .entry(drive_idx)
+                    .or_insert_with(|| tree::malformed_cache_with_capacity(256));
+                let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+                    drive,
+                    rec_idx as usize,
+                    volume_prefix,
+                    cache,
+                    mal_cache,
+                );
+                let forensics = row_forensics(rec, &drive.names, path_malformed);
+                local_rows.push(make_display_row(
+                    rec_idx,
+                    drive.letter,
+                    rec,
+                    name,
+                    path,
+                    forensics,
+                ));
             }
             local_rows
         })

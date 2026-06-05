@@ -12,7 +12,7 @@ use super::super::derived::bulkiness_for_record;
 use super::super::field::FieldId;
 use super::super::filters::SearchFilters;
 use super::super::tree;
-use super::{HeapEntry, heap_push_capped, make_display_row, stack_volume_prefix};
+use super::{HeapEntry, heap_push_capped, make_display_row, row_forensics, stack_volume_prefix};
 use crate::compact::{CompactRecord, DriveCompactIndex};
 
 /// Target chunk size for parallel path resolution inside
@@ -518,6 +518,10 @@ fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
 ) -> ResolveStats {
     let mut local_caches: std::collections::HashMap<u16, tree::DirCache> =
         std::collections::HashMap::new();
+    // Parallel per-drive cache of the malformed-path bit (WI-4.4), kept
+    // alongside `local_caches` so both stay coherent in the resolve walk.
+    let mut local_mal_caches: std::collections::HashMap<u16, tree::MalformedCache> =
+        std::collections::HashMap::new();
     let mut rows: Vec<DisplayRow> = Vec::with_capacity(chunk.len());
     let mut resolve_fn_ns: u128 = 0;
     let mut build_row_ns: u128 = 0;
@@ -540,11 +544,28 @@ fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
         let cache = local_caches
             .entry(drive_idx)
             .or_insert_with(|| tree::dir_cache_with_capacity(256));
+        let mal_cache = local_mal_caches
+            .entry(drive_idx)
+            .or_insert_with(|| tree::malformed_cache_with_capacity(256));
         let t_resolve = std::time::Instant::now();
-        let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
+        let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+            drive,
+            rec_idx as usize,
+            volume_prefix,
+            cache,
+            mal_cache,
+        );
         resolve_fn_ns += t_resolve.elapsed().as_nanos();
         let t_build = std::time::Instant::now();
-        rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
+        let forensics = row_forensics(rec, &drive.names, path_malformed);
+        rows.push(make_display_row(
+            rec_idx,
+            drive.letter,
+            rec,
+            name,
+            path,
+            forensics,
+        ));
         build_row_ns += t_build.elapsed().as_nanos();
         candidates += 1;
     }

@@ -479,6 +479,7 @@ pub(crate) fn search_compact_drive_tree(
 
     let t_resolve = std::time::Instant::now();
     let mut dir_cache = tree::dir_cache_with_capacity(256);
+    let mut mal_cache = tree::malformed_cache_with_capacity(256);
     let rows: Vec<DisplayRow> = match_indices
         .iter()
         .filter_map(|&record_idx| {
@@ -487,13 +488,22 @@ pub(crate) fn search_compact_drive_tree(
             if name.is_empty() {
                 return None;
             }
-            let path = tree::resolve_path_cached(
+            let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
                 drive,
                 record_idx as usize,
                 volume_prefix,
                 &mut dir_cache,
+                &mut mal_cache,
             );
-            Some(make_display_row(record_idx, drive.letter, rec, name, path))
+            let forensics = row_forensics(rec, &drive.names, path_malformed);
+            Some(make_display_row(
+                record_idx,
+                drive.letter,
+                rec,
+                name,
+                path,
+                forensics,
+            ))
         })
         .collect();
     let resolve_ms = t_resolve.elapsed().as_millis();
@@ -526,6 +536,7 @@ pub(super) fn make_display_row(
     rec: &CompactRecord,
     name: &str,
     path: String,
+    forensics: RowForensics,
 ) -> DisplayRow {
     // ADS entries on directories must not render as directories
     // (no trailing backslash, name shown, stream size used).
@@ -545,6 +556,66 @@ pub(super) fn make_display_row(
         rec.treesize,
         rec.tree_allocated,
     )
+    .with_forensics(
+        forensics.malformed,
+        forensics.malformed_path,
+        forensics.name_hex,
+    )
+}
+
+/// WI-4.4 forensic facts computed against a record's lossless name bytes at
+/// result-materialization time (the one place with both the record and the
+/// WTF-8 `names` arena). Bundled so [`make_display_row`] keeps a small arg
+/// list.
+pub(super) struct RowForensics {
+    /// Leaf name's true bytes are not valid UTF-8.
+    pub malformed: bool,
+    /// Some component of the resolved path is ill-formed (⊇ `malformed`).
+    pub malformed_path: bool,
+    /// Hex of the true (WTF-8) leaf bytes; `Some` only when projected.
+    pub name_hex: Option<String>,
+}
+
+/// Compute the WI-4.4 leaf-level forensic facts for `rec` from its lossless
+/// name bytes. `path_malformed` is supplied by the caller's path-resolution
+/// walk.
+///
+/// `name_hex` is populated **iff the leaf is malformed** — i.e. only for the
+/// vanishing fraction of names that are ill-formed. This keeps the hex-encode
+/// allocation off the hot path for normal names without threading a projection
+/// flag through every search entry point: well-formed names need no hex
+/// evidence (their `&str` view is faithful), and the projection layer simply
+/// drops `name_hex` when the column was not requested.
+pub(super) fn row_forensics(
+    rec: &CompactRecord,
+    names: &[u8],
+    path_malformed: bool,
+) -> RowForensics {
+    let bytes = rec.name_bytes(names);
+    let malformed = core::str::from_utf8(bytes).is_err();
+    RowForensics {
+        malformed,
+        // A path is malformed if any ancestor is OR the leaf itself is.
+        malformed_path: path_malformed || malformed,
+        // Evidence hex only for ill-formed leaves (rare → near-zero cost).
+        name_hex: if malformed {
+            Some(hex_encode(bytes))
+        } else {
+            None
+        },
+    }
+}
+
+/// Lowercase, separator-free hex of `bytes` (e.g. `[0xED,0xA0,0x80]` →
+/// `"eda080"`). The forensic evidence form: compact, diffable, and
+/// `xxd -r -p`-decodable. `format!` is allowed (no panic path).
+#[must_use]
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 /// Build a `"X:\\"` volume prefix on the stack.
@@ -588,6 +659,7 @@ fn indices_to_rows(
     volume_prefix: &str,
 ) -> Vec<DisplayRow> {
     let mut dir_cache = tree::dir_cache_with_capacity(256);
+    let mut mal_cache = tree::malformed_cache_with_capacity(256);
     indices
         .iter()
         .filter_map(|&record_idx| {
@@ -596,13 +668,22 @@ fn indices_to_rows(
             if name.is_empty() {
                 return None;
             }
-            let path = tree::resolve_path_cached(
+            let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
                 drive,
                 record_idx as usize,
                 volume_prefix,
                 &mut dir_cache,
+                &mut mal_cache,
             );
-            Some(make_display_row(record_idx, drive.letter, rec, name, path))
+            let forensics = row_forensics(rec, &drive.names, path_malformed);
+            Some(make_display_row(
+                record_idx,
+                drive.letter,
+                rec,
+                name,
+                path,
+                forensics,
+            ))
         })
         .collect()
 }
