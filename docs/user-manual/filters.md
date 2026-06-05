@@ -560,6 +560,55 @@ uffs '*' --month jun,jul,aug
 
 ---
 
+## 14a  Malformed-Name Filters (forensic)
+
+NTFS stores file names as UTF-16 with **no well-formedness guarantee** — a name
+can contain an unpaired surrogate that has no valid UTF-8 form. UFFS retains
+such names byte-faithfully (it never silently "heals" them to `U+FFFD`), so it
+can find files that other tools — even Windows Explorer and `dir` — mangle or
+hide. These filters surface exactly those names.
+
+```bash
+# Every file/dir whose own NAME is ill-formed (not valid UTF-8)
+uffs '*' --malformed --filter all
+
+# The inverse — only well-formed names
+uffs '*' --well-formed
+
+# Every entry whose PATH has an ill-formed component (e.g. a clean-named file
+# living under a crooked directory)
+uffs '*' --malformed-path --filter all
+```
+
+| Flag | Matches |
+|------|---------|
+| `--malformed` | the entry's own leaf name is ill-formed UTF-16 |
+| `--well-formed` | the entry's own leaf name is valid UTF-8 |
+| `--malformed-path` | any component of the resolved path is ill-formed (⊇ `--malformed`) |
+
+`--malformed` runs on the hot path (it keeps the `--limit` fast path);
+`--malformed-path` is path-derived and post-filtered, so it scans more — scope
+it with other filters when possible.
+
+### Seeing the true bytes
+
+Because the displayed name of an ill-formed file degrades to `U+FFFD`, two
+different crooked names can look identical on screen. The opt-in `name_hex`
+column emits the **true WTF-8 bytes as hex** so you can tell them apart and
+recover the exact name (decode with `xxd -r -p`):
+
+```bash
+# Surface the malformed flag + the true bytes as columns
+uffs '*' --malformed --columns path,malformed,malformed_path,name_hex --format json
+```
+
+The `malformed` / `malformed_path` columns render `0`/`1` like the attribute
+flags (`--columns ...,malformed`); `name_hex` is non-empty only for ill-formed
+names. None of these appear unless explicitly requested — default output is
+unchanged.
+
+---
+
 ## 15  Result Limit
 
 The `--limit` (or `-n`) flag caps the number of results returned.

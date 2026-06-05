@@ -66,11 +66,15 @@
 // `--list` shows REALITY after.)
 //
 // **Proving it WITH UFFS, automatically.** `--verify` enumerates the on-disk
-// entries (ground truth), runs `uffs search <marker> --filter all --format json`,
-// and cross-references: every on-disk name MUST appear in UFFS's results. It
-// prints PASS (and exits 0) only if no file is hidden; otherwise it lists the
-// hidden entries and exits non-zero. This is the WI-4.4 findability claim
-// checked in one command.
+// entries (ground truth), then runs two cross-checks and exits non-zero on any
+// failure:
+//   1. `uffs search <marker> --filter all` — every on-disk name MUST appear
+//      (nothing is hidden behind a crooked name).
+//   2. `uffs search * --malformed` — must return EXACTLY the ill-formed
+//      entries on disk (the forensic malformed-name filter finds the crooked
+//      names and only those).
+// This is the WI-4.4 findability claim AND the --malformed filter, checked in
+// one command.
 
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI tool: stdout IS the UI.
 
@@ -956,7 +960,7 @@ mod windows_impl {
         // 4. Cross-reference. For each on-disk entry, is its lossy display name
         // present in the UFFS results? (A marker-bearing file that UFFS does not
         // report is hidden.) We match on the leaf display; UFFS reports the leaf
-        // name, so a contains-check on the reported name is exact for our leafs.
+        // name, so a contains-check on the reported name is exact for our leaves.
         let mut hidden: Vec<&DiskEntry> = Vec::new();
         for entry in &disk {
             let want = entry.display();
@@ -980,37 +984,100 @@ mod windows_impl {
         );
         println!();
 
-        if hidden.is_empty() {
+        if !hidden.is_empty() {
             println!(
-                "{} UFFS reported every on-disk entry — including all ill-formed names. \
-                 No file can hide behind a crooked name. {}",
-                "PASS:".green().bold(),
-                "(WI-4.4 holds)".green()
+                "{} UFFS did NOT report {} of {} on-disk entries — these files are HIDDEN:",
+                "FAIL:".red().bold(),
+                hidden.len(),
+                disk.len()
             );
-            return Ok(());
+            for e in &hidden {
+                let kind = if e.is_dir { "dir " } else { "file" };
+                let flag = if e.is_ill_formed() {
+                    " <ILL-FORMED>".red().bold().to_string()
+                } else {
+                    String::new()
+                };
+                println!("    [{}] {}{flag}", kind.magenta(), e.display());
+                println!("      utf16: {}", e.hex().dimmed());
+            }
+            anyhow::bail!(
+                "{} on-disk entr{} hidden from UFFS — the WI-4.4 findability claim is VIOLATED",
+                hidden.len(),
+                if hidden.len() == 1 { "y is" } else { "ies are" }
+            );
         }
 
         println!(
-            "{} UFFS did NOT report {} of {} on-disk entries — these files are HIDDEN:",
-            "FAIL:".red().bold(),
-            hidden.len(),
-            disk.len()
+            "{} UFFS reported every on-disk entry — including all ill-formed names. \
+             No file can hide behind a crooked name. {}",
+            "PASS:".green().bold(),
+            "(findability holds)".green()
         );
-        for e in &hidden {
-            let kind = if e.is_dir { "dir " } else { "file" };
-            let flag = if e.is_ill_formed() {
-                " <ILL-FORMED>".red().bold().to_string()
-            } else {
-                String::new()
-            };
-            println!("    [{}] {}{flag}", kind.magenta(), e.display());
-            println!("      utf16: {}", e.hex().dimmed());
-        }
-        anyhow::bail!(
-            "{} on-disk entr{} hidden from UFFS — the WI-4.4 findability claim is VIOLATED",
-            hidden.len(),
-            if hidden.len() == 1 { "y is" } else { "ies are" }
+
+        // 6. Second proof — the `--malformed` filter. Every ILL-FORMED on-disk
+        // entry must be returned by `uffs search * --malformed`, and the count
+        // must match (the filter finds exactly the crooked names — no more, no
+        // fewer). This exercises the WI-4.4-followup forensic filter directly.
+        verify_malformed_filter(&disk, &bin, drive)
+    }
+
+    /// Cross-check the `uffs search * --malformed` filter against the
+    /// ill-formed entries actually on disk.
+    fn verify_malformed_filter(disk: &[DiskEntry], bin: &str, drive: char) -> Result<()> {
+        use std::process::Command;
+
+        let on_disk_ill: Vec<&DiskEntry> = disk.iter().filter(|e| e.is_ill_formed()).collect();
+        let drive_s = drive.to_string();
+        let args = [
+            "search",
+            "*",
+            "--malformed",
+            "--drives",
+            &drive_s,
+            "--filter",
+            "all",
+            "--limit",
+            "1000",
+            "--format",
+            "json",
+        ];
+        println!();
+        println!("{} {bin} {}", "verify:".bold(), args.join(" ").cyan());
+        let out = Command::new(bin)
+            .args(args)
+            .output()
+            .with_context(|| format!("running {bin} --malformed"))?;
+        anyhow::ensure!(
+            out.status.success(),
+            "uffs search --malformed exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
         );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let returned = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+
+        println!(
+            "  on disk : {} ill-formed entries",
+            on_disk_ill.len().to_string().bold()
+        );
+        println!(
+            "  --malformed returned: {} rows",
+            returned.to_string().bold()
+        );
+        anyhow::ensure!(
+            returned == on_disk_ill.len(),
+            "--malformed returned {returned} rows but {} ill-formed entries are on disk — \
+             the malformed filter is not matching exactly the crooked names",
+            on_disk_ill.len()
+        );
+        println!(
+            "{} `uffs search --malformed` returned exactly the {} crooked names. {}",
+            "PASS:".green().bold(),
+            on_disk_ill.len(),
+            "(--malformed filter verified)".green()
+        );
+        Ok(())
     }
 
     /// Recursively delete the whole top-level folder. Uses `std::fs` on the
