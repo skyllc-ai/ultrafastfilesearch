@@ -752,11 +752,11 @@ impl IndexManager {
 /// (path-contains / type) both already do this.
 ///
 /// `malformed_positive` (`--malformed`, near-zero hit rate) joins them:
-/// the lift is safe even for match-all because `collect_global_top_n`
-/// filters *during* the heap scan, keeping it tiny.  The inverse
-/// `--well-formed` is deliberately NOT lifted — it matches ~every file,
-/// so an unbounded match-all scan would admit the whole index into the
-/// heap (OOM-class blowup), and it never under-returns anyway.
+/// the lift is safe for match-all because `collect_global_top_n_numeric`
+/// filters *before* its bounded top-N heap.  `--well-formed` is NOT
+/// lifted — the lift's `usize::MAX` flips that scan's `use_heap =
+/// limit < 1M` to `false`, so its fallback `Vec` collects every survivor
+/// (~the whole index here → OOM-class); it never under-returns anyway.
 const fn resolve_search_limit(
     requires_post_filter: bool,
     needs_display_row_filter: bool,
