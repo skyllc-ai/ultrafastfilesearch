@@ -572,3 +572,63 @@ fn ads_on_directory_strips_directory_flag() {
         "ADS flags must match parent directory flags (raw NTFS parity)"
     );
 }
+
+// ── WI-4.4: a crooked (surrogate-named) file cannot hide from the search
+//    layer. Build the compact/search index from an MftIndex holding an
+//    ill-formed name and prove it is enumerated and byte-recoverable. ──
+
+/// WTF-8 of `evil` + lone-high-surrogate(U+D800) + `.exe`
+/// (`0xD800` → 3-byte WTF-8 `ED A0 80`). Not valid UTF-8.
+const CROOKED_NAME_WTF8: &[u8] = &[b'e', b'v', b'i', b'l', 0xED, 0xA0, 0x80, b'.', b'e', b'x', b'e'];
+
+/// Like `push_name`, but stores raw WTF-8 bytes (the lossless ingestion path)
+/// for an ill-formed NTFS name.
+fn push_name_bytes(index: &mut MftIndex, bytes: &[u8]) -> IndexNameRef {
+    let offset = index.add_name_bytes(bytes);
+    let len = u16::try_from(bytes.len()).expect("test name too long");
+    // Ill-formed → not ASCII, no extension (the `.exe` here is decorative).
+    IndexNameRef::new(offset, len, false, 0)
+}
+
+#[test]
+fn crooked_surrogate_name_is_visible_in_compact_index() {
+    let mut idx = fixture_index();
+
+    // Plant a file whose name contains an unpaired surrogate under root.
+    let crooked = push_name_bytes(&mut idx, CROOKED_NAME_WTF8);
+    let rec = idx.get_or_create(909.into());
+    rec.first_name.name = crooked;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
+    rec.first_stream.size = SizeInfo {
+        length: 1337,
+        allocated: 1536,
+    };
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+
+    // The crooked file must appear in the compact index — found by its TRUE
+    // bytes via the lossless `name_bytes` accessor. This is the "cannot hide"
+    // guarantee: a malicious ill-formed name is still enumerated.
+    let found = drive
+        .records
+        .iter()
+        .find(|r| r.name_bytes(&drive.names) == CROOKED_NAME_WTF8);
+    assert!(
+        found.is_some(),
+        "crooked surrogate-named file must be present + byte-recoverable in the search index"
+    );
+
+    let found = found.expect("present");
+    assert_eq!(found.size, 1337, "the crooked file's metadata transfers too");
+    // Its lossy &str view is empty (not valid UTF-8) — display degrades, but
+    // the file is NOT hidden (it is enumerated above).
+    assert_eq!(found.name(&drive.names), "");
+    // And the true bytes carry no U+FFFD replacement — nothing was lost.
+    assert!(
+        !found
+            .name_bytes(&drive.names)
+            .windows(3)
+            .any(|w| w == [0xEF, 0xBF, 0xBD]),
+        "the search index must hold the true bytes, not a lossy replacement"
+    );
+}

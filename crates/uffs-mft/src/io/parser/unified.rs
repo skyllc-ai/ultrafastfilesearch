@@ -784,4 +784,94 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(name, "\u{FFFD}");
     }
+
+    // ── WI-4.4: lossless WTF-8 retention ─────────────────────────────────
+    use super::{store_name_lossless, wtf8_from_utf16le};
+    use crate::index::MftIndex;
+    use crate::platform::DriveLetter;
+
+    /// Encode a `&[u16]` to its little-endian byte form (mirrors how the
+    /// parser hands raw on-disk UTF-16LE to the WTF-8 encoder).
+    fn utf16le_bytes(units: &[u16]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(units.len() * 2);
+        for u in units {
+            out.extend_from_slice(&u.to_le_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn wtf8_well_formed_matches_utf8() {
+        // Well-formed UTF-16 must produce exactly the standard UTF-8 bytes —
+        // the common path is byte-identical to a normal `String`.
+        for s in ["readme.txt", "café", "日本語", "emoji_😀_file", "Ω≈ç"] {
+            let units: Vec<u16> = s.encode_utf16().collect();
+            let mut wtf8 = Vec::new();
+            wtf8_from_utf16le(&utf16le_bytes(&units), &mut wtf8);
+            assert_eq!(wtf8, s.as_bytes(), "well-formed name must be plain UTF-8");
+        }
+    }
+
+    #[test]
+    fn wtf8_unpaired_high_surrogate_is_byte_faithful() {
+        // "f" + lone high surrogate 0xD800 + "o". WTF-8 encodes 0xD800 as the
+        // 3-byte sequence ED A0 80 — byte-faithful, NOT U+FFFD. This is what
+        // keeps the file findable by its true name.
+        let units = [0x0066_u16, 0xD800, 0x006F];
+        let mut wtf8 = Vec::new();
+        wtf8_from_utf16le(&utf16le_bytes(&units), &mut wtf8);
+        assert_eq!(wtf8, vec![b'f', 0xED, 0xA0, 0x80, b'o']);
+        // It is intentionally NOT valid UTF-8 (that is the whole point — the
+        // true bytes are retained, not lost to a replacement char).
+        assert!(core::str::from_utf8(&wtf8).is_err());
+        // And it contains no U+FFFD replacement bytes (EF BF BD).
+        assert!(!wtf8.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]));
+    }
+
+    #[test]
+    fn wtf8_lone_low_surrogate_is_byte_faithful() {
+        // Lone low surrogate 0xDC00 → WTF-8 ED B0 80.
+        let units = [0xDC00_u16];
+        let mut wtf8 = Vec::new();
+        wtf8_from_utf16le(&utf16le_bytes(&units), &mut wtf8);
+        assert_eq!(wtf8, vec![0xED, 0xB0, 0x80]);
+    }
+
+    #[test]
+    fn wtf8_valid_pair_becomes_astral_utf8() {
+        // A valid surrogate pair must combine into the normal 4-byte UTF-8
+        // astral form, not two separate 3-byte surrogate encodings.
+        let units = [0xD83D_u16, 0xDE00]; // 😀 U+1F600
+        let mut wtf8 = Vec::new();
+        wtf8_from_utf16le(&utf16le_bytes(&units), &mut wtf8);
+        assert_eq!(wtf8, "😀".as_bytes());
+        assert_eq!(core::str::from_utf8(&wtf8).unwrap(), "😀");
+    }
+
+    #[test]
+    fn store_name_lossless_common_path_is_plain_utf8() {
+        // lossy == 0 → stores the display String's bytes verbatim (no WTF-8
+        // re-encode), zero extra work on the hot path.
+        let mut index = MftIndex::new(DriveLetter::C);
+        let raw = utf16le_bytes(&"café".encode_utf16().collect::<Vec<_>>());
+        let (off, len) = store_name_lossless(&mut index, "café", &raw, 0);
+        assert_eq!(len, "café".len());
+        assert_eq!(&index.names[off as usize..off as usize + len], "café".as_bytes());
+    }
+
+    #[test]
+    fn store_name_lossless_surrogate_path_retains_true_bytes() {
+        // lossy > 0 → the raw UTF-16 is re-encoded to byte-faithful WTF-8 and
+        // stored; the stored length is the WTF-8 length. The lossy display
+        // "f\u{FFFD}o" is NOT what gets stored — the true bytes are.
+        let mut index = MftIndex::new(DriveLetter::C);
+        let units = [0x0066_u16, 0xD800, 0x006F];
+        let raw = utf16le_bytes(&units);
+        let display = "f\u{FFFD}o"; // what decode_utf16le_into produced
+        let (off, len) = store_name_lossless(&mut index, display, &raw, 1);
+        let stored = &index.names[off as usize..off as usize + len];
+        assert_eq!(stored, vec![b'f', 0xED, 0xA0, 0x80, b'o']);
+        // Stored bytes are the lossless WTF-8, distinct from the lossy display.
+        assert_ne!(stored, display.as_bytes());
+    }
 }

@@ -197,3 +197,92 @@ fn deserialize_never_panics_on_seeded_fuzz() {
         let _outcome = MftIndex::deserialize(&blob);
     }
 }
+
+// ── WI-4.4: lossless surrogate-name retention & findability ──────────────
+//
+// The security goal: a file whose NTFS name contains an unpaired UTF-16
+// surrogate (legal on disk, illegal in UTF-8) must be retained byte-faithfully
+// and remain findable by its true name — so a malicious actor cannot hide a
+// file from UFFS behind an ill-formed name. These tests pin that end to end:
+// build an index holding such a name, then prove (1) the lossless bytes are
+// recoverable, (2) the display view degrades gracefully, and (3) the bytes
+// survive a serialize→deserialize cache round-trip unchanged.
+mod lossless_names {
+    use crate::index::{IndexNameRef, MftIndex};
+    use crate::platform::DriveLetter;
+
+    /// WTF-8 encoding of the name `f` + lone-high-surrogate(U+D800) + `o`.
+    /// (`0xD800` → 3-byte WTF-8 `ED A0 80`.)
+    const SURROGATE_NAME_WTF8: &[u8] = &[b'f', 0xED, 0xA0, 0x80, b'o'];
+
+    /// Build an index containing one file whose name is the ill-formed
+    /// surrogate name above, stored losslessly via `add_name_bytes`.
+    fn index_with_surrogate_name() -> (MftIndex, IndexNameRef) {
+        let mut index = MftIndex::new(DriveLetter::C);
+        let offset = index.add_name_bytes(SURROGATE_NAME_WTF8);
+        let len = u16::try_from(SURROGATE_NAME_WTF8.len()).expect("len fits u16");
+        // Not ASCII (it isn't even valid UTF-8); no extension.
+        let name_ref = IndexNameRef::new(offset, len, false, 0);
+        let record = index.get_or_create(100.into());
+        record.first_name.name = name_ref;
+        (index, name_ref)
+    }
+
+    #[test]
+    fn surrogate_name_bytes_are_retained_losslessly() {
+        let (index, name_ref) = index_with_surrogate_name();
+        // The lossless accessor returns the TRUE on-disk bytes — this is what
+        // an exact-name search matches against, so the file is findable.
+        assert_eq!(index.get_name_bytes(name_ref), SURROGATE_NAME_WTF8);
+        // Nothing was replaced with U+FFFD (EF BF BD); the bytes are faithful.
+        assert!(
+            !index
+                .get_name_bytes(name_ref)
+                .windows(3)
+                .any(|w| w == [0xEF, 0xBF, 0xBD]),
+            "lossless bytes must not contain a U+FFFD replacement"
+        );
+    }
+
+    #[test]
+    fn surrogate_name_display_view_degrades_gracefully() {
+        let (index, name_ref) = index_with_surrogate_name();
+        // The `&str` view is lossy by contract: an ill-formed name renders as
+        // "" for display (the bytes are not valid UTF-8) — it must NOT panic
+        // and must NOT leak invalid UTF-8 into a `&str`.
+        let display = index.get_name(name_ref);
+        assert_eq!(display, "", "ill-formed name has no valid &str view");
+        // record_name routes through the same lossy view.
+        let rec = index.records().first().expect("one record");
+        assert_eq!(index.record_name(rec), "");
+    }
+
+    #[test]
+    fn surrogate_name_survives_cache_round_trip() {
+        let (index, name_ref) = index_with_surrogate_name();
+        // Serialize to the v14 cache format and read it back: the WTF-8 names
+        // blob must round-trip byte-for-byte (deserialize no longer demands
+        // UTF-8). This is the on-disk persistence half of findability.
+        let blob = index.serialize(1, 2, crate::usn::Usn::new(3));
+        let (restored, header) =
+            MftIndex::deserialize(&blob).expect("v14 index must round-trip");
+        assert_eq!(header.version, 14, "names-format break is v14");
+        assert_eq!(
+            restored.get_name_bytes(name_ref),
+            SURROGATE_NAME_WTF8,
+            "surrogate name must survive serialize→deserialize unchanged"
+        );
+    }
+
+    #[test]
+    fn well_formed_name_round_trips_as_plain_utf8() {
+        // Control: a normal name still behaves exactly as before — stored as
+        // plain UTF-8, recoverable as both bytes and a faithful &str view.
+        let mut index = MftIndex::new(DriveLetter::C);
+        let offset = index.add_name("réport.txt");
+        let len = u16::try_from("réport.txt".len()).expect("len fits u16");
+        let name_ref = IndexNameRef::new(offset, len, false, 0);
+        assert_eq!(index.get_name_bytes(name_ref), "réport.txt".as_bytes());
+        assert_eq!(index.get_name(name_ref), "réport.txt");
+    }
+}

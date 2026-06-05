@@ -111,16 +111,32 @@ impl CompactRecord {
         self.name_first_byte == b'$'
     }
 
-    /// Get the name from a names blob.
+    /// Get the name from a names blob as a **lossy `&str` view**.
+    ///
+    /// Valid-UTF-8 names (the common case) are returned verbatim; an ill-formed
+    /// (surrogate-bearing) name stored as WTF-8 returns `""` for display. Use
+    /// [`Self::name_bytes`] for the lossless bytes that exact/substring search
+    /// matches against, so a file with an ill-formed name stays findable
+    /// (WI-4.4).
     #[inline]
     #[must_use]
     pub fn name<'a>(&self, names: &'a [u8]) -> &'a str {
+        core::str::from_utf8(self.name_bytes(names)).unwrap_or("")
+    }
+
+    /// Get the name's **raw bytes** (WTF-8) from a names blob — the lossless
+    /// accessor.
+    ///
+    /// Returns exactly the stored bytes, including the byte-faithful encoding
+    /// of an ill-formed NTFS name (unpaired surrogates). This is what makes
+    /// every file matchable/findable by its true name regardless of UTF-8
+    /// well-formedness (WI-4.4). Returns `&[]` for an out-of-range slice.
+    #[inline]
+    #[must_use]
+    pub fn name_bytes<'a>(&self, names: &'a [u8]) -> &'a [u8] {
         let start = self.name_offset as usize;
-        let end = start + self.name_len as usize;
-        names
-            .get(start..end)
-            .and_then(|bytes| core::str::from_utf8(bytes).ok())
-            .unwrap_or("")
+        let end = start.saturating_add(self.name_len as usize);
+        names.get(start..end).unwrap_or(&[])
     }
 }
 
