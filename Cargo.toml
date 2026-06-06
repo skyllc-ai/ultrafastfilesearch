@@ -38,6 +38,7 @@ members = [
   # NOTE: uffs-tui and uffs-gui have moved to the private uffs-products repo.
   # ── Tools ──
   "crates/uffs-diag",          # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
+  "crates/uffs-bench",         # 📊 Benchmark-suite orchestrator (robust-benchmark-flow-*.md)
   "scripts/ci-pipeline",       # 🛠️ Promoted CI pipeline driver (dev-flow-implementation-plan.md § 7)
   "scripts/ci/gen-hooks",      # 🧬 Gate-manifest hook generator (gates-manifest-plan.md Phase 2)
   "scripts/ci/gen-workflow",   # 🧪 Gate-manifest workflow structural validator (gates-manifest-plan.md Phase 3)
@@ -139,6 +140,9 @@ uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.5.11
 # member consumes it as a library.
 # NOTE: no `uffs-diag` workspace dependency alias on purpose.
 # It is a top-level diagnostic/tool crate, not a shared runtime dependency.
+# NOTE: no `uffs-bench` workspace dependency alias on purpose either.
+# It is the top-level benchmark-suite orchestrator, consumed by no other
+# workspace member as a library.
 
 # ───── Polars (via facade crate for compilation isolation) ─────
 # Polars is pinned to a specific commit in crates/uffs-polars/Cargo.toml (rev = "...").
