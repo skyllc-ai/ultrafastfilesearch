@@ -29,6 +29,7 @@
 //! - [`host`] — the [`host::Host`] seam + `SystemHost` / `MockHost`.
 //! - [`restore`] — the LIFO undo registry and its `Drop` guard.
 //! - [`gate`] — modes, cards, and the mode-aware [`gate::confirm`] decision.
+//! - [`cards`] — gate-card / step-result builders for the staged orchestrator.
 //! - [`state`] — the `state.json` model + resume engine (`input_hash`).
 //! - [`tooling`] — acquired-tool keep/remove dispositions.
 //! - [`fingerprint`] — host fingerprint capture + crumb diff.
@@ -39,11 +40,11 @@
 //! - [`matrix`] — Stage 0d cross-tool vs UFFS-only matrix negotiation.
 //! - [`cli`] — the `clap` flag surface ([`cli::Cli`]) and mode resolution.
 //! - [`stages`] — Stage 1–3 measurement wrappers + the `percentiles` helper.
+//! - [`report`] — Stage 4 bundle assembly + `REPORT-DRAFT.md` scaffold.
 //! - [`mod@run`] — Stage 0e plan gate + the staged orchestrator ([`run::run`]).
 //!
-//! The remaining reporting wrapper (`report`) builds on this foundation in
-//! phases P7–P9; the binary entry point (`main.rs`) is a thin shim over
-//! [`run::run`].
+//! The remaining teardown/verify wiring builds on this foundation in phase P9;
+//! the binary entry point (`main.rs`) is a thin shim over [`run::run`].
 
 // Collection types are imported from `alloc` (not `std`) per the workspace
 // `std_instead_of_alloc` lint; this brings the crate into scope for those
@@ -51,6 +52,7 @@
 extern crate alloc;
 
 pub mod bundle;
+pub mod cards;
 pub mod cli;
 pub mod env;
 pub mod error;
@@ -59,6 +61,7 @@ pub mod gate;
 pub mod host;
 pub mod matrix;
 pub mod preflight;
+pub mod report;
 pub mod restore;
 pub mod run;
 pub mod stages;

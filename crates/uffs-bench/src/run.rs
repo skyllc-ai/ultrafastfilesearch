@@ -21,22 +21,26 @@ use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{bundle_path, new_bundle};
+use crate::cards::{
+    assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
+};
 use crate::cli::Cli;
 use crate::env::{self, EnvFingerprint, EnvSpec, ToolProbe};
 use crate::error::{CrumbError, Result};
-use crate::gate::{Card, Decision, Mode, StepResult, confirm, done_panel};
+use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
 use crate::matrix::{self, Matrix, MatrixSpec};
 use crate::preflight::{self, PatternProbe, PreflightResult, PreflightSpec};
+use crate::report;
 use crate::restore::RunGuard;
-use crate::stages::{self, StageCfg, StagePlan};
+use crate::stages::{self, StageCfg};
 use crate::state::{Decisions, State, Status, input_hash};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Stable id of the Stage 0 plan step in the resume engine.
-const STAGE0_ID: &str = "stage0/plan";
+pub(crate) const STAGE0_ID: &str = "stage0/plan";
 
 /// Default measurement patterns: display name + UFFS row-count argument
 /// template (`{DRIVE}` is substituted per drive during preflight).
@@ -53,6 +57,12 @@ const PREFLIGHT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Number of measurement stages following Stage 0 (cross-tool, parity, full).
 const MEASUREMENT_STAGES: u32 = 3;
+
+/// Stage number of the read-only Stage 4 bundle assembly.
+const ASSEMBLY_STAGE: u32 = 4;
+
+/// Stable id of the Stage 4 assembly step in the resume engine.
+pub(crate) const ASSEMBLY_ID: &str = "stage4/report";
 
 /// Whether the staged run should continue or stop early (operator abort/back).
 enum Flow {
@@ -194,12 +204,12 @@ const fn stage_selected(cli: &Cli, stage: u32) -> bool {
 }
 
 /// Resume-engine step id for a measurement stage.
-fn stage_step_id(stage: u32) -> String {
+pub(crate) fn stage_step_id(stage: u32) -> String {
     format!("stage{stage}/measure")
 }
 
 /// Operator-facing banner for a measurement stage.
-fn stage_banner(stage: u32) -> String {
+pub(crate) fn stage_banner(stage: u32) -> String {
     let label = match stage {
         1 => "CROSS-TOOL",
         2 => "PARITY",
@@ -229,75 +239,6 @@ fn report_crumbs(host: &dyn Host, crumbs: &[CrumbError]) {
     host.out("WARNING: some restores failed (crumbs left behind):");
     for crumb in crumbs {
         host.out(&format!("  - {crumb}"));
-    }
-}
-
-/// Build the Stage 0e plan-gate [`Card`].
-fn plan_card(bundle_dir: &Path) -> Card {
-    Card {
-        id: STAGE0_ID.to_owned(),
-        stage: "STAGE 0: PLAN".to_owned(),
-        step_num: 1,
-        step_total: 1,
-        title: "Confirm environment, competitor preflight, and negotiated matrix".to_owned(),
-        why: "Lock the apples-to-apples plan before any measurement runs.".to_owned(),
-        commands: Vec::new(),
-        resources: vec![bundle_dir.display().to_string()],
-        backups: Vec::new(),
-        est_time: "~5-20 s".to_owned(),
-        recovery: "Read-only: nothing is mutated, so an abort restores nothing.".to_owned(),
-        long_why: "The plan above is derived entirely from read-only probes; \
-                    proceeding writes the Stage 0 artifacts into the bundle and \
-                    unlocks the measurement stages."
-            .to_owned(),
-    }
-}
-
-/// Build a measurement-stage [`Card`] from the stage's [`StagePlan`].
-///
-/// The plan's commands/resources/backups are shown verbatim, upholding the
-/// transparency guarantee (the card shows exactly what [`stages::run_stage`]
-/// will run for the same stage and config).
-fn measurement_card(stage: u32, plan: &StagePlan) -> Card {
-    let banner = stage_banner(stage);
-    let title = format!("{banner} measurements");
-    Card {
-        id: stage_step_id(stage),
-        stage: banner,
-        step_num: 1,
-        step_total: 1,
-        title,
-        why: "Time the negotiated cells for each participating tool.".to_owned(),
-        commands: plan.commands.clone(),
-        resources: plan.resources.clone(),
-        backups: plan.backups.clone(),
-        est_time: plan.est_time.clone(),
-        recovery: "Snapshotted resources (daemon run-state, caches) are restored \
-                    at teardown, in reverse order."
-            .to_owned(),
-        long_why: "Each measurement stage registers its snapshot restores on the \
-                    run guard *before* mutating, shells out through the host seam, \
-                    and writes its artifacts into the bundle; teardown (or an early \
-                    return) undoes every snapshot in LIFO order."
-            .to_owned(),
-    }
-}
-
-/// The [`StepResult`] for a completed Stage 0.
-fn stage0_result(bundle_dir: &Path) -> StepResult {
-    StepResult {
-        code: Some(0_i32),
-        summary: "Plan locked; Stage 0 artifacts written.".to_owned(),
-        output_path: Some(bundle_dir.join("matrix.json").display().to_string()),
-    }
-}
-
-/// The [`StepResult`] used when a step is dry-run (rendered, not executed).
-fn dry_run_result() -> StepResult {
-    StepResult {
-        code: None,
-        summary: "Dry-run: rendered only, nothing mutated.".to_owned(),
-        output_path: None,
     }
 }
 
@@ -482,6 +423,52 @@ impl Orchestrator<'_> {
         }
     }
 
+    /// Gate and (on proceed) run the Stage 4 bundle assembly.
+    ///
+    /// Read-only with respect to host state — it only reads the bundle's
+    /// artifacts and writes the draft back into the bundle — so it takes no
+    /// [`RunGuard`].
+    ///
+    /// # Errors
+    /// Returns an error if the draft cannot be written into the bundle (see
+    /// [`report::assemble`]).
+    fn run_assembly(&self, state: &mut State, session: &mut Session, hash: &str) -> Result<Flow> {
+        let card = assembly_card(&self.bundle_dir);
+        match act_of(confirm(
+            self.host,
+            &mut session.mode,
+            &mut session.seen,
+            &card,
+        )) {
+            Act::Run => {
+                let path = report::assemble(
+                    self.host,
+                    &self.bundle_dir,
+                    SUITE_VERSION,
+                    &report_scope(self.cli),
+                )?;
+                let display = path.display().to_string();
+                let result = StepResult {
+                    code: Some(0_i32),
+                    summary: format!("Assembled {}.", report::REPORT_DRAFT),
+                    output_path: Some(display.clone()),
+                };
+                done_panel(self.host, &card, &result);
+                state.set_step(self.host, ASSEMBLY_ID, Status::Done, hash, vec![display]);
+                Ok(Flow::Continue)
+            }
+            Act::Noop => {
+                done_panel(self.host, &card, &dry_run_result());
+                Ok(Flow::Continue)
+            }
+            Act::Skip => {
+                state.set_step(self.host, ASSEMBLY_ID, Status::Skipped, hash, Vec::new());
+                Ok(Flow::Continue)
+            }
+            Act::Stop => Ok(Flow::Stop),
+        }
+    }
+
     /// Run the selected stages in order, honoring resume and stage selection.
     ///
     /// The read-only Stage 0 [`Capture`] is computed at most once, and only
@@ -532,6 +519,14 @@ impl Orchestrator<'_> {
                 self.run_measurement(state, session, guard, stage, cap, hash)?,
                 Flow::Stop
             ) {
+                return Ok(());
+            }
+        }
+        if stage_selected(self.cli, ASSEMBLY_STAGE) {
+            if state.should_skip(ASSEMBLY_ID, hash) {
+                self.host
+                    .out("-> STAGE 4: ASSEMBLY cached (resume) - skipping");
+            } else if matches!(self.run_assembly(state, session, hash)?, Flow::Stop) {
                 return Ok(());
             }
         }
