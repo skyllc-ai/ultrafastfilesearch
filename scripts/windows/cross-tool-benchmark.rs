@@ -245,6 +245,10 @@ fn find_uffs() -> Option<PathBuf> {
         find_in(&[PathBuf::from(&h).join("bin").join("uffs.exe")])
     })
 }
+// The pinned competitor *version* (currently Everything 1.1.0.30) is recorded
+// in `scripts/windows/competitors.toml` — the single source of truth. The
+// directory names below are only install-location candidates for *discovering*
+// an `es.exe` on disk (any installed build works); they are not version claims.
 fn find_es() -> Option<PathBuf> {
     where_exe("es.exe").or_else(|| {
         let (h, pf, pf86) = (env::var("USERPROFILE").unwrap_or_default(),

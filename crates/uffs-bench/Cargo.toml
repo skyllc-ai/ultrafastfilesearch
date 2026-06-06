@@ -64,6 +64,9 @@ chrono.workspace = true
 # CLI entry point (`main.rs`): mode/flag parsing for the orchestrator binary.
 clap = { workspace = true, features = ["derive", "env", "wrap_help"] }
 
+# Parse the pinned-competitor manifest (`scripts/windows/competitors.toml`).
+toml.workspace = true
+
 [dev-dependencies]
 # Real-filesystem round-trip tests for `SystemHost` (MockHost tests need no FS).
 tempfile.workspace = true

@@ -441,3 +441,11 @@ bench-preflight *args:
 bench-resume bundle *args:
     cargo run -p uffs-bench -- --bundle {{bundle}} {{args}}
 
+# Download + SHA-256-verify the pinned competitor (`es.exe`) into the bundle.
+# Reads scripts/windows/competitors.toml (the single pinned version), fetches
+# into <bundle>/tools/, and fails closed on a hash mismatch. Pass `--keep-tools`
+# to retain the binary; otherwise it is removed at teardown. Forward flags like
+# `--bundle <dir>`, e.g. `just bench-fetch-competitors --bundle out/bench`.
+bench-fetch-competitors *args:
+    cargo run -p uffs-bench -- {{args}} fetch-competitors
+

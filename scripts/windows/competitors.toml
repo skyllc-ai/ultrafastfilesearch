@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025-2026 SKY, LLC.
+#
+# ============================================================================
+# competitors.toml — the SINGLE pinned competitor version for the whole repo
+# ============================================================================
+# Every script and document that cites a competitor version MUST agree with
+# this file. The benchmark orchestrator (`uffs-bench fetch-competitors`) reads
+# it to download + SHA-256-verify a pinned `es.exe` into a run bundle, and
+# *fails closed* on any hash mismatch (see `crates/uffs-bench/src/competitors.rs`).
+#
+# Licensing guardrail (execution-plan §12 / open decision #1): we link-and-
+# hash-pin only. voidtools binaries are NOT redistributed in this repo or its
+# release assets; the operator downloads them at run time into the bundle.
+#
+# Filling in `es_sha256`: until the operator pastes the real upstream hash
+# here, verification fails closed and no acquisition is recorded — by design.
+# ============================================================================
+
+[everything]
+# The canonical Everything CLI version cited by the README and the published
+# head-to-head reports (docs/benchmarks/). This is the one pinned number.
+version = "1.1.0.30"
+# Upstream download (command-line `es.exe` distribution). Link only.
+es_url = "https://www.voidtools.com/ES-1.1.0.30.x64.zip"
+# Hex SHA-256 of the downloaded artifact. Operator pastes the upstream hash;
+# the placeholder below intentionally never matches, so an un-pinned fetch
+# fails closed instead of trusting arbitrary bytes.
+es_sha256 = "<fill-in>"
+note = "Link + hash only. Not redistributed. Operator stages into the bundle."
+
+[uffs_cpp]
+# Internal C++ reference binary (SwiftSearch lineage). Documented home, not
+# fetched over the network — resolved from the operator's `~/bin`.
+version = "v0.4.x"
+location = "~/bin/uffs.com"
+note = "Internal reference binary; documented home, not fetched."

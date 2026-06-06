@@ -22,6 +22,7 @@ use sha2 as _;
 #[cfg(test)]
 use tempfile as _;
 use thiserror as _;
+use toml as _;
 use uffs_bench::host::SystemHost;
 use uffs_bench::{Cli, Result, run};
 

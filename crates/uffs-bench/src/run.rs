@@ -24,17 +24,18 @@ use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
     assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
 };
-use crate::cli::Cli;
+use crate::cli::{Cli, Command};
 use crate::env::{self, EnvFingerprint, EnvSpec, ToolProbe};
 use crate::error::{CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
 use crate::matrix::{self, Matrix, MatrixSpec};
 use crate::preflight::{self, PatternProbe, PreflightResult, PreflightSpec};
-use crate::report;
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{Decisions, State, Status, input_hash};
+use crate::tooling::Disposition;
+use crate::{competitors, report};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -547,6 +548,50 @@ fn resolve_bundle_dir(host: &dyn Host, cli: &Cli, dry_run: bool) -> Result<PathB
     }
 }
 
+/// Disposition for tools the suite acquires (the `--keep-tools` toggle).
+const fn tool_disposition(cli: &Cli) -> Disposition {
+    if cli.keep_tools {
+        Disposition::Keep
+    } else {
+        Disposition::Remove
+    }
+}
+
+/// Handle the `fetch-competitors` subcommand.
+///
+/// Resolves (or resumes) a bundle, fetches + SHA-256-verifies the pinned
+/// competitor from `competitors.toml` into `<bundle>/tools/`, and records the
+/// verified [`Acquisition`](crate::tooling::Acquisition) in `state.json`. A
+/// dry-run acquires nothing.
+///
+/// # Errors
+/// Returns an error if bundle/state I/O fails or provisioning fails (a
+/// malformed manifest, a failed download, or a SHA-256 mismatch — all fail
+/// closed).
+fn run_fetch_competitors(host: &dyn Host, cli: &Cli) -> Result<()> {
+    if cli.mode() == Mode::DryRun {
+        host.out("dry-run: competitor fetch acquires nothing");
+        return Ok(());
+    }
+    let decisions = decisions_from_cli(cli);
+    let bundle_dir = resolve_bundle_dir(host, cli, false)?;
+    let state_path = bundle_dir.join("state.json");
+    let mut state = load_or_new_state(host, cli, &state_path, &decisions)?;
+
+    let manifest = competitors::load_manifest(host, Path::new(competitors::MANIFEST_PATH))?;
+    let acquisition = competitors::fetch(host, &manifest, &bundle_dir, tool_disposition(cli))?;
+    host.out(&format!(
+        "fetched {} (Everything v{}) -> {} [sha256 verified, {:?}]",
+        acquisition.name,
+        manifest.everything.version,
+        acquisition.path.display(),
+        acquisition.disposition
+    ));
+    state.acquisitions.push(acquisition);
+    state.save(host, &state_path)?;
+    Ok(())
+}
+
 /// Load `state.json` when resuming an existing bundle, else start fresh.
 fn load_or_new_state(
     host: &dyn Host,
@@ -571,6 +616,10 @@ fn load_or_new_state(
 /// Returns an error if bundle creation, state load/save, or a Stage 0 artifact
 /// write fails. An operator abort/back is **not** an error (returns `Ok`).
 pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
+    if matches!(cli.command, Some(Command::FetchCompetitors)) {
+        return run_fetch_competitors(host, cli);
+    }
+
     let mode = cli.mode();
     let dry_run = mode == Mode::DryRun;
     let decisions = decisions_from_cli(cli);

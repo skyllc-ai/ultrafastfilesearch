@@ -30,6 +30,7 @@
 //! - [`restore`] — the LIFO undo registry and its `Drop` guard.
 //! - [`gate`] — modes, cards, and the mode-aware [`gate::confirm`] decision.
 //! - [`cards`] — gate-card / step-result builders for the staged orchestrator.
+//! - [`competitors`] — P8 pinned-competitor manifest parse + fetch/verify.
 //! - [`state`] — the `state.json` model + resume engine (`input_hash`).
 //! - [`tooling`] — acquired-tool keep/remove dispositions.
 //! - [`fingerprint`] — host fingerprint capture + crumb diff.
@@ -54,6 +55,7 @@ extern crate alloc;
 pub mod bundle;
 pub mod cards;
 pub mod cli;
+pub mod competitors;
 pub mod env;
 pub mod error;
 pub mod fingerprint;

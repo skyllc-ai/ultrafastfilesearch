@@ -21,6 +21,8 @@ mod tests {
     use alloc::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
+    use clap::Parser as _;
+    use sha2::{Digest as _, Sha256};
     use uffs_bench::bundle::{ResolvedTool, ToolSource, new_bundle, resolve_tool};
     use uffs_bench::error::BenchError;
     use uffs_bench::fingerprint::{FingerprintSpec, capture, diff};
@@ -29,6 +31,7 @@ mod tests {
     use uffs_bench::restore::{RestoreRegistry, RunGuard};
     use uffs_bench::state::{Decisions, State, Status, input_hash};
     use uffs_bench::tooling::{Acquisition, Disposition, teardown};
+    use uffs_bench::{Cli, run};
 
     /// Build a minimal [`Card`] for the gate tests.
     fn make_card() -> Card {
@@ -372,5 +375,50 @@ mod tests {
                 .iter()
                 .any(|call| matches!(call, Call::CreateDirAll(_)))
         );
+    }
+
+    /// `fetch-competitors` records a verified acquisition in `state.json`.
+    ///
+    /// Drives the full public dispatch (`run`): the manifest is seeded at its
+    /// repo-relative path and the artifact the (mocked) downloader produces is
+    /// pre-seeded at the bundle's tools path, so the post-download SHA-256
+    /// check reads real bytes and the acquisition is persisted with its
+    /// disposition.
+    #[test]
+    fn fetch_competitors_records_acquisition_in_state() {
+        let artifact = b"pinned-es-artifact".to_vec();
+        let mut hasher = Sha256::new();
+        hasher.update(&artifact);
+        let sha256 = hex::encode(hasher.finalize());
+
+        let manifest = format!(
+            "[everything]\nversion = \"1.1.0.30\"\n\
+             es_url = \"https://example.test/dir/es.zip\"\nes_sha256 = \"{sha256}\"\n"
+        );
+        let host = MockHost::new()
+            .with_file("scripts/windows/competitors.toml", manifest.into_bytes())
+            .with_file("/out/bench/tools/es.zip", artifact);
+
+        let cli = Cli::parse_from([
+            "uffs-bench",
+            "--keep-tools",
+            "--bundle",
+            "/out/bench",
+            "fetch-competitors",
+        ]);
+        run(&host, &cli).expect("fetch-competitors succeeds");
+
+        let saved = host
+            .file(Path::new("/out/bench/state.json"))
+            .expect("state.json is written");
+        let state: State = serde_json::from_slice(&saved).expect("state.json parses");
+        assert_eq!(state.acquisitions.len(), 1, "one acquisition recorded");
+        let acq = state
+            .acquisitions
+            .first()
+            .expect("one acquisition recorded");
+        assert_eq!(acq.name, "es.zip");
+        assert_eq!(acq.sha256, sha256);
+        assert_eq!(acq.disposition, Disposition::Keep);
     }
 }

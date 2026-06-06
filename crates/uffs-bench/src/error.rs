@@ -48,6 +48,15 @@ pub enum BenchError {
     /// single filesystem path.
     #[error("command failed: {0}")]
     Command(String),
+
+    /// Competitor provisioning failed (malformed manifest or a SHA-256
+    /// mismatch on a downloaded binary).
+    ///
+    /// The fetch path treats a hash mismatch as fatal and *fails closed*
+    /// (deletes the suspect download), so the pinned competitor is never run
+    /// from unverified bytes.
+    #[error("competitor provisioning failed: {0}")]
+    Provision(String),
 }
 
 impl BenchError {

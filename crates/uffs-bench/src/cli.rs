@@ -15,12 +15,25 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::gate::Mode;
 
 /// Default tool ids when `--tools` is omitted (the full head-to-head set).
 pub const DEFAULT_TOOLS: [&str; 3] = ["uffs", "uffs_cpp", "everything"];
+
+/// Optional subcommands; an absent subcommand runs the full benchmark suite.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Download + SHA-256-verify the pinned competitor binary into the bundle.
+    ///
+    /// Reads `scripts/windows/competitors.toml`, fetches the pinned `es.exe`
+    /// artifact into `<bundle>/tools/`, verifies its hash (failing closed on a
+    /// mismatch), and records the result as a tracked acquisition in
+    /// `state.json` with the `--keep-tools` disposition.
+    #[command(name = "fetch-competitors")]
+    FetchCompetitors,
+}
 
 /// Robust, reproducible benchmark-suite orchestrator for UFFS.
 #[expect(
@@ -80,6 +93,10 @@ pub struct Cli {
     /// Keep any tools the suite acquired (default: remove at teardown).
     #[arg(long = "keep-tools")]
     pub keep_tools: bool,
+
+    /// Optional subcommand (e.g. `fetch-competitors`); absent runs the suite.
+    #[command(subcommand)]
+    pub command: Option<Command>,
 }
 
 impl Cli {
