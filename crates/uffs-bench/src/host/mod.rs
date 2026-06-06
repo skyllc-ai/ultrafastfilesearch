@@ -93,6 +93,14 @@ pub trait Host {
     /// Whether the standard input/output is an interactive terminal.
     fn is_tty(&self) -> bool;
 
+    /// Whether the current process has administrator/root privileges.
+    ///
+    /// Captured for the Stage 0a environment fingerprint (a benchmark run on an
+    /// unelevated host cannot read the MFT, so the report must record this).
+    /// Implementations make a best-effort, non-failing determination; the value
+    /// is informational and never gates control flow or a security decision.
+    fn is_elevated(&self) -> bool;
+
     /// Read a single keypress for an interactive gate.
     ///
     /// # Errors

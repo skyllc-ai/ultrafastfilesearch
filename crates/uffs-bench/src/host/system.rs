@@ -85,6 +85,30 @@ impl Host for SystemHost {
         io::stdin().is_terminal() && io::stdout().is_terminal()
     }
 
+    fn is_elevated(&self) -> bool {
+        // Best-effort, dependency-free probe through the same process seam the
+        // host already uses. Honest token/uid inspection would need `unsafe`
+        // FFI (which the workspace denies) or a heavyweight crate; this value is
+        // only recorded in the environment fingerprint, never used to gate a
+        // decision, so a process probe is the correct, minimal trade-off.
+        #[cfg(windows)]
+        {
+            // The High Mandatory Level group SID (`S-1-16-12288`) appears in the
+            // token only when the process is running elevated.
+            self.run("whoami", &["/groups"])
+                .is_ok_and(|out| out.stdout.contains("S-1-16-12288"))
+        }
+        #[cfg(unix)]
+        {
+            self.run("id", &["-u"])
+                .is_ok_and(|out| out.stdout.trim() == "0")
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            false
+        }
+    }
+
     fn read_key(&self) -> io::Result<char> {
         // A full-line read is a deliberately simple stand-in for raw single-key
         // input: it needs no extra dependency or `unsafe` termios handling and

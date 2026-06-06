@@ -61,6 +61,8 @@ pub struct MockHost {
     clock: Cell<DateTime<Utc>>,
     /// Whether the mock reports an interactive TTY.
     tty: bool,
+    /// Whether the mock reports the process as elevated.
+    elevated: bool,
 }
 
 /// Deterministic default clock (a fixed, arbitrary instant in 2023).
@@ -79,6 +81,7 @@ impl Default for MockHost {
             out_lines: RefCell::new(Vec::new()),
             clock: Cell::new(default_clock()),
             tty: true,
+            elevated: false,
         }
     }
 }
@@ -123,6 +126,13 @@ impl MockHost {
     #[must_use]
     pub const fn with_tty(mut self, tty: bool) -> Self {
         self.tty = tty;
+        self
+    }
+
+    /// Builder: set whether the mock reports the process as elevated.
+    #[must_use]
+    pub const fn with_elevated(mut self, elevated: bool) -> Self {
+        self.elevated = elevated;
         self
     }
 
@@ -237,6 +247,10 @@ impl super::Host for MockHost {
 
     fn is_tty(&self) -> bool {
         self.tty
+    }
+
+    fn is_elevated(&self) -> bool {
+        self.elevated
     }
 
     fn read_key(&self) -> io::Result<char> {

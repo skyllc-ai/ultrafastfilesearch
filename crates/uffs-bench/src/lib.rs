@@ -33,16 +33,11 @@
 //! - [`tooling`] — acquired-tool keep/remove dispositions.
 //! - [`fingerprint`] — host fingerprint capture + crumb diff.
 //! - [`bundle`] — bundle directory creation + tool resolution.
+//! - [`env`] — Stage 0a environment fingerprint capture + markdown renderer.
 //!
-//! Measurement stages (`env`, `preflight`, `matrix`, `stages`, `report`) and
-//! the `clap` CLI binary build on this foundation in phases P2–P9.
-//!
-//! ## Deferred to P2
-//!
-//! `Host::is_elevated` (from the design sketch) is intentionally **not** part
-//! of the P1 trait: honest token-elevation detection needs platform-specific
-//! `unsafe`, and no P1 component consumes it. It lands with `env.rs` (Stage
-//! 0a), where the environment fingerprint actually requires it.
+//! The remaining measurement stages (`preflight`, `matrix`, `stages`,
+//! `report`) and the `clap` CLI binary build on this foundation in phases
+//! P3–P9.
 
 // Collection types are imported from `alloc` (not `std`) per the workspace
 // `std_instead_of_alloc` lint; this brings the crate into scope for those
@@ -50,6 +45,7 @@
 extern crate alloc;
 
 pub mod bundle;
+pub mod env;
 pub mod error;
 pub mod fingerprint;
 pub mod gate;
