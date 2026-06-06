@@ -408,3 +408,36 @@ bench-help:
     printf "\033[0;34m📊 Results are saved to: benchmarks/*.json\033[0m\n"
     printf "\033[0;34m📈 Criterion reports: target/criterion/report/index.html\033[0m\n"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Robust benchmark-suite orchestrator (`crates/uffs-bench`)
+#
+# Thin wrappers around the `uffs-bench` binary that drives the reproducible
+# Stage 0→5 flow (env fingerprint → competitor preflight → matrix → measurement
+# → report → teardown) with the "no crumb left behind" snapshot/restore guard.
+# All side effects flow through the `Host` seam, so dry-run and preflight are
+# safe on any OS; live measurement stages are Windows-only (later phases).
+# See docs/benchmarks/robust-benchmark-flow-execution-plan.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Full benchmark suite (Stage 0→5); guided on first run, terse after.
+# Pass extra flags through, e.g. `just bench-suite --drives C,D --only-stage 1`.
+bench-suite *args:
+    cargo run -p uffs-bench -- {{args}}
+
+# Full suite with no prompts (snapshot/restore/verify still run).
+bench-suite-auto *args:
+    cargo run -p uffs-bench -- --auto {{args}}
+
+# Render every card and the negotiated matrix, mutating nothing.
+bench-suite-dry *args:
+    cargo run -p uffs-bench -- --dry-run {{args}}
+
+# Stage 0 only: env fingerprint + competitor preflight + matrix (no measurement).
+bench-preflight *args:
+    cargo run -p uffs-bench -- --only-stage 0 {{args}}
+
+# Resume an existing bundle: load its state.json, skip Done steps, continue.
+bench-resume bundle *args:
+    cargo run -p uffs-bench -- --bundle {{bundle}} {{args}}
+

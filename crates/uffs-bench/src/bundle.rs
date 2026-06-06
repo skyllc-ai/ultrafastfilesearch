@@ -13,16 +13,27 @@ use std::path::{Path, PathBuf};
 use crate::error::{BenchError, Result};
 use crate::host::Host;
 
+/// Compute the bundle directory path for *now* without creating it.
+///
+/// The name is `bench-<UTC timestamp>-v<version>`, so concurrent or repeated
+/// runs never collide and the bundle self-documents its suite version. Split
+/// out from [`new_bundle`] so a dry-run can display the would-be path while
+/// creating nothing.
+#[must_use]
+pub fn bundle_path(host: &dyn Host, root: &Path, version: &str) -> PathBuf {
+    let stamp = host.now().format("%Y%m%dT%H%M%SZ").to_string();
+    root.join(format!("bench-{stamp}-v{version}"))
+}
+
 /// Create a fresh, timestamped bundle directory under `root`.
 ///
-/// The directory name is `bench-<UTC timestamp>-v<version>`, so concurrent or
-/// repeated runs never collide and the bundle self-documents its suite version.
+/// Names it via [`bundle_path`] (the single source of the naming convention)
+/// then creates it.
 ///
 /// # Errors
 /// Returns an error if the directory cannot be created.
 pub fn new_bundle(host: &dyn Host, root: &Path, version: &str) -> Result<PathBuf> {
-    let stamp = host.now().format("%Y%m%dT%H%M%SZ").to_string();
-    let dir = root.join(format!("bench-{stamp}-v{version}"));
+    let dir = bundle_path(host, root, version);
     host.create_dir_all(&dir)
         .map_err(|err| BenchError::io(&dir, err))?;
     Ok(dir)

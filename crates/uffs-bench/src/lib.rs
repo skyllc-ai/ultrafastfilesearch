@@ -35,9 +35,13 @@
 //! - [`bundle`] — bundle directory creation + tool resolution.
 //! - [`env`] — Stage 0a environment fingerprint capture + markdown renderer.
 //! - [`preflight`] — Stage 0c read-only competitor (Everything) preflight.
+//! - [`matrix`] — Stage 0d cross-tool vs UFFS-only matrix negotiation.
+//! - [`cli`] — the `clap` flag surface ([`cli::Cli`]) and mode resolution.
+//! - [`run`] — Stage 0e plan gate + the staged orchestrator ([`run::run`]).
 //!
-//! The remaining measurement stages (`matrix`, `stages`, `report`) and the
-//! `clap` CLI binary build on this foundation in phases P4–P9.
+//! The remaining measurement-stage harness wrappers (`stages`, `report`) build
+//! on this foundation in phases P5–P9; the binary entry point (`main.rs`) is a
+//! thin shim over [`run::run`].
 
 // Collection types are imported from `alloc` (not `std`) per the workspace
 // `std_instead_of_alloc` lint; this brings the crate into scope for those
@@ -45,15 +49,20 @@
 extern crate alloc;
 
 pub mod bundle;
+pub mod cli;
 pub mod env;
 pub mod error;
 pub mod fingerprint;
 pub mod gate;
 pub mod host;
+pub mod matrix;
 pub mod preflight;
 pub mod restore;
+pub mod run;
 pub mod state;
 pub mod tooling;
 
+pub use cli::Cli;
 pub use error::{BenchError, CrumbError, Result};
 pub use host::{Host, MockHost, ProcOutput, SystemHost};
+pub use run::run;
