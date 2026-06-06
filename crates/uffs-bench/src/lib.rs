@@ -34,10 +34,10 @@
 //! - [`fingerprint`] — host fingerprint capture + crumb diff.
 //! - [`bundle`] — bundle directory creation + tool resolution.
 //! - [`env`] — Stage 0a environment fingerprint capture + markdown renderer.
+//! - [`preflight`] — Stage 0c read-only competitor (Everything) preflight.
 //!
-//! The remaining measurement stages (`preflight`, `matrix`, `stages`,
-//! `report`) and the `clap` CLI binary build on this foundation in phases
-//! P3–P9.
+//! The remaining measurement stages (`matrix`, `stages`, `report`) and the
+//! `clap` CLI binary build on this foundation in phases P4–P9.
 
 // Collection types are imported from `alloc` (not `std`) per the workspace
 // `std_instead_of_alloc` lint; this brings the crate into scope for those
@@ -50,6 +50,7 @@ pub mod error;
 pub mod fingerprint;
 pub mod gate;
 pub mod host;
+pub mod preflight;
 pub mod restore;
 pub mod state;
 pub mod tooling;

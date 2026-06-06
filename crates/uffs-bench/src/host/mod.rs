@@ -90,6 +90,13 @@ pub trait Host {
     /// The current wall-clock time, in UTC.
     fn now(&self) -> DateTime<Utc>;
 
+    /// Pause execution for `millis` milliseconds.
+    ///
+    /// Used by readiness polls (for example waiting for a competitor index to
+    /// finish loading) so the cadence is injectable: the [`MockHost`] records
+    /// the request and returns immediately, keeping tests instant.
+    fn sleep_ms(&self, millis: u64);
+
     /// Whether the standard input/output is an interactive terminal.
     fn is_tty(&self) -> bool;
 

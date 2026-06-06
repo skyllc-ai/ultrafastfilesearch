@@ -81,6 +81,10 @@ impl Host for SystemHost {
         Utc::now()
     }
 
+    fn sleep_ms(&self, millis: u64) {
+        std::thread::sleep(core::time::Duration::from_millis(millis));
+    }
+
     fn is_tty(&self) -> bool {
         io::stdin().is_terminal() && io::stdout().is_terminal()
     }

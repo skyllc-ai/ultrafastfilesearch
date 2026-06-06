@@ -41,6 +41,8 @@ pub enum Call {
     ReadKey,
     /// [`super::Host::out`] emitted the given line.
     Out(String),
+    /// [`super::Host::sleep_ms`] was asked to pause for the given milliseconds.
+    Sleep(u64),
 }
 
 /// In-memory, fully scriptable [`Host`](super::Host) implementation.
@@ -243,6 +245,12 @@ impl super::Host for MockHost {
 
     fn now(&self) -> DateTime<Utc> {
         self.clock.get()
+    }
+
+    fn sleep_ms(&self, millis: u64) {
+        // No real waiting in tests; the request is recorded so a poll's cadence
+        // can be asserted.
+        self.record(Call::Sleep(millis));
     }
 
     fn is_tty(&self) -> bool {
