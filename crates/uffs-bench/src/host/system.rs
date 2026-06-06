@@ -56,6 +56,12 @@ impl Host for SystemHost {
         std::fs::rename(from, to)
     }
 
+    fn copy_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // `std::fs::copy` returns the byte count; the orchestrator only needs
+        // success/failure, so the count is intentionally discarded here.
+        std::fs::copy(from, to).map(|_bytes| ())
+    }
+
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         std::fs::create_dir_all(path)
     }

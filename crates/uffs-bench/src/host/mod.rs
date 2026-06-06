@@ -69,6 +69,18 @@ pub trait Host {
     /// Returns an error if the rename fails.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
 
+    /// Copy `from` to `to`, overwriting any existing destination.
+    ///
+    /// Distinct from [`read_file`](Host::read_file) +
+    /// [`write_file`](Host::write_file) so a multi-GB resource (a UFFS
+    /// cache snapshot for R2) is streamed by the OS rather than buffered
+    /// through the orchestrator's heap.
+    ///
+    /// # Errors
+    /// Returns an error if the source cannot be read or the destination
+    /// written.
+    fn copy_file(&self, from: &Path, to: &Path) -> io::Result<()>;
+
     /// Recursively create a directory and all missing parents.
     ///
     /// # Errors

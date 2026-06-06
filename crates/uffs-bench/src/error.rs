@@ -40,6 +40,14 @@ pub enum BenchError {
     /// orchestrator fails closed instead of blocking on absent input.
     #[error("interactive confirmation required but host has no TTY")]
     NoTty,
+
+    /// A spawned command could not be run or returned a non-zero exit code.
+    ///
+    /// Used by the measurement stages and their restore actions, where the
+    /// failure is a process outcome rather than an [`std::io::Error`] tied to a
+    /// single filesystem path.
+    #[error("command failed: {0}")]
+    Command(String),
 }
 
 impl BenchError {

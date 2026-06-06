@@ -7,12 +7,12 @@
 //! resolves the bundle directory and `state.json`, captures the Stage 0a
 //! environment fingerprint, runs the Stage 0c competitor preflight, negotiates
 //! the Stage 0d matrix, then presents the Stage 0e plan gate through the
-//! mode-aware [`confirm`] gate. Stages 1–3 are measurement stubs in this phase
-//! (the Windows-live harness wrappers land in P5/P6); they are wired here so
-//! the resume engine and `--only-stage`/`--from-stage` selection are exercised
-//! end to end. The "no crumb left behind" [`RunGuard`] teardown is created and
-//! drained at the top level; measurement stages register their snapshots
-//! through it once they gain real mutations in P5/P6.
+//! mode-aware [`confirm`] gate. Stages 1–3 dispatch to the live measurement
+//! wrappers in [`crate::stages`]; resume and `--only-stage`/`--from-stage`
+//! selection are honored throughout. The "no crumb left behind" [`RunGuard`]
+//! teardown is created at the top level and threaded into the measurement
+//! stages, which register their snapshot restores on it *before* mutating, then
+//! drained once the staged loop returns.
 //!
 //! Every side effect flows through the [`Host`] seam, so the whole orchestrator
 //! is unit-testable under the `MockHost` on any OS.
@@ -29,6 +29,7 @@ use crate::host::Host;
 use crate::matrix::{self, Matrix, MatrixSpec};
 use crate::preflight::{self, PatternProbe, PreflightResult, PreflightSpec};
 use crate::restore::RunGuard;
+use crate::stages::{self, StageCfg, StagePlan};
 use crate::state::{Decisions, State, Status, input_hash};
 
 /// Suite version stamped into bundle names and `state.json`.
@@ -160,19 +161,12 @@ fn env_spec_from_cli(cli: &Cli) -> EnvSpec {
 
 /// Build the Stage 0c [`PreflightSpec`] from the CLI and host environment.
 fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli) -> PreflightSpec {
-    let patterns = DEFAULT_PATTERNS
-        .iter()
-        .map(|(name, args)| PatternProbe {
-            name: (*name).to_owned(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-        })
-        .collect();
     PreflightSpec {
         ini_path: everything_ini_path(host),
         candidate_drives: cli.drives_or_default(),
         es_exe: "es".to_owned(),
         uffs_exe: "uffs".to_owned(),
-        patterns,
+        patterns: default_pattern_probes(),
         poll_attempts: PREFLIGHT_POLL_ATTEMPTS,
         poll_interval_ms: PREFLIGHT_POLL_INTERVAL_MS,
     }
@@ -259,8 +253,12 @@ fn plan_card(bundle_dir: &Path) -> Card {
     }
 }
 
-/// Build a measurement-stage [`Card`] (skeleton: the harness lands in P5/P6).
-fn measurement_card(stage: u32) -> Card {
+/// Build a measurement-stage [`Card`] from the stage's [`StagePlan`].
+///
+/// The plan's commands/resources/backups are shown verbatim, upholding the
+/// transparency guarantee (the card shows exactly what [`stages::run_stage`]
+/// will run for the same stage and config).
+fn measurement_card(stage: u32, plan: &StagePlan) -> Card {
     let banner = stage_banner(stage);
     let title = format!("{banner} measurements");
     Card {
@@ -270,14 +268,17 @@ fn measurement_card(stage: u32) -> Card {
         step_total: 1,
         title,
         why: "Time the negotiated cells for each participating tool.".to_owned(),
-        commands: Vec::new(),
-        resources: Vec::new(),
-        backups: Vec::new(),
-        est_time: "~1-5 min".to_owned(),
-        recovery: "Any competitor config touched is restored at teardown.".to_owned(),
-        long_why: "Measurement harness wrappers (snapshot -> mutate -> measure \
-                    -> restore) are implemented in phases P5/P6; this skeleton \
-                    wires the gate, resume, and stage selection."
+        commands: plan.commands.clone(),
+        resources: plan.resources.clone(),
+        backups: plan.backups.clone(),
+        est_time: plan.est_time.clone(),
+        recovery: "Snapshotted resources (daemon run-state, caches) are restored \
+                    at teardown, in reverse order."
+            .to_owned(),
+        long_why: "Each measurement stage registers its snapshot restores on the \
+                    run guard *before* mutating, shells out through the host seam, \
+                    and writes its artifacts into the bundle; teardown (or an early \
+                    return) undoes every snapshot in LIFO order."
             .to_owned(),
     }
 }
@@ -300,13 +301,42 @@ fn dry_run_result() -> StepResult {
     }
 }
 
-/// The placeholder [`StepResult`] for a skeleton measurement stage.
-fn stub_result(stage: u32) -> StepResult {
-    StepResult {
-        code: Some(0_i32),
-        summary: format!("Stage {stage} harness lands in P5/P6 (skeleton no-op)."),
-        output_path: None,
-    }
+/// Read-only Stage 0 capture, shared by the plan gate and the measurement
+/// stages.
+///
+/// Computed at most once per run (only when Stage 0 or a measurement stage will
+/// actually execute), so a fully-cached resume performs no probes.
+struct Capture {
+    /// Stage 0a environment fingerprint.
+    fp: EnvFingerprint,
+    /// Stage 0c competitor preflight.
+    preflight: PreflightResult,
+    /// Stage 0d negotiated matrix (its `capable_drives` feed Stage 1).
+    matrix: Matrix,
+}
+
+/// Mutable per-run gate state threaded through every staged confirm.
+///
+/// Bundles the (mutable) confirmation [`Mode`] with the set of card ids already
+/// taught this run, so a single `&mut Session` flows through the staged loop
+/// instead of two parallel out-parameters.
+struct Session {
+    /// Confirmation mode (an interactive `a` keypress upgrades it in place).
+    mode: Mode,
+    /// Card ids already shown in full this run (guided-mode teach-once).
+    seen: BTreeSet<String>,
+}
+
+/// Build the default measurement [`PatternProbe`] set (shared by preflight and
+/// the native Stage 3 timing).
+fn default_pattern_probes() -> Vec<PatternProbe> {
+    DEFAULT_PATTERNS
+        .iter()
+        .map(|(name, args)| PatternProbe {
+            name: (*name).to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        })
+        .collect()
 }
 
 /// Coordinates Stage 0 capture and the staged measurement loop over a [`Host`].
@@ -333,27 +363,58 @@ impl Orchestrator<'_> {
         Ok(())
     }
 
-    /// Capture Stage 0 (env + preflight + matrix), render the plan, and gate
-    /// it.
-    fn run_stage0(
-        &self,
-        state: &mut State,
-        mode: &mut Mode,
-        seen: &mut BTreeSet<String>,
-        hash: &str,
-    ) -> Result<Flow> {
+    /// Run the read-only Stage 0 probes (env + preflight + matrix).
+    ///
+    /// Computed at most once per run and shared by the plan gate and the
+    /// measurement stages (whose [`StageCfg`] draws its cross-tool-capable
+    /// drive subset from the negotiated matrix), so no probe runs twice.
+    fn capture(&self) -> Capture {
         let fp = env::capture(self.host, &env_spec_from_cli(self.cli));
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
         let matrix = matrix::compute_matrix(&matrix_spec_from_cli(self.cli), &preflight);
+        Capture {
+            fp,
+            preflight,
+            matrix,
+        }
+    }
 
-        self.host.out(&env::render_md(&fp));
-        self.host.out(&matrix::render_md(&matrix));
+    /// Build the [`StageCfg`] shared by every measurement stage from the CLI
+    /// and the negotiated matrix.
+    fn stage_cfg(&self, cap: &Capture) -> StageCfg {
+        StageCfg {
+            bundle_dir: self.bundle_dir.clone(),
+            capable_drives: cap.matrix.capable_drives.clone(),
+            drives: self.cli.drives_or_default(),
+            tools: self.cli.tools_or_default(),
+            rounds: self.cli.rounds,
+            drop_cache: self.cli.drop_os_cache,
+            patterns: default_pattern_probes(),
+            uffs_exe: "uffs".to_owned(),
+        }
+    }
+
+    /// Render the captured Stage 0 plan and gate it.
+    fn run_stage0(
+        &self,
+        state: &mut State,
+        session: &mut Session,
+        cap: &Capture,
+        hash: &str,
+    ) -> Result<Flow> {
+        self.host.out(&env::render_md(&cap.fp));
+        self.host.out(&matrix::render_md(&cap.matrix));
 
         let card = plan_card(&self.bundle_dir);
-        match act_of(confirm(self.host, mode, seen, &card)) {
+        match act_of(confirm(
+            self.host,
+            &mut session.mode,
+            &mut session.seen,
+            &card,
+        )) {
             Act::Run => {
-                self.write_stage0(&fp, &preflight, &matrix)?;
+                self.write_stage0(&cap.fp, &cap.preflight, &cap.matrix)?;
                 state.set_step(
                     self.host,
                     STAGE0_ID,
@@ -376,47 +437,80 @@ impl Orchestrator<'_> {
         }
     }
 
-    /// Gate one measurement stage (skeleton: no timing harness yet).
+    /// Plan, gate, and (on proceed) run one measurement stage through
+    /// [`stages::run_stage`], threading the [`RunGuard`] so the stage registers
+    /// its snapshot restores *before* mutating.
+    ///
+    /// # Errors
+    /// Returns an error if the wrapped harness cannot be spawned or a snapshot
+    /// / artifact write fails (see [`stages::run_stage`]).
     fn run_measurement(
         &self,
         state: &mut State,
-        mode: &mut Mode,
-        seen: &mut BTreeSet<String>,
+        session: &mut Session,
+        guard: &mut RunGuard<'_>,
         stage_num: u32,
+        cap: &Capture,
         hash: &str,
-    ) -> Flow {
-        let card = measurement_card(stage_num);
+    ) -> Result<Flow> {
+        let cfg = self.stage_cfg(cap);
+        let plan = stages::plan(stage_num, &cfg);
+        let card = measurement_card(stage_num, &plan);
         let id = stage_step_id(stage_num);
-        match act_of(confirm(self.host, mode, seen, &card)) {
+        match act_of(confirm(
+            self.host,
+            &mut session.mode,
+            &mut session.seen,
+            &card,
+        )) {
             Act::Run => {
-                done_panel(self.host, &card, &stub_result(stage_num));
-                state.set_step(self.host, id, Status::Done, hash, Vec::new());
-                Flow::Continue
+                let result = stages::run_stage(self.host, guard, stage_num, &cfg)?;
+                let outputs = result.output_path.clone().into_iter().collect();
+                done_panel(self.host, &card, &result);
+                state.set_step(self.host, id, Status::Done, hash, outputs);
+                Ok(Flow::Continue)
             }
             Act::Noop => {
                 done_panel(self.host, &card, &dry_run_result());
-                Flow::Continue
+                Ok(Flow::Continue)
             }
             Act::Skip => {
                 state.set_step(self.host, id, Status::Skipped, hash, Vec::new());
-                Flow::Continue
+                Ok(Flow::Continue)
             }
-            Act::Stop => Flow::Stop,
+            Act::Stop => Ok(Flow::Stop),
         }
     }
 
     /// Run the selected stages in order, honoring resume and stage selection.
+    ///
+    /// The read-only Stage 0 [`Capture`] is computed at most once, and only
+    /// when Stage 0 or a measurement stage will actually run, so a
+    /// fully-cached resume performs no probes.
     fn execute(
         &self,
         state: &mut State,
-        mode: &mut Mode,
-        seen: &mut BTreeSet<String>,
+        session: &mut Session,
+        guard: &mut RunGuard<'_>,
         hash: &str,
     ) -> Result<()> {
-        if stage_selected(self.cli, 0) {
-            if state.should_skip(STAGE0_ID, hash) {
+        let stage0_selected = stage_selected(self.cli, 0);
+        let stage0_skip = state.should_skip(STAGE0_ID, hash);
+        let measure_live = (1..=MEASUREMENT_STAGES).any(|stage| {
+            stage_selected(self.cli, stage) && !state.should_skip(&stage_step_id(stage), hash)
+        });
+        let capture = ((stage0_selected && !stage0_skip) || measure_live).then(|| self.capture());
+
+        if stage0_selected {
+            let flow = if stage0_skip {
                 self.host.out("-> STAGE 0: PLAN cached (resume) - skipping");
-            } else if matches!(self.run_stage0(state, mode, seen, hash)?, Flow::Stop) {
+                Flow::Continue
+            } else if let Some(cap) = capture.as_ref() {
+                self.run_stage0(state, session, cap, hash)?
+            } else {
+                Flow::Continue
+            };
+            if matches!(flow, Flow::Stop) {
                 return Ok(());
             }
         }
@@ -431,8 +525,11 @@ impl Orchestrator<'_> {
                 ));
                 continue;
             }
+            let Some(cap) = capture.as_ref() else {
+                continue;
+            };
             if matches!(
-                self.run_measurement(state, mode, seen, stage, hash),
+                self.run_measurement(state, session, guard, stage, cap, hash)?,
                 Flow::Stop
             ) {
                 return Ok(());
@@ -479,7 +576,7 @@ fn load_or_new_state(
 /// Returns an error if bundle creation, state load/save, or a Stage 0 artifact
 /// write fails. An operator abort/back is **not** an error (returns `Ok`).
 pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
-    let mut mode = cli.mode();
+    let mode = cli.mode();
     let dry_run = mode == Mode::DryRun;
     let decisions = decisions_from_cli(cli);
     let hash = plan_input_hash(&decisions);
@@ -498,10 +595,13 @@ pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
         cli,
         bundle_dir,
     };
-    let mut seen = BTreeSet::new();
-    let guard = RunGuard::new(host);
+    let mut session = Session {
+        mode,
+        seen: BTreeSet::new(),
+    };
+    let mut guard = RunGuard::new(host);
 
-    orchestrator.execute(&mut state, &mut mode, &mut seen, &hash)?;
+    orchestrator.execute(&mut state, &mut session, &mut guard, &hash)?;
 
     report_crumbs(host, &guard.finish());
 

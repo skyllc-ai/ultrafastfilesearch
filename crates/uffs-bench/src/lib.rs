@@ -33,15 +33,17 @@
 //! - [`tooling`] — acquired-tool keep/remove dispositions.
 //! - [`fingerprint`] — host fingerprint capture + crumb diff.
 //! - [`bundle`] — bundle directory creation + tool resolution.
-//! - [`env`] — Stage 0a environment fingerprint capture + markdown renderer.
+//! - [`mod@env`] — Stage 0a environment fingerprint capture + markdown
+//!   renderer.
 //! - [`preflight`] — Stage 0c read-only competitor (Everything) preflight.
 //! - [`matrix`] — Stage 0d cross-tool vs UFFS-only matrix negotiation.
 //! - [`cli`] — the `clap` flag surface ([`cli::Cli`]) and mode resolution.
-//! - [`run`] — Stage 0e plan gate + the staged orchestrator ([`run::run`]).
+//! - [`stages`] — Stage 1–3 measurement wrappers + the `percentiles` helper.
+//! - [`mod@run`] — Stage 0e plan gate + the staged orchestrator ([`run::run`]).
 //!
-//! The remaining measurement-stage harness wrappers (`stages`, `report`) build
-//! on this foundation in phases P5–P9; the binary entry point (`main.rs`) is a
-//! thin shim over [`run::run`].
+//! The remaining reporting wrapper (`report`) builds on this foundation in
+//! phases P7–P9; the binary entry point (`main.rs`) is a thin shim over
+//! [`run::run`].
 
 // Collection types are imported from `alloc` (not `std`) per the workspace
 // `std_instead_of_alloc` lint; this brings the crate into scope for those
@@ -59,6 +61,7 @@ pub mod matrix;
 pub mod preflight;
 pub mod restore;
 pub mod run;
+pub mod stages;
 pub mod state;
 pub mod tooling;
 

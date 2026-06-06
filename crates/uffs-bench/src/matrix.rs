@@ -8,7 +8,7 @@
 //! a clearly-labelled **UFFS-only** cell (with a per-cell reason), so coverage
 //! is never silently dropped. [`compute_matrix`] implements execution-plan
 //! §8.4; [`render_md`] formats the negotiated matrix for the 0e plan gate and
-//! the report; [`write`] persists it to `bundle/matrix.json`.
+//! the report; [`write()`] persists it to `bundle/matrix.json`.
 //!
 //! The only competitor that constrains drives today is Everything: it can serve
 //! a drive only when its index is `loaded` *and* `hot`, and a `(drive,

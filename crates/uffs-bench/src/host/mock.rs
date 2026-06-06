@@ -33,6 +33,8 @@ pub enum Call {
     RemoveFile(PathBuf),
     /// [`super::Host::rename`] from the first path to the second.
     Rename(PathBuf, PathBuf),
+    /// [`super::Host::copy_file`] from the first path to the second.
+    Copy(PathBuf, PathBuf),
     /// [`super::Host::create_dir_all`] for the given path.
     CreateDirAll(PathBuf),
     /// [`super::Host::run`] with the executable and its arguments.
@@ -203,6 +205,18 @@ impl super::Host for MockHost {
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.record(Call::Rename(from.to_path_buf(), to.to_path_buf()));
         let bytes = self.files.borrow_mut().remove(from).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no such file: {}", from.display()),
+            )
+        })?;
+        self.files.borrow_mut().insert(to.to_path_buf(), bytes);
+        Ok(())
+    }
+
+    fn copy_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.record(Call::Copy(from.to_path_buf(), to.to_path_buf()));
+        let bytes = self.files.borrow().get(from).cloned().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("no such file: {}", from.display()),
