@@ -6,9 +6,9 @@
 //! These pure presentation helpers turn a stage's plan and bundle paths into
 //! the operator-facing card shown by [`crate::gate::confirm`] and the
 //! [`StepResult`] echoed by [`crate::gate::done_panel`]. They are split out of
-//! [`crate::run`] so the orchestrator module stays focused on control flow; the
-//! stage "vocabulary" they depend on ([`STAGE0_ID`], [`ASSEMBLY_ID`],
-//! [`stage_banner`], [`stage_step_id`]) still lives with the run loop.
+//! [`mod@crate::run`] so the orchestrator module stays focused on control flow;
+//! the stage "vocabulary" they depend on (`STAGE0_ID`, `ASSEMBLY_ID`,
+//! `stage_banner`, `stage_step_id`) still lives with the run loop.
 
 use std::path::Path;
 
