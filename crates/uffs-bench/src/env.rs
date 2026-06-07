@@ -448,14 +448,12 @@ pub fn write(host: &dyn Host, fp: &EnvFingerprint, bundle_dir: &Path) -> Result<
 /// binary before they decide whether to proceed with the remaining tools.
 pub(crate) fn tool_install_hint(name: &str) -> &'static str {
     match name {
-        "uffs" => "Install UFFS: https://github.com/skyllc-ai/UltraFastFileSearch/releases",
+        "uffs" => "https://github.com/skyllc-ai/UltraFastFileSearch/releases",
         "uffs_cpp" => {
-            "Install UFFS C++ ref binary (uffs.com): run `just use` from the repo root \
-             or copy the release artefact to ~/bin/uffs.com"
+            "https://github.com/githubrobbi/Ultra-Fast-File-Search-legacy-cpp/releases/download/v1.0.0/uffs.com"
         }
-        "everything" | "everything_gui" => {
-            "Install Everything 1.4+ and its CLI (es.exe): https://www.voidtools.com/downloads/"
-        }
+        "everything" => "https://www.voidtools.com/downloads/#cli",
+        "everything_gui" => "https://www.voidtools.com/support/everything/installing_everything/",
         _ => "Ensure the binary is on PATH or in ~/bin and re-run",
     }
 }
