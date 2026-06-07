@@ -52,18 +52,41 @@ pub(crate) fn uffs_cpp_exe(host: &dyn Host) -> String {
     bin_name.to_owned()
 }
 
-/// Resolve the `es.exe` binary (Everything CLI).
+/// Resolve the `es.exe` binary (Everything CLI) to its absolute path.
+///
+/// The binary exits 0 even when the Everything daemon is not running, so
+/// execution-based probes cannot distinguish "found" from "not found".
+/// This function uses disk/PATH lookups only — no execution.
 ///
 /// Search order:
-///   1. `es.exe` reachable via PATH (already-installed or bundle-staged)
-///   2. `%ProgramFiles%\Everything\es.exe` — default installer location
-///   3. `%ProgramFiles(x86)%\Everything\es.exe` — 32-bit installer on 64-bit
-///   4. bare `es.exe` (PATH fallback — lets the OS surface a clear error)
+///   1. `where.exe es.exe` (Windows) / `which es` (Unix) — first PATH hit,
+///      returns the full absolute path.
+///   2. `%USERPROFILE%\bin\es.exe` — `just use` / manual install location.
+///   3. `%ProgramFiles%\Everything\es.exe` — default installer location.
+///   4. `%ProgramFiles(x86)%\Everything\es.exe` — 32-bit installer on 64-bit.
+///   5. bare `es.exe` fallback (OS will error clearly if truly absent).
 pub(crate) fn es_exe(host: &dyn Host) -> String {
-    let bin_name = "es.exe";
-    if host.run(bin_name, &["-get-everything-version"]).is_ok() {
-        return bin_name.to_owned();
+    let bin_name = if cfg!(windows) { "es.exe" } else { "es" };
+
+    // 1. Ask the shell where the binary lives on PATH (gives full absolute path).
+    let where_cmd = if cfg!(windows) { "where.exe" } else { "which" };
+    if let Ok(out) = host.run(where_cmd, &[bin_name]) {
+        let first = out.stdout.lines().next().unwrap_or("").trim().to_owned();
+        if !first.is_empty() {
+            return first;
+        }
     }
+
+    // 2. ~/bin install location.
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Some(home) = host.env(home_var) {
+        let candidate = PathBuf::from(&home).join("bin").join(bin_name);
+        if host.path_exists(&candidate) {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+
+    // 3-4. Known Windows installer locations.
     for env_var in &["ProgramFiles", "ProgramFiles(x86)"] {
         if let Some(pf) = host.env(env_var) {
             let candidate = PathBuf::from(&pf).join("Everything").join(bin_name);
@@ -72,6 +95,8 @@ pub(crate) fn es_exe(host: &dyn Host) -> String {
             }
         }
     }
+
+    // 5. Bare fallback — OS will surface a clear error if truly absent.
     bin_name.to_owned()
 }
 

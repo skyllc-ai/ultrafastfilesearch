@@ -78,32 +78,44 @@ const fn mode_name(mode: Mode) -> &'static str {
 
 /// Build a version-probe for one tool id.
 ///
-/// - `everything` → `es.exe -get-everything-version` (resolved via cascade)
+/// - `everything` → `es.exe -version` (ES CLI version, no daemon/IPC needed)
 /// - `uffs_cpp`   → `uffs.com --version` (resolved via `~/bin` cascade)
 /// - anything else → `<exe> --version`
 fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
-    let (exe, args, version_line_prefix) = if name == matrix::EVERYTHING_TOOL {
+    let (exe, args, version_line_prefix, daemon_error_markers) = if name == matrix::EVERYTHING_TOOL
+    {
         (
             resolve::es_exe(host),
-            vec!["-get-everything-version".to_owned()],
+            // Use `-version` (ES CLI version, no IPC/daemon required) rather
+            // than `-get-everything-version` which exits 0 but prints an IPC
+            // error when the Everything daemon is not running.
+            vec!["-version".to_owned()],
             None,
+            vec![],
         )
     } else if name == "uffs_cpp" {
         (
             resolve::uffs_cpp_exe(host),
             vec!["--version".to_owned()],
             Some("UFFS version:".to_owned()),
+            vec![],
         )
     } else if name == "uffs" {
-        (resolve::uffs_exe(host), vec!["--version".to_owned()], None)
+        (
+            resolve::uffs_exe(host),
+            vec!["--version".to_owned()],
+            None,
+            vec![],
+        )
     } else {
-        (name.to_owned(), vec!["--version".to_owned()], None)
+        (name.to_owned(), vec!["--version".to_owned()], None, vec![])
     };
     ToolProbe {
         name: name.to_owned(),
         exe,
         args,
         version_line_prefix,
+        daemon_error_markers,
     }
 }
 

@@ -33,6 +33,11 @@ pub struct ToolProbe {
     /// rather than taking the first non-empty line. Useful for tools whose
     /// first output line is a banner URL rather than a version number.
     pub version_line_prefix: Option<String>,
+    /// If any of these substrings appear in the combined stdout+stderr output,
+    /// the version is reported as `"not running"` instead of the raw error
+    /// text. Useful for daemons (e.g. Everything) that exit 0 but print an IPC
+    /// error when their background process is absent.
+    pub daemon_error_markers: Vec<String>,
 }
 
 /// A resolved tool name → version pair.
@@ -202,6 +207,14 @@ fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
     let version = host.run(&tool.exe, &arg_refs).ok().map_or_else(
         || "unknown".to_owned(),
         |out| {
+            let combined = format!("{} {}", out.stdout, out.stderr);
+            if tool
+                .daemon_error_markers
+                .iter()
+                .any(|marker| combined.contains(marker.as_str()))
+            {
+                return "not running".to_owned();
+            }
             let text = if out.stdout.is_empty() {
                 &out.stderr
             } else {
@@ -384,8 +397,28 @@ mod tests {
             exe: "uffs.com".to_owned(),
             args: vec!["--version".to_owned()],
             version_line_prefix: Some("UFFS version:".to_owned()),
+            daemon_error_markers: vec![],
         };
         assert_eq!(probe_tool(&host, &tool).version, "1.0.0");
+    }
+
+    #[test]
+    fn probe_tool_daemon_error_markers_returns_not_running() {
+        let ipc_error =
+            "Error 8: Everything IPC window not found. Please make sure Everything is running.\n";
+        let host = MockHost::new().with_run_result(ProcOutput {
+            code: Some(0_i32),
+            stdout: ipc_error.to_owned(),
+            stderr: String::new(),
+        });
+        let tool = ToolProbe {
+            name: "everything".to_owned(),
+            exe: "es.exe".to_owned(),
+            args: vec!["-get-everything-version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec!["Error 8".to_owned(), "IPC window not found".to_owned()],
+        };
+        assert_eq!(probe_tool(&host, &tool).version, "not running");
     }
 
     #[test]
@@ -400,6 +433,7 @@ mod tests {
             exe: "x".to_owned(),
             args: Vec::new(),
             version_line_prefix: None,
+            daemon_error_markers: vec![],
         };
         assert_eq!(probe_tool(&host, &tool).version, "banner 9.9");
     }
@@ -420,6 +454,7 @@ mod tests {
                 exe: "uffs".to_owned(),
                 args: vec!["--version".to_owned()],
                 version_line_prefix: None,
+                daemon_error_markers: vec![],
             }],
         };
 
