@@ -235,6 +235,30 @@ fn cache_dir(host: &dyn Host) -> Option<PathBuf> {
     Some(PathBuf::from(base).join("uffs").join("cache"))
 }
 
+/// Enumerate the per-drive UFFS cache file paths that a measurement stage may
+/// touch (R2 resource).
+///
+/// Used by [`crate::teardown::baseline`] to build the
+/// [`crate::fingerprint::FingerprintSpec`] that
+/// records the pre/post-run cache-file state as part of the "no crumb left
+/// behind" policy.  Returns an empty `Vec` when `LOCALAPPDATA` is absent (non-
+/// Windows or a stripped test environment).
+#[must_use]
+pub fn cache_files(host: &dyn Host, drives: &[char]) -> Vec<PathBuf> {
+    let Some(dir) = cache_dir(host) else {
+        return Vec::new();
+    };
+    drives
+        .iter()
+        .flat_map(|&drive| {
+            let drive_dir = dir.clone();
+            CACHE_SUFFIXES
+                .iter()
+                .map(move |suffix| drive_dir.join(format!("{drive}{suffix}")))
+        })
+        .collect()
+}
+
 /// Substitute `{DRIVE}` in a pattern's argument template for one drive.
 fn resolve_pattern_args(drive: char, probe: &PatternProbe) -> Vec<String> {
     let letter = drive.to_string();

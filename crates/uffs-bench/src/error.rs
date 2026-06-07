@@ -57,6 +57,14 @@ pub enum BenchError {
     /// from unverified bytes.
     #[error("competitor provisioning failed: {0}")]
     Provision(String),
+
+    /// One or more restore actions or fingerprint differences were detected.
+    ///
+    /// Used by the `restore` and `verify` subcommands to fail closed (non-zero
+    /// exit) when the host is not returned to its as-found state, while still
+    /// allowing callers to report every crumb before returning.
+    #[error("{0} host difference(s) or restore failure(s) detected")]
+    Crumbs(usize),
 }
 
 impl BenchError {

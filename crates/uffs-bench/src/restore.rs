@@ -12,7 +12,7 @@
 //!
 //! [`drain`]: RestoreRegistry::drain
 
-use crate::error::{CrumbError, Result};
+use crate::error::{BenchError, CrumbError, Result};
 use crate::host::Host;
 
 /// A boxed undo action: given the host, reverse one mutation.
@@ -131,5 +131,102 @@ impl Drop for RunGuard<'_> {
             // uses `finish()` to surface them.
             let _crumbs = self.registry.drain(self.host);
         }
+    }
+}
+
+/// A serialized crash-recovery manifest written to `restore-manifest.json`.
+///
+/// After a hard kill (power loss, Ctrl-C before teardown) the operator runs
+/// `uffs-bench restore --bundle <dir>` to replay the labelled file-level undo
+/// operations that were committed but not yet replayed by the live
+/// [`RunGuard`].
+///
+/// The manifest records each undo as a (label, kind, path) triple.  Only
+/// file-level operations that are expressible as a path rename or removal are
+/// persisted; arbitrary closures are not serializable.  On a clean run
+/// [`finalize`](crate::teardown::finalize) resets the manifest to an empty
+/// sentinel so a second replay is a no-op.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RestoreManifest {
+    /// Pending undo entries.  Empty after a clean run (sentinel state).
+    pub entries: Vec<ManifestEntry>,
+}
+
+/// One serializable undo operation recorded in a [`RestoreManifest`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ManifestEntry {
+    /// Human-readable label matching the live [`RestoreRegistry`] entry.
+    pub label: String,
+    /// The kind of file-level undo to replay.
+    pub kind: EntryKind,
+    /// Primary path the operation targets.
+    pub path: std::path::PathBuf,
+    /// Secondary path (destination) for [`EntryKind::Rename`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dest: Option<std::path::PathBuf>,
+}
+
+/// The kind of file-level operation a [`ManifestEntry`] replays.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    /// Rename `path` to `dest` (used to restore a file to its original name).
+    Rename,
+    /// Remove `path` (used to clean up a file that was created by the run).
+    Remove,
+}
+
+impl RestoreManifest {
+    /// Construct an empty (sentinel) manifest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Serialize the manifest to `path` as pretty JSON.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or the write fails.
+    pub fn save(&self, host: &dyn Host, path: &std::path::Path) -> Result<()> {
+        let json = serde_json::to_vec_pretty(self)?;
+        host.write_file(path, &json)
+            .map_err(|err| BenchError::io(path, err))
+    }
+
+    /// Deserialize a manifest from `path`.
+    ///
+    /// # Errors
+    /// Returns an error if reading or deserialization fails.
+    pub fn load(host: &dyn Host, path: &std::path::Path) -> Result<Self> {
+        let bytes = host
+            .read_file(path)
+            .map_err(|err| BenchError::io(path, err))?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// Replay every entry in LIFO order (last appended first), collecting
+    /// failures instead of propagating them so all undos run.
+    #[must_use]
+    pub fn replay(&self, host: &dyn Host) -> Vec<CrumbError> {
+        let mut crumbs = Vec::new();
+        for entry in self.entries.iter().rev() {
+            let result = match entry.kind {
+                EntryKind::Rename => {
+                    let dest = entry.dest.as_deref().unwrap_or(&entry.path);
+                    host.rename(&entry.path, dest)
+                        .map_err(|err| BenchError::io(&entry.path, err))
+                }
+                EntryKind::Remove => host
+                    .remove_file(&entry.path)
+                    .map_err(|err| BenchError::io(&entry.path, err)),
+            };
+            if let Err(source) = result {
+                crumbs.push(CrumbError {
+                    label: entry.label.clone(),
+                    source,
+                });
+            }
+        }
+        crumbs
     }
 }

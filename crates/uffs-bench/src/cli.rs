@@ -33,6 +33,22 @@ pub enum Command {
     /// `state.json` with the `--keep-tools` disposition.
     #[command(name = "fetch-competitors")]
     FetchCompetitors,
+
+    /// Replay a bundle's `restore-manifest.json` after a hard kill.
+    ///
+    /// Re-applies every restore closure serialized during the run to return
+    /// the host to its as-found state. Fails closed (non-zero exit) when any
+    /// undo cannot be replayed. On success the manifest is reset so a second
+    /// replay is a no-op. Requires `--bundle <dir>`.
+    Restore,
+
+    /// Re-capture the host fingerprint and diff it against a bundle's baseline.
+    ///
+    /// Compares the current host state against `fingerprint-before.json` from
+    /// a previous run. Fails closed (non-zero exit) when any difference is
+    /// detected; writes `fingerprint-after.json` for forensics. Requires
+    /// `--bundle <dir>`.
+    Verify,
 }
 
 /// Robust, reproducible benchmark-suite orchestrator for UFFS.

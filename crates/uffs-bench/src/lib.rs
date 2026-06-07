@@ -68,6 +68,7 @@ pub mod restore;
 pub mod run;
 pub mod stages;
 pub mod state;
+pub mod teardown;
 pub mod tooling;
 
 pub use cli::Cli;

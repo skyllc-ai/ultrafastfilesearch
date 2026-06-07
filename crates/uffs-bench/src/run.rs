@@ -35,7 +35,7 @@ use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{Decisions, State, Status, input_hash};
 use crate::tooling::Disposition;
-use crate::{competitors, report};
+use crate::{competitors, report, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -102,7 +102,7 @@ fn tool_probe(name: &str) -> ToolProbe {
 /// Uses `%APPDATA%\Everything\Everything.ini` when `APPDATA` is set (the
 /// Windows install default), falling back to a bare relative name otherwise so
 /// the preflight simply observes an absent ini on other hosts.
-fn everything_ini_path(host: &dyn Host) -> PathBuf {
+pub(crate) fn everything_ini_path(host: &dyn Host) -> PathBuf {
     host.env("APPDATA").map_or_else(
         || PathBuf::from("Everything.ini"),
         |appdata| {
@@ -616,8 +616,11 @@ fn load_or_new_state(
 /// Returns an error if bundle creation, state load/save, or a Stage 0 artifact
 /// write fails. An operator abort/back is **not** an error (returns `Ok`).
 pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
-    if matches!(cli.command, Some(Command::FetchCompetitors)) {
-        return run_fetch_competitors(host, cli);
+    match cli.command {
+        Some(Command::FetchCompetitors) => return run_fetch_competitors(host, cli),
+        Some(Command::Restore) => return teardown::restore(host, cli),
+        Some(Command::Verify) => return teardown::verify(host, cli),
+        None => {}
     }
 
     let mode = cli.mode();
@@ -634,10 +637,14 @@ pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
         state.invalidate(STAGE0_ID);
     }
 
+    if !dry_run {
+        teardown::baseline(host, cli, &bundle_dir)?;
+    }
+
     let orchestrator = Orchestrator {
         host,
         cli,
-        bundle_dir,
+        bundle_dir: bundle_dir.clone(),
     };
     let mut session = Session {
         mode,
@@ -647,12 +654,11 @@ pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
 
     orchestrator.execute(&mut state, &mut session, &mut guard, &hash)?;
 
-    report_crumbs(host, &guard.finish());
-
-    if !dry_run {
-        state.save(host, &state_path)?;
+    if dry_run {
+        report_crumbs(host, &guard.finish());
+        return Ok(());
     }
-    Ok(())
+    teardown::finalize(host, cli, &bundle_dir, guard, &mut state, &state_path)
 }
 
 #[cfg(test)]
