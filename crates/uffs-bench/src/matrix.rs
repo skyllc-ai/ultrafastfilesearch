@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BenchError, Result};
 use crate::host::Host;
-use crate::preflight::{CellFeasibility, DrivePreflight, PreflightResult};
+use crate::preflight::{CellFeasibility, DrivePreflight, EsStatus, PreflightResult};
 
 /// Tool id of the competitor that constrains the cross-tool matrix.
 pub const EVERYTHING_TOOL: &str = "everything";
@@ -91,22 +91,36 @@ fn everything_serves(preflight: &PreflightResult, drive: char) -> bool {
 
 /// Explain why competitors are excluded from a `(drive, pattern)` cell.
 ///
-/// Only reached when Everything is required and the cell is not cross-tool, so
-/// the cause is one of: drive not configured, configured-but-not-ready, or the
-/// row estimate exceeding the IPC ceiling.
+/// Only reached when Everything is required and the cell is not cross-tool.
+/// Uses the fine-grained [`EsStatus`] to surface actionable operator guidance
+/// rather than a generic "not loaded" message.
 fn solo_reason(preflight: &PreflightResult, drive: char, pattern: &str) -> String {
-    match find_drive(&preflight.drives, drive) {
-        None
-        | Some(DrivePreflight {
-            configured: false, ..
-        }) => format!("{drive}: es not loaded (not configured in Everything.ini)"),
-        Some(state) if !(state.loaded && state.hot) => {
-            format!("{drive}: es not loaded (configured but still indexing)")
+    let status = find_drive(&preflight.drives, drive)
+        .map_or(&EsStatus::NotConfigured, |drive_pf| &drive_pf.es_status);
+    match status {
+        EsStatus::NotInstalled => format!(
+            "{drive}: Everything not installed \
+             — download from https://www.voidtools.com/ and re-run"
+        ),
+        EsStatus::DaemonNotRunning => format!(
+            "{drive}: Everything daemon not running \
+             — start Everything.exe (system tray) then re-run; \
+             to limit indexed drives open Options → Indexes → NTFS"
+        ),
+        EsStatus::NotConfigured => format!(
+            "{drive}: drive not in Everything's index \
+             — open Everything Options → Indexes → NTFS and add {drive}:\\"
+        ),
+        EsStatus::StillIndexing => {
+            format!("{drive}: Everything is still indexing — re-run once the tray icon settles")
         }
-        Some(_) => {
+        EsStatus::Loaded => {
             let est = find_cell(&preflight.cells, drive, pattern).map_or(0, |cell| cell.est_rows);
             let ceiling = crate::preflight::ES_IPC_ROW_CEILING;
-            format!("{pattern}: es infeasible (est {est} rows > {ceiling} IPC ceiling)")
+            format!(
+                "{pattern}: es infeasible (est {est} rows > {ceiling} IPC ceiling) \
+                 — consider limiting indexed drives in Everything Options → Indexes → NTFS"
+            )
         }
     }
 }
@@ -226,7 +240,7 @@ mod tests {
 
     use super::{Matrix, MatrixSpec, compute_matrix, render_md, write};
     use crate::host::{Call, MockHost};
-    use crate::preflight::{CellFeasibility, DrivePreflight, PreflightResult};
+    use crate::preflight::{CellFeasibility, DrivePreflight, EsStatus, PreflightResult};
 
     /// A hot, loaded, configured drive record.
     fn hot_drive(drive: char, record_count: u64) -> DrivePreflight {
@@ -236,6 +250,7 @@ mod tests {
             loaded: true,
             hot: true,
             record_count,
+            es_status: EsStatus::Loaded,
         }
     }
 
@@ -268,6 +283,7 @@ mod tests {
                 loaded: false,
                 hot: false,
                 record_count: 0,
+                es_status: EsStatus::NotConfigured,
             }],
             cells: vec![
                 cell('C', "all_dlls", 500, true),
@@ -291,14 +307,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!['C', 'D']
         );
-        // E/F/M/S all land in UFFS-only with an "es not loaded" reason.
+        // E/F/M/S all land in UFFS-only; E is NotConfigured, F/M/S have no
+        // DrivePreflight record at all (also maps to NotConfigured).
         let solo_drives: Vec<char> = matrix.uffs_only.iter().map(|cell| cell.drive).collect();
         assert_eq!(solo_drives, vec!['E', 'F', 'M', 'S']);
         assert!(
             matrix
                 .uffs_only
                 .iter()
-                .all(|cell| cell.reason.contains("es not loaded"))
+                .all(|cell| cell.reason.contains("Everything Options")
+                    || cell.reason.contains("not in Everything"))
         );
     }
 
@@ -332,6 +350,7 @@ mod tests {
                 loaded: false,
                 hot: false,
                 record_count: 0,
+                es_status: EsStatus::StillIndexing,
             }],
             cells: Vec::new(),
         };

@@ -64,6 +64,7 @@ pub mod host;
 pub mod matrix;
 pub mod preflight;
 pub mod report;
+pub mod resolve;
 pub mod restore;
 pub mod run;
 pub mod stages;

@@ -22,6 +22,27 @@ use serde::{Deserialize, Serialize};
 use crate::error::{BenchError, Result};
 use crate::host::Host;
 
+/// Why `es.exe` could not serve results for a drive.
+///
+/// Distinguishing these states lets the Stage 0 plan gate surface concrete
+/// operator instructions rather than a generic "not loaded" message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EsStatus {
+    /// `es.exe` binary not found: Everything (engine + CLI) is not installed.
+    NotInstalled,
+    /// `es.exe` found but reports IPC error 8 — the Everything daemon is
+    /// installed but not currently running.
+    DaemonNotRunning,
+    /// Everything is running and the drive is in `ntfs_volume_paths`, but the
+    /// index is still being built (result-count poll returned 0).
+    StillIndexing,
+    /// Everything is running and has a non-zero result count for this drive.
+    Loaded,
+    /// This drive is not in Everything's `ntfs_volume_paths` at all.
+    NotConfigured,
+}
+
 /// Everything's practical IPC row ceiling for a single cross-tool cell.
 ///
 /// Everything serves results over IPC (`-export-csv` tops out near ~2 GB);
@@ -75,6 +96,8 @@ pub struct DrivePreflight {
     pub hot: bool,
     /// Live record count reported by `es.exe` (`0` when not loaded).
     pub record_count: u64,
+    /// Fine-grained reason why `es.exe` could not serve this drive (if any).
+    pub es_status: EsStatus,
 }
 
 /// Per-(drive, pattern) feasibility against the IPC ceiling.
@@ -122,8 +145,27 @@ pub fn parse_drives_from_ini(ini: &str) -> Vec<char> {
     Vec::new()
 }
 
-/// Poll `es.exe "<drive>:\" -get-result-count`, returning the first non-zero
+/// Check whether `es.exe` is reachable and the Everything daemon is running.
+///
+/// Returns `None` when the binary executes but no IPC error is detected (daemon
+/// is running). Returns `Some(EsStatus)` when the binary is missing entirely or
+/// the daemon is not running (IPC error 8 in stderr).
+fn check_es_available(host: &dyn Host, es_exe: &str) -> Option<EsStatus> {
+    match host.run(es_exe, &["-get-everything-version"]) {
+        Err(_) => Some(EsStatus::NotInstalled),
+        Ok(out) => {
+            let combined = format!("{} {}", out.stdout, out.stderr);
+            (combined.contains("Error 8") || combined.contains("IPC window not found"))
+                .then_some(EsStatus::DaemonNotRunning)
+        }
+    }
+}
+
+/// Poll `es.exe <drive>: -get-result-count`, returning the first non-zero
 /// count within `attempts` (sleeping `interval_ms` between tries), else `0`.
+///
+/// Uses `"C:"` (no trailing backslash) as the drive scope, which matches
+/// `everything_capacity_probe.rs`'s L1+ convention.
 fn poll_result_count(
     host: &dyn Host,
     es_exe: &str,
@@ -131,7 +173,7 @@ fn poll_result_count(
     attempts: u32,
     interval_ms: u64,
 ) -> u64 {
-    let search = format!("{drive}:\\");
+    let search = format!("{drive}:");
     for attempt in 0..attempts {
         if attempt > 0 {
             host.sleep_ms(interval_ms);
@@ -155,7 +197,18 @@ fn probe_drive(
     spec: &PreflightSpec,
     drive: char,
     configured: bool,
+    es_available: Option<&EsStatus>,
 ) -> DrivePreflight {
+    if let Some(status) = es_available {
+        return DrivePreflight {
+            drive,
+            configured,
+            loaded: false,
+            hot: false,
+            record_count: 0,
+            es_status: status.clone(),
+        };
+    }
     let attempts = if configured {
         spec.poll_attempts.max(1)
     } else {
@@ -164,12 +217,20 @@ fn probe_drive(
     let record_count =
         poll_result_count(host, &spec.es_exe, drive, attempts, spec.poll_interval_ms);
     let loaded = record_count > 0;
+    let es_status = if loaded {
+        EsStatus::Loaded
+    } else if configured {
+        EsStatus::StillIndexing
+    } else {
+        EsStatus::NotConfigured
+    };
     DrivePreflight {
         drive,
         configured,
         loaded,
         hot: loaded,
         record_count,
+        es_status,
     }
 }
 
@@ -221,10 +282,20 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
         .unwrap_or_default();
     let configured_drives = parse_drives_from_ini(&ini);
 
+    let es_available = check_es_available(host, &spec.es_exe);
+
     let drives: Vec<DrivePreflight> = spec
         .candidate_drives
         .iter()
-        .map(|&drive| probe_drive(host, spec, drive, configured_drives.contains(&drive)))
+        .map(|&drive| {
+            probe_drive(
+                host,
+                spec,
+                drive,
+                configured_drives.contains(&drive),
+                es_available.as_ref(),
+            )
+        })
         .collect();
 
     let cells = feasibility_cells(host, spec, &drives);
@@ -248,8 +319,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CellFeasibility, DrivePreflight, PatternProbe, PreflightResult, PreflightSpec, capture,
-        parse_drives_from_ini, write,
+        CellFeasibility, DrivePreflight, EsStatus, PatternProbe, PreflightResult, PreflightSpec,
+        capture, parse_drives_from_ini, write,
     };
     use crate::host::{Call, MockHost, ProcOutput};
 
@@ -297,6 +368,7 @@ mod tests {
     fn capture_is_read_only_and_records_state() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\,D:\\".to_vec())
+            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
             .with_run_result(stdout_of("1000")) // C: loaded
             .with_run_result(stdout_of("0")) // D: configured but not loaded
             .with_run_result(stdout_of("5000")); // uffs estimate for (C, all_dlls)
@@ -311,6 +383,7 @@ mod tests {
                 loaded: true,
                 hot: true,
                 record_count: 1000,
+                es_status: EsStatus::Loaded,
             },
             DrivePreflight {
                 drive: 'D',
@@ -318,6 +391,7 @@ mod tests {
                 loaded: false,
                 hot: false,
                 record_count: 0,
+                es_status: EsStatus::StillIndexing,
             },
         ]);
         assert_eq!(result.cells, vec![CellFeasibility {
@@ -337,6 +411,7 @@ mod tests {
     fn configured_zero_drive_is_polled_with_backoff() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
+            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
             .with_run_result(stdout_of("0"))
             .with_run_result(stdout_of("0"))
             .with_run_result(stdout_of("7"));
@@ -361,6 +436,7 @@ mod tests {
     fn unconfigured_drive_probed_once_without_sleep() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
+            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
             .with_run_result(stdout_of("0"));
         let mut spec = spec_for(&['E'], 5);
         spec.patterns.clear();
@@ -376,7 +452,7 @@ mod tests {
             .into_iter()
             .filter(|call| matches!(call, Call::Run(_, _)))
             .count();
-        assert_eq!(runs, 1);
+        assert_eq!(runs, 2); // 1 availability check + 1 drive probe
         assert!(
             !host
                 .calls()
@@ -389,6 +465,7 @@ mod tests {
     fn cell_above_ipc_ceiling_is_infeasible() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
+            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
             .with_run_result(stdout_of("100")) // C loaded
             .with_run_result(stdout_of("200000")); // estimate over the 150k ceiling
         let spec = spec_for(&['C'], 1);
@@ -411,6 +488,7 @@ mod tests {
                 loaded: true,
                 hot: true,
                 record_count: 42,
+                es_status: EsStatus::Loaded,
             }],
             cells: Vec::new(),
         };

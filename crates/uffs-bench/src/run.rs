@@ -30,25 +30,18 @@ use crate::error::{CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
 use crate::matrix::{self, Matrix, MatrixSpec};
-use crate::preflight::{self, PatternProbe, PreflightResult, PreflightSpec};
+use crate::preflight::{self, PreflightResult, PreflightSpec};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{Decisions, State, Status, input_hash};
 use crate::tooling::Disposition;
-use crate::{competitors, report, teardown};
+use crate::{competitors, report, resolve, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Stable id of the Stage 0 plan step in the resume engine.
 pub(crate) const STAGE0_ID: &str = "stage0/plan";
-
-/// Default measurement patterns: display name + UFFS row-count argument
-/// template (`{DRIVE}` is substituted per drive during preflight).
-const DEFAULT_PATTERNS: [(&str, &[&str]); 2] = [
-    ("all_dlls", &["{DRIVE}:\\", "*.dll", "--count"]),
-    ("full_scan", &["{DRIVE}:\\", "*", "--count"]),
-];
 
 /// Default readiness-poll attempts for a configured-but-cold competitor drive.
 const PREFLIGHT_POLL_ATTEMPTS: u32 = 3;
@@ -83,10 +76,20 @@ const fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
-/// Build a version-probe for one tool id (Everything uses `es` + its own flag).
-fn tool_probe(name: &str) -> ToolProbe {
+/// Build a version-probe for one tool id.
+///
+/// - `everything` → `es.exe -get-everything-version` (resolved via cascade)
+/// - `uffs_cpp`   → `uffs.com --version` (resolved via `~/bin` cascade)
+/// - anything else → `<exe> --version`
+fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
     let (exe, args) = if name == matrix::EVERYTHING_TOOL {
-        ("es".to_owned(), vec!["-get-everything-version".to_owned()])
+        (resolve::es_exe(host), vec![
+            "-get-everything-version".to_owned(),
+        ])
+    } else if name == "uffs_cpp" {
+        (resolve::uffs_cpp_exe(host), vec!["--version".to_owned()])
+    } else if name == "uffs" {
+        (resolve::uffs_exe(host), vec!["--version".to_owned()])
     } else {
         (name.to_owned(), vec!["--version".to_owned()])
     };
@@ -160,12 +163,12 @@ fn plan_input_hash(decisions: &Decisions) -> String {
 }
 
 /// Build the Stage 0a [`EnvSpec`] (one version probe per requested tool).
-fn env_spec_from_cli(cli: &Cli) -> EnvSpec {
+fn env_spec_from_cli(host: &dyn Host, cli: &Cli) -> EnvSpec {
     EnvSpec {
         tools: cli
             .tools_or_default()
             .iter()
-            .map(|tool| tool_probe(tool))
+            .map(|tool| tool_probe(host, tool))
             .collect(),
     }
 }
@@ -175,9 +178,9 @@ fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli) -> PreflightSpec {
     PreflightSpec {
         ini_path: everything_ini_path(host),
         candidate_drives: cli.drives_or_default(),
-        es_exe: "es".to_owned(),
-        uffs_exe: "uffs".to_owned(),
-        patterns: default_pattern_probes(),
+        es_exe: resolve::es_exe(host),
+        uffs_exe: resolve::uffs_exe(host),
+        patterns: resolve::default_pattern_probes(),
         poll_attempts: PREFLIGHT_POLL_ATTEMPTS,
         poll_interval_ms: PREFLIGHT_POLL_INTERVAL_MS,
     }
@@ -188,7 +191,7 @@ fn matrix_spec_from_cli(cli: &Cli) -> MatrixSpec {
     MatrixSpec {
         required_tools: cli.tools_or_default(),
         candidate_drives: cli.drives_or_default(),
-        patterns: DEFAULT_PATTERNS
+        patterns: resolve::DEFAULT_PATTERNS
             .iter()
             .map(|(name, _)| (*name).to_owned())
             .collect(),
@@ -269,18 +272,6 @@ struct Session {
     seen: BTreeSet<String>,
 }
 
-/// Build the default measurement [`PatternProbe`] set (shared by preflight and
-/// the native Stage 3 timing).
-fn default_pattern_probes() -> Vec<PatternProbe> {
-    DEFAULT_PATTERNS
-        .iter()
-        .map(|(name, args)| PatternProbe {
-            name: (*name).to_owned(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-        })
-        .collect()
-}
-
 /// Coordinates Stage 0 capture and the staged measurement loop over a [`Host`].
 struct Orchestrator<'a> {
     /// Host seam every side effect flows through.
@@ -311,7 +302,7 @@ impl Orchestrator<'_> {
     /// measurement stages (whose [`StageCfg`] draws its cross-tool-capable
     /// drive subset from the negotiated matrix), so no probe runs twice.
     fn capture(&self) -> Capture {
-        let fp = env::capture(self.host, &env_spec_from_cli(self.cli));
+        let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
         let matrix = matrix::compute_matrix(&matrix_spec_from_cli(self.cli), &preflight);
@@ -332,8 +323,8 @@ impl Orchestrator<'_> {
             tools: self.cli.tools_or_default(),
             rounds: self.cli.rounds,
             drop_cache: self.cli.drop_os_cache,
-            patterns: default_pattern_probes(),
-            uffs_exe: "uffs".to_owned(),
+            patterns: resolve::default_pattern_probes(),
+            uffs_exe: resolve::uffs_exe(self.host),
         }
     }
 
