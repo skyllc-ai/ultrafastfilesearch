@@ -352,15 +352,27 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
         let w_ver = fp
             .tools
             .iter()
-            .map(|tv| tv.version.len())
+            .map(|tv| {
+                if tv.version == "unknown" {
+                    "⚠️ not found".len()
+                } else {
+                    tv.version.len()
+                }
+            })
             .max()
             .unwrap_or(0)
             .max("Version".len());
         let w_path = fp
             .tools
             .iter()
-            // backtick-wrapped in the cell: exe + 2 chars
-            .map(|tv| tv.exe.len() + 2)
+            .map(|tv| {
+                if tv.version == "unknown" {
+                    tool_install_hint(&tv.name).len()
+                } else {
+                    // backtick-wrapped: exe + 2 chars
+                    tv.exe.len() + 2
+                }
+            })
             .max()
             .unwrap_or(0)
             .max("Path".len());
@@ -378,10 +390,17 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
             .tools
             .iter()
             .map(|tv| {
-                let path = format!("`{}`", tv.exe);
+                let (ver_cell, path_cell) = if tv.version == "unknown" {
+                    (
+                        "\u{26a0}\u{fe0f} not found".to_owned(),
+                        tool_install_hint(&tv.name).to_owned(),
+                    )
+                } else {
+                    (tv.version.clone(), format!("`{}`", tv.exe))
+                };
                 format!(
                     "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
-                    tv.name, tv.version, path,
+                    tv.name, ver_cell, path_cell,
                 )
             })
             .collect();

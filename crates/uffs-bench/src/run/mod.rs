@@ -26,7 +26,7 @@ use crate::cards::{
     stage0_result,
 };
 use crate::cli::{Cli, Command};
-use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe, tool_install_hint};
+use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe};
 use crate::error::{BenchError, CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
@@ -387,13 +387,6 @@ impl Orchestrator<'_> {
             .map(|tv| tv.name.as_str())
             .collect();
         if !missing.is_empty() {
-            self.host.out("\n⚠️  Some tools could not be found:");
-            for name in &missing {
-                self.host.out(&format!(
-                    "  ✗  {name} — {hint}",
-                    hint = tool_install_hint(name)
-                ));
-            }
             let available = fp.tools.len() - missing.len();
             if available < 2 {
                 return Err(BenchError::MissingTools(format!(
@@ -401,9 +394,6 @@ impl Orchestrator<'_> {
                      benchmark. Install the missing tools and re-run."
                 )));
             }
-            self.host.out(&format!(
-                "\n{available} tool(s) available. Proceed with the tools we have?"
-            ));
             let card = missing_tools_card(&missing);
             if matches!(
                 confirm(self.host, &mut session.mode, &mut session.seen, &card),

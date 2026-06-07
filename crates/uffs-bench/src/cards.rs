@@ -138,7 +138,8 @@ pub(crate) fn missing_tools_card(missing: &[&str]) -> Card {
         backups: Vec::new(),
         est_time: "0 s".to_owned(),
         recovery: "Read-only: aborting here changes nothing.".to_owned(),
-        long_why: "Install the missing binaries (hints shown above), then re-run. \
+        long_why: "The table above shows install locations for each missing tool. \
+                   Install the binaries, then re-run for a full comparison. \
                    Alternatively, proceed with only the available tools — results \
                    will reflect a partial comparison."
             .to_owned(),
