@@ -338,7 +338,10 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
     let tools = if fp.tools.is_empty() {
         "_None probed._".to_owned()
     } else {
-        // Compute column widths for a padded GFM table.
+        // Compute column widths for a padded GFM table (3 visible columns).
+        // `state` is retained on ToolVersion for downstream logic but is not
+        // shown in the report — the table is read by humans who care about
+        // which version is installed, not pre-run daemon status.
         let w_name = fp
             .tools
             .iter()
@@ -353,13 +356,6 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
             .max()
             .unwrap_or(0)
             .max("Version".len());
-        let w_state = fp
-            .tools
-            .iter()
-            .map(|tv| tv.state.len())
-            .max()
-            .unwrap_or(0)
-            .max("State".len());
         let w_path = fp
             .tools
             .iter()
@@ -369,15 +365,14 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
             .unwrap_or(0)
             .max("Path".len());
         let sep = format!(
-            "|{}|{}|{}|{}|",
+            "|{}|{}|{}|",
             "-".repeat(w_name + 2),
             "-".repeat(w_ver + 2),
-            "-".repeat(w_state + 2),
             "-".repeat(w_path + 2),
         );
         let header = format!(
-            "| {:<w_name$} | {:<w_ver$} | {:<w_state$} | {:<w_path$} |",
-            "Tool", "Version", "State", "Path",
+            "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
+            "Tool", "Version", "Path",
         );
         let rows: Vec<String> = fp
             .tools
@@ -385,8 +380,8 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
             .map(|tv| {
                 let path = format!("`{}`", tv.exe);
                 format!(
-                    "| {:<w_name$} | {:<w_ver$} | {:<w_state$} | {:<w_path$} |",
-                    tv.name, tv.version, tv.state, path,
+                    "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
+                    tv.name, tv.version, path,
                 )
             })
             .collect();
@@ -627,9 +622,9 @@ mod tests {
 - **CPU:** Test CPU (8 logical)\n\
 - **RAM:** 16.0 GiB\n\
 \n### Tool versions\n\n\
-| Tool | Version | State   | Path       |\n\
-|------|---------|---------|------------|\n\
-| uffs | 1.2.3   | running | `uffs.exe` |\n";
+| Tool | Version | Path       |\n\
+|------|---------|------------|\n\
+| uffs | 1.2.3   | `uffs.exe` |\n";
         assert_eq!(render_md(&sample_fp()), expected);
     }
 
