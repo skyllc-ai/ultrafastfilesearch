@@ -328,6 +328,86 @@ pub fn capture(host: &dyn Host, spec: &EnvSpec) -> EnvFingerprint {
     }
 }
 
+/// Render the tool-versions GFM table for `fp`.
+///
+/// Missing tools (version = `"unknown"`) appear with `⚠️ not found` in the
+/// Version cell and their install URL in the Path cell. Used both in the
+/// terminal (printed before the missing-tool gate) and embedded in
+/// [`render_md`] for the report file.
+#[must_use]
+pub(crate) fn render_tool_table(fp: &EnvFingerprint) -> String {
+    if fp.tools.is_empty() {
+        return "_None probed._".to_owned();
+    }
+    // Compute column widths for a padded GFM table (3 visible columns).
+    // `state` is retained on ToolVersion for downstream logic but is not
+    // shown in the report — the table is read by humans who care about
+    // which version is installed, not pre-run daemon status.
+    let w_name = fp
+        .tools
+        .iter()
+        .map(|tv| tv.name.len())
+        .max()
+        .unwrap_or(0)
+        .max("Tool".len());
+    let w_ver = fp
+        .tools
+        .iter()
+        .map(|tv| {
+            if tv.version == "unknown" {
+                "⚠️ not found".len()
+            } else {
+                tv.version.len()
+            }
+        })
+        .max()
+        .unwrap_or(0)
+        .max("Version".len());
+    let w_path = fp
+        .tools
+        .iter()
+        .map(|tv| {
+            if tv.version == "unknown" {
+                tool_install_hint(&tv.name).len()
+            } else {
+                // backtick-wrapped: exe + 2 chars
+                tv.exe.len() + 2
+            }
+        })
+        .max()
+        .unwrap_or(0)
+        .max("Path".len());
+    let sep = format!(
+        "|{}|{}|{}|",
+        "-".repeat(w_name + 2),
+        "-".repeat(w_ver + 2),
+        "-".repeat(w_path + 2),
+    );
+    let header = format!(
+        "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
+        "Tool", "Version", "Path",
+    );
+    let rows: Vec<String> = fp
+        .tools
+        .iter()
+        .map(|tv| {
+            let (ver_cell, path_cell) = if tv.version == "unknown" {
+                (
+                    "\u{26a0}\u{fe0f} not found".to_owned(),
+                    tool_install_hint(&tv.name).to_owned(),
+                )
+            } else {
+                (tv.version.clone(), format!("`{}`", tv.exe))
+            };
+            format!(
+                "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
+                tv.name, ver_cell, path_cell,
+            )
+        })
+        .collect();
+    format!("{header}\n{sep}\n{}", rows.join("\n"))
+}
+
 /// Render a captured fingerprint as the report's "Test environment" markdown.
 ///
 /// A pure function of its input (no host access), so it is covered by a golden
@@ -335,77 +415,7 @@ pub fn capture(host: &dyn Host, spec: &EnvSpec) -> EnvFingerprint {
 #[must_use]
 pub fn render_md(fp: &EnvFingerprint) -> String {
     let elevated = if fp.elevated { "yes" } else { "no" };
-    let tools = if fp.tools.is_empty() {
-        "_None probed._".to_owned()
-    } else {
-        // Compute column widths for a padded GFM table (3 visible columns).
-        // `state` is retained on ToolVersion for downstream logic but is not
-        // shown in the report — the table is read by humans who care about
-        // which version is installed, not pre-run daemon status.
-        let w_name = fp
-            .tools
-            .iter()
-            .map(|tv| tv.name.len())
-            .max()
-            .unwrap_or(0)
-            .max("Tool".len());
-        let w_ver = fp
-            .tools
-            .iter()
-            .map(|tv| {
-                if tv.version == "unknown" {
-                    "⚠️ not found".len()
-                } else {
-                    tv.version.len()
-                }
-            })
-            .max()
-            .unwrap_or(0)
-            .max("Version".len());
-        let w_path = fp
-            .tools
-            .iter()
-            .map(|tv| {
-                if tv.version == "unknown" {
-                    tool_install_hint(&tv.name).len()
-                } else {
-                    // backtick-wrapped: exe + 2 chars
-                    tv.exe.len() + 2
-                }
-            })
-            .max()
-            .unwrap_or(0)
-            .max("Path".len());
-        let sep = format!(
-            "|{}|{}|{}|",
-            "-".repeat(w_name + 2),
-            "-".repeat(w_ver + 2),
-            "-".repeat(w_path + 2),
-        );
-        let header = format!(
-            "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
-            "Tool", "Version", "Path",
-        );
-        let rows: Vec<String> = fp
-            .tools
-            .iter()
-            .map(|tv| {
-                let (ver_cell, path_cell) = if tv.version == "unknown" {
-                    (
-                        "\u{26a0}\u{fe0f} not found".to_owned(),
-                        tool_install_hint(&tv.name).to_owned(),
-                    )
-                } else {
-                    (tv.version.clone(), format!("`{}`", tv.exe))
-                };
-                format!(
-                    "| {:<w_name$} | {:<w_ver$} | {:<w_path$} |",
-                    tv.name, ver_cell, path_cell,
-                )
-            })
-            .collect();
-        format!("{header}\n{sep}\n{}", rows.join("\n"))
-    };
+    let tools = render_tool_table(fp);
     format!(
         "## Test environment\n\n\
          - **Captured:** {}\n\

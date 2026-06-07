@@ -380,6 +380,7 @@ impl Orchestrator<'_> {
     /// after the operator's decision, or if the operator chooses to abort.
     fn capture(&self, session: &mut Session) -> Result<Capture> {
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
+        self.host.out(&env::render_md(&fp));
         let missing: Vec<&str> = fp
             .tools
             .iter()
@@ -437,7 +438,6 @@ impl Orchestrator<'_> {
         cap: &Capture,
         hash: &str,
     ) -> Result<Flow> {
-        self.host.out(&env::render_md(&cap.fp));
         self.host.out(&matrix::render_md(&cap.matrix));
 
         let card = plan_card(&self.bundle_dir);
