@@ -103,9 +103,13 @@ fn solo_reason(preflight: &PreflightResult, drive: char, pattern: &str) -> Strin
              — download from https://www.voidtools.com/ and re-run"
         ),
         EsStatus::DaemonNotRunning => format!(
-            "{drive}: Everything daemon not running \
-             — start Everything.exe (system tray) then re-run; \
+            "{drive}: Everything not started \
+             — launch Everything.exe (system tray) then re-run; \
              to limit indexed drives open Options → Indexes → NTFS"
+        ),
+        EsStatus::DaemonStarting => format!(
+            "{drive}: Everything is starting (process running but IPC not ready) \
+             — wait a moment then re-run"
         ),
         EsStatus::NotConfigured => format!(
             "{drive}: drive not in Everything's index \

@@ -65,6 +65,14 @@ pub enum BenchError {
     /// allowing callers to report every crumb before returning.
     #[error("{0} host difference(s) or restore failure(s) detected")]
     Crumbs(usize),
+
+    /// One or more required tools could not be invoked.
+    ///
+    /// Raised during Stage 0a when a version probe returns `"unknown"` for a
+    /// tool the operator requested, so the run aborts loudly before any
+    /// measurements start rather than silently producing incomplete results.
+    #[error("required tool(s) not found: {0}")]
+    MissingTools(String),
 }
 
 impl BenchError {

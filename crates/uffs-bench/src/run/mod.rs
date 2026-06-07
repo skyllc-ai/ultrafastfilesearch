@@ -26,7 +26,7 @@ use crate::cards::{
 };
 use crate::cli::{Cli, Command};
 use crate::env::{self, EnvFingerprint, EnvSpec, ToolProbe};
-use crate::error::{CrumbError, Result};
+use crate::error::{BenchError, CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
 use crate::matrix::{self, Matrix, MatrixSpec};
@@ -82,21 +82,28 @@ const fn mode_name(mode: Mode) -> &'static str {
 /// - `uffs_cpp`   → `uffs.com --version` (resolved via `~/bin` cascade)
 /// - anything else → `<exe> --version`
 fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
-    let (exe, args) = if name == matrix::EVERYTHING_TOOL {
-        (resolve::es_exe(host), vec![
-            "-get-everything-version".to_owned(),
-        ])
+    let (exe, args, version_line_prefix) = if name == matrix::EVERYTHING_TOOL {
+        (
+            resolve::es_exe(host),
+            vec!["-get-everything-version".to_owned()],
+            None,
+        )
     } else if name == "uffs_cpp" {
-        (resolve::uffs_cpp_exe(host), vec!["--version".to_owned()])
+        (
+            resolve::uffs_cpp_exe(host),
+            vec!["--version".to_owned()],
+            Some("UFFS version:".to_owned()),
+        )
     } else if name == "uffs" {
-        (resolve::uffs_exe(host), vec!["--version".to_owned()])
+        (resolve::uffs_exe(host), vec!["--version".to_owned()], None)
     } else {
-        (name.to_owned(), vec!["--version".to_owned()])
+        (name.to_owned(), vec!["--version".to_owned()], None)
     };
     ToolProbe {
         name: name.to_owned(),
         exe,
         args,
+        version_line_prefix,
     }
 }
 
@@ -301,16 +308,34 @@ impl Orchestrator<'_> {
     /// Computed at most once per run and shared by the plan gate and the
     /// measurement stages (whose [`StageCfg`] draws its cross-tool-capable
     /// drive subset from the negotiated matrix), so no probe runs twice.
-    fn capture(&self) -> Capture {
+    ///
+    /// # Errors
+    /// Returns [`BenchError::MissingTools`] if any requested tool could not be
+    /// invoked (version probe returned `"unknown"`). Fails fast and loud so the
+    /// operator knows exactly which binaries to install before any measurements
+    /// run.
+    fn capture(&self) -> Result<Capture> {
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
+        let missing: Vec<&str> = fp
+            .tools
+            .iter()
+            .filter(|tv| tv.version == "unknown")
+            .map(|tv| tv.name.as_str())
+            .collect();
+        if !missing.is_empty() {
+            let list = missing.join(", ");
+            return Err(BenchError::MissingTools(format!(
+                "{list} — ensure the binaries are on PATH or in ~/bin and re-run"
+            )));
+        }
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
         let matrix = matrix::compute_matrix(&matrix_spec_from_cli(self.cli), &preflight);
-        Capture {
+        Ok(Capture {
             fp,
             preflight,
             matrix,
-        }
+        })
     }
 
     /// Build the [`StageCfg`] shared by every measurement stage from the CLI
@@ -478,7 +503,9 @@ impl Orchestrator<'_> {
         let measure_live = (1..=MEASUREMENT_STAGES).any(|stage| {
             stage_selected(self.cli, stage) && !state.should_skip(&stage_step_id(stage), hash)
         });
-        let capture = ((stage0_selected && !stage0_skip) || measure_live).then(|| self.capture());
+        let capture = ((stage0_selected && !stage0_skip) || measure_live)
+            .then(|| self.capture())
+            .transpose()?;
 
         if stage0_selected {
             let flow = if stage0_skip {
@@ -653,133 +680,4 @@ pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use clap::Parser as _;
-
-    use super::{STAGE0_ID, decisions_from_cli, plan_input_hash, run, stage_selected};
-    use crate::cli::Cli;
-    use crate::host::{Call, MockHost};
-    use crate::state::{State, Status};
-
-    /// Whether any recorded call mutated the host filesystem.
-    fn is_mutation(call: &Call) -> bool {
-        matches!(
-            call,
-            Call::WriteFile(_) | Call::RemoveFile(_) | Call::Rename(_, _) | Call::CreateDirAll(_)
-        )
-    }
-
-    /// Paths written via `write_file` during the run, as display strings.
-    fn writes(host: &MockHost) -> Vec<String> {
-        host.calls()
-            .into_iter()
-            .filter_map(|call| {
-                if let Call::WriteFile(path) = call {
-                    Some(path.display().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn dry_run_mutates_nothing() {
-        let host = MockHost::new();
-        let cli = Cli::parse_from(["uffs-bench", "--dry-run", "--drives", "C"]);
-
-        run(&host, &cli).expect("dry run succeeds");
-
-        assert!(
-            host.calls().iter().all(|call| !is_mutation(call)),
-            "dry-run must perform zero filesystem mutations"
-        );
-    }
-
-    #[test]
-    fn autopilot_writes_stage0_artifacts_and_saves_state() {
-        let host = MockHost::new();
-        let cli = Cli::parse_from([
-            "uffs-bench",
-            "--auto",
-            "--drives",
-            "C",
-            "--bundle-root",
-            "/out",
-        ]);
-
-        run(&host, &cli).expect("autopilot run succeeds");
-
-        let calls = host.calls();
-        assert!(
-            calls
-                .iter()
-                .any(|call| matches!(call, Call::CreateDirAll(_))),
-            "a bundle directory should be created"
-        );
-        let written = writes(&host);
-        for artifact in ["env.json", "competitor-preflight.json", "matrix.json"] {
-            assert!(
-                written.iter().any(|path| path.ends_with(artifact)),
-                "expected {artifact} to be written, got {written:?}"
-            );
-        }
-        // `state.json` is saved atomically (temp write + rename).
-        assert!(calls.iter().any(|call| matches!(call, Call::Rename(_, _))));
-    }
-
-    #[test]
-    fn resume_skips_cached_stage0() {
-        let bundle = "/out/bench-fixed";
-        let cli = Cli::parse_from([
-            "uffs-bench",
-            "--auto",
-            "--only-stage",
-            "0",
-            "--drives",
-            "C",
-            "--bundle",
-            bundle,
-        ]);
-        // Seed a state where Stage 0 is already Done with the matching hash.
-        let seed = MockHost::new();
-        let hash = plan_input_hash(&decisions_from_cli(&cli));
-        let mut state = State::new(&seed, "test", decisions_from_cli(&cli));
-        state.set_step(&seed, STAGE0_ID, Status::Done, hash.as_str(), Vec::new());
-        let json = serde_json::to_vec(&state).expect("serialize seed state");
-        let host = MockHost::new().with_file(format!("{bundle}/state.json"), json);
-
-        run(&host, &cli).expect("resume run succeeds");
-
-        // Stage 0 was cached, so no matrix.json is (re)written.
-        assert!(
-            !writes(&host)
-                .iter()
-                .any(|path| path.ends_with("matrix.json")),
-            "cached Stage 0 must not rewrite its artifacts"
-        );
-        assert!(
-            host.output()
-                .iter()
-                .any(|line| line.contains("cached (resume)")),
-            "the cached-skip notice should be shown"
-        );
-    }
-
-    #[test]
-    fn stage_selection_honors_only_and_from() {
-        let only = Cli::parse_from(["uffs-bench", "--only-stage", "2"]);
-        assert!(stage_selected(&only, 2));
-        assert!(!stage_selected(&only, 1));
-        assert!(!stage_selected(&only, 0));
-
-        let from = Cli::parse_from(["uffs-bench", "--from-stage", "1"]);
-        assert!(!stage_selected(&from, 0));
-        assert!(stage_selected(&from, 1));
-        assert!(stage_selected(&from, 3));
-
-        let all = Cli::parse_from(["uffs-bench"]);
-        assert!(stage_selected(&all, 0));
-        assert!(stage_selected(&all, 3));
-    }
-}
+mod tests;

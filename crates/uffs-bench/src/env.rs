@@ -28,6 +28,11 @@ pub struct ToolProbe {
     pub exe: String,
     /// Arguments that make the tool print its version.
     pub args: Vec<String>,
+    /// When `Some`, select the first output line *containing* this substring
+    /// and trim up to and including the substring (plus surrounding whitespace)
+    /// rather than taking the first non-empty line. Useful for tools whose
+    /// first output line is a banner URL rather than a version number.
+    pub version_line_prefix: Option<String>,
 }
 
 /// A resolved tool name → version pair.
@@ -35,6 +40,8 @@ pub struct ToolProbe {
 pub struct ToolVersion {
     /// Display name of the tool.
     pub name: String,
+    /// Resolved executable path (or bare name when found via PATH).
+    pub exe: String,
     /// Reported version string (`"unknown"` if the probe produced nothing).
     pub version: String,
 }
@@ -195,13 +202,27 @@ fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
     let version = host.run(&tool.exe, &arg_refs).ok().map_or_else(
         || "unknown".to_owned(),
         |out| {
-            first_nonempty(&out.stdout)
-                .or_else(|| first_nonempty(&out.stderr))
-                .unwrap_or_else(|| "unknown".to_owned())
+            let text = if out.stdout.is_empty() {
+                &out.stderr
+            } else {
+                &out.stdout
+            };
+            tool.version_line_prefix.as_ref().map_or_else(
+                || first_nonempty(text).unwrap_or_else(|| "unknown".to_owned()),
+                |prefix| {
+                    text.lines()
+                        .find(|line| line.contains(prefix.as_str()))
+                        .and_then(|line| line.split_once(prefix.as_str()))
+                        .map(|(_, after)| after.trim().to_owned())
+                        .filter(|ver| !ver.is_empty())
+                        .unwrap_or_else(|| "unknown".to_owned())
+                },
+            )
         },
     );
     ToolVersion {
         name: tool.name.clone(),
+        exe: tool.exe.clone(),
         version,
     }
 }
@@ -260,7 +281,7 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
     } else {
         fp.tools
             .iter()
-            .map(|tool| format!("- **{}:** {}", tool.name, tool.version))
+            .map(|tool| format!("- **{}:** {} `{}`", tool.name, tool.version, tool.exe))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -346,6 +367,28 @@ mod tests {
     }
 
     #[test]
+    fn probe_tool_version_line_prefix_extracts_correct_line() {
+        let banner = "Ultra Fast File Search   https://example.com\n\
+                      \n\
+                      based on SwiftSearch\n\
+                      \n\
+                      \tUFFS version:\t1.0.0\n\
+                      \tBuild for:\tx86_64\n";
+        let host = MockHost::new().with_run_result(ProcOutput {
+            code: Some(0_i32),
+            stdout: banner.to_owned(),
+            stderr: String::new(),
+        });
+        let tool = ToolProbe {
+            name: "uffs_cpp".to_owned(),
+            exe: "uffs.com".to_owned(),
+            args: vec!["--version".to_owned()],
+            version_line_prefix: Some("UFFS version:".to_owned()),
+        };
+        assert_eq!(probe_tool(&host, &tool).version, "1.0.0");
+    }
+
+    #[test]
     fn probe_tool_falls_back_to_stderr() {
         let host = MockHost::new().with_run_result(ProcOutput {
             code: Some(0_i32),
@@ -356,6 +399,7 @@ mod tests {
             name: "x".to_owned(),
             exe: "x".to_owned(),
             args: Vec::new(),
+            version_line_prefix: None,
         };
         assert_eq!(probe_tool(&host, &tool).version, "banner 9.9");
     }
@@ -375,6 +419,7 @@ mod tests {
                 name: "uffs".to_owned(),
                 exe: "uffs".to_owned(),
                 args: vec!["--version".to_owned()],
+                version_line_prefix: None,
             }],
         };
 
@@ -390,6 +435,7 @@ mod tests {
         assert_eq!(fp.arch, std::env::consts::ARCH);
         assert_eq!(fp.tools, vec![ToolVersion {
             name: "uffs".to_owned(),
+            exe: "uffs".to_owned(),
             version: "uffs 1.2.3".to_owned(),
         }]);
     }
@@ -407,6 +453,7 @@ mod tests {
             total_ram: "16.0 GiB".to_owned(),
             tools: vec![ToolVersion {
                 name: "uffs".to_owned(),
+                exe: "uffs.exe".to_owned(),
                 version: "1.2.3".to_owned(),
             }],
         }
@@ -422,7 +469,7 @@ mod tests {
 - **CPU:** Test CPU (8 logical)\n\
 - **RAM:** 16.0 GiB\n\
 \n### Tool versions\n\n\
-- **uffs:** 1.2.3\n";
+- **uffs:** 1.2.3 `uffs.exe`\n";
         assert_eq!(render_md(&sample_fp()), expected);
     }
 

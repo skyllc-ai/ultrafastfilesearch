@@ -31,9 +31,12 @@ use crate::host::Host;
 pub enum EsStatus {
     /// `es.exe` binary not found: Everything (engine + CLI) is not installed.
     NotInstalled,
-    /// `es.exe` found but reports IPC error 8 — the Everything daemon is
-    /// installed but not currently running.
+    /// `es.exe` found but reports IPC error 8 and `Everything.exe` is not
+    /// in the process list — the daemon is installed but not started.
     DaemonNotRunning,
+    /// `es.exe` found, IPC error 8 detected, but `Everything.exe` is already
+    /// in the process list — started but IPC not yet ready (still loading).
+    DaemonStarting,
     /// Everything is running and the drive is in `ntfs_volume_paths`, but the
     /// index is still being built (result-count poll returned 0).
     StillIndexing,
@@ -148,16 +151,47 @@ pub fn parse_drives_from_ini(ini: &str) -> Vec<char> {
 /// Check whether `es.exe` is reachable and the Everything daemon is running.
 ///
 /// Returns `None` when the binary executes but no IPC error is detected (daemon
-/// is running). Returns `Some(EsStatus)` when the binary is missing entirely or
-/// the daemon is not running (IPC error 8 in stderr).
+/// is running). Returns `Some(EsStatus)` with a fine-grained status otherwise:
+/// - `NotInstalled` — binary could not be spawned at all.
+/// - `DaemonStarting` — IPC error but `Everything.exe` is in the process list
+///   (started but not yet ready).
+/// - `DaemonNotRunning` — IPC error and `Everything.exe` is not running at all.
 fn check_es_available(host: &dyn Host, es_exe: &str) -> Option<EsStatus> {
     match host.run(es_exe, &["-get-everything-version"]) {
         Err(_) => Some(EsStatus::NotInstalled),
         Ok(out) => {
             let combined = format!("{} {}", out.stdout, out.stderr);
-            (combined.contains("Error 8") || combined.contains("IPC window not found"))
-                .then_some(EsStatus::DaemonNotRunning)
+            (combined.contains("Error 8") || combined.contains("IPC window not found")).then(|| {
+                if is_everything_process_running(host) {
+                    EsStatus::DaemonStarting
+                } else {
+                    EsStatus::DaemonNotRunning
+                }
+            })
         }
+    }
+}
+
+/// Return `true` when `Everything.exe` appears in the running process list.
+///
+/// Uses `tasklist` on Windows (always available) and `pgrep` on Unix.
+/// Returns `false` on any execution failure — conservative default.
+fn is_everything_process_running(host: &dyn Host) -> bool {
+    #[cfg(windows)]
+    {
+        host.run("tasklist", &[
+            "/FI",
+            "IMAGENAME eq Everything.exe",
+            "/NH",
+            "/FO",
+            "CSV",
+        ])
+        .is_ok_and(|out| out.stdout.contains("Everything.exe"))
+    }
+    #[cfg(not(windows))]
+    {
+        host.run("pgrep", &["-x", "Everything"])
+            .is_ok_and(|out| !out.stdout.trim().is_empty())
     }
 }
 
@@ -351,6 +385,36 @@ mod tests {
             poll_attempts: attempts,
             poll_interval_ms: 500,
         }
+    }
+
+    /// Build an IPC-error output (what es.exe returns when Everything is not
+    /// running or not yet ready).
+    fn ipc_error_output() -> ProcOutput {
+        ProcOutput {
+            code: Some(1_i32),
+            stdout: "Error 8: Everything IPC window not found. \
+                     Please make sure Everything is running."
+                .to_owned(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn check_es_daemon_not_running_when_process_absent() {
+        let host = MockHost::new()
+            .with_run_result(ipc_error_output()) // es.exe -get-everything-version
+            .with_run_result(stdout_of("")); // tasklist / pgrep: process NOT found
+        let status = super::check_es_available(&host, "es.exe");
+        assert_eq!(status, Some(EsStatus::DaemonNotRunning));
+    }
+
+    #[test]
+    fn check_es_daemon_starting_when_process_present() {
+        let host = MockHost::new()
+            .with_run_result(ipc_error_output()) // es.exe -get-everything-version
+            .with_run_result(stdout_of("\"Everything.exe\",\"1234\"")); // tasklist: found
+        let status = super::check_es_available(&host, "es.exe");
+        assert_eq!(status, Some(EsStatus::DaemonStarting));
     }
 
     #[test]
