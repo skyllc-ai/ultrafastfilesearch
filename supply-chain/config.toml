@@ -193,7 +193,7 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.bitflags]]
-version = "2.12.1"
+version = "2.13.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.blake3]]

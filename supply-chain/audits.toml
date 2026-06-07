@@ -13,6 +13,12 @@ criteria = "safe-to-deploy"
 delta = "1.5.0 -> 1.5.1"
 notes = "Delta audit (cargo vet diff 1.5.0 -> 1.5.1). TEST-ONLY change: ZERO src/ library changes. README adds the 1.5.1 changelog line ('Refactor the test_wrappers test without any shell script'). Cargo.toml(.orig) declares explicit [[test]] targets and sets harness=false for the wrappers test. The bash helper tests/wrap_ignored is deleted and replaced by a Rust main() in tests/wrappers.rs that acts as the rustc-wrapper stand-in. No change to autocfg's build-probe library logic, no new unsafe, no new runtime deps; the changed code runs only under `cargo test`. autocfg is a build-dependency (via num-traits). Publisher cuviper (Josh Stone), already trusted by isrg/mozilla/bytecode-alliance."
 
+[[audits.bitflags]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "2.12.1 -> 2.13.0"
+notes = "Delta audit (cargo vet diff 2.12.1 -> 2.13.0). Additive-only change: adds a single new safe method iter_equal_names(&self) -> IterEqualNames<Self> to the Flags trait (src/traits.rs), plus its iterator impl in src/iter.rs and a corresponding test module src/tests/iter_equal_names.rs. CHANGELOG.md and README.md updated for the new version. No unsafe code added, no new dependencies, no changes to any existing method, no semantic changes to flag operations. Publisher KodrAus (Ashley Mannix), long-standing bitflags / Rust project contributor."
+
 [[audits.brotli]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
