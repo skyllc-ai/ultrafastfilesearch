@@ -338,16 +338,59 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
     let tools = if fp.tools.is_empty() {
         "_None probed._".to_owned()
     } else {
-        fp.tools
+        // Compute column widths for a padded GFM table.
+        let w_name = fp
+            .tools
             .iter()
-            .map(|tool| {
+            .map(|tv| tv.name.len())
+            .max()
+            .unwrap_or(0)
+            .max("Tool".len());
+        let w_ver = fp
+            .tools
+            .iter()
+            .map(|tv| tv.version.len())
+            .max()
+            .unwrap_or(0)
+            .max("Version".len());
+        let w_state = fp
+            .tools
+            .iter()
+            .map(|tv| tv.state.len())
+            .max()
+            .unwrap_or(0)
+            .max("State".len());
+        let w_path = fp
+            .tools
+            .iter()
+            // backtick-wrapped in the cell: exe + 2 chars
+            .map(|tv| tv.exe.len() + 2)
+            .max()
+            .unwrap_or(0)
+            .max("Path".len());
+        let sep = format!(
+            "|{}|{}|{}|{}|",
+            "-".repeat(w_name + 2),
+            "-".repeat(w_ver + 2),
+            "-".repeat(w_state + 2),
+            "-".repeat(w_path + 2),
+        );
+        let header = format!(
+            "| {:<w_name$} | {:<w_ver$} | {:<w_state$} | {:<w_path$} |",
+            "Tool", "Version", "State", "Path",
+        );
+        let rows: Vec<String> = fp
+            .tools
+            .iter()
+            .map(|tv| {
+                let path = format!("`{}`", tv.exe);
                 format!(
-                    "- **{}:** {} (state: {}) `{}`",
-                    tool.name, tool.version, tool.state, tool.exe
+                    "| {:<w_name$} | {:<w_ver$} | {:<w_state$} | {:<w_path$} |",
+                    tv.name, tv.version, tv.state, path,
                 )
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect();
+        format!("{header}\n{sep}\n{}", rows.join("\n"))
     };
     format!(
         "## Test environment\n\n\
@@ -382,6 +425,25 @@ pub fn write(host: &dyn Host, fp: &EnvFingerprint, bundle_dir: &Path) -> Result<
     host.write_file(&md_path, render_md(fp).as_bytes())
         .map_err(|err| BenchError::io(&md_path, err))?;
     Ok(())
+}
+
+/// Return a human-readable install hint for a tool id, or a generic message
+/// if the tool is unknown.
+///
+/// Used by the missing-tool soft gate to tell the operator where to get the
+/// binary before they decide whether to proceed with the remaining tools.
+pub(crate) fn tool_install_hint(name: &str) -> &'static str {
+    match name {
+        "uffs" => "Install UFFS: https://github.com/skyllc-ai/UltraFastFileSearch/releases",
+        "uffs_cpp" => {
+            "Install UFFS C++ ref binary (uffs.com): run `just use` from the repo root \
+             or copy the release artefact to ~/bin/uffs.com"
+        }
+        "everything" | "everything_gui" => {
+            "Install Everything 1.4+ and its CLI (es.exe): https://www.voidtools.com/downloads/"
+        }
+        _ => "Ensure the binary is on PATH or in ~/bin and re-run",
+    }
 }
 
 #[cfg(test)]
@@ -565,7 +627,9 @@ mod tests {
 - **CPU:** Test CPU (8 logical)\n\
 - **RAM:** 16.0 GiB\n\
 \n### Tool versions\n\n\
-- **uffs:** 1.2.3 (state: running) `uffs.exe`\n";
+| Tool | Version | State   | Path       |\n\
+|------|---------|---------|------------|\n\
+| uffs | 1.2.3   | running | `uffs.exe` |\n";
         assert_eq!(render_md(&sample_fp()), expected);
     }
 

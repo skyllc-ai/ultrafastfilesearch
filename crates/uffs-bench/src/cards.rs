@@ -120,6 +120,31 @@ pub(crate) fn report_scope(cli: &Cli) -> String {
     }
 }
 
+/// Build a gate [`Card`] presented when one or more tools are missing.
+///
+/// The operator can press **proceed** to continue with the available tools or
+/// **abort** to quit and install the missing binaries first.
+pub(crate) fn missing_tools_card(missing: &[&str]) -> Card {
+    let list = missing.join(", ");
+    Card {
+        id: "missing-tools".to_owned(),
+        stage: "STAGE 0: PREFLIGHT".to_owned(),
+        step_num: 1,
+        step_total: 1,
+        title: format!("Missing tool(s): {list}"),
+        why: "At least 2 tools are needed for a meaningful head-to-head benchmark.".to_owned(),
+        commands: Vec::new(),
+        resources: Vec::new(),
+        backups: Vec::new(),
+        est_time: "0 s".to_owned(),
+        recovery: "Read-only: aborting here changes nothing.".to_owned(),
+        long_why: "Install the missing binaries (hints shown above), then re-run. \
+                   Alternatively, proceed with only the available tools — results \
+                   will reflect a partial comparison."
+            .to_owned(),
+    }
+}
+
 /// The [`StepResult`] used when a step is dry-run (rendered, not executed).
 pub(crate) fn dry_run_result() -> StepResult {
     StepResult {

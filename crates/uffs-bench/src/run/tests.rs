@@ -27,13 +27,13 @@ fn stdout_of(text: &str) -> ProcOutput {
 ///  5. `env::capture` cpu
 ///  6. `env::capture` `logical_cpus`
 ///  7. `env::capture` `total_ram`
-///  8. `env::capture` uffs --version
-///  9. uffs daemon status (state probe)
-///  10. `env::capture` `uffs_cpp` --version
-///  11. `env::capture` es -version
-///  12. tasklist (everything state probe — stopped)
-///  13. `env::capture` es -get-everything-version
-///  14. tasklist (`everything_gui` state probe — stopped)
+///  8. `env::capture` uffs --version (prefix stripped: `"uffs 0.0.0"` →
+///     `"0.0.0"`)
+///  9. `env::capture` `uffs_cpp` --version
+///  10. `env::capture` es -version
+///  11. tasklist (everything state probe — stopped)
+///  12. `env::capture` es -get-everything-version
+///  13. tasklist (`everything_gui` state probe — stopped)
 fn dry_run_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
@@ -45,12 +45,11 @@ fn dry_run_host() -> MockHost {
         .with_run_result(stdout_of("8"))                      //  6: logical_cpus
         .with_run_result(stdout_of("8589934592"))             //  7: total_ram
         .with_run_result(stdout_of("uffs 0.0.0"))             //  8: uffs --version
-        .with_run_result(stdout_of("running"))                //  9: uffs daemon status
-        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 10: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30"))               // 11: es -version
-        .with_run_result(stdout_of(""))                       // 12: tasklist (stopped)
-        .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
-        .with_run_result(stdout_of("")) // 14: tasklist (stopped)
+        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) //  9: uffs_cpp --version
+        .with_run_result(stdout_of("1.1.0.30"))               // 10: es -version
+        .with_run_result(stdout_of(""))                       // 11: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 12: es -get-everything-version
+        .with_run_result(stdout_of("")) // 13: tasklist (stopped)
 }
 
 /// Queue the run results needed for the autopilot (non-dry-run) path.
@@ -64,13 +63,13 @@ fn dry_run_host() -> MockHost {
 ///  6. `env::capture` cpu
 ///  7. `env::capture` `logical_cpus`
 ///  8. `env::capture` `total_ram`
-///  9. `env::capture` uffs --version
-///  10. uffs daemon status (state probe)
-///  11. `env::capture` `uffs_cpp` --version
-///  12. `env::capture` es -version
-///  13. tasklist (everything state probe — stopped)
-///  14. `env::capture` es -get-everything-version
-///  15. tasklist (`everything_gui` state probe — stopped)
+///  9. `env::capture` uffs --version (prefix stripped: `"uffs 0.0.0"` →
+///     `"0.0.0"`)
+///  10. `env::capture` `uffs_cpp` --version
+///  11. `env::capture` es -version
+///  12. tasklist (everything state probe — stopped)
+///  13. `env::capture` es -get-everything-version
+///  14. tasklist (`everything_gui` state probe — stopped)
 fn autopilot_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
@@ -83,12 +82,11 @@ fn autopilot_host() -> MockHost {
         .with_run_result(stdout_of("8"))                      //  7: logical_cpus
         .with_run_result(stdout_of("8589934592"))             //  8: total_ram
         .with_run_result(stdout_of("uffs 0.0.0"))             //  9: uffs --version
-        .with_run_result(stdout_of("running"))                // 10: uffs daemon status
-        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 11: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30"))               // 12: es -version
-        .with_run_result(stdout_of(""))                       // 13: tasklist (stopped)
-        .with_run_result(stdout_of("1.4.1.1032"))             // 14: es -get-everything-version
-        .with_run_result(stdout_of("")) // 15: tasklist (stopped)
+        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 10: uffs_cpp --version
+        .with_run_result(stdout_of("1.1.0.30"))               // 11: es -version
+        .with_run_result(stdout_of(""))                       // 12: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
+        .with_run_result(stdout_of("")) // 14: tasklist (stopped)
 }
 
 /// Whether any recorded call mutated the host filesystem.

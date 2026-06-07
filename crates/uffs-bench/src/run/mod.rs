@@ -22,10 +22,11 @@ use std::path::{Path, PathBuf};
 
 use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
-    assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
+    assembly_card, dry_run_result, measurement_card, missing_tools_card, plan_card, report_scope,
+    stage0_result,
 };
 use crate::cli::{Cli, Command};
-use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe};
+use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe, tool_install_hint};
 use crate::error::{BenchError, CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
@@ -142,19 +143,17 @@ fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
             state_probe: None,
         }
     } else if name == "uffs" {
-        let uffs = resolve::uffs_exe(host);
         ToolProbe {
             name: name.to_owned(),
-            exe: uffs.clone(),
+            exe: resolve::uffs_exe(host),
             display_exe: None,
+            // `uffs --version` prints e.g. `uffs 0.5.117`; strip the prefix.
             args: vec!["--version".to_owned()],
-            version_line_prefix: None,
+            version_line_prefix: Some("uffs ".to_owned()),
             daemon_error_markers: vec![],
-            state_probe: Some(StateProbe {
-                exe: uffs,
-                args: vec!["daemon".to_owned(), "status".to_owned()],
-                running_marker: "running".to_owned(),
-            }),
+            // The daemon (uttfd) is started/restarted by the bench itself, so
+            // its pre-run state is irrelevant — report n/a.
+            state_probe: None,
         }
     } else {
         ToolProbe {
@@ -371,12 +370,15 @@ impl Orchestrator<'_> {
     /// measurement stages (whose [`StageCfg`] draws its cross-tool-capable
     /// drive subset from the negotiated matrix), so no probe runs twice.
     ///
+    /// When one or more tools cannot be found (version = `"unknown"`), the
+    /// operator is shown an install hint per missing tool and asked whether to
+    /// proceed with the remaining tools or quit. If fewer than two tools are
+    /// available after the gate, the run is aborted.
+    ///
     /// # Errors
-    /// Returns [`BenchError::MissingTools`] if any requested tool could not be
-    /// invoked (version probe returned `"unknown"`). Fails fast and loud so the
-    /// operator knows exactly which binaries to install before any measurements
-    /// run.
-    fn capture(&self) -> Result<Capture> {
+    /// Returns [`BenchError::MissingTools`] if fewer than 2 tools are available
+    /// after the operator's decision, or if the operator chooses to abort.
+    fn capture(&self, session: &mut Session) -> Result<Capture> {
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
         let missing: Vec<&str> = fp
             .tools
@@ -385,10 +387,32 @@ impl Orchestrator<'_> {
             .map(|tv| tv.name.as_str())
             .collect();
         if !missing.is_empty() {
-            let list = missing.join(", ");
-            return Err(BenchError::MissingTools(format!(
-                "{list} — ensure the binaries are on PATH or in ~/bin and re-run"
-            )));
+            self.host.out("\n⚠️  Some tools could not be found:");
+            for name in &missing {
+                self.host.out(&format!(
+                    "  ✗  {name} — {hint}",
+                    hint = tool_install_hint(name)
+                ));
+            }
+            let available = fp.tools.len() - missing.len();
+            if available < 2 {
+                return Err(BenchError::MissingTools(format!(
+                    "only {available} tool(s) available — need at least 2 to run a meaningful \
+                     benchmark. Install the missing tools and re-run."
+                )));
+            }
+            self.host.out(&format!(
+                "\n{available} tool(s) available. Proceed with the tools we have?"
+            ));
+            let card = missing_tools_card(&missing);
+            if matches!(
+                confirm(self.host, &mut session.mode, &mut session.seen, &card),
+                Decision::Back | Decision::Abort
+            ) {
+                return Err(BenchError::MissingTools(
+                    "operator chose to abort — install missing tools and re-run".to_owned(),
+                ));
+            }
         }
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
@@ -566,7 +590,7 @@ impl Orchestrator<'_> {
             stage_selected(self.cli, stage) && !state.should_skip(&stage_step_id(stage), hash)
         });
         let capture = ((stage0_selected && !stage0_skip) || measure_live)
-            .then(|| self.capture())
+            .then(|| self.capture(session))
             .transpose()?;
 
         if stage0_selected {
