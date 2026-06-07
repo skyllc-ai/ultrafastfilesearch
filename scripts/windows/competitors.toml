@@ -20,7 +20,17 @@
 [everything]
 # The canonical Everything CLI version cited by the README and the published
 # head-to-head reports (docs/benchmarks/). This is the one pinned number.
+#
+# NOTE: es.exe is a thin IPC wrapper around the Everything GUI daemon. The
+# daemon version determines search behaviour and performance. Always run
+# benchmarks with the engine version documented here installed and running.
+# Latest GUI stable as of 2026-06-07: 1.4.1.1032
+# (https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe)
 version = "1.1.0.30"
+# Everything GUI daemon version used in published benchmark results.
+# es.exe queries this daemon over IPC; the engine version is part of the
+# benchmark environment and must be documented alongside the CLI version.
+engine_version = "1.4.1.1032"
 # Upstream download (command-line `es.exe` distribution). Link only.
 es_url = "https://www.voidtools.com/ES-1.1.0.30.x64.zip"
 # Hex SHA-256 of the downloaded artifact. Operator pastes the upstream hash;

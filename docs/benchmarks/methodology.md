@@ -119,7 +119,7 @@ Every canonical report documents:
 - **RAM** (e.g. 64 GB)
 - **OS and build** (e.g. Windows 11 Pro 24H2)
 - **Drive topology** (e.g. 7 NTFS volumes, 3 NVMe + 3 SATA HDD + 1 USB stick, specific record counts per drive)
-- **Binary versions** (e.g. UFFS Rust v0.5.66 `2ff76fb45`, UFFS C++ reference commit, Everything 1.1.0.30 — the single pinned competitor version lives in [`scripts/windows/competitors.toml`](../../scripts/windows/competitors.toml))
+- **Binary versions** (e.g. UFFS Rust v0.5.66 `2ff76fb45`, UFFS C++ reference commit, Everything GUI engine 1.4.1.1032 + ES CLI 1.1.0.30 — the pinned versions live in [`scripts/windows/competitors.toml`](../../scripts/windows/competitors.toml). Note: `es.exe` is a thin IPC wrapper; the GUI daemon version determines search behaviour and must be documented alongside the CLI version.)
 - **Elevation state** (both tools run elevated — UFFS needs it for raw MFT read; Everything recommends it for volume enumeration)
 
 This isn't optional boilerplate. When a reader sees a surprising number, the first debugging step is "did they run on the same-ish hardware I have?". Disclosure is what makes that reasoning possible.

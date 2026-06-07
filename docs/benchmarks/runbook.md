@@ -39,9 +39,12 @@ winget install Casey.Just
 # 3. rust-script (required for Stage 1 cross-tool harness)
 cargo install rust-script
 
-# 4. Everything 1.1.0.30 (the pinned competitor — fetched automatically by the
-#    orchestrator, but es.exe must be reachable for Stage 1/2 to run)
-#    OR let the orchestrator fetch it:
+# 4. Everything GUI engine 1.4.1.1032 (the daemon es.exe talks to over IPC).
+#    es.exe is a thin wrapper — the engine version determines search behaviour
+#    and performance. Install the GUI first:
+#    https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe
+#
+#    Then fetch + SHA-256-verify the pinned ES CLI (1.1.0.30) automatically:
 just bench-fetch-competitors --keep-tools
 ```
 
