@@ -52,6 +52,45 @@ pub(crate) fn uffs_cpp_exe(host: &dyn Host) -> String {
     bin_name.to_owned()
 }
 
+/// Resolve the `Everything.exe` GUI binary to its absolute path.
+///
+/// Uses disk/PATH lookups only — no execution.
+///
+/// Search order:
+///   1. `where.exe Everything.exe` / `which Everything` — first PATH hit.
+///   2. `%ProgramFiles(x86)%\Everything\Everything.exe` — default installer.
+///   3. `%ProgramFiles%\Everything\Everything.exe` — 64-bit install.
+///   4. bare `Everything.exe` fallback.
+pub(crate) fn everything_exe(host: &dyn Host) -> String {
+    let bin_name = if cfg!(windows) {
+        "Everything.exe"
+    } else {
+        "Everything"
+    };
+
+    // 1. Ask the OS where the binary lives on PATH.
+    let where_cmd = if cfg!(windows) { "where.exe" } else { "which" };
+    if let Ok(out) = host.run(where_cmd, &[bin_name]) {
+        let first = out.stdout.lines().next().unwrap_or("").trim().to_owned();
+        if !first.is_empty() {
+            return first;
+        }
+    }
+
+    // 2-3. Known installer locations.
+    for env_var in &["ProgramFiles(x86)", "ProgramFiles"] {
+        if let Some(pf) = host.env(env_var) {
+            let candidate = PathBuf::from(&pf).join("Everything").join(bin_name);
+            if host.path_exists(&candidate) {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    // 4. Bare fallback.
+    bin_name.to_owned()
+}
+
 /// Resolve the `es.exe` binary (Everything CLI) to its absolute path.
 ///
 /// The binary exits 0 even when the Everything daemon is not running, so

@@ -23,8 +23,10 @@ use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::preflight::{CellFeasibility, DrivePreflight, EsStatus, PreflightResult};
 
-/// Tool id of the competitor that constrains the cross-tool matrix.
+/// Tool id of the Everything CLI (es.exe) competitor.
 pub const EVERYTHING_TOOL: &str = "everything";
+/// Tool id of the Everything GUI (Everything.exe) daemon process.
+pub const EVERYTHING_GUI_TOOL: &str = "everything_gui";
 
 /// Inputs that scope a matrix negotiation.
 #[derive(Debug, Clone, Default)]

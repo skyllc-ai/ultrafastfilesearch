@@ -19,13 +19,31 @@ use serde::{Deserialize, Serialize};
 use crate::error::{BenchError, Result};
 use crate::host::Host;
 
+/// A lightweight probe that determines whether a tool's background
+/// process/daemon is currently running.
+#[derive(Debug, Clone)]
+pub struct StateProbe {
+    /// Executable to invoke.
+    pub exe: String,
+    /// Arguments to pass.
+    pub args: Vec<String>,
+    /// If this substring is present in combined stdout+stderr the state is
+    /// `"running"`, otherwise `"stopped"`.
+    pub running_marker: String,
+}
+
 /// A tool whose version string should be probed for the fingerprint.
 #[derive(Debug, Clone)]
 pub struct ToolProbe {
     /// Display name (for example `"uffs"`).
     pub name: String,
-    /// Executable to invoke.
+    /// Executable to invoke for version/state probes.
     pub exe: String,
+    /// Path shown in the report. Defaults to `exe` when `None`. Useful when
+    /// the version is queried via a helper binary (e.g. `es.exe` probing the
+    /// Everything daemon version) but the report should display the primary
+    /// binary path (e.g. `Everything.exe`).
+    pub display_exe: Option<String>,
     /// Arguments that make the tool print its version.
     pub args: Vec<String>,
     /// When `Some`, select the first output line *containing* this substring
@@ -38,9 +56,12 @@ pub struct ToolProbe {
     /// text. Useful for daemons (e.g. Everything) that exit 0 but print an IPC
     /// error when their background process is absent.
     pub daemon_error_markers: Vec<String>,
+    /// Optional probe to determine whether the tool's daemon/process is active.
+    /// `None` means the tool has no background process (renders as `"n/a"`).
+    pub state_probe: Option<StateProbe>,
 }
 
-/// A resolved tool name → version pair.
+/// A resolved tool name → version + state triple.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolVersion {
     /// Display name of the tool.
@@ -49,6 +70,9 @@ pub struct ToolVersion {
     pub exe: String,
     /// Reported version string (`"unknown"` if the probe produced nothing).
     pub version: String,
+    /// Daemon/process state: `"running"`, `"stopped"`, `"n/a"` (no daemon),
+    /// or `"unknown"` if the state probe failed unexpectedly.
+    pub state: String,
 }
 
 /// Inputs that scope an environment capture.
@@ -200,6 +224,22 @@ fn probe_value(host: &dyn Host, probe: &Probe) -> String {
     }
 }
 
+/// Run a [`StateProbe`] and return `"running"` or `"stopped"`.
+fn probe_state(host: &dyn Host, sp: &StateProbe) -> String {
+    let arg_refs: Vec<&str> = sp.args.iter().map(String::as_str).collect();
+    host.run(&sp.exe, &arg_refs).ok().map_or_else(
+        || "stopped".to_owned(),
+        |out| {
+            let combined = format!("{} {}", out.stdout, out.stderr);
+            if combined.contains(sp.running_marker.as_str()) {
+                "running".to_owned()
+            } else {
+                "stopped".to_owned()
+            }
+        },
+    )
+}
+
 /// Probe one tool's version, preferring stdout then stderr (`"unknown"` on
 /// failure or empty output — many tools print their banner to stderr).
 fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
@@ -233,10 +273,16 @@ fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
             )
         },
     );
+    let state = tool
+        .state_probe
+        .as_ref()
+        .map_or_else(|| "n/a".to_owned(), |sp| probe_state(host, sp));
+    let exe = tool.display_exe.as_deref().unwrap_or(&tool.exe).to_owned();
     ToolVersion {
         name: tool.name.clone(),
-        exe: tool.exe.clone(),
+        exe,
         version,
+        state,
     }
 }
 
@@ -294,7 +340,12 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
     } else {
         fp.tools
             .iter()
-            .map(|tool| format!("- **{}:** {} `{}`", tool.name, tool.version, tool.exe))
+            .map(|tool| {
+                format!(
+                    "- **{}:** {} (state: {}) `{}`",
+                    tool.name, tool.version, tool.state, tool.exe
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -395,9 +446,11 @@ mod tests {
         let tool = ToolProbe {
             name: "uffs_cpp".to_owned(),
             exe: "uffs.com".to_owned(),
+            display_exe: None,
             args: vec!["--version".to_owned()],
             version_line_prefix: Some("UFFS version:".to_owned()),
             daemon_error_markers: vec![],
+            state_probe: None,
         };
         assert_eq!(probe_tool(&host, &tool).version, "1.0.0");
     }
@@ -414,9 +467,11 @@ mod tests {
         let tool = ToolProbe {
             name: "everything".to_owned(),
             exe: "es.exe".to_owned(),
+            display_exe: None,
             args: vec!["-get-everything-version".to_owned()],
             version_line_prefix: None,
             daemon_error_markers: vec!["Error 8".to_owned(), "IPC window not found".to_owned()],
+            state_probe: None,
         };
         assert_eq!(probe_tool(&host, &tool).version, "not running");
     }
@@ -431,9 +486,11 @@ mod tests {
         let tool = ToolProbe {
             name: "x".to_owned(),
             exe: "x".to_owned(),
+            display_exe: None,
             args: Vec::new(),
             version_line_prefix: None,
             daemon_error_markers: vec![],
+            state_probe: None,
         };
         assert_eq!(probe_tool(&host, &tool).version, "banner 9.9");
     }
@@ -452,9 +509,11 @@ mod tests {
             tools: vec![ToolProbe {
                 name: "uffs".to_owned(),
                 exe: "uffs".to_owned(),
+                display_exe: None,
                 args: vec!["--version".to_owned()],
                 version_line_prefix: None,
                 daemon_error_markers: vec![],
+                state_probe: None,
             }],
         };
 
@@ -472,6 +531,7 @@ mod tests {
             name: "uffs".to_owned(),
             exe: "uffs".to_owned(),
             version: "uffs 1.2.3".to_owned(),
+            state: "n/a".to_owned(),
         }]);
     }
 
@@ -490,6 +550,7 @@ mod tests {
                 name: "uffs".to_owned(),
                 exe: "uffs.exe".to_owned(),
                 version: "1.2.3".to_owned(),
+                state: "running".to_owned(),
             }],
         }
     }
@@ -504,7 +565,7 @@ mod tests {
 - **CPU:** Test CPU (8 logical)\n\
 - **RAM:** 16.0 GiB\n\
 \n### Tool versions\n\n\
-- **uffs:** 1.2.3 `uffs.exe`\n";
+- **uffs:** 1.2.3 (state: running) `uffs.exe`\n";
         assert_eq!(render_md(&sample_fp()), expected);
     }
 

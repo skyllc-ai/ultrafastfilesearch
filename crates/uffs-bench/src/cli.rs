@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 use crate::gate::Mode;
 
 /// Default tool ids when `--tools` is omitted (the full head-to-head set).
-pub const DEFAULT_TOOLS: [&str; 3] = ["uffs", "uffs_cpp", "everything"];
+pub const DEFAULT_TOOLS: [&str; 4] = ["uffs", "uffs_cpp", "everything", "everything_gui"];
 
 /// Optional subcommands; an absent subcommand runs the full benchmark suite.
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -171,7 +171,8 @@ mod tests {
         assert_eq!(cli.tools_or_default(), vec![
             "uffs",
             "uffs_cpp",
-            "everything"
+            "everything",
+            "everything_gui"
         ]);
     }
 

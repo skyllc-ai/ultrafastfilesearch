@@ -25,11 +25,11 @@ use crate::cards::{
     assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
 };
 use crate::cli::{Cli, Command};
-use crate::env::{self, EnvFingerprint, EnvSpec, ToolProbe};
+use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe};
 use crate::error::{BenchError, CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
-use crate::matrix::{self, Matrix, MatrixSpec};
+use crate::matrix::{self, EVERYTHING_GUI_TOOL, Matrix, MatrixSpec};
 use crate::preflight::{self, PreflightResult, PreflightSpec};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
@@ -76,46 +76,96 @@ const fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
-/// Build a version-probe for one tool id.
+/// Build a version + state probe for one tool id.
 ///
-/// - `everything` → `es.exe -version` (ES CLI version, no daemon/IPC needed)
-/// - `uffs_cpp`   → `uffs.com --version` (resolved via `~/bin` cascade)
-/// - anything else → `<exe> --version`
+/// - `everything`     → `es.exe -version` (ES CLI version, no IPC), state via
+///   `tasklist`
+/// - `everything_gui` → `es.exe -get-everything-version` (daemon IPC version,
+///   `daemon_error_markers` turn IPC errors into `"not running"`), display exe
+///   = `Everything.exe`, state via `tasklist`
+/// - `uffs`           → `uffs --version`, state via `uffs daemon status`
+/// - `uffs_cpp`       → `uffs.com --version` (resolved via `~/bin` cascade), no
+///   daemon state
+/// - anything else    → `<exe> --version`, no daemon state
 fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
-    let (exe, args, version_line_prefix, daemon_error_markers) = if name == matrix::EVERYTHING_TOOL
-    {
-        (
-            resolve::es_exe(host),
+    let tasklist_state = || StateProbe {
+        exe: "tasklist.exe".to_owned(),
+        args: vec![
+            "/FI".to_owned(),
+            "IMAGENAME eq Everything.exe".to_owned(),
+            "/NH".to_owned(),
+            "/FO".to_owned(),
+            "CSV".to_owned(),
+        ],
+        // tasklist CSV output contains the image name when the process is
+        // present; if the filter matches nothing it prints a "no tasks are
+        // running" message that does NOT contain this string.
+        running_marker: "Everything.exe".to_owned(),
+    };
+
+    if name == matrix::EVERYTHING_TOOL {
+        ToolProbe {
+            name: name.to_owned(),
+            exe: resolve::es_exe(host),
+            display_exe: None,
             // Use `-version` (ES CLI version, no IPC/daemon required) rather
             // than `-get-everything-version` which exits 0 but prints an IPC
             // error when the Everything daemon is not running.
-            vec!["-version".to_owned()],
-            None,
-            vec![],
-        )
+            args: vec!["-version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec![],
+            state_probe: Some(tasklist_state()),
+        }
+    } else if name == EVERYTHING_GUI_TOOL {
+        ToolProbe {
+            name: name.to_owned(),
+            // Version is queried via es.exe IPC; display path is Everything.exe.
+            exe: resolve::es_exe(host),
+            display_exe: Some(resolve::everything_exe(host)),
+            // `-get-everything-version` queries the running daemon via IPC and
+            // returns the GUI version. When the daemon is not running it exits
+            // 0 but prints an IPC error — daemon_error_markers turns this into
+            // "not running" in the version field.
+            args: vec!["-get-everything-version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec!["Error 8".to_owned(), "IPC window not found".to_owned()],
+            state_probe: Some(tasklist_state()),
+        }
     } else if name == "uffs_cpp" {
-        (
-            resolve::uffs_cpp_exe(host),
-            vec!["--version".to_owned()],
-            Some("UFFS version:".to_owned()),
-            vec![],
-        )
+        ToolProbe {
+            name: name.to_owned(),
+            exe: resolve::uffs_cpp_exe(host),
+            display_exe: None,
+            args: vec!["--version".to_owned()],
+            version_line_prefix: Some("UFFS version:".to_owned()),
+            daemon_error_markers: vec![],
+            state_probe: None,
+        }
     } else if name == "uffs" {
-        (
-            resolve::uffs_exe(host),
-            vec!["--version".to_owned()],
-            None,
-            vec![],
-        )
+        let uffs = resolve::uffs_exe(host);
+        ToolProbe {
+            name: name.to_owned(),
+            exe: uffs.clone(),
+            display_exe: None,
+            args: vec!["--version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec![],
+            state_probe: Some(StateProbe {
+                exe: uffs,
+                args: vec!["daemon".to_owned(), "status".to_owned()],
+                running_marker: "running".to_owned(),
+            }),
+        }
     } else {
-        (name.to_owned(), vec!["--version".to_owned()], None, vec![])
-    };
-    ToolProbe {
-        name: name.to_owned(),
-        exe,
-        args,
-        version_line_prefix,
-        daemon_error_markers,
+        ToolProbe {
+            name: name.to_owned(),
+            exe: name.to_owned(),
+            display_exe: None,
+            args: vec!["--version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec![],
+            state_probe: None,
+        }
     }
 }
 

@@ -17,52 +17,78 @@ fn stdout_of(text: &str) -> ProcOutput {
     }
 }
 
-/// Queue the 8 run results needed for the `--dry-run` code path.
+/// Queue the run results needed for the `--dry-run` code path.
 ///
-/// `--dry-run` skips `teardown::baseline`, so the call order is:
-///  1. `resolve::es_exe` — `where.exe es.exe` (returns full path)
-///  2. `env::capture` hostname
-///  3. `env::capture` cpu
-///  4. `env::capture` `logical_cpus`
-///  5. `env::capture` `total_ram`
-///  6. `env::capture` uffs --version
-///  7. `env::capture` `uffs_cpp` --version (needs "UFFS version:" line)
-///  8. `env::capture` es -version
+/// `--dry-run` skips `teardown::baseline`, call order is:
+///  1. `resolve::es_exe`         — `where.exe es.exe` (for `everything`)
+///  2. `resolve::es_exe`         — `where.exe es.exe` (for `everything_gui`)
+///  3. `resolve::everything_exe` — `where.exe Everything.exe`
+///  4. `env::capture` hostname
+///  5. `env::capture` cpu
+///  6. `env::capture` `logical_cpus`
+///  7. `env::capture` `total_ram`
+///  8. `env::capture` uffs --version
+///  9. uffs daemon status (state probe)
+///  10. `env::capture` `uffs_cpp` --version
+///  11. `env::capture` es -version
+///  12. tasklist (everything state probe — stopped)
+///  13. `env::capture` es -get-everything-version
+///  14. tasklist (`everything_gui` state probe — stopped)
 fn dry_run_host() -> MockHost {
+    let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
-        .with_run_result(stdout_of("C:\\bin\\es.exe"))         // 1: where.exe es.exe
-        .with_run_result(stdout_of("myhost"))                 // 2: hostname
-        .with_run_result(stdout_of("Name=Test CPU"))          // 3: cpu
-        .with_run_result(stdout_of("8"))                      // 4: logical_cpus
-        .with_run_result(stdout_of("8589934592"))             // 5: total_ram
-        .with_run_result(stdout_of("uffs 0.0.0"))             // 6: uffs --version
-        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 7: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30")) // 8: es -version
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  1: where.exe es.exe
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  2: where.exe es.exe
+        .with_run_result(stdout_of(evr))                      //  3: where.exe Everything.exe
+        .with_run_result(stdout_of("myhost"))                 //  4: hostname
+        .with_run_result(stdout_of("Name=Test CPU"))          //  5: cpu
+        .with_run_result(stdout_of("8"))                      //  6: logical_cpus
+        .with_run_result(stdout_of("8589934592"))             //  7: total_ram
+        .with_run_result(stdout_of("uffs 0.0.0"))             //  8: uffs --version
+        .with_run_result(stdout_of("running"))                //  9: uffs daemon status
+        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 10: uffs_cpp --version
+        .with_run_result(stdout_of("1.1.0.30"))               // 11: es -version
+        .with_run_result(stdout_of(""))                       // 12: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
+        .with_run_result(stdout_of("")) // 14: tasklist (stopped)
 }
 
-/// Queue the 9 run results needed for the autopilot (non-dry-run) path.
+/// Queue the run results needed for the autopilot (non-dry-run) path.
 ///
 /// `teardown::baseline` fires `uffs daemon status` before the env probes:
-///  1. `teardown::baseline` — `uffs daemon status`
-///  2. `resolve::es_exe` — `where.exe es.exe` (returns full path)
-///  3. `env::capture` hostname
-///  4. `env::capture` cpu
-///  5. `env::capture` `logical_cpus`
-///  6. `env::capture` `total_ram`
-///  7. `env::capture` uffs --version
-///  8. `env::capture` `uffs_cpp` --version (needs "UFFS version:" line)
-///  9. `env::capture` es -version
+///  1. `teardown::baseline`      — `uffs daemon status`
+///  2. `resolve::es_exe`         — `where.exe es.exe` (for `everything`)
+///  3. `resolve::es_exe`         — `where.exe es.exe` (for `everything_gui`)
+///  4. `resolve::everything_exe` — `where.exe Everything.exe`
+///  5. `env::capture` hostname
+///  6. `env::capture` cpu
+///  7. `env::capture` `logical_cpus`
+///  8. `env::capture` `total_ram`
+///  9. `env::capture` uffs --version
+///  10. uffs daemon status (state probe)
+///  11. `env::capture` `uffs_cpp` --version
+///  12. `env::capture` es -version
+///  13. tasklist (everything state probe — stopped)
+///  14. `env::capture` es -get-everything-version
+///  15. tasklist (`everything_gui` state probe — stopped)
 fn autopilot_host() -> MockHost {
+    let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
-        .with_run_result(stdout_of("running"))                 // 1: uffs daemon status
-        .with_run_result(stdout_of("C:\\bin\\es.exe"))         // 2: where.exe es.exe
-        .with_run_result(stdout_of("myhost"))                 // 3: hostname
-        .with_run_result(stdout_of("Name=Test CPU"))          // 4: cpu
-        .with_run_result(stdout_of("8"))                      // 5: logical_cpus
-        .with_run_result(stdout_of("8589934592"))             // 6: total_ram
-        .with_run_result(stdout_of("uffs 0.0.0"))             // 7: uffs --version
-        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 8: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30")) // 9: es -version
+        .with_run_result(stdout_of("running"))                 //  1: uffs daemon status
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  2: where.exe es.exe
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  3: where.exe es.exe
+        .with_run_result(stdout_of(evr))                      //  4: where.exe Everything.exe
+        .with_run_result(stdout_of("myhost"))                 //  5: hostname
+        .with_run_result(stdout_of("Name=Test CPU"))          //  6: cpu
+        .with_run_result(stdout_of("8"))                      //  7: logical_cpus
+        .with_run_result(stdout_of("8589934592"))             //  8: total_ram
+        .with_run_result(stdout_of("uffs 0.0.0"))             //  9: uffs --version
+        .with_run_result(stdout_of("running"))                // 10: uffs daemon status
+        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 11: uffs_cpp --version
+        .with_run_result(stdout_of("1.1.0.30"))               // 12: es -version
+        .with_run_result(stdout_of(""))                       // 13: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 14: es -get-everything-version
+        .with_run_result(stdout_of("")) // 15: tasklist (stopped)
 }
 
 /// Whether any recorded call mutated the host filesystem.
