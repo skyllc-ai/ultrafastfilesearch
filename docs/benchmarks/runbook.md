@@ -45,15 +45,26 @@ cargo install rust-script
 just bench-fetch-competitors --keep-tools
 ```
 
-### Build UFFS from source
+### UFFS binary — resolution cascade
+
+The orchestrator resolves `uffs.exe` automatically using the same cascade as
+all UFFS validation scripts. It does **not** auto-build; you control which
+artifact is exercised:
+
+| Priority | Location | How to get there |
+|----------|----------|------------------|
+| 1st | `%USERPROFILE%\bin\uffs.exe` | `just use` — installs the latest release or a dist build |
+| 2nd | `target\release\uffs.exe` | `cargo build --release -p uffs -p uffsd` |
+| 3rd | `uffs.exe` on PATH | any other install method |
+
+If none of the above exist, the orchestrator surfaces the OS "executable not
+found" error with the search path — clearer than a silent failure.
+
+To pin a specific binary for a run:
 
 ```powershell
-# from repo root (elevated PowerShell)
-cargo build --release -p uffs -p uffsd
+just bench-suite --bin C:\path\to\my\uffs.exe --drives C,D
 ```
-
-The orchestrator resolves `uffs.exe` from the release target directory; no
-manual install step is needed.
 
 ---
 
@@ -242,6 +253,7 @@ pre-filled report scaffold. To promote it to a canonical benchmark report:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--bin <path>` | auto-cascade | Override the `uffs.exe` path (skips cascade) |
 | `--drives <C,D,…>` | `C` | Comma-separated NTFS drive letters to benchmark |
 | `--tools <uffs,es,…>` | `uffs,everything` | Tool IDs for cross-tool stage |
 | `--rounds <n>` | `10` | Measurement rounds per cell (30+ for publishable results) |
