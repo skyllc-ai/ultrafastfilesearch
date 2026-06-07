@@ -31,7 +31,11 @@ The report publishes **everything these numbers don't cover too** — a row-coun
 
 ## How UFFS benchmarks
 
-Four principles, documented in full in [`methodology.md`](methodology.md) (the single-link reply to *"this comparison is rigged because..."*):
+**Ready to run a benchmark cycle?** See the **[operator runbook →](runbook.md)** for prerequisites,
+step-by-step commands, crash recovery, and how to promote results to a canonical report.
+
+Four fairness principles, documented in full in [`methodology.md`](methodology.md) (the single-link
+reply to *"this comparison is rigged because..."*):
 
 - **Separate cold / warm / hot.** Cold build + warm restart + hot query are three different workloads. We measure and publish them separately instead of averaging them into one "startup time" lie.
 - **Separate interactive from bulk.** Targeted-query latency (`notepad.exe`, `*.dll`) and full-scan export (`*` → CSV for 23 M rows) are different workload classes. Different tools win each. We test both.
