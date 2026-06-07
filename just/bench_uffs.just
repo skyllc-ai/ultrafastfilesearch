@@ -423,23 +423,23 @@ bench-help:
 # Full benchmark suite (Stage 0→5); guided on first run, terse after.
 # Pass extra flags through, e.g. `just bench-suite --drives C,D --only-stage 1`.
 bench-suite *args:
-    cargo run -p uffs-bench -- {{args}}
+    cargo run --release -p uffs-bench -- {{args}}
 
 # Full suite with no prompts (snapshot/restore/verify still run).
 bench-suite-auto *args:
-    cargo run -p uffs-bench -- --auto {{args}}
+    cargo run --release -p uffs-bench -- --auto {{args}}
 
 # Render every card and the negotiated matrix, mutating nothing.
 bench-suite-dry *args:
-    cargo run -p uffs-bench -- --dry-run {{args}}
+    cargo run --release -p uffs-bench -- --dry-run {{args}}
 
 # Stage 0 only: env fingerprint + competitor preflight + matrix (no measurement).
 bench-preflight *args:
-    cargo run -p uffs-bench -- --only-stage 0 {{args}}
+    cargo run --release -p uffs-bench -- --only-stage 0 {{args}}
 
 # Resume an existing bundle: load its state.json, skip Done steps, continue.
 bench-resume bundle *args:
-    cargo run -p uffs-bench -- --bundle {{bundle}} {{args}}
+    cargo run --release -p uffs-bench -- --bundle {{bundle}} {{args}}
 
 # Download + SHA-256-verify the pinned competitor (`es.exe`) into the bundle.
 # Reads scripts/windows/competitors.toml (the single pinned version), fetches
@@ -447,7 +447,7 @@ bench-resume bundle *args:
 # to retain the binary; otherwise it is removed at teardown. Forward flags like
 # `--bundle <dir>`, e.g. `just bench-fetch-competitors --bundle out/bench`.
 bench-fetch-competitors *args:
-    cargo run -p uffs-bench -- {{args}} fetch-competitors
+    cargo run --release -p uffs-bench -- {{args}} fetch-competitors
 
 # Replay a bundle's restore-manifest.json after a hard kill (crash recovery).
 # Re-applies every serialized undo in LIFO order to return the host to its
@@ -455,7 +455,7 @@ bench-fetch-competitors *args:
 # On success the manifest is reset to a no-op sentinel. Requires --bundle <dir>.
 # Example: just bench-restore --bundle LOG/bench/20260601T120000Z
 bench-restore bundle:
-    cargo run -p uffs-bench -- --bundle {{bundle}} restore
+    cargo run --release -p uffs-bench -- --bundle {{bundle}} restore
 
 # Re-capture the host fingerprint and diff it against a bundle's baseline.
 # Compares the current host state against fingerprint-before.json from a
@@ -463,5 +463,5 @@ bench-restore bundle:
 # writes fingerprint-after.json for forensics. Requires --bundle <dir>.
 # Example: just bench-suite-verify --bundle LOG/bench/20260601T120000Z
 bench-suite-verify bundle:
-    cargo run -p uffs-bench -- --bundle {{bundle}} verify
+    cargo run --release -p uffs-bench -- --bundle {{bundle}} verify
 
