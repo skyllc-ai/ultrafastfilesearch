@@ -48,6 +48,27 @@ UFFS is built for **exact filename, path, and metadata search** at scales where 
 
 ---
 
+## See it in action
+
+Every clip runs the **real binary** against real NTFS data with unedited timings and result counts — captured with the reproducible [demo kit](scripts/dev/demo/README.md).
+
+<p align="center">
+  <img src="assets/demo/uffs-tui-short.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives against a hot daemon in seconds." width="900"><br>
+  <sub><b>TUI</b> — unzip, run <code>uffs-tui</code>, and browse your own drives in seconds. <a href="assets/demo/uffs-tui.gif">Full reel</a>.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/demo/uffs-cli-short.gif" alt="UFFS CLI: real searches, filters, and aggregations across 25.9M indexed files with measured latency." width="900"><br>
+  <sub><b>CLI</b> — real commands, real result counts, real measured latency on a hot daemon. <a href="assets/demo/uffs-cli.gif">Full 9-step reel</a>.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/demo/uffs-mcp-claude.gif" alt="Claude using the UFFS MCP server to find the largest video files and summarize storage by file type." width="900"><br>
+  <sub><b>MCP</b> — Claude querying your filesystem through the UFFS MCP server. Deterministic search underneath, MCP on top.</sub>
+</p>
+
+---
+
 ## Benchmark snapshot (v0.5.71)
 
 Measured on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, 7 NTFS volumes totaling 26.1 M records; scaled to 100.4 M with offline MFT clones (v0.5.4 era). Full captures in [`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt`](docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt) + [`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).

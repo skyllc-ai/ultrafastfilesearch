@@ -1,54 +1,139 @@
-# UFFS TUI quick-start demo — VHS tape SKELETON (charmbracelet/vhs)
-# Render:  vhs scripts/dev/demo/tui-demo.tape   ->  uffs-tui.gif
-#
-# STATUS: skeleton. The bundled `uffs-tui` is the free demo binary built in the
-# separate githubrobbi/uffs-demo repo, so its exact keybindings are not vendored
-# here. Fill in the `# TODO` keystrokes ONCE (confirm against the running TUI),
-# then this clip is reproducible too.
-#
-# If filling keybindings is fiddly, just record the TUI interactively with
-# ScreenToGif using the shot list in README.md — that is the supported path.
-#
-# Prereqs:
-#   - `uffs-tui` (and `uffs`/`uffsd`) on PATH, ideally from an unzipped release
-#   - daemon warmed:  rust-script scripts/windows/record-demo-prep.rs --mode hot
-#
-# Honesty: the demo TUI caps result counts and disables exports (DEMO-LICENSE.txt).
-# Don't imply uncapped/export behaviour in this clip.
+# Intentionally no: Set Shell "pwsh"
+# VHS on Windows starts cmd.exe by default.
+# We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
+
+Set FontSize 20
+Set Width 1280
+Set Height 720
+Set Padding 24
+Set Theme "Catppuccin Mocha"
+Set TypingSpeed 45ms
+Set PlaybackSpeed 1.0
 
 Output uffs-tui.gif
 
-Set Shell "pwsh"
-Set FontSize 18
-Set Width 1280
-Set Height 720
-Set Padding 20
-Set Theme "Catppuccin Mocha"
+Hide
+Type "pwsh -NoLogo -NoProfile"
+Enter
+Sleep 1500ms
+Type "function global:prompt { '>' }"
+Enter
+Show
+
+# UltraFastFileSearch (UFFS)
+# Benchmark-honest demo.
+#
+# Recorded against the real binary.
+# No edited timings, no synthetic results.
+#
+# Demo environment:
+#   - Hot daemon (pre-warmed)
+#   - Real filesystem data
+#   - Demo edition TUI
+#
+# The demo edition limits result counts and disables exports.
+
+Set TypingSpeed 1ms
+Type "Clear-Host"
+Enter
+
+Set TypingSpeed 1ms
+Type "# ##           ##   ###############   ###############    #############"
+Enter
+Type "# ##           ##   ##                ##               ##             "
+Enter
+Type "# ##           ##   ##                ##               ##             "
+Enter
+Type "# ##           ##   ###########       ###########        ###########  "
+Enter
+Type "# ##           ##   ##                ##                           ## "
+Enter
+Type "# ##           ##   ##                ##                            ##"
+Enter
+Type "# ##           ##   ##                ##               ##           ##"
+Enter
+Type "#   ###########     ##                ##                 ###########  "
+Enter
+Enter
+Type "# UltraFastFileSearch"
+Enter
+Type "# Hot daemon • Real drives • Real timings"
+Enter
+Type "# 25M+ files searchable in seconds"
+Enter
+
+Sleep 5s
+
+Type "Clear-Host"
+Enter
+
+Type "# Story: unzip, run, search"
+Enter
+Type "# No indexing wait. No pre-generated demo data."
+Enter
+Enter
+
+Sleep 2s
+
+Type "# Launching the TUI against a hot daemon"
+Enter
+Type "# Real result counts and measured latency remain visible"
+Enter
+
+Sleep 4s
+
+Set TypingSpeed 45ms
+Type "uffs_tui.exe --keys windows --reset-history"
+Enter
+
+Sleep 3500ms
+
+# Search interaction
+
+Set TypingSpeed 300ms
+Type "Invoice"
+Sleep 2s
+Tab
+Sleep 2s
+Tab
+
+Set TypingSpeed 1s
+Escape
+Down 
+Down
+Down
+PageDown
+Down 
+Down
+Down
+PageDown
+PageUp 3
+Escape
+
+# Browse previously executed searches
+
+Set TypingSpeed 2s
+Down 3
+
+# Show query editing and navigation
+
+Set TypingSpeed 1s
+Ctrl+A
+Ctrl+X
+Type "are we there yet"
+
+Set TypingSpeed 2s
+Tab 2
+
+Ctrl+A
+Sleep 2s
+Ctrl+X
+Sleep 2s
+
+Type "Hallo"
+
 Set TypingSpeed 45ms
 
-# Story: "unzip -> run -> browsing your real drives in seconds"
-Hide
-Type "clear" Enter
-Show
-Sleep 600ms
+# Exit the application
 
-# Launch the TUI; the daemon auto-starts and the UI populates with real drives
-Type "uffs-tui"
-Sleep 400ms
-Enter
-Sleep 3500ms          # let the daemon attach + the UI render
-
-# TODO: type a query into the TUI's search field (confirm focus behaviour)
-Type "*.pdf"
-Sleep 2500ms          # results filter live
-
-# TODO: navigate results — replace with the demo TUI's real keys
-Down
-Down
-Sleep 1500ms
-
-# TODO: optionally toggle a filter / panel here
-
-# TODO: quit cleanly — replace with the demo TUI's real quit key (often q or Ctrl+C)
-Type "q"
-Sleep 1500ms
+Ctrl+Q

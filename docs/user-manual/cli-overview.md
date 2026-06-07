@@ -7,6 +7,10 @@ milliseconds.
 **Search is the default action** — just type `uffs <pattern>`.  No
 subcommand required.
 
+![UFFS CLI: real searches, filters, and aggregations across millions of indexed files with measured latency](../../assets/demo/uffs-cli.gif)
+
+> *Real commands, real result counts, real measured latency on a hot daemon. Recorded against the real CLI (see the [demo kit](../../scripts/dev/demo/README.md)).*
+
 > **See also:**
 > [Getting Started](getting-started.md) ·
 > [Search Modes](search-modes.md) ·

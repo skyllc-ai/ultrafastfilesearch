@@ -1,9 +1,12 @@
 # UFFS demo capture kit
 
-Tooling and shot lists for the two Phase 1 launch GIFs:
+Tooling and shot lists for the launch GIFs:
 
 1. **TUI quick-start** — the zero-friction "front door" (hero on README + site).
 2. **CLI speed** — raw query latency across a real NTFS estate (proof clip for HN / Reddit / Rust).
+3. **MCP + Claude** — deterministic local retrieval exposed as agent tools.
+
+Each clip has a full reel (`*-demo.tape`) and, for TUI/CLI, a short loop (`*-demo-short.tape`).
 
 Everything here is built so the clips are **reproducible**, **honest**, and **re-renderable** each release. Capture must run on the Windows box with live NTFS (the only place `uffs` reads the MFT directly); macOS/Linux can only show offline-MFT analysis.
 
@@ -86,20 +89,27 @@ Shot list:
 
 Keep the heavy binaries out of git history where possible; prefer the smallest optimized GIF (< ~3 MB) or an MP4/WebM.
 
-| Output | Location | Wires into |
-|---|---|---|
-| `uffs-tui.gif` | `assets/demo/uffs-tui.gif` (this repo) **and** `skyllc-ai.github.io/assets/demo/uffs-tui.gif` | README hero block; site hero/section |
-| `uffs-cli.gif` | `assets/demo/uffs-cli.gif` (this repo) | README "Benchmark snapshot" area; HN/Reddit posts |
+Each `.tape` renders one GIF into `assets/demo/` (this repo). Short variants are the snappy loops used on the README/site; full variants are the complete reels linked as "full reel".
 
-README wiring (hero):
+| Tape | Output (`assets/demo/`) | Wires into |
+|---|---|---|
+| `tui-demo.tape` | `uffs-tui.gif` | `docs/user-manual/tui-search-box.md`; README "full reel" link |
+| `tui-demo-short.tape` | `uffs-tui-short.gif` | README "See it in action" (TUI); site `#demo` |
+| `cli-demo.tape` | `uffs-cli.gif` | `docs/user-manual/cli-overview.md`; README "full reel" link |
+| `cli-demo-short.tape` | `uffs-cli-short.gif` | README "See it in action" (CLI); site `#demo` |
+| `mcp-demo.tape` | `uffs-mcp-claude.gif` | README "See it in action" (MCP); `docs/user-manual/mcp.md`; site `#demo` |
+
+Mirror the three site clips into the separate [`skyllc-ai.github.io`](https://github.com/skyllc-ai/skyllc-ai.github.io) repo under `assets/demo/` (`uffs-tui-short.gif`, `uffs-cli-short.gif`, `uffs-mcp-claude.gif`) — they are embedded in the `#demo` section of `index.html`.
+
+README wiring (per clip):
 
 ```markdown
 <p align="center">
-  <img src="assets/demo/uffs-tui.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives in seconds (hot daemon, 25.9M records).">
+  <img src="assets/demo/uffs-tui-short.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives in seconds (hot daemon, 25.9M records).">
 </p>
 ```
 
-Site wiring: add an `<img>` in the hero or a dedicated demo section of `index.html`, served from `assets/demo/`.
+Site wiring: the `<section id="demo">` in `index.html` holds a `figure.demo` per clip, served from `assets/demo/`.
 
 ---
 
