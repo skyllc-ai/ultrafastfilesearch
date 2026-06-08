@@ -375,8 +375,8 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
 /// Render a GFM drive-status table for display before the matrix.
 ///
 /// Columns: Drive | UFFS records | Est. RAM | ES status | ES capable
-/// "ES capable" uses the same RAM-budget logic as [`compute_matrix`] to show
-/// which drives would be included in cross-tool cells.
+/// "ES capable" uses the same RAM-budget logic as `matrix::compute_matrix` to
+/// show which drives would be included in cross-tool cells.
 #[must_use]
 pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) -> String {
     if result.drives.is_empty() {
