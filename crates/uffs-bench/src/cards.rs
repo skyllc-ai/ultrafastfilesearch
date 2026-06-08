@@ -141,25 +141,47 @@ fn unique_product_names(ids: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// Build a gate [`Card`] presented when one or more tools are missing.
+/// Build the tool-selection gate [`Card`] shown after the env table.
 ///
-/// The operator can press **proceed** to continue with the available tools or
-/// **abort** to quit and install the missing binaries first.
-pub(crate) fn missing_tools_card(missing: &[&str], available: &[&str]) -> Card {
-    let missing_products = unique_product_names(missing).join(", ");
+/// Always fires — even when all tools are present — so the operator can
+/// confirm (or in the future, deselect) which products will be benchmarked.
+/// When some tools are missing, the card notes them and points to the table.
+pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str]) -> Card {
     let avail_products = unique_product_names(available);
     let avail_names = avail_products.join(" and ");
     let avail_count = avail_products.len();
+    let (title, why, long_why) = if missing.is_empty() {
+        (
+            format!("Benchmark {avail_names} — confirm tool selection"),
+            format!("All {avail_count} product(s) found. Confirm to continue."),
+            format!(
+                "Proceeding will benchmark: {avail_names}.\n\
+                 Press [q] to abort and adjust the tool list."
+            ),
+        )
+    } else {
+        let missing_products = unique_product_names(missing).join(", ");
+        (
+            format!("Benchmark {avail_names} — proceed or quit to install missing tools first?"),
+            format!(
+                "Not found: {missing_products} (see install links in table above). \
+                 Proceeding benchmarks only the {avail_count} available product(s)."
+            ),
+            format!(
+                "Missing: {missing_products}.\n\
+                 The table above shows install URLs for each missing tool.\n\
+                 Install the binaries and re-run for a full comparison, or\n\
+                 proceed now with: {avail_names}."
+            ),
+        )
+    };
     Card {
-        id: "missing-tools".to_owned(),
+        id: "tool-selection".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
         step_num: 1,
         step_total: 1,
-        title: format!("Benchmarking {avail_names} — proceed or quit to install missing tools?"),
-        why: format!(
-            "Not found: {missing_products} (see install links in table above). \
-             Proceeding benchmarks only the {avail_count} available product(s)."
-        ),
+        title,
+        why,
         commands: Vec::new(),
         resources: avail_products
             .iter()
@@ -168,12 +190,7 @@ pub(crate) fn missing_tools_card(missing: &[&str], available: &[&str]) -> Card {
         backups: Vec::new(),
         est_time: "0 s".to_owned(),
         recovery: "Read-only — aborting changes nothing.".to_owned(),
-        long_why: format!(
-            "Missing: {missing_products}.\n\
-             The table above shows install URLs for each missing tool.\n\
-             Install the binaries and re-run for a full comparison, or\n\
-             proceed now with: {avail_names}."
-        ),
+        long_why,
     }
 }
 

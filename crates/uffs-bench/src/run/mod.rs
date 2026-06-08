@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 
 use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
-    assembly_card, dry_run_result, measurement_card, missing_tools_card, plan_card, report_scope,
-    stage0_result,
+    assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
+    tool_selection_card,
 };
 use crate::cli::{Cli, Command};
 use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe};
@@ -387,29 +387,27 @@ impl Orchestrator<'_> {
             .filter(|tv| tv.version == "unknown")
             .map(|tv| tv.name.as_str())
             .collect();
-        if !missing.is_empty() {
-            let available: Vec<&str> = fp
-                .tools
-                .iter()
-                .filter(|tv| tv.version != "unknown")
-                .map(|tv| tv.name.as_str())
-                .collect();
-            if available.len() < 2 {
-                return Err(BenchError::MissingTools(format!(
-                    "only {} tool(s) available — need at least 2 to run a meaningful \
-                     benchmark. Install the missing tools and re-run.",
-                    available.len()
-                )));
-            }
-            let card = missing_tools_card(&missing, &available);
-            if matches!(
-                confirm(self.host, &mut session.mode, &mut session.seen, &card),
-                Decision::Back | Decision::Abort
-            ) {
-                return Err(BenchError::MissingTools(
-                    "operator chose to abort — install missing tools and re-run".to_owned(),
-                ));
-            }
+        let available: Vec<&str> = fp
+            .tools
+            .iter()
+            .filter(|tv| tv.version != "unknown")
+            .map(|tv| tv.name.as_str())
+            .collect();
+        if available.len() < 2 {
+            return Err(BenchError::MissingTools(format!(
+                "only {} tool(s) available — need at least 2 to run a meaningful \
+                 benchmark. Install the missing tools and re-run.",
+                available.len()
+            )));
+        }
+        let card = tool_selection_card(&available, &missing);
+        if matches!(
+            confirm(self.host, &mut session.mode, &mut session.seen, &card),
+            Decision::Back | Decision::Abort
+        ) {
+            return Err(BenchError::MissingTools(
+                "operator chose to abort — install missing tools and re-run".to_owned(),
+            ));
         }
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
