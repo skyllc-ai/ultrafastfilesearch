@@ -44,10 +44,10 @@ const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
 ///  7. `env::capture` `total_ram`
 ///  8. `env::capture` uffs --version
 ///  9. `env::capture` `uffs_cpp` --version
-/// 10. `env::capture` es -version
-/// 11. tasklist (everything state probe — stopped)
-/// 12. `env::capture` es -get-everything-version
-/// 13. tasklist (`everything_gui` state probe — stopped)
+/// 10. tasklist (`everything` state probe — stopped)   ← state before version
+/// 11. `env::capture` es -version
+/// 12. tasklist (`everything_gui` state probe — stopped)
+/// 13. `env::capture` es -get-everything-version
 /// 14. `preflight`  — `es -get-everything-version` (availability)
 /// 15. `preflight`  — `uffs daemon status` (record counts for C)
 /// 16. `preflight`  — `es -get-result-count C:` → loaded
@@ -63,10 +63,10 @@ fn dry_run_host() -> MockHost {
         .with_run_result(stdout_of("8589934592"))             //  7: total_ram
         .with_run_result(stdout_of("uffs 0.0.0"))             //  8: uffs --version
         .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) //  9: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30"))               // 10: es -version
-        .with_run_result(stdout_of(""))                       // 11: tasklist (stopped)
-        .with_run_result(stdout_of("1.4.1.1032"))             // 12: es -get-everything-version
-        .with_run_result(stdout_of(""))                       // 13: tasklist (stopped)
+        .with_run_result(stdout_of(""))                       // 10: tasklist (everything stopped)
+        .with_run_result(stdout_of("1.1.0.30"))               // 11: es -version
+        .with_run_result(stdout_of(""))                       // 12: tasklist (everything_gui stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
         .with_run_result(stdout_of("1.4.1.1032"))             // 14: preflight es availability
         .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 15: preflight daemon status
         .with_run_result(stdout_of("1000")) // 16: es result-count C
@@ -88,10 +88,10 @@ fn dry_run_host() -> MockHost {
 ///  8. `env::capture` `total_ram`
 ///  9. `env::capture` uffs --version
 /// 10. `env::capture` `uffs_cpp` --version
-/// 11. `env::capture` es -version
-/// 12. tasklist (everything state probe — stopped)
-/// 13. `env::capture` es -get-everything-version
-/// 14. tasklist (`everything_gui` state probe — stopped)
+/// 11. tasklist (`everything` state probe — stopped)   ← state before version
+/// 12. `env::capture` es -version
+/// 13. tasklist (`everything_gui` state probe — stopped)
+/// 14. `env::capture` es -get-everything-version
 /// 15. `preflight`  — `es -get-everything-version` (availability)
 /// 16. `preflight`  — `uffs daemon status` (record counts for C)
 /// 17. `preflight`  — `es -get-result-count C:` → loaded
@@ -114,10 +114,10 @@ fn autopilot_host() -> MockHost {
         .with_run_result(stdout_of("8589934592"))             //  8: total_ram
         .with_run_result(stdout_of("uffs 0.0.0"))             //  9: uffs --version
         .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 10: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30"))               // 11: es -version
-        .with_run_result(stdout_of(""))                       // 12: tasklist (stopped)
-        .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
-        .with_run_result(stdout_of(""))                       // 14: tasklist (stopped)
+        .with_run_result(stdout_of(""))                       // 11: tasklist (everything stopped)
+        .with_run_result(stdout_of("1.1.0.30"))               // 12: es -version
+        .with_run_result(stdout_of(""))                       // 13: tasklist (everything_gui stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 14: es -get-everything-version
         .with_run_result(stdout_of("1.4.1.1032"))             // 15: preflight es availability
         .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 16: preflight daemon status
         .with_run_result(stdout_of("1000"))                   // 17: es result-count C

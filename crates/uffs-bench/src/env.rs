@@ -253,6 +253,13 @@ fn probe_state(host: &dyn Host, sp: &StateProbe) -> String {
 /// Probe one tool's version, preferring stdout then stderr (`"unknown"` on
 /// failure or empty output — many tools print their banner to stderr).
 fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
+    // State is probed first so the daemon-error-marker path can reuse the
+    // result without issuing a second tasklist/pgrep call.
+    let state = tool
+        .state_probe
+        .as_ref()
+        .map_or_else(|| "n/a".to_owned(), |sp| probe_state(host, sp));
+
     let arg_refs: Vec<&str> = tool.args.iter().map(String::as_str).collect();
     let version = host.run(&tool.exe, &arg_refs).ok().map_or_else(
         || "unknown".to_owned(),
@@ -263,7 +270,17 @@ fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
                 .iter()
                 .any(|marker| combined.contains(marker.as_str()))
             {
-                return "not running".to_owned();
+                // The IPC channel reported an error — es.exe cannot talk to
+                // the instance.  If the process is actually running (e.g. a
+                // private instance launched by the bench) report the version
+                // as "ipc unavailable" so the operator knows the binary
+                // exists but is not the default instance.  Only fall back to
+                // "not running" when the process is genuinely absent.
+                return if state == "running" {
+                    "ipc unavailable".to_owned()
+                } else {
+                    "not running".to_owned()
+                };
             }
             let text = if out.stdout.is_empty() {
                 &out.stderr
@@ -283,10 +300,6 @@ fn probe_tool(host: &dyn Host, tool: &ToolProbe) -> ToolVersion {
             )
         },
     );
-    let state = tool
-        .state_probe
-        .as_ref()
-        .map_or_else(|| "n/a".to_owned(), |sp| probe_state(host, sp));
     let exe = tool.display_exe.as_deref().unwrap_or(&tool.exe).to_owned();
     ToolVersion {
         name: tool.name.clone(),
@@ -491,8 +504,8 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::{
-        EnvFingerprint, EnvSpec, ToolProbe, ToolVersion, bytes_to_gib, capture, clean_value,
-        first_nonempty, probe_tool, render_md, write,
+        EnvFingerprint, EnvSpec, StateProbe, ToolProbe, ToolVersion, bytes_to_gib, capture,
+        clean_value, first_nonempty, probe_tool, render_md, write,
     };
     use crate::host::{Call, MockHost, ProcOutput};
 
@@ -677,6 +690,61 @@ mod tests {
         let mut fp = sample_fp();
         fp.tools.clear();
         assert!(render_md(&fp).contains("_None probed._"));
+    }
+
+    fn ipc_error_output() -> ProcOutput {
+        ProcOutput {
+            code: Some(1),
+            stdout: "Error 8: Everything IPC window not found.".to_owned(),
+            stderr: String::new(),
+        }
+    }
+
+    fn tasklist_found() -> ProcOutput {
+        stdout_of("\"Everything.exe\",\"1234\"")
+    }
+
+    fn tasklist_empty() -> ProcOutput {
+        stdout_of("")
+    }
+
+    fn gui_tool_probe() -> ToolProbe {
+        ToolProbe {
+            name: "everything_gui".to_owned(),
+            exe: "es.exe".to_owned(),
+            display_exe: Some("Everything.exe".to_owned()),
+            args: vec!["-get-everything-version".to_owned()],
+            version_line_prefix: None,
+            daemon_error_markers: vec!["Error 8".to_owned()],
+            state_probe: Some(StateProbe {
+                exe: "tasklist.exe".to_owned(),
+                args: vec!["/FI".to_owned(), "IMAGENAME eq Everything.exe".to_owned()],
+                running_marker: "Everything.exe".to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn ipc_error_with_process_running_reports_ipc_unavailable() {
+        let host = MockHost::new()
+            .with_run_result(tasklist_found())  // state probe: process running
+            .with_run_result(ipc_error_output()); // version probe: IPC error
+        let tv = probe_tool(&host, &gui_tool_probe());
+        assert_eq!(tv.state, "running");
+        assert_eq!(
+            tv.version, "ipc unavailable",
+            "process is up but es.exe cannot see the private instance"
+        );
+    }
+
+    #[test]
+    fn ipc_error_with_process_absent_reports_not_running() {
+        let host = MockHost::new()
+            .with_run_result(tasklist_empty())  // state probe: no process
+            .with_run_result(ipc_error_output()); // version probe: IPC error
+        let tv = probe_tool(&host, &gui_tool_probe());
+        assert_eq!(tv.state, "stopped");
+        assert_eq!(tv.version, "not running", "process is genuinely absent");
     }
 
     #[test]
