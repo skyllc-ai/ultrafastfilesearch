@@ -10,8 +10,9 @@
 //!
 //! - **Stage 1 (cross-tool)** shells out to `cross-tool-benchmark.rs` with
 //!   `--skip-cold`; the harness writes `bundle/cross-tool-summary.csv` itself.
-//! - **Stage 2 (parity)** shells out to `cold-parity-per-drive.ps1`; the script
-//!   transcribes to `bundle/parity.txt` (purging cache first when requested).
+//! - **Stage 2 (parity)** shells out to `cold-parity-per-drive.rs` via
+//!   `rust-script`; the harness writes `bundle/parity.txt` (purging cache first
+//!   when `--purge-cache` is set).
 //! - **Stage 3 (full suite)** times native UFFS queries directly (N rounds per
 //!   drive × pattern), reduces each cell with the unit-tested [`percentiles`]
 //!   helper, and emits `bundle/full-suite.csv` + `bundle/full-suite.txt`.
@@ -34,7 +35,7 @@ use crate::restore::RunGuard;
 /// Repo-relative path to the cross-tool harness shelled out to by Stage 1.
 pub const CROSS_TOOL_SCRIPT: &str = "scripts/windows/cross-tool-benchmark.rs";
 /// Repo-relative path to the parity harness shelled out to by Stage 2.
-pub const PARITY_SCRIPT: &str = "scripts/windows/cold-parity-per-drive.ps1";
+pub const PARITY_SCRIPT: &str = "scripts/windows/cold-parity-per-drive.rs";
 
 /// Bundle-relative name of the cross-tool summary CSV (written by the harness).
 const CROSS_TOOL_OUT: &str = "cross-tool-summary.csv";
@@ -158,10 +159,8 @@ impl Invocation {
     }
 }
 
-/// The `rust-script` launcher used to run the cross-tool harness (Stage 1).
+/// The `rust-script` launcher used to run the Stage 1 and Stage 2 harnesses.
 const RUST_SCRIPT_EXE: &str = "rust-script";
-/// The PowerShell launcher used to run the parity harness (Stage 2).
-const POWERSHELL_EXE: &str = "powershell";
 
 /// Card-facing label for the daemon run-state resource (R1).
 const DAEMON_RESOURCE: &str = "uffs daemon (run-state)";
@@ -336,27 +335,21 @@ fn cross_tool_invocation(cfg: &StageCfg) -> Invocation {
 /// Build the Stage 2 parity harness invocation.
 fn parity_invocation(cfg: &StageCfg) -> Invocation {
     let out_path = cfg.bundle_dir.join(PARITY_OUT);
-    let mut args = vec![
-        "-NoProfile".to_owned(),
-        "-ExecutionPolicy".to_owned(),
-        "Bypass".to_owned(),
-        "-File".to_owned(),
-        PARITY_SCRIPT.to_owned(),
-    ];
+    let mut args = vec![PARITY_SCRIPT.to_owned()];
     if !cfg.capable_drives.is_empty() {
-        args.push("-Drives".to_owned());
+        args.push("--drives".to_owned());
         args.push(join_drives(&cfg.capable_drives));
     }
-    args.push("-Rounds".to_owned());
+    args.push("--rounds".to_owned());
     args.push(cfg.rounds.to_string());
-    args.push("-OutputFile".to_owned());
+    args.push("--output-file".to_owned());
     args.push(out_path.display().to_string());
-    // The parity script purges every drive cache before the cold warm-up.
+    // The parity harness purges every drive cache before the cold warm-up.
     if cfg.drop_cache {
-        args.push("-PurgeCacheFirst".to_owned());
+        args.push("--purge-cache".to_owned());
     }
     Invocation {
-        exe: POWERSHELL_EXE.to_owned(),
+        exe: RUST_SCRIPT_EXE.to_owned(),
         args,
     }
 }
