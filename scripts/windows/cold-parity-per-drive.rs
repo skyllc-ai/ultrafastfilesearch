@@ -26,9 +26,18 @@
 //!      every drive; records wall-clock warm-up time.
 //!   3. Per-drive loop (`--rounds` iterations each):
 //!        UFFS Rust HOT:  `uffs.exe '*' --drive X --out <tmp> --columns Path
-//!                         --hide-system --hide-ads --profile`
+//!                         --profile`
 //!        C++ MFT-reread: `uffs.com '*' --drives=X --columns=path --out=<tmp>`
-//!      Report p50 wall-clock (+ daemon-ms from `--profile` stderr) per drive.
+//!      Report p50 wall-clock + daemon-ms (from `--profile`) per drive.
+//!      `--hide-system` / `--hide-ads` are intentionally **omitted**: those
+//!      flags exist only to align row counts with Everything (which skips
+//!      system files and ADS).  This benchmark is uffs.exe vs uffs.com only
+//!      — the full unfiltered MFT corpus is the correct baseline.
+//!      `--profile` is kept: it prints `daemon: N ms` on stderr so Table 2
+//!      can break the wall-clock into daemon-search vs CLI overhead, giving
+//!      insight into the daemon IPC cost.  It is a non-default code path but
+//!      the extra `SearchProfile` payload is small and does not materially
+//!      change wall-clock at the >100 ms scale of these queries.
 //!   4. Two markdown summary tables.
 //!
 //! # Binary resolution (same cascade as the bench suite)
@@ -193,14 +202,14 @@ fn resolve_uffs(explicit: Option<&str>) -> (String, String) {
     if let Ok(home) = env::var(home_var) {
         let p = PathBuf::from(&home).join("bin").join(bin);
         if p.exists() {
-            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({p:?})"));
+            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({})", p.display()));
         }
     }
     let tgt = PathBuf::from("target").join("release").join(bin);
     if tgt.exists() {
         return (
             tgt.to_string_lossy().into_owned(),
-            format!("target\\release ({tgt:?})"),
+            format!("target\\release ({})", tgt.display()),
         );
     }
     (
@@ -219,13 +228,31 @@ fn resolve_cpp(explicit: Option<&str>) -> (String, String) {
     if let Ok(home) = env::var(home_var) {
         let p = PathBuf::from(&home).join("bin").join(bin);
         if p.exists() {
-            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({p:?})"));
+            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({})", p.display()));
         }
     }
     (
         bin.to_owned(),
         format!("unresolved (tried: explicit, %USERPROFILE%\\bin\\{bin}, PATH)"),
     )
+}
+
+/// Extract the version string from uffs.com `--version` output.
+/// The C++ binary prints several lines; the one starting with
+/// `\tUFFS version:` (after trimming) holds the actual version number.
+fn extract_cpp_version(raw: &str) -> String {
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("UFFS version:") {
+            return format!("uffs.com {}", rest.trim());
+        }
+    }
+    // Fallback: first non-empty line.
+    raw.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("uffs.com (version unknown)")
+        .to_owned()
 }
 
 fn binary_available(bin: &str) -> bool {
@@ -454,8 +481,6 @@ fn run_uffs_hot(uffs_bin: &str, drive: &str, dump_raw: bool) -> Round {
             out_path.to_str().unwrap_or("out.csv"),
             "--columns",
             "Path",
-            "--hide-system",
-            "--hide-ads",
             "--profile",
         ])
         .output();
@@ -543,6 +568,20 @@ fn opt_ms(n: Option<u64>) -> String {
     n.map(|v| format!("{v} ms")).unwrap_or_else(|| "n/a".to_owned())
 }
 
+/// Format a millisecond value as `"N ms"` with thousands-separated N.
+fn ms_str(ms: u64) -> String {
+    format!("{} ms", fmt_count(ms))
+}
+
+/// Format a speedup ratio as `"N.Nx"`, or `"n/a"` / `"(skipped)"`.
+fn speedup_str(cpp_ms: Option<u64>, rust_ms: u64) -> String {
+    match cpp_ms {
+        Some(c) if rust_ms > 0 => format!("{:.1}x", c as f64 / rust_ms as f64),
+        Some(_) => "n/a".to_owned(),
+        None => "(skipped)".to_owned(),
+    }
+}
+
 fn now_str() -> String {
     // No chrono dep: use the OS time via a simple epoch calculation.
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -617,7 +656,9 @@ fn main() {
         std::process::exit(1);
     }
     if let Ok(o) = Command::new(&uffs_bin).arg("--version").output() {
-        out.line(&format!("  {}", String::from_utf8_lossy(&o.stdout).trim()));
+        let ver = String::from_utf8_lossy(&o.stdout);
+        let ver = ver.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+        out.line(&format!("  {ver}"));
     }
 
     // Verify uffs.com (optional).
@@ -626,7 +667,8 @@ fn main() {
         if !avail {
             print_missing_cpp_warning(&cpp_bin, &cpp_src);
         } else if let Ok(o) = Command::new(&cpp_bin).arg("--version").output() {
-            out.line(&format!("  {}", String::from_utf8_lossy(&o.stdout).trim()));
+            let raw = String::from_utf8_lossy(&o.stdout);
+            out.line(&format!("  {}", extract_cpp_version(&raw)));
         }
         avail
     };
@@ -692,7 +734,7 @@ fn main() {
         for r in 1..=args.rounds {
             out.line(&format!(
                 "  [Rust HOT {r}/{}]  uffs.exe '*' --drive {drive} \
-                 --out <tmp> --columns Path --hide-system --hide-ads --profile",
+                 --out <tmp> --columns Path --profile",
                 args.rounds
             ));
             let res = run_uffs_hot(&uffs_bin, drive, args.dump_raw);
@@ -760,13 +802,26 @@ fn main() {
         });
     }
 
+    // ── Pre-compute column widths from data for aligned tables ────────────
+    let w_drive   = table.iter().map(|r| r.drive.len() + 1).max().unwrap_or(5).max(5); // "Drive"
+    let w_cpp     = table.iter().map(|r| r.cpp_p50.map(|v| ms_str(v).len()).unwrap_or(9)).max().unwrap_or(9).max(17); // "C++ (MFT re-read)"
+    let w_rust    = table.iter().map(|r| ms_str(r.rust_p50).len()).max().unwrap_or(9).max(17); // "Rust (daemon HOT)"
+    let w_speedup = table.iter().map(|r| speedup_str(r.cpp_p50, r.rust_p50).len()).max().unwrap_or(7).max(7); // "Speedup"
+    let w_rrows   = table.iter().map(|r| opt_count(r.rust_rows).len()).max().unwrap_or(9).max(9); // "Rust rows"
+    let w_crows   = table.iter().map(|r| opt_count(r.cpp_rows).len()).max().unwrap_or(8).max(8);  // "C++ rows"
+
     // ── Summary table 1: parity ────────────────────────────────────────────
     out.divider(&format!(
         "Summary — table 1: per-drive parity (wall-clock p50 over {} round(s))",
         args.rounds
     ));
-    out.line("| Drive | C++ (MFT re-read) | Rust (daemon HOT) | Speedup | Rust rows | C++ rows |");
-    out.line("|-------|------------------:|------------------:|--------:|----------:|---------:|");
+
+    let h1 = format!("| {:<w_drive$} | {:>w_cpp$} | {:>w_rust$} | {:>w_speedup$} | {:>w_rrows$} | {:>w_crows$} |",
+        "Drive", "C++ (MFT re-read)", "Rust (daemon HOT)", "Speedup", "Rust rows", "C++ rows");
+    let sep1 = format!("| {:-<w_drive$} | {:->w_cpp$}: | {:->w_rust$}: | {:->w_speedup$}: | {:->w_rrows$}: | {:->w_crows$}: |",
+        "", "", "", "", "", "");
+    out.line(&h1);
+    out.line(&sep1);
 
     let mut total_rust_ms: u64 = 0;
     let mut total_cpp_ms: u64 = 0;
@@ -774,23 +829,21 @@ fn main() {
 
     for row in &table {
         total_rust_ms += row.rust_p50;
-        let speedup = match row.cpp_p50 {
-            Some(c) if row.rust_p50 > 0 => format!("{:.1}x", c as f64 / row.rust_p50 as f64),
-            Some(_) => "n/a".to_owned(),
-            None => "(skipped)".to_owned(),
-        };
+        let speedup = speedup_str(row.cpp_p50, row.rust_p50);
         let cpp_cell = row
             .cpp_p50
             .map(|c| {
                 total_cpp_ms += c;
                 any_cpp = true;
-                format!("{c:>7} ms")
+                ms_str(c)
             })
             .unwrap_or_else(|| "(skipped)".to_owned());
         out.line(&format!(
-            "| {}: | {cpp_cell} | {:>7} ms | {speedup:>8} | {:>9} | {:>8} |",
-            row.drive,
-            row.rust_p50,
+            "| {:<w_drive$} | {:>w_cpp$} | {:>w_rust$} | {:>w_speedup$} | {:>w_rrows$} | {:>w_crows$} |",
+            format!("{}:", row.drive),
+            cpp_cell,
+            ms_str(row.rust_p50),
+            speedup,
             opt_count(row.rust_rows),
             opt_count(row.cpp_rows),
         ));
@@ -798,42 +851,62 @@ fn main() {
 
     if any_cpp && total_rust_ms > 0 {
         let total_speedup = total_cpp_ms as f64 / total_rust_ms as f64;
+        let speedup_label = format!("{total_speedup:.1}x");
         out.line(&format!(
-            "| **TOTAL** | **{total_cpp_ms:>7} ms** | **{total_rust_ms:>7} ms** \
-             | **{total_speedup:.1}x** | — | — |"
+            "| {:<w_drive$} | {:>w_cpp$} | {:>w_rust$} | {:>w_speedup$} | {:>w_rrows$} | {:>w_crows$} |",
+            "TOTAL",
+            ms_str(total_cpp_ms),
+            ms_str(total_rust_ms),
+            speedup_label,
+            "—",
+            "—",
         ));
     } else {
         out.line(&format!(
-            "| **TOTAL (Rust sum)** | — | **{total_rust_ms:>7} ms** | — | — | — |"
+            "| {:<w_drive$} | {:>w_cpp$} | {:>w_rust$} | {:>w_speedup$} | {:>w_rrows$} | {:>w_crows$} |",
+            "TOTAL",
+            "—",
+            ms_str(total_rust_ms),
+            "—",
+            "—",
+            "—",
         ));
     }
 
     // ── Summary table 2: Rust daemon breakdown ─────────────────────────────
+    let w2_rows  = table.iter().map(|r| opt_count(r.rust_rows).len()).max().unwrap_or(9).max(9);
+    let w2_wall  = table.iter().map(|r| ms_str(r.rust_p50).len()).max().unwrap_or(13).max(13);
+    let w2_dmn   = table.iter().map(|r| r.rust_daemon_p50.map(|v| ms_str(v).len()).unwrap_or(3)).max().unwrap_or(15).max(15);
+    let w2_over  = table.iter().map(|r| r.rust_daemon_p50.map(|dm| ms_str(r.rust_p50.saturating_sub(dm)).len()).unwrap_or(3)).max().unwrap_or(12).max(12);
+
     out.divider("Summary — table 2: Rust wall vs daemon breakdown");
-    out.line("| Drive | Rust rows | Rust wall p50 | Rust daemon p50 | CLI overhead |");
-    out.line("|-------|----------:|--------------:|----------------:|-------------:|");
+    let h2 = format!("| {:<w_drive$} | {:>w2_rows$} | {:>w2_wall$} | {:>w2_dmn$} | {:>w2_over$} |",
+        "Drive", "Rust rows", "Rust wall p50", "Rust daemon p50", "CLI overhead");
+    let sep2 = format!("| {:-<w_drive$} | {:->w2_rows$}: | {:->w2_wall$}: | {:->w2_dmn$}: | {:->w2_over$}: |",
+        "", "", "", "", "");
+    out.line(&h2);
+    out.line(&sep2);
     for row in &table {
-        let overhead = row.rust_daemon_p50.map(|dm| {
-            let ov = row.rust_p50.saturating_sub(dm);
-            format!("{ov:>5} ms")
-        });
+        let daemon_cell = row.rust_daemon_p50.map(ms_str).unwrap_or_else(|| "n/a".to_owned());
+        let overhead_cell = row.rust_daemon_p50
+            .map(|dm| ms_str(row.rust_p50.saturating_sub(dm)))
+            .unwrap_or_else(|| "n/a".to_owned());
         out.line(&format!(
-            "| {}: | {:>9} | {:>9} ms | {:>11} | {:>12} |",
-            row.drive,
+            "| {:<w_drive$} | {:>w2_rows$} | {:>w2_wall$} | {:>w2_dmn$} | {:>w2_over$} |",
+            format!("{}:", row.drive),
             opt_count(row.rust_rows),
-            row.rust_p50,
-            row.rust_daemon_p50
-                .map(|d| format!("{d:>5} ms"))
-                .unwrap_or_else(|| "    n/a".to_owned()),
-            overhead.unwrap_or_else(|| "    n/a".to_owned()),
+            ms_str(row.rust_p50),
+            daemon_cell,
+            overhead_cell,
         ));
     }
     out.line("");
     out.line("  Legend:");
     out.line("    Rust wall p50    = process wall-clock from spawn to exit (Rust Instant).");
-    out.line("    Rust daemon p50  = daemon-reported search duration (--profile 'daemon: N ms').");
-    out.line("    CLI overhead     = wall − daemon  (process start + IPC + file write).");
+    out.line("    Rust daemon p50  = daemon-reported search duration (--profile stderr: 'daemon: N ms').");
+    out.line("    CLI overhead     = wall − daemon  (process spawn + IPC round-trip + file write).");
     out.line("    C++ has no daemon — its wall-clock IS its total cost (full MFT re-read every run).");
+    out.line("    Row counts differ: Rust returns all MFT records; C++ may apply implicit filters.");
 
     // ── Warm-up recap ──────────────────────────────────────────────────────
     out.divider("Summary — daemon warm-up (Phase 0b)");
