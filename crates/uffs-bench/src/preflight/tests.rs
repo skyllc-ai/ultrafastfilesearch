@@ -98,6 +98,28 @@ fn parse_daemon_status_drives_extracts_counts() {
 }
 
 #[test]
+fn parse_daemon_status_drives_handles_hot_and_parked_tiers() {
+    // Real daemon output mix: [Parked] has no record count; [Hot] and [Warm]
+    // both have the "N records (live)" format.
+    let status = "Status:        Ready\n\
+        Drives:\n\
+          [Parked] G: \u{2014} bloom + trie kept resident; body released\n\
+          [Hot]    F: \u{2014}  2,221,339 records (live) \u{2014} 466 MB\n\
+          [Warm]   C: \u{2014}  3,409,074 records (live) \u{2014} 737 MB\n\
+          [Parked] S: \u{2014} bloom + trie kept resident; body released\n\
+          [Hot]    D: \u{2014}  7,066,034 records (live) \u{2014} 1337 MB\n";
+    let map = parse_daemon_status_drives(status);
+    // Parked drives are absent (no record count in their line).
+    assert_eq!(map.get(&'G'), None, "[Parked] G must be absent");
+    assert_eq!(map.get(&'S'), None, "[Parked] S must be absent");
+    // Hot drives are parsed identically to Warm.
+    assert_eq!(map.get(&'F').copied(), Some(2_221_339), "[Hot] F");
+    assert_eq!(map.get(&'D').copied(), Some(7_066_034), "[Hot] D");
+    // Warm drive is parsed correctly.
+    assert_eq!(map.get(&'C').copied(), Some(3_409_074), "[Warm] C");
+}
+
+#[test]
 fn capture_is_read_only_and_records_state() {
     // Call order:
     //  1. check_es_available: es -get-everything-version (daemon running)
