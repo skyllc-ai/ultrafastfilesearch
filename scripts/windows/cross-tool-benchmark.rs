@@ -392,11 +392,10 @@ fn count_and_validate(path: &str, needle: &str) -> (u64, u64) {
 fn cleanup_bench_file() { let p = bench_out_path(); let _ = std::fs::remove_file(&p); }
 fn cleanup_file(p: &str) { let _ = std::fs::remove_file(p); }
 
-/// Extract the path column from a tool's output file or byte buffer into a
-/// normalised (lowercase, trimmed) set of strings.  Headers, footers, and
-/// empty lines are stripped by `is_header_or_footer` so the set only
-/// contains actual filesystem paths.  Used for path-set superset checks.
-fn extract_paths_from_file(path: &str) -> std::collections::HashSet<String> {
+/// Read a tool's output file, strip headers/footers, normalise each path
+/// (lowercase, trim quotes, first CSV field), and return a **sorted** vec.
+/// Handles both UTF-8 and UTF-16 LE (BOM) output.
+fn normalise_paths(path: &str) -> Vec<String> {
     let content = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(_) => match std::fs::read(path) {
@@ -406,36 +405,75 @@ fn extract_paths_from_file(path: &str) -> std::collections::HashSet<String> {
                 String::from_utf16_lossy(&u16s)
             }
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            Err(_) => return std::collections::HashSet::new(),
+            Err(_) => return Vec::new(),
         },
     };
-    content.lines()
+    let mut v: Vec<String> = content.lines()
         .filter(|l| !is_header_or_footer(l))
         .map(|l| {
-            // The Path column may be quoted CSV: strip surrounding quotes and
-            // take only the first comma-delimited field (path is always first).
             let trimmed = l.trim().trim_matches('"');
             trimmed.split(',').next().unwrap_or(trimmed).trim().to_lowercase()
         })
         .filter(|s| !s.is_empty())
-        .collect()
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
 }
 
+/// Result of comparing two sorted normalised path lists.
+struct DiffResult {
+    only_in_a: Vec<String>,  // paths present in A but not B
+    only_in_b: Vec<String>,  // paths present in B but not A
+}
 
-/// Check that `subset` is a subset of `superset`; return a short summary
-/// string.  Reports the first few missing paths on a violation.
-fn check_subset(
-    subset_label: &str,
-    subset: &std::collections::HashSet<String>,
-    superset_label: &str,
-    superset: &std::collections::HashSet<String>,
-) -> Option<String> {
-    if subset.is_empty() || superset.is_empty() { return None; }
-    let missing: Vec<&String> = subset.iter().filter(|p| !superset.contains(*p)).collect();
-    if missing.is_empty() { return None; }
-    let preview: Vec<&str> = missing.iter().take(3).map(|s| s.as_str()).collect();
-    Some(format!("{subset_label}⊄{superset_label}: {} paths missing (e.g. {})",
-        missing.len(), preview.join(", ")))
+impl DiffResult {
+    fn is_identical(&self) -> bool { self.only_in_a.is_empty() && self.only_in_b.is_empty() }
+}
+
+/// Compare two **sorted** path vecs using a merge-walk (O(n)).  Collects all
+/// differences; the caller prints at most `max_examples` from each side.
+fn diff_paths(a: &[String], b: &[String]) -> DiffResult {
+    let mut only_in_a = Vec::new();
+    let mut only_in_b = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal   => { i += 1; j += 1; }
+            std::cmp::Ordering::Less    => { only_in_a.push(a[i].clone()); i += 1; }
+            std::cmp::Ordering::Greater => { only_in_b.push(b[j].clone()); j += 1; }
+        }
+    }
+    only_in_a.extend_from_slice(&a[i..]);
+    only_in_b.extend_from_slice(&b[j..]);
+    DiffResult { only_in_a, only_in_b }
+}
+
+/// Print a human-readable diff summary between two tool outputs.  Shows up to
+/// `max_examples` lines from each side so operators can spot patterns.
+fn print_diff(a_label: &str, b_label: &str, diff: &DiffResult, max_examples: usize) {
+    if diff.is_identical() {
+        eprintln!("      {a_label} vs {b_label}: identical ✓");
+        return;
+    }
+    let show_a = diff.only_in_a.len().min(max_examples);
+    let show_b = diff.only_in_b.len().min(max_examples);
+    eprintln!("      {a_label} vs {b_label}: ⚠ {} only in {a_label}, {} only in {b_label}",
+        diff.only_in_a.len(), diff.only_in_b.len());
+    if show_a > 0 {
+        eprintln!("        only in {a_label} (first {show_a}):");
+        for p in &diff.only_in_a[..show_a] { eprintln!("          - {p}"); }
+        if diff.only_in_a.len() > max_examples {
+            eprintln!("          ... and {} more", diff.only_in_a.len() - max_examples);
+        }
+    }
+    if show_b > 0 {
+        eprintln!("        only in {b_label} (first {show_b}):");
+        for p in &diff.only_in_b[..show_b] { eprintln!("          + {p}"); }
+        if diff.only_in_b.len() > max_examples {
+            eprintln!("          ... and {} more", diff.only_in_b.len() - max_examples);
+        }
+    }
 }
 
 /// Count data lines in a captured stdout byte buffer, filtering the same
@@ -948,21 +986,13 @@ fn main() {
             eprintln!(" ready.");
         }
 
-        // ── Per-sink HOT rotation (interleaved rounds, randomised tool order) ─
-        //
-        // For each (sink, pattern) the tools run in a freshly shuffled order
-        // every round so no tool consistently benefits from OS file-system
-        // caching warmed up by a prior tool.  After every round the superset
-        // constraint is checked immediately:
-        //
-        //   uffs.exe rows  ≥  uffs.com rows  ≥  es.exe rows
-        //
-        // This reflects the fact that UFFS (Rust) covers all files including
-        // system files / ADS when --hide-system / --hide-ads are NOT passed
-        // (here they ARE, so the counts should be close), and that Everything
-        // does not index NTFS metadata files that uffs.com does include.
-        // A violation is printed as a warning per round — it does not abort —
-        // so timing data is preserved even when parity is off.
+        // ── HOT: for each pattern, run all N rounds; within each round run the
+        // three tools in a freshly-shuffled order so no tool always benefits
+        // from OS FS cache warmed by the previous tool.  After every round:
+        //   1. Compare line counts across tools.
+        //   2. Diff normalised path lists and print up to 10 examples per side
+        //      so patterns in the discrepancies are immediately visible.
+        // Loop shape: for pattern → for round → run(uffs,cpp,es) → compare
         for sink in cfg.sinks.iter().copied() {
             if cfg.sinks.len() > 1 {
                 println!("  ── sink={}  ──────────────────────────────────────────────", sink.label());
@@ -971,61 +1001,74 @@ fn main() {
             for &(label, pat, es_pat, cpp_pat, cpp_ext, validate) in PATTERNS {
                 if cfg.skip_pattern(label) { continue; }
 
-                // Skip full_scan for Everything (2GB IPC ceiling).
-                let es_skip = label == "full_scan";
-                // Skip patterns C++ does not support.
-                let cpp_skip = cpp_pat.is_empty();
+                let es_skip  = label == "full_scan"; // es.exe 2GB IPC ceiling on large drives
+                let cpp_skip = cpp_pat.is_empty();   // pattern not supported by C++ tool
 
-                let run_uffs_tool  = cfg.tools.contains(&Tool::Uffs);
-                let run_cpp_tool   = cfg.tools.contains(&Tool::UffsCpp) && cfg.uffs_cpp.is_some() && !cpp_skip;
-                let run_es_tool    = cfg.tools.contains(&Tool::Everything) && cfg.es.is_some() && !es_skip;
+                let run_uffs_tool = cfg.tools.contains(&Tool::Uffs);
+                let run_cpp_tool  = cfg.tools.contains(&Tool::UffsCpp) && cfg.uffs_cpp.is_some() && !cpp_skip;
+                let run_es_tool   = cfg.tools.contains(&Tool::Everything) && cfg.es.is_some() && !es_skip;
 
                 if !run_uffs_tool && !run_cpp_tool && !run_es_tool { continue; }
 
-                eprintln!("  HOT [{sink}] {label:<12}  {} rounds  (tools shuffled each round)",
-                    cfg.rounds, sink = sink.label());
+                if es_skip  { eprintln!("  HOT  {label:<12}  ES  SKIP (es.exe 2GB IPC limit)"); }
+                if cpp_skip { eprintln!("  HOT  {label:<12}  C++ SKIP (pattern not supported)"); }
+
+                eprintln!("  HOT [{s}] {label:<12}  {} rounds  (tools shuffled each round)",
+                    cfg.rounds, s = sink.label());
 
                 let mut uffs_runs: Vec<Timing> = Vec::new();
                 let mut cpp_runs:  Vec<Timing> = Vec::new();
                 let mut es_runs:   Vec<Timing> = Vec::new();
                 let mut es_aborted = false;
 
-                // Per-tool output files for this pattern — kept alive for the
-                // duration of a round so path sets can be compared, then deleted.
-                // C++ cannot write to absolute paths, so all three use relative names.
+                // Separate output file per tool per round — all relative paths
+                // (C++ cannot write to absolute paths).  Files are cleaned up
+                // immediately after the per-round diff so disk usage stays low.
                 let f_uffs = format!("bench_uffs_{label}.csv");
                 let f_cpp  = format!("bench_cpp_{label}.csv");
                 let f_es   = format!("bench_es_{label}.csv");
 
                 for round in 0..cfg.rounds {
-                    // Fresh random tool order every round — seeded from wall clock
-                    // nanoseconds so consecutive rounds get different seeds.
+                    // Fresh LCG seed every round so tool order varies.
                     let seed = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.subsec_nanos() as u64 + round as u64 * 1_000_000_007)
                         .unwrap_or(round as u64 + 1);
                     let order = lcg_shuffle3(seed);
 
+                    let order_labels: Vec<&str> = order.iter().map(|&s| match s {
+                        0 => "uffs", 1 => "cpp", 2 => "es", _ => "?"
+                    }).collect();
+                    eprint!("    [round {:>2}/{}] order=[{}] ",
+                        round + 1, cfg.rounds, order_labels.join(","));
+                    flush();
+
                     let mut round_rows: [Option<u64>; 3] = [None; 3]; // [uffs, cpp, es]
 
+                    // ── Run tools in shuffled order ───────────────────────
                     for &slot in &order {
                         match slot {
                             0 if run_uffs_tool => {
-                                let t = check_dnf(run_uffs_to(&cfg.uffs, drive, pat, validate, sink, &f_uffs));
+                                let t = check_dnf(run_uffs_to(
+                                    &cfg.uffs, drive, pat, validate, sink, &f_uffs));
                                 round_rows[0] = t.ok.then_some(t.rows);
                                 uffs_runs.push(t);
                             }
                             1 if run_cpp_tool => {
                                 let cpp = cfg.uffs_cpp.as_ref().unwrap();
-                                let t = check_dnf(run_uffs_cpp_to(cpp, drive, cpp_pat, cpp_ext, validate, sink, &f_cpp));
+                                let t = check_dnf(run_uffs_cpp_to(
+                                    cpp, drive, cpp_pat, cpp_ext, validate, sink, &f_cpp));
                                 round_rows[1] = t.ok.then_some(t.rows);
                                 cpp_runs.push(t);
                             }
                             2 if run_es_tool && !es_aborted => {
                                 let es = cfg.es.as_ref().unwrap();
-                                let t = check_dnf(run_es_to(es, drive, es_pat, validate, sink, cfg.es_instance.as_deref(), &f_es));
+                                let t = check_dnf(run_es_to(
+                                    es, drive, es_pat, validate, sink,
+                                    cfg.es_instance.as_deref(), &f_es));
                                 if round == 0 && is_fast_deterministic_fail(&t) {
-                                    eprintln!("    [round {round}] es.exe fast-fail (exit={}); skipping remaining es rounds", t.err);
+                                    eprintln!();
+                                    eprintln!("    es.exe fast-fail (exit={}); skipping remaining es rounds", t.err);
                                     es_aborted = true;
                                 }
                                 round_rows[2] = t.ok.then_some(t.rows);
@@ -1035,74 +1078,55 @@ fn main() {
                         }
                     }
 
-                    // ── Path-set superset check after every round (File sink only) ──
-                    // Superset contract:
-                    //   es.exe paths  ⊆  uffs.com paths  ⊆  uffs.exe paths
-                    // Stdout/Null sinks don't retain output files so we skip
-                    // the set check there; row counts are still shown.
-                    let round_order_labels: Vec<&str> = order.iter().map(|&s| match s {
-                        0 => "uffs", 1 => "cpp", 2 => "es", _ => "?"
-                    }).collect();
+                    // ── Line-count summary for this round ─────────────────
+                    eprintln!("uffs={} cpp={} es={}",
+                        round_rows[0].map_or("-".into(), |n| n.to_string()),
+                        round_rows[1].map_or("-".into(), |n| n.to_string()),
+                        round_rows[2].map_or("-".into(), |n| n.to_string()),
+                    );
 
-                    let mut violations: Vec<String> = Vec::new();
+                    // ── Content diff (File sink only) ─────────────────────
+                    // Normalise: strip headers, lowercase, sort, dedup.
+                    // Compare every active pair and show up to 10 examples
+                    // per side so the operator can spot naming/path patterns.
                     if matches!(sink, OutputSink::File) {
-                        let uffs_paths = extract_paths_from_file(&f_uffs);
-                        let cpp_paths  = extract_paths_from_file(&f_cpp);
-                        let es_paths   = extract_paths_from_file(&f_es);
+                        let uffs_paths = if run_uffs_tool { normalise_paths(&f_uffs) } else { Vec::new() };
+                        let cpp_paths  = if run_cpp_tool  { normalise_paths(&f_cpp)  } else { Vec::new() };
+                        let es_paths   = if run_es_tool && !es_aborted { normalise_paths(&f_es) } else { Vec::new() };
 
-                        if run_es_tool && !es_aborted && run_uffs_tool
-                            && !uffs_paths.is_empty() && !es_paths.is_empty() {
-                            if let Some(v) = check_subset("es", &es_paths, "uffs", &uffs_paths) {
-                                violations.push(v);
+                        let any_data = !uffs_paths.is_empty() || !cpp_paths.is_empty() || !es_paths.is_empty();
+                        if any_data {
+                            if run_uffs_tool && run_cpp_tool && !uffs_paths.is_empty() && !cpp_paths.is_empty() {
+                                print_diff("uffs", "cpp", &diff_paths(&uffs_paths, &cpp_paths), 10);
                             }
-                        }
-                        if run_es_tool && !es_aborted && run_cpp_tool
-                            && !cpp_paths.is_empty() && !es_paths.is_empty() {
-                            if let Some(v) = check_subset("es", &es_paths, "cpp", &cpp_paths) {
-                                violations.push(v);
+                            if run_uffs_tool && run_es_tool && !es_aborted
+                                && !uffs_paths.is_empty() && !es_paths.is_empty() {
+                                print_diff("uffs", "es", &diff_paths(&uffs_paths, &es_paths), 10);
                             }
-                        }
-                        if run_cpp_tool && run_uffs_tool
-                            && !uffs_paths.is_empty() && !cpp_paths.is_empty() {
-                            if let Some(v) = check_subset("cpp", &cpp_paths, "uffs", &uffs_paths) {
-                                violations.push(v);
+                            if run_cpp_tool && run_es_tool && !es_aborted
+                                && !cpp_paths.is_empty() && !es_paths.is_empty() {
+                                print_diff("cpp", "es", &diff_paths(&cpp_paths, &es_paths), 10);
                             }
                         }
                     }
 
-                    // Clean up per-tool files for this round.
+                    // Clean up per-tool output files before the next round.
                     cleanup_file(&f_uffs);
                     cleanup_file(&f_cpp);
                     cleanup_file(&f_es);
-
-                    if violations.is_empty() {
-                        eprintln!("    [round {:>2}] order=[{}]  rows: uffs={} cpp={} es={}  ✓ paths ok",
-                            round + 1,
-                            round_order_labels.join(","),
-                            round_rows[0].map_or("-".into(), |n| n.to_string()),
-                            round_rows[1].map_or("-".into(), |n| n.to_string()),
-                            round_rows[2].map_or("-".into(), |n| n.to_string()),
-                        );
-                    } else {
-                        eprintln!("    [round {:>2}] order=[{}]  rows: uffs={} cpp={} es={}  ⚠ PATH SUPERSET VIOLATION: {}",
-                            round + 1,
-                            round_order_labels.join(","),
-                            round_rows[0].map_or("-".into(), |n| n.to_string()),
-                            round_rows[1].map_or("-".into(), |n| n.to_string()),
-                            round_rows[2].map_or("-".into(), |n| n.to_string()),
-                            violations.join(" | "),
-                        );
-                    }
                 }
 
-                // ── Per-tool summary lines ────────────────────────────────
+                // ── Per-tool timing summary after all rounds ──────────────
                 if run_uffs_tool && !uffs_runs.is_empty() {
                     let s = sw(&uffs_runs);
-                    let mut dm: Vec<u64> = uffs_runs.iter().filter(|r| r.ok && r.daemon_ms > 0).map(|r| r.daemon_ms).collect();
+                    let mut dm: Vec<u64> = uffs_runs.iter()
+                        .filter(|r| r.ok && r.daemon_ms > 0).map(|r| r.daemon_ms).collect();
                     dm.sort();
-                    let daemon_str = if dm.is_empty() { String::new() } else { format!("  daemon_p50={}", fms(p50(&dm))) };
+                    let daemon_str = if dm.is_empty() { String::new() }
+                        else { format!("  daemon_p50={}", fms(p50(&dm))) };
                     let any_bad = uffs_runs.iter().any(|r| r.bad_rows > 0);
-                    let verdict = if uffs_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else { "PASS" };
+                    let verdict = if uffs_runs.iter().any(|r| r.dnf) { "DNF" }
+                        else if any_bad { "WRONG" } else { "PASS" };
                     let first_ok = uffs_runs.iter().find(|r| r.ok);
                     eprintln!("    UFFS     p50={:>6}  p95={:>6}{}  rows={}  {}",
                         fms(p50(&s)), fms(p95(&s)), daemon_str,
@@ -1113,7 +1137,9 @@ fn main() {
                 if run_cpp_tool && !cpp_runs.is_empty() {
                     let s = sw(&cpp_runs);
                     let any_bad = cpp_runs.iter().any(|r| r.bad_rows > 0);
-                    let verdict = if cpp_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if cpp_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
+                    let verdict = if cpp_runs.iter().any(|r| r.dnf) { "DNF" }
+                        else if any_bad { "WRONG" }
+                        else if cpp_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
                     let first_ok = cpp_runs.iter().find(|r| r.ok);
                     eprintln!("    UFFS-C++ p50={:>6}  p95={:>6}  rows={}  {}",
                         fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows), verdict);
@@ -1123,19 +1149,18 @@ fn main() {
                 if run_es_tool && !es_runs.is_empty() {
                     let s = sw(&es_runs);
                     let any_bad = es_runs.iter().any(|r| r.bad_rows > 0);
-                    let abort_str = if es_aborted { format!("  (fast-fail, {} rounds)", es_runs.len()) } else { String::new() };
-                    let verdict = if es_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if es_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
+                    let abort_str = if es_aborted {
+                        format!("  (fast-fail after {} round(s))", es_runs.len())
+                    } else { String::new() };
+                    let verdict = if es_runs.iter().any(|r| r.dnf) { "DNF" }
+                        else if any_bad { "WRONG" }
+                        else if es_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
                     let first_ok = es_runs.iter().find(|r| r.ok);
                     eprintln!("    ES       p50={:>6}  p95={:>6}  rows={}  {}{}",
-                        fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows), verdict, abort_str);
+                        fms(p50(&s)), fms(p95(&s)),
+                        first_ok.map_or(0, |r| r.rows), verdict, abort_str);
                     all_rows.push(Row { tool: Tool::Everything, phase: Phase::Hot, sink,
                         drive: drive.clone(), pat: label.into(), runs: es_runs });
-                }
-                if run_es_tool && es_skip {
-                    eprintln!("    {label:<12} ES SKIP (es.exe 2GB IPC limit)");
-                }
-                if run_cpp_tool && cpp_skip {
-                    eprintln!("    {label:<12} C++ SKIP (pattern not supported)");
                 }
             }
         }
