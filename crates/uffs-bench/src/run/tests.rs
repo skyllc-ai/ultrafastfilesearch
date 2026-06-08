@@ -40,10 +40,10 @@ const DAEMON_READY_STATUS: &str =
 ///  12. tasklist (everything state probe — stopped)
 ///  13. `env::capture` es -get-everything-version
 ///  14. tasklist (`everything_gui` state probe — stopped)
-///  15. `ensure_daemon_ready` — `uffs daemon status` → Ready on first poll
-///  16. `preflight` — `es -get-everything-version` (availability check)
-///  17. `preflight` — `uffs C:\ * --count` (UFFS record count for C)
-///  18. `preflight` — `es -get-result-count C:\` (ES count for C → loaded)
+///  15. `ensure_daemon_ready`  — `uffs daemon status` → Ready on first poll
+///  16. `preflight`             — `es -get-everything-version` (availability)
+///  17. `preflight`             — `uffs daemon status` (record counts for C)
+///  18. `preflight`             — `es -get-result-count C:` → loaded
 fn dry_run_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
@@ -63,8 +63,8 @@ fn dry_run_host() -> MockHost {
         .with_run_result(stdout_of(""))                       // 14: tasklist (stopped)
         .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 15: ensure_daemon_ready poll
         .with_run_result(stdout_of("1.4.1.1032"))             // 16: preflight es availability
-        .with_run_result(stdout_of("3000000"))                // 17: uffs C:\ count
-        .with_run_result(stdout_of("1000")) // 18: es result-count C → loaded
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 17: preflight daemon status
+        .with_run_result(stdout_of("1000")) // 18: es result-count C
 }
 
 /// Queue the run results needed for the autopilot (non-dry-run) path.
@@ -89,8 +89,8 @@ fn dry_run_host() -> MockHost {
 ///  15. tasklist (`everything_gui` state probe — stopped)
 ///  16. `ensure_daemon_ready`    — `uffs daemon status` → Ready on first poll
 ///  17. `preflight`              — `es -get-everything-version` (availability)
-///  18. `preflight`              — `uffs C:\ * --count`
-///  19. `preflight`              — `es -get-result-count C:\` → loaded
+///  18. `preflight`              — `uffs daemon status` (record counts for C)
+///  19. `preflight`              — `es -get-result-count C:` → loaded
 fn autopilot_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
@@ -111,8 +111,8 @@ fn autopilot_host() -> MockHost {
         .with_run_result(stdout_of(""))                       // 15: tasklist (stopped)
         .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 16: ensure_daemon_ready poll
         .with_run_result(stdout_of("1.4.1.1032"))             // 17: preflight es availability
-        .with_run_result(stdout_of("3000000"))                // 18: uffs C:\ count
-        .with_run_result(stdout_of("1000")) // 19: es result-count C → loaded
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 18: preflight daemon status
+        .with_run_result(stdout_of("1000")) // 19: es result-count C
 }
 
 /// Whether any recorded call mutated the host filesystem.

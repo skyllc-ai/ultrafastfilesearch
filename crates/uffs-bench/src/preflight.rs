@@ -242,20 +242,50 @@ fn poll_result_count(
     0
 }
 
-/// Observe one drive's competitor state. A configured drive reporting zero is
-/// re-polled (it may still be indexing); an unconfigured drive is probed once.
-/// Count all files+dirs on `drive` via UFFS `--count` (`0` on failure).
-fn uffs_drive_count(host: &dyn Host, uffs_exe: &str, drive: char) -> u64 {
-    let root = format!("{drive}:\\");
-    host.run(uffs_exe, &[root.as_str(), "*", "--count"])
-        .ok()
-        .and_then(|out| out.stdout.trim().parse::<u64>().ok())
-        .unwrap_or(0)
+/// Parse per-drive record counts from `uffs daemon status` stdout.
+///
+/// Each loaded drive appears as a line matching:
+/// ```text
+///   [Warm]   C: —  3,409,074 records (live) — …
+/// ```
+/// The drive letter is the first ASCII-alphabetic character after the tier
+/// tag, and the record count is the comma-separated integer before the word
+/// `records`. Returns a map of uppercase drive letter → record count.
+/// Drives not present in the output (e.g. still loading) are absent from
+/// the map; callers treat a missing entry as count = 0.
+#[must_use]
+pub(crate) fn parse_daemon_status_drives(status: &str) -> alloc::collections::BTreeMap<char, u64> {
+    let mut map = alloc::collections::BTreeMap::new();
+    for line in status.lines() {
+        let trimmed = line.trim_start();
+        // Lines look like:  [Warm]   C: —  3,409,074 records (live)
+        // Skip header lines and any line that doesn't contain "records".
+        if !trimmed.contains("records") {
+            continue;
+        }
+        // Find the first alpha char after the tier tag (e.g. 'C' in 'C:').
+        let drive = trimmed.split_whitespace().find_map(|token| {
+            let ch = token.trim_end_matches(':').chars().next()?;
+            ch.is_ascii_alphabetic().then(|| ch.to_ascii_uppercase())
+        });
+        // Find the comma-separated integer immediately before "records".
+        let count = trimmed
+            .split_whitespace()
+            .zip(trimmed.split_whitespace().skip(1))
+            .find_map(|(token, next)| {
+                (next == "records").then(|| token.replace(',', "").parse::<u64>().ok())?
+            });
+        if let (Some(letter), Some(records)) = (drive, count) {
+            map.insert(letter, records);
+        }
+    }
+    map
 }
 
-/// Probe one drive's ES and UFFS state.
+/// Probe one drive's ES state.
 ///
-/// Always runs a UFFS total-count to populate `uffs_record_count`.
+/// `uffs_record_count` is sourced from the already-parsed `uffs daemon status`
+/// output (passed in by the caller) — no additional UFFS IPC call is made.
 /// Returns early with zeroed ES fields if the daemon is unavailable.
 /// Otherwise polls `es.exe -get-result-count` (with backoff for configured
 /// drives, once for unconfigured drives).
@@ -265,8 +295,8 @@ fn probe_drive(
     drive: char,
     configured: bool,
     es_available: Option<&EsStatus>,
+    uffs_record_count: u64,
 ) -> DrivePreflight {
-    let uffs_record_count = uffs_drive_count(host, &spec.uffs_exe, drive);
     if let Some(status) = es_available {
         return DrivePreflight {
             drive,
@@ -342,8 +372,9 @@ fn feasibility_cells(
 
 /// Capture a [`PreflightResult`] for the given [`PreflightSpec`].
 ///
-/// Reads `Everything.ini` (never writes it), probes each candidate drive's live
-/// record count, then estimates per-pattern feasibility for the loaded drives.
+/// Reads `Everything.ini` (never writes it), fetches drive record counts from
+/// `uffs daemon status` in a single call, probes each candidate drive's ES
+/// state, then estimates per-pattern feasibility for the loaded drives.
 #[must_use]
 pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
     let ini = host
@@ -354,16 +385,21 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
 
     let es_available = check_es_available(host, &spec.es_exe);
 
+    let status = daemon_status_output(host, &spec.uffs_exe);
+    let uffs_counts = parse_daemon_status_drives(&status);
+
     let drives: Vec<DrivePreflight> = spec
         .candidate_drives
         .iter()
         .map(|&drive| {
+            let uffs_record_count = uffs_counts.get(&drive).copied().unwrap_or(0);
             probe_drive(
                 host,
                 spec,
                 drive,
                 configured_drives.contains(&drive),
                 es_available.as_ref(),
+                uffs_record_count,
             )
         })
         .collect();
@@ -372,9 +408,16 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
     PreflightResult { drives, cells }
 }
 
+/// Run `uffs daemon status` once and return the raw stdout (`""` on failure).
+fn daemon_status_output(host: &dyn Host, uffs_exe: &str) -> String {
+    host.run(uffs_exe, &["daemon", "status"])
+        .map(|out| out.stdout)
+        .unwrap_or_default()
+}
+
 /// Render a GFM drive-status table for display before the matrix.
 ///
-/// Columns: Drive | UFFS records | Est. RAM | ES status | ES capable
+/// Columns: Drive | UFFS records | Est. RAM | ES index  | ES capable
 /// "ES capable" uses the same RAM-budget logic as `matrix::compute_matrix` to
 /// show which drives would be included in cross-tool cells.
 #[must_use]
@@ -382,7 +425,7 @@ pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) ->
     if result.drives.is_empty() {
         return String::new();
     }
-    let header = "| Drive | UFFS records | Est. RAM | ES status | ES capable |";
+    let header = "| Drive | UFFS records | Est. RAM | ES index  | ES capable |";
     let sep = "|-------|-------------|----------|-----------|------------|";
 
     let mut cumulative_bytes: u64 = 0;
@@ -476,7 +519,7 @@ mod tests {
 
     use super::{
         CellFeasibility, DrivePreflight, EsStatus, PatternProbe, PreflightResult, PreflightSpec,
-        capture, parse_drives_from_ini, write,
+        capture, parse_daemon_status_drives, parse_drives_from_ini, write,
     };
     use crate::host::{Call, MockHost, ProcOutput};
 
@@ -551,18 +594,39 @@ mod tests {
         assert_eq!(parse_drives_from_ini("a=1\nb=2\n"), Vec::<char>::new());
     }
 
+    /// Fake `uffs daemon status` output with C (3 M records) and D (7 M
+    /// records).
+    fn daemon_status_cd() -> &'static str {
+        "Version:       0.0.0\n\
+         Status:        Ready\n\
+         Drives:\n\
+           [Warm]   C: —  3,000,000 records (live) — 600 MB\n\
+           [Warm]   D: —  7,000,000 records (live) — 1400 MB\n"
+    }
+
+    #[test]
+    fn parse_daemon_status_drives_extracts_counts() {
+        let map = parse_daemon_status_drives(daemon_status_cd());
+        assert_eq!(map.get(&'C').copied(), Some(3_000_000));
+        assert_eq!(map.get(&'D').copied(), Some(7_000_000));
+        assert_eq!(map.get(&'E'), None);
+    }
+
     #[test]
     fn capture_is_read_only_and_records_state() {
-        // Call order: es availability (1), then per-drive: uffs count (1) +
-        // es result-count poll (1), then feasibility for loaded C (1).
+        // Call order:
+        //  1. check_es_available: es -get-everything-version (daemon running)
+        //  2. daemon_status_output: uffs daemon status (record counts)
+        //  3. C: es result-count poll → loaded
+        //  4. D: es result-count poll → not loaded
+        //  5. feasibility estimate for (C, all_dlls)
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\,D:\\".to_vec())
-            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
-            .with_run_result(stdout_of("3000000")) // C: uffs count
-            .with_run_result(stdout_of("1000"))    // C: es result-count → loaded
-            .with_run_result(stdout_of("7000000")) // D: uffs count
-            .with_run_result(stdout_of("0"))       // D: es result-count → not loaded
-            .with_run_result(stdout_of("5000")); // uffs estimate for (C, all_dlls)
+            .with_run_result(stdout_of("1.4.1.1032"))       // 1: es availability
+            .with_run_result(stdout_of(daemon_status_cd())) // 2: uffs daemon status
+            .with_run_result(stdout_of("1000"))             // 3: C es result-count
+            .with_run_result(stdout_of("0"))                // 4: D es result-count
+            .with_run_result(stdout_of("5000")); // 5: uffs estimate C/all_dlls
         let spec = spec_for(&['C', 'D'], 1);
 
         let result = capture(&host, &spec);
@@ -604,11 +668,13 @@ mod tests {
     fn configured_zero_drive_is_polled_with_backoff() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
-            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
-            .with_run_result(stdout_of("500000"))     // C: uffs count
-            .with_run_result(stdout_of("0"))          // C: es poll 1
-            .with_run_result(stdout_of("0"))          // C: es poll 2
-            .with_run_result(stdout_of("7")); // C: es poll 3 → loaded
+            .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
+            .with_run_result(stdout_of(                  // 2: uffs daemon status
+                "Status: Ready\n  [Warm]   C: —  500,000 records (live) — 50 MB\n"
+            ))
+            .with_run_result(stdout_of("0"))             // 3: C es poll 1
+            .with_run_result(stdout_of("0"))             // 4: C es poll 2
+            .with_run_result(stdout_of("7")); // 5: C es poll 3 → loaded
         let mut spec = spec_for(&['C'], 3);
         spec.patterns.clear();
 
@@ -630,9 +696,11 @@ mod tests {
     fn unconfigured_drive_probed_once_without_sleep() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
-            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
-            .with_run_result(stdout_of("100000"))     // E: uffs count
-            .with_run_result(stdout_of("0")); // E: es result-count → not loaded
+            .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
+            .with_run_result(stdout_of(                  // 2: uffs daemon status (E absent)
+                "Status: Ready\n  [Warm]   C: —  100,000 records (live) — 10 MB\n"
+            ))
+            .with_run_result(stdout_of("0")); // 3: E es result-count → not loaded
         let mut spec = spec_for(&['E'], 5);
         spec.patterns.clear();
 
@@ -642,12 +710,17 @@ mod tests {
             result.drives.first().map(|drive| drive.configured),
             Some(false)
         );
+        // E is absent from daemon status → uffs_record_count = 0.
+        assert_eq!(
+            result.drives.first().map(|drive| drive.uffs_record_count),
+            Some(0)
+        );
         let runs = host
             .calls()
             .into_iter()
             .filter(|call| matches!(call, Call::Run(_, _)))
             .count();
-        assert_eq!(runs, 3); // 1 availability check + 1 uffs count + 1 es probe
+        assert_eq!(runs, 3); // 1 availability check + 1 daemon status + 1 es probe
         assert!(
             !host
                 .calls()
@@ -660,10 +733,12 @@ mod tests {
     fn cell_above_ipc_ceiling_is_infeasible() {
         let host = MockHost::new()
             .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
-            .with_run_result(stdout_of("1.4.1.1032")) // check_es_available: daemon running
-            .with_run_result(stdout_of("500000"))     // C: uffs count
-            .with_run_result(stdout_of("100"))        // C: es result-count → loaded
-            .with_run_result(stdout_of("200000")); // estimate over the 150k ceiling
+            .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
+            .with_run_result(stdout_of(                  // 2: uffs daemon status
+                "Status: Ready\n  [Warm]   C: —  500,000 records (live) — 50 MB\n"
+            ))
+            .with_run_result(stdout_of("100"))           // 3: C es result-count → loaded
+            .with_run_result(stdout_of("200000")); // 4: estimate over the 150k ceiling
         let spec = spec_for(&['C'], 1);
 
         let result = capture(&host, &spec);
