@@ -124,25 +124,31 @@ pub(crate) fn report_scope(cli: &Cli) -> String {
 ///
 /// The operator can press **proceed** to continue with the available tools or
 /// **abort** to quit and install the missing binaries first.
-pub(crate) fn missing_tools_card(missing: &[&str]) -> Card {
-    let list = missing.join(", ");
+pub(crate) fn missing_tools_card(missing: &[&str], available: &[&str]) -> Card {
+    let missing_list = missing.join(", ");
+    let avail_names = available.join(" and ");
+    let avail_count = available.len();
     Card {
         id: "missing-tools".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
         step_num: 1,
         step_total: 1,
-        title: format!("Missing tool(s): {list}"),
-        why: "At least 2 tools are needed for a meaningful head-to-head benchmark.".to_owned(),
+        title: format!("Benchmarking {avail_names} — proceed or quit to install missing tools?"),
+        why: format!(
+            "Not found: {missing_list} (see install links in table above). \
+             Proceeding benchmarks only the {avail_count} available tool(s)."
+        ),
         commands: Vec::new(),
-        resources: Vec::new(),
+        resources: available.iter().map(|name| format!("✓  {name}")).collect(),
         backups: Vec::new(),
         est_time: "0 s".to_owned(),
-        recovery: "Read-only: aborting here changes nothing.".to_owned(),
-        long_why: "The table above shows install locations for each missing tool. \
-                   Install the binaries, then re-run for a full comparison. \
-                   Alternatively, proceed with only the available tools — results \
-                   will reflect a partial comparison."
-            .to_owned(),
+        recovery: "Read-only — aborting changes nothing.".to_owned(),
+        long_why: format!(
+            "Missing: {missing_list}.\n\
+             The table above shows install URLs for each missing tool.\n\
+             Install the binaries and re-run for a full comparison, or\n\
+             proceed now with: {avail_names}."
+        ),
     }
 }
 

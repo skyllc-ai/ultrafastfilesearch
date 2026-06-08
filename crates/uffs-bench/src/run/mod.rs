@@ -388,14 +388,20 @@ impl Orchestrator<'_> {
             .map(|tv| tv.name.as_str())
             .collect();
         if !missing.is_empty() {
-            let available = fp.tools.len() - missing.len();
-            if available < 2 {
+            let available: Vec<&str> = fp
+                .tools
+                .iter()
+                .filter(|tv| tv.version != "unknown")
+                .map(|tv| tv.name.as_str())
+                .collect();
+            if available.len() < 2 {
                 return Err(BenchError::MissingTools(format!(
-                    "only {available} tool(s) available — need at least 2 to run a meaningful \
-                     benchmark. Install the missing tools and re-run."
+                    "only {} tool(s) available — need at least 2 to run a meaningful \
+                     benchmark. Install the missing tools and re-run.",
+                    available.len()
                 )));
             }
-            let card = missing_tools_card(&missing);
+            let card = missing_tools_card(&missing, &available);
             if matches!(
                 confirm(self.host, &mut session.mode, &mut session.seen, &card),
                 Decision::Back | Decision::Abort

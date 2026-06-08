@@ -114,27 +114,38 @@ fn show_terse(host: &dyn Host, card: &Card) {
 
 /// Render the full teaching card.
 fn show_full(host: &dyn Host, card: &Card) {
+    host.out("");
     host.out(&format!(
-        "+- {} - step {}/{} ",
+        "+- {} - step {}/{}",
         card.stage, card.step_num, card.step_total
     ));
+    host.out("|");
     host.out(&format!("| {}", card.title));
-    host.out(&format!("| why: {}", card.why));
-    host.out("| commands (run verbatim):");
-    for cmd in &card.commands {
-        host.out(&format!("|   $ {cmd}"));
+    host.out("|");
+    host.out(&format!("| {}", card.why));
+    if !card.commands.is_empty() {
+        host.out("|");
+        host.out("| commands (run verbatim):");
+        for cmd in &card.commands {
+            host.out(&format!("|   $ {cmd}"));
+        }
     }
     if !card.resources.is_empty() {
-        host.out(&format!("| resources: {}", card.resources.join(", ")));
+        host.out("|");
+        for res in &card.resources {
+            host.out(&format!("| {res}"));
+        }
     }
     if !card.backups.is_empty() {
+        host.out("|");
         host.out(&format!("| backups: {}", card.backups.join(", ")));
     }
+    host.out("|");
     host.out(&format!(
         "| est: {}   recovery: {}",
         card.est_time, card.recovery
     ));
-    host.out("+- [y proceed - s skip - a autopilot - b back - q quit - e explain - ? help]");
+    host.out("|\n+- [y] proceed   [a] autopilot   [b] back   [q] quit   [e] explain   [?] help");
 }
 
 /// Render the DONE panel after a step has run.
