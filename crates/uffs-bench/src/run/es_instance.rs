@@ -301,20 +301,20 @@ pub(super) fn stop(host: &dyn Host, everything_exe: &str, ini_path: Option<&Path
     }
 }
 
-/// Whether the preflight result shows Everything is not running on any of the
-/// given drives (i.e. we need to launch our own instance).
+/// Whether the bench should launch its own isolated Everything instance.
+///
+/// Returns `true` for every ES status except `NotInstalled` (where
+/// `Everything.exe` is not present and cannot be launched).  This means the
+/// bench always replaces whatever instance the operator may have running — even
+/// a fully-loaded default instance — with a private one restricted to the
+/// RAM-budget-capable drives and a clean temp ini.
 pub(super) fn es_needs_launch(
     preflight: &crate::preflight::PreflightResult,
     drives: &[char],
 ) -> bool {
     drives.iter().any(|&letter| {
         preflight.drives.iter().any(|dp| {
-            dp.drive == letter
-                && matches!(
-                    dp.es_status,
-                    crate::preflight::EsStatus::DaemonNotRunning
-                        | crate::preflight::EsStatus::NotConfigured
-                )
+            dp.drive == letter && !matches!(dp.es_status, crate::preflight::EsStatus::NotInstalled)
         })
     })
 }
