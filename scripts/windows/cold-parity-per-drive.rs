@@ -20,10 +20,14 @@
 //!
 //! # Sequence
 //!
-//!   1. (`--purge-cache`) Stop daemon, remove drive cache files — re-measures
-//!      the one-time cold daemon warm-up path.
-//!   2. Warm-up: `uffs * --limit 1 --profile` auto-spawns the daemon and loads
-//!      every drive; records wall-clock warm-up time.
+//!   1. Kill the running daemon and restart it with the requested `--drives`
+//!      (or with no filter so it auto-discovers all system drives when none
+//!      are given).  This ensures every run starts from a known COLD state.
+//!      If `--purge-cache` is also set the on-disk cache files are deleted
+//!      before the restart, forcing a true MFT re-read on first load.
+//!   2. Warm-up: issue `uffs * --limit 1 --profile` **three times** so the
+//!      daemon moves through its load path (pass 1) then fully primes its
+//!      JIT query state (passes 2-3).  Pass-1 wall + `await_ready` reported.
 //!   3. Per-drive loop (`--rounds` iterations each):
 //!        UFFS Rust HOT:  `uffs.exe '*' --drive X --out <tmp> --columns Path
 //!                         --profile`
@@ -385,13 +389,29 @@ fn purge_drive_cache(cache_dir: &PathBuf, drive: &str, dump_raw: bool) {
 
 // ── Daemon helpers ────────────────────────────────────────────────────────────
 
-fn stop_daemon(uffs_bin: &str) {
+/// Kill any running daemon and start a fresh one with the given drives.
+/// If `drives` is empty the daemon auto-discovers all system drives.
+/// Sleeps briefly after kill to let the OS release socket / named-pipe handles.
+fn kill_and_restart_daemon(uffs_bin: &str, drives: &[String]) {
     let _ = Command::new(uffs_bin)
         .args(["daemon", "kill"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    std::thread::sleep(std::time::Duration::from_millis(800));
+    std::thread::sleep(std::time::Duration::from_millis(1_200));
+    let mut start_args: Vec<&str> = vec!["daemon", "start"];
+    let drive_flags: Vec<String> = drives
+        .iter()
+        .flat_map(|d| ["--drive".to_owned(), d.clone()])
+        .collect();
+    for s in &drive_flags {
+        start_args.push(s.as_str());
+    }
+    let _ = Command::new(uffs_bin)
+        .args(&start_args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn daemon_total_records(uffs_bin: &str) -> Option<u64> {
@@ -409,27 +429,41 @@ fn daemon_total_records(uffs_bin: &str) -> Option<u64> {
     None
 }
 
-/// Auto-spawn daemon via `uffs * --limit 1 --profile` and wait for completion.
-/// Returns `(wall_sec, await_ready_ms, total_records)`.
-fn warmup_daemon(uffs_bin: &str, dump_raw: bool) -> (f64, Option<u64>, Option<u64>) {
-    let t = Instant::now();
-    let result = Command::new(uffs_bin)
-        .args(["*", "--limit", "1", "--profile"])
-        .output();
-    let wall_sec = t.elapsed().as_secs_f64();
-    let stderr = match result {
-        Ok(ref o) => String::from_utf8_lossy(&o.stderr).into_owned(),
-        Err(ref e) => {
-            eprintln!("    WARNING: warm-up failed: {e}");
-            return (wall_sec, None, None);
+/// Prime the daemon with three `uffs * --limit 1 --profile` queries.
+///
+/// The first call triggers the initial load + JIT index warm-up (the slow
+/// path).  Calls 2 and 3 exercise the HOT path and get the daemon into its
+/// fully-primed query state.  We report the wall-clock of the **first** call
+/// as the load time and `await_ready` from its stderr; the final record count
+/// is read once after all three queries settle.
+///
+/// Returns `(load_wall_sec, await_ready_ms, total_records)`.
+fn warmup_daemon_primed(uffs_bin: &str, dump_raw: bool) -> (f64, Option<u64>, Option<u64>) {
+    let mut load_wall = 0.0f64;
+    let mut ready_ms = None;
+    for pass in 1u8..=3 {
+        let t = Instant::now();
+        let result = Command::new(uffs_bin)
+            .args(["*", "--limit", "1", "--profile"])
+            .output();
+        let elapsed = t.elapsed().as_secs_f64();
+        let stderr = match result {
+            Ok(ref o) => String::from_utf8_lossy(&o.stderr).into_owned(),
+            Err(ref e) => {
+                eprintln!("    WARNING: warm-up pass {pass} failed: {e}");
+                continue;
+            }
+        };
+        if dump_raw {
+            eprintln!("    [warm-up pass {pass}] {stderr}");
         }
-    };
-    if dump_raw {
-        eprintln!("{stderr}");
+        if pass == 1 {
+            load_wall = elapsed;
+            ready_ms = parse_tagged_ms(&stderr, "Await ready:");
+        }
     }
-    let ready_ms = parse_tagged_ms(&stderr, "Await ready:");
     let records = daemon_total_records(uffs_bin);
-    (wall_sec, ready_ms, records)
+    (load_wall, ready_ms, records)
 }
 
 fn parse_tagged_ms(text: &str, marker: &str) -> Option<u64> {
@@ -673,26 +707,47 @@ fn main() {
         avail
     };
 
-    // ── Phase 0a: optional cache purge ─────────────────────────────────────
-    if args.purge_cache {
-        out.divider("Phase 0a: stop daemon + purge all drive caches (true COLD)");
-        out.line("  Stopping daemon …");
-        stop_daemon(&uffs_bin);
-        let cdir = uffs_cache_dir();
-        for drive in &args.drives {
-            out.line(&format!("  Purging cache for {drive}: …"));
-            purge_drive_cache(&cdir, drive, args.dump_raw);
+    // ── Phase 0a: kill + (optional cache purge) + restart daemon ──────────
+    {
+        let drives_label = if args.drives.is_empty() {
+            "(auto-discover all)".to_owned()
+        } else {
+            args.drives.join(", ")
+        };
+        let phase_title = if args.purge_cache {
+            format!("Phase 0a: kill + purge caches + restart  [{drives_label}]  (true COLD)")
+        } else {
+            format!("Phase 0a: kill + restart daemon  [{drives_label}]")
+        };
+        out.divider(&phase_title);
+        if args.purge_cache {
+            out.line("  Killing daemon …");
+            let cdir = uffs_cache_dir();
+            for drive in &args.drives {
+                out.line(&format!("  Purging cache for {drive}: …"));
+                purge_drive_cache(&cdir, drive, args.dump_raw);
+            }
+        } else {
+            out.line("  Killing daemon …");
         }
+        kill_and_restart_daemon(&uffs_bin, &args.drives);
+        let drives_hint = if args.drives.is_empty() {
+            "all drives (auto-discovered)"
+        } else {
+            "requested drives"
+        };
+        out.line(&format!("  Daemon restarted with {drives_hint}."));
         std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
     }
 
-    // ── Phase 0b: daemon warm-up ───────────────────────────────────────────
-    out.divider("Phase 0b: daemon warm-up — load all drives");
-    out.line("  Spawning daemon via `uffs * --limit 1 --profile` …");
+    // ── Phase 0b: daemon warm-up (3 priming passes) ────────────────────────
+    out.divider("Phase 0b: daemon warm-up — 3 priming passes");
+    out.line("  Pass 1: load path + await_ready (COLD).  Passes 2-3: prime HOT query state.");
+    out.line("  Running `uffs '*' --limit 1 --profile`  ×3 …");
     let (warmup_wall, warmup_ready_ms, warmup_records) =
-        warmup_daemon(&uffs_bin, args.dump_raw);
+        warmup_daemon_primed(&uffs_bin, args.dump_raw);
     out.line(&format!(
-        "    -> wall = {:.2} s   await_ready = {}   total_records = {}",
+        "    -> pass-1 wall = {:.2} s   await_ready = {}   total_records = {}",
         warmup_wall,
         opt_ms(warmup_ready_ms),
         opt_count(warmup_records),
@@ -700,9 +755,9 @@ fn main() {
     out.line(&format!(
         "  Mode: {}",
         if args.purge_cache {
-            "COLD — cache purged before warm-up"
+            "COLD — daemon restarted from scratch, cache files purged"
         } else {
-            "WARM — pre-existing cache reused (use --purge-cache for COLD)"
+            "COLD — daemon restarted (on-disk cache retained for faster load)"
         }
     ));
     std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
@@ -910,18 +965,20 @@ fn main() {
 
     // ── Warm-up recap ──────────────────────────────────────────────────────
     out.divider("Summary — daemon warm-up (Phase 0b)");
-    out.line(&format!("  Wall-clock    : {:.2} s", warmup_wall));
+    out.line(&format!("  Pass-1 wall   : {:.2} s  (daemon load + await_ready)", warmup_wall));
     if let Some(rm) = warmup_ready_ms {
-        out.line(&format!(
-            "  Await ready   : {rm} ms  (daemon spawn + MFT load + index build)"
-        ));
+        out.line(&format!("  Await ready   : {rm} ms  (MFT read + index build)"));
     }
     if let Some(rec) = warmup_records {
         out.line(&format!("  Total records : {}", fmt_count(rec)));
     }
     out.line(&format!(
         "  Mode          : {}",
-        if args.purge_cache { "COLD" } else { "WARM" }
+        if args.purge_cache {
+            "COLD (daemon restarted, cache purged — true MFT re-read)"
+        } else {
+            "COLD (daemon restarted, on-disk cache retained for faster load)"
+        }
     ));
 
     out.divider("Done");
