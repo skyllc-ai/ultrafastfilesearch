@@ -1,0 +1,858 @@
+#!/usr/bin/env rust-script
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+//! Per-drive parity benchmark: UFFS (Rust daemon HOT) vs UFFS (C++ MFT re-read)
+//!
+//! # Methodology
+//!
+//!   Both tools answer the same `*` (all-files, path-only) query per drive:
+//!
+//!   - **UFFS Rust** (`uffs.exe`): daemon model.  The daemon loads all drives
+//!     once and serves each per-drive `*` query from the in-memory index.
+//!     Each round is HOT (daemon already warm for every drive before the loop).
+//!
+//!   - **UFFS C++** (`uffs.com`): no daemon.  Re-reads the MFT on every
+//!     invocation regardless of `--drives=X`.  The `--drives` flag is an
+//!     *output filter*, not a load-time filter — each round is effectively COLD.
+//!
+//!   The per-drive table therefore measures the real-world workflow difference:
+//!   how fast can each tool answer an interactive `*` query on a single drive?
+//!
+//! # Sequence
+//!
+//!   1. (`--purge-cache`) Stop daemon, remove drive cache files — re-measures
+//!      the one-time cold daemon warm-up path.
+//!   2. Warm-up: `uffs * --limit 1 --profile` auto-spawns the daemon and loads
+//!      every drive; records wall-clock warm-up time.
+//!   3. Per-drive loop (`--rounds` iterations each):
+//!        UFFS Rust HOT:  `uffs.exe '*' --drive X --out <tmp> --columns Path
+//!                         --hide-system --hide-ads --profile`
+//!        C++ MFT-reread: `uffs.com '*' --drives=X --columns=path --out=<tmp>`
+//!      Report p50 wall-clock (+ daemon-ms from `--profile` stderr) per drive.
+//!   4. Two markdown summary tables.
+//!
+//! # Binary resolution (same cascade as the bench suite)
+//!
+//!   1. Explicit `--uffs-bin` / `--cpp-bin`
+//!   2. `%USERPROFILE%\bin\uffs.exe` / `%USERPROFILE%\bin\uffs.com`
+//!   3. `target\release\uffs.exe`  (Rust only)
+//!   4. bare name on PATH (OS errors clearly if absent)
+//!
+//!   If a required binary is not found an actionable error with the download
+//!   URL is printed and the script exits non-zero.
+//!
+//! # Usage
+//!
+//! ```powershell
+//! rust-script scripts\windows\cold-parity-per-drive.rs --drives C,D,G
+//! rust-script scripts\windows\cold-parity-per-drive.rs --drives C,D --rounds 3
+//! rust-script scripts\windows\cold-parity-per-drive.rs --purge-cache
+//! rust-script scripts\windows\cold-parity-per-drive.rs --skip-cpp
+//! rust-script scripts\windows\cold-parity-per-drive.rs --dump-raw
+//! rust-script scripts\windows\cold-parity-per-drive.rs --uffs-bin C:\tools\uffs.exe
+//! ```
+//!
+//! ```cargo
+//! [dependencies]
+//! ```
+
+use std::env;
+use std::fs;
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::Instant;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const UFFS_DOWNLOAD_URL: &str =
+    "https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest";
+const CPP_DOWNLOAD_URL: &str =
+    "https://github.com/githubrobbi/Ultra-Fast-File-Search/releases/latest";
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
+
+struct Args {
+    drives: Vec<String>,
+    uffs_bin: Option<String>,
+    cpp_bin: Option<String>,
+    rounds: usize,
+    sleep_ms: u64,
+    purge_cache: bool,
+    skip_cpp: bool,
+    dump_raw: bool,
+    output_file: Option<String>,
+}
+
+impl Args {
+    fn parse() -> Self {
+        let raw: Vec<String> = env::args().skip(1).collect();
+        let mut a = Args {
+            drives: vec!["C".into(), "D".into()],
+            uffs_bin: None,
+            cpp_bin: None,
+            rounds: 1,
+            sleep_ms: 1_000,
+            purge_cache: false,
+            skip_cpp: false,
+            dump_raw: false,
+            output_file: None,
+        };
+        let mut i = 0usize;
+        while i < raw.len() {
+            match raw[i].as_str() {
+                "--drives" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.drives = raw[i]
+                            .split(',')
+                            .map(|d| d.trim().to_uppercase())
+                            .filter(|d| !d.is_empty())
+                            .collect();
+                    }
+                }
+                "--uffs-bin" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.uffs_bin = Some(raw[i].clone());
+                    }
+                }
+                "--cpp-bin" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.cpp_bin = Some(raw[i].clone());
+                    }
+                }
+                "--rounds" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.rounds = raw[i].parse().unwrap_or(1).max(1);
+                    }
+                }
+                "--sleep-ms" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.sleep_ms = raw[i].parse().unwrap_or(1_000);
+                    }
+                }
+                "--output-file" => {
+                    i += 1;
+                    if i < raw.len() {
+                        a.output_file = Some(raw[i].clone());
+                    }
+                }
+                "--purge-cache" => a.purge_cache = true,
+                "--skip-cpp" => a.skip_cpp = true,
+                "--dump-raw" => a.dump_raw = true,
+                "--help" | "-h" => {
+                    print_help();
+                    std::process::exit(0);
+                }
+                other => {
+                    eprintln!("Unknown argument: {other}  (use --help)");
+                    std::process::exit(1);
+                }
+            }
+            i += 1;
+        }
+        a
+    }
+}
+
+fn print_help() {
+    println!(
+        "cold-parity-per-drive — UFFS Rust (daemon HOT) vs UFFS C++ (MFT re-read)\n\
+         \n\
+         Usage:  rust-script cold-parity-per-drive.rs [OPTIONS]\n\
+         \n\
+         Options:\n\
+           --drives C,D,G       Comma-separated drives to test (default: C,D)\n\
+           --rounds N           Rounds per drive per tool (default: 1)\n\
+           --uffs-bin <path>    Explicit path to uffs.exe\n\
+           --cpp-bin  <path>    Explicit path to uffs.com\n\
+           --purge-cache        Stop daemon + purge all cache files before warm-up\n\
+           --skip-cpp           Skip the C++ reference column entirely\n\
+           --dump-raw           Print raw stderr for each invocation\n\
+           --sleep-ms N         Sleep between rounds in ms (default: 1000)\n\
+           --output-file <path> Tee all output to a file\n\
+           --help               Show this help\n\
+         \n\
+         Requires admin elevation for MFT reads (C++ column)."
+    );
+}
+
+// ── Binary resolution ─────────────────────────────────────────────────────────
+
+/// Returns `(resolved_path, source_description)`.
+fn resolve_uffs(explicit: Option<&str>) -> (String, String) {
+    if let Some(e) = explicit {
+        return (e.to_owned(), format!("explicit --uffs-bin ({e})"));
+    }
+    let bin = "uffs.exe";
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Ok(home) = env::var(home_var) {
+        let p = PathBuf::from(&home).join("bin").join(bin);
+        if p.exists() {
+            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({p:?})"));
+        }
+    }
+    let tgt = PathBuf::from("target").join("release").join(bin);
+    if tgt.exists() {
+        return (
+            tgt.to_string_lossy().into_owned(),
+            format!("target\\release ({tgt:?})"),
+        );
+    }
+    (
+        bin.to_owned(),
+        format!("unresolved (tried: explicit, %USERPROFILE%\\bin\\{bin}, target\\release, PATH)"),
+    )
+}
+
+/// Returns `(resolved_path, source_description)`.
+fn resolve_cpp(explicit: Option<&str>) -> (String, String) {
+    if let Some(e) = explicit {
+        return (e.to_owned(), format!("explicit --cpp-bin ({e})"));
+    }
+    let bin = "uffs.com";
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Ok(home) = env::var(home_var) {
+        let p = PathBuf::from(&home).join("bin").join(bin);
+        if p.exists() {
+            return (p.to_string_lossy().into_owned(), format!("%USERPROFILE%\\bin ({p:?})"));
+        }
+    }
+    (
+        bin.to_owned(),
+        format!("unresolved (tried: explicit, %USERPROFILE%\\bin\\{bin}, PATH)"),
+    )
+}
+
+fn binary_available(bin: &str) -> bool {
+    if PathBuf::from(bin).exists() {
+        return true;
+    }
+    Command::new(bin)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn print_missing_uffs_error(path: &str, source: &str) {
+    eprintln!();
+    eprintln!("ERROR: uffs.exe not found.");
+    eprintln!("       Resolved  : {path}");
+    eprintln!("       Source    : {source}");
+    eprintln!();
+    eprintln!("       Looked in order:");
+    eprintln!("         1. --uffs-bin <path> (not provided)");
+    eprintln!("         2. %USERPROFILE%\\bin\\uffs.exe");
+    eprintln!("         3. target\\release\\uffs.exe  (cargo build --release)");
+    eprintln!("         4. PATH");
+    eprintln!();
+    eprintln!("       Download: {UFFS_DOWNLOAD_URL}");
+    eprintln!();
+}
+
+fn print_missing_cpp_warning(path: &str, source: &str) {
+    eprintln!();
+    eprintln!("WARNING: uffs.com (C++ reference) not found — C++ column will be skipped.");
+    eprintln!("         Resolved  : {path}");
+    eprintln!("         Source    : {source}");
+    eprintln!("         Looked in order:");
+    eprintln!("           1. --cpp-bin <path> (not provided)");
+    eprintln!("           2. %USERPROFILE%\\bin\\uffs.com");
+    eprintln!("           3. PATH");
+    eprintln!("         Download: {CPP_DOWNLOAD_URL}");
+    eprintln!();
+}
+
+// ── Output sink (console + optional file tee) ─────────────────────────────────
+
+struct Out {
+    file: Option<fs::File>,
+}
+
+impl Out {
+    fn open(path: Option<&str>) -> Self {
+        let file = path.and_then(|p| {
+            if let Some(parent) = PathBuf::from(p).parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = fs::create_dir_all(parent);
+                }
+            }
+            fs::File::create(p)
+                .map_err(|e| eprintln!("WARNING: cannot open output file {p}: {e}"))
+                .ok()
+        });
+        Self { file }
+    }
+
+    fn line(&mut self, s: &str) {
+        println!("{s}");
+        if let Some(f) = &mut self.file {
+            let _ = writeln!(f, "{s}");
+        }
+    }
+
+    fn divider(&mut self, title: &str) {
+        let bar = "=".repeat(110);
+        self.line("");
+        self.line(&bar);
+        if !title.is_empty() {
+            self.line(&format!("  {title}"));
+        }
+        self.line(&bar);
+        self.line("");
+    }
+}
+
+// ── Round result ──────────────────────────────────────────────────────────────
+
+struct Round {
+    wall_ms: u64,
+    daemon_ms: Option<u64>,
+    rows: Option<u64>,
+}
+
+// ── Cache helpers ─────────────────────────────────────────────────────────────
+
+fn uffs_cache_dir() -> PathBuf {
+    env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            env::var("USERPROFILE").map(|h| {
+                PathBuf::from(h)
+                    .join("AppData")
+                    .join("Local")
+            })
+        })
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("uffs")
+        .join("cache")
+}
+
+fn purge_drive_cache(cache_dir: &PathBuf, drive: &str, dump_raw: bool) {
+    for suffix in &[
+        "_compact.uffs",
+        "_index.uffs",
+        "_index.uffs.tmp",
+        "_index.lock",
+        "_compact.uffs.tmp",
+    ] {
+        let p = cache_dir.join(format!("{drive}{suffix}"));
+        if p.exists() {
+            match fs::remove_file(&p) {
+                Ok(()) => {
+                    if dump_raw {
+                        eprintln!("    - removed {}", p.display());
+                    }
+                }
+                Err(e) => eprintln!("    WARNING: could not remove {}: {e}", p.display()),
+            }
+        }
+    }
+}
+
+// ── Daemon helpers ────────────────────────────────────────────────────────────
+
+fn stop_daemon(uffs_bin: &str) {
+    let _ = Command::new(uffs_bin)
+        .args(["daemon", "kill"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+}
+
+fn daemon_total_records(uffs_bin: &str) -> Option<u64> {
+    let out = Command::new(uffs_bin)
+        .args(["daemon", "stats"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if line.contains("Total records:") {
+            let digits: String = line.chars().filter(|c| c.is_ascii_digit()).collect();
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+/// Auto-spawn daemon via `uffs * --limit 1 --profile` and wait for completion.
+/// Returns `(wall_sec, await_ready_ms, total_records)`.
+fn warmup_daemon(uffs_bin: &str, dump_raw: bool) -> (f64, Option<u64>, Option<u64>) {
+    let t = Instant::now();
+    let result = Command::new(uffs_bin)
+        .args(["*", "--limit", "1", "--profile"])
+        .output();
+    let wall_sec = t.elapsed().as_secs_f64();
+    let stderr = match result {
+        Ok(ref o) => String::from_utf8_lossy(&o.stderr).into_owned(),
+        Err(ref e) => {
+            eprintln!("    WARNING: warm-up failed: {e}");
+            return (wall_sec, None, None);
+        }
+    };
+    if dump_raw {
+        eprintln!("{stderr}");
+    }
+    let ready_ms = parse_tagged_ms(&stderr, "Await ready:");
+    let records = daemon_total_records(uffs_bin);
+    (wall_sec, ready_ms, records)
+}
+
+fn parse_tagged_ms(text: &str, marker: &str) -> Option<u64> {
+    for line in text.lines() {
+        if let Some(after) = line.split_once(marker).map(|(_, r)| r) {
+            let digits: String = after
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                return digits.parse().ok();
+            }
+        }
+    }
+    None
+}
+
+// ── File line counter ─────────────────────────────────────────────────────────
+
+fn count_lines(path: &PathBuf) -> Option<u64> {
+    let bytes = fs::read(path).ok()?;
+    Some(bytes.iter().filter(|&&b| b == b'\n').count() as u64)
+}
+
+// ── Unique temp path ──────────────────────────────────────────────────────────
+
+fn tmp_path(prefix: &str, drive: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "uffs_{prefix}_{drive}_{}.csv",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ))
+}
+
+// ── Round runners ─────────────────────────────────────────────────────────────
+
+fn run_uffs_hot(uffs_bin: &str, drive: &str, dump_raw: bool) -> Round {
+    let out_path = tmp_path("hot", drive);
+    let t = Instant::now();
+    let result = Command::new(uffs_bin)
+        .args([
+            "*",
+            "--drive",
+            drive,
+            "--out",
+            out_path.to_str().unwrap_or("out.csv"),
+            "--columns",
+            "Path",
+            "--hide-system",
+            "--hide-ads",
+            "--profile",
+        ])
+        .output();
+    let wall_ms = t.elapsed().as_millis() as u64;
+    let (daemon_ms, stderr) = match result {
+        Ok(ref o) => {
+            let s = String::from_utf8_lossy(&o.stderr).into_owned();
+            (parse_tagged_ms(&s, "daemon:"), s)
+        }
+        Err(ref e) => {
+            eprintln!("    WARNING: uffs.exe failed: {e}");
+            (None, String::new())
+        }
+    };
+    if dump_raw && !stderr.is_empty() {
+        eprintln!("{stderr}");
+    }
+    let rows = count_lines(&out_path);
+    let _ = fs::remove_file(&out_path);
+    Round { wall_ms, daemon_ms, rows }
+}
+
+fn run_cpp(cpp_bin: &str, drive: &str, dump_raw: bool) -> Round {
+    let out_path = tmp_path("cpp", drive);
+    // C++ binary uses freopen() internally — must NOT capture stdout/stderr via
+    // pipe; inherit both so the internal redirect onto --out= works correctly.
+    let t = Instant::now();
+    let status = Command::new(cpp_bin)
+        .args([
+            "*",
+            &format!("--drives={drive}"),
+            "--columns=path",
+            &format!("--out={}", out_path.display()),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+    let wall_ms = t.elapsed().as_millis() as u64;
+    if dump_raw {
+        let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        eprintln!("    [cpp exit: {code}]");
+    }
+    let rows = count_lines(&out_path);
+    let _ = fs::remove_file(&out_path);
+    Round { wall_ms, daemon_ms: None, rows }
+}
+
+// ── Statistics ────────────────────────────────────────────────────────────────
+
+fn p50(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut s = values.to_vec();
+    s.sort_unstable();
+    let mid = s.len() / 2;
+    if s.len() % 2 == 1 {
+        s[mid]
+    } else {
+        (s[mid - 1] + s[mid]) / 2
+    }
+}
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+
+fn fmt_count(n: u64) -> String {
+    // Insert thousands separators.
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn opt_count(n: Option<u64>) -> String {
+    n.map(fmt_count).unwrap_or_else(|| "n/a".to_owned())
+}
+
+fn opt_ms(n: Option<u64>) -> String {
+    n.map(|v| format!("{v} ms")).unwrap_or_else(|| "n/a".to_owned())
+}
+
+fn now_str() -> String {
+    // No chrono dep: use the OS time via a simple epoch calculation.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (s, m, h, d, mo, y) = epoch_to_ymd_hms(secs);
+    format!("{y}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02} UTC")
+}
+
+fn epoch_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86_400;
+    // Tomohiko Sakamoto's algorithm (Jan 1 1970 = day 0).
+    let mut y = 1970u64;
+    let mut remaining = days;
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let days_in_year = if leap { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mo = 1u64;
+    for days_in_month in month_days {
+        if remaining < days_in_month {
+            break;
+        }
+        remaining -= days_in_month;
+        mo += 1;
+    }
+    (s, m, h, remaining + 1, mo, y)
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+fn main() {
+    let args = Args::parse();
+
+    // Binary resolution.
+    let (uffs_bin, uffs_src) = resolve_uffs(args.uffs_bin.as_deref());
+    let (cpp_bin, cpp_src) = resolve_cpp(args.cpp_bin.as_deref());
+
+    let mut out = Out::open(args.output_file.as_deref());
+
+    // ── Preflight header ───────────────────────────────────────────────────
+    out.divider(&format!("UFFS per-drive parity benchmark  —  {}", now_str()));
+    out.line(&format!("  uffs.exe     : {uffs_bin}"));
+    out.line(&format!("  uffs.exe src : {uffs_src}"));
+    if args.skip_cpp {
+        out.line("  uffs.com     : (--skip-cpp)");
+    } else {
+        out.line(&format!("  uffs.com     : {cpp_bin}"));
+        out.line(&format!("  uffs.com src : {cpp_src}"));
+    }
+    out.line(&format!("  drives       : {}", args.drives.join(", ")));
+    out.line(&format!("  rounds/drive : {}", args.rounds));
+    out.line(&format!("  purge-cache  : {}", args.purge_cache));
+    out.line(&format!("  cache dir    : {}", uffs_cache_dir().display()));
+    out.line("");
+
+    // Verify uffs.exe (required).
+    if !binary_available(&uffs_bin) {
+        print_missing_uffs_error(&uffs_bin, &uffs_src);
+        std::process::exit(1);
+    }
+    if let Ok(o) = Command::new(&uffs_bin).arg("--version").output() {
+        out.line(&format!("  {}", String::from_utf8_lossy(&o.stdout).trim()));
+    }
+
+    // Verify uffs.com (optional).
+    let cpp_available = !args.skip_cpp && {
+        let avail = binary_available(&cpp_bin);
+        if !avail {
+            print_missing_cpp_warning(&cpp_bin, &cpp_src);
+        } else if let Ok(o) = Command::new(&cpp_bin).arg("--version").output() {
+            out.line(&format!("  {}", String::from_utf8_lossy(&o.stdout).trim()));
+        }
+        avail
+    };
+
+    // ── Phase 0a: optional cache purge ─────────────────────────────────────
+    if args.purge_cache {
+        out.divider("Phase 0a: stop daemon + purge all drive caches (true COLD)");
+        out.line("  Stopping daemon …");
+        stop_daemon(&uffs_bin);
+        let cdir = uffs_cache_dir();
+        for drive in &args.drives {
+            out.line(&format!("  Purging cache for {drive}: …"));
+            purge_drive_cache(&cdir, drive, args.dump_raw);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
+    }
+
+    // ── Phase 0b: daemon warm-up ───────────────────────────────────────────
+    out.divider("Phase 0b: daemon warm-up — load all drives");
+    out.line("  Spawning daemon via `uffs * --limit 1 --profile` …");
+    let (warmup_wall, warmup_ready_ms, warmup_records) =
+        warmup_daemon(&uffs_bin, args.dump_raw);
+    out.line(&format!(
+        "    -> wall = {:.2} s   await_ready = {}   total_records = {}",
+        warmup_wall,
+        opt_ms(warmup_ready_ms),
+        opt_count(warmup_records),
+    ));
+    out.line(&format!(
+        "  Mode: {}",
+        if args.purge_cache {
+            "COLD — cache purged before warm-up"
+        } else {
+            "WARM — pre-existing cache reused (use --purge-cache for COLD)"
+        }
+    ));
+    std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
+
+    // ── Phase 1: per-drive loop ────────────────────────────────────────────
+
+    struct DriveRow {
+        drive: String,
+        rust_p50: u64,
+        rust_daemon_p50: Option<u64>,
+        rust_rows: Option<u64>,
+        cpp_p50: Option<u64>,
+        cpp_rows: Option<u64>,
+    }
+
+    let mut table: Vec<DriveRow> = Vec::new();
+
+    for drive in &args.drives {
+        out.divider(&format!(
+            "Drive {drive}:  — {} round(s) per tool",
+            args.rounds
+        ));
+
+        // Rust HOT rounds.
+        let mut rust_walls: Vec<u64> = Vec::new();
+        let mut rust_daemons: Vec<u64> = Vec::new();
+        let mut rust_rows_r1: Option<u64> = None;
+
+        for r in 1..=args.rounds {
+            out.line(&format!(
+                "  [Rust HOT {r}/{}]  uffs.exe '*' --drive {drive} \
+                 --out <tmp> --columns Path --hide-system --hide-ads --profile",
+                args.rounds
+            ));
+            let res = run_uffs_hot(&uffs_bin, drive, args.dump_raw);
+            out.line(&format!(
+                "    -> wall = {} ms   daemon = {}   rows = {}",
+                res.wall_ms,
+                opt_ms(res.daemon_ms),
+                opt_count(res.rows),
+            ));
+            if r == 1 {
+                rust_rows_r1 = res.rows;
+            }
+            rust_walls.push(res.wall_ms);
+            if let Some(dm) = res.daemon_ms {
+                rust_daemons.push(dm);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
+        }
+
+        let rust_p50 = p50(&rust_walls);
+        let rust_daemon_p50 = if rust_daemons.is_empty() {
+            None
+        } else {
+            Some(p50(&rust_daemons))
+        };
+
+        // C++ MFT-reread rounds.
+        let mut cpp_walls: Vec<u64> = Vec::new();
+        let mut cpp_rows_r1: Option<u64> = None;
+
+        if cpp_available {
+            for r in 1..=args.rounds {
+                out.line(&format!(
+                    "  [C++ MFT-reread {r}/{}]  uffs.com '*' --drives={drive} \
+                     --columns=path --out=<tmp>",
+                    args.rounds
+                ));
+                let res = run_cpp(&cpp_bin, drive, args.dump_raw);
+                out.line(&format!(
+                    "    -> wall = {} ms   rows = {}",
+                    res.wall_ms,
+                    opt_count(res.rows),
+                ));
+                if r == 1 {
+                    cpp_rows_r1 = res.rows;
+                }
+                cpp_walls.push(res.wall_ms);
+                std::thread::sleep(std::time::Duration::from_millis(args.sleep_ms));
+            }
+        }
+
+        let cpp_p50 = if cpp_walls.is_empty() {
+            None
+        } else {
+            Some(p50(&cpp_walls))
+        };
+
+        table.push(DriveRow {
+            drive: drive.clone(),
+            rust_p50,
+            rust_daemon_p50,
+            rust_rows: rust_rows_r1,
+            cpp_p50,
+            cpp_rows: cpp_rows_r1,
+        });
+    }
+
+    // ── Summary table 1: parity ────────────────────────────────────────────
+    out.divider(&format!(
+        "Summary — table 1: per-drive parity (wall-clock p50 over {} round(s))",
+        args.rounds
+    ));
+    out.line("| Drive | C++ (MFT re-read) | Rust (daemon HOT) | Speedup | Rust rows | C++ rows |");
+    out.line("|-------|------------------:|------------------:|--------:|----------:|---------:|");
+
+    let mut total_rust_ms: u64 = 0;
+    let mut total_cpp_ms: u64 = 0;
+    let mut any_cpp = false;
+
+    for row in &table {
+        total_rust_ms += row.rust_p50;
+        let speedup = match row.cpp_p50 {
+            Some(c) if row.rust_p50 > 0 => format!("{:.1}x", c as f64 / row.rust_p50 as f64),
+            Some(_) => "n/a".to_owned(),
+            None => "(skipped)".to_owned(),
+        };
+        let cpp_cell = row
+            .cpp_p50
+            .map(|c| {
+                total_cpp_ms += c;
+                any_cpp = true;
+                format!("{c:>7} ms")
+            })
+            .unwrap_or_else(|| "(skipped)".to_owned());
+        out.line(&format!(
+            "| {}: | {cpp_cell} | {:>7} ms | {speedup:>8} | {:>9} | {:>8} |",
+            row.drive,
+            row.rust_p50,
+            opt_count(row.rust_rows),
+            opt_count(row.cpp_rows),
+        ));
+    }
+
+    if any_cpp && total_rust_ms > 0 {
+        let total_speedup = total_cpp_ms as f64 / total_rust_ms as f64;
+        out.line(&format!(
+            "| **TOTAL** | **{total_cpp_ms:>7} ms** | **{total_rust_ms:>7} ms** \
+             | **{total_speedup:.1}x** | — | — |"
+        ));
+    } else {
+        out.line(&format!(
+            "| **TOTAL (Rust sum)** | — | **{total_rust_ms:>7} ms** | — | — | — |"
+        ));
+    }
+
+    // ── Summary table 2: Rust daemon breakdown ─────────────────────────────
+    out.divider("Summary — table 2: Rust wall vs daemon breakdown");
+    out.line("| Drive | Rust rows | Rust wall p50 | Rust daemon p50 | CLI overhead |");
+    out.line("|-------|----------:|--------------:|----------------:|-------------:|");
+    for row in &table {
+        let overhead = row.rust_daemon_p50.map(|dm| {
+            let ov = row.rust_p50.saturating_sub(dm);
+            format!("{ov:>5} ms")
+        });
+        out.line(&format!(
+            "| {}: | {:>9} | {:>9} ms | {:>11} | {:>12} |",
+            row.drive,
+            opt_count(row.rust_rows),
+            row.rust_p50,
+            row.rust_daemon_p50
+                .map(|d| format!("{d:>5} ms"))
+                .unwrap_or_else(|| "    n/a".to_owned()),
+            overhead.unwrap_or_else(|| "    n/a".to_owned()),
+        ));
+    }
+    out.line("");
+    out.line("  Legend:");
+    out.line("    Rust wall p50    = process wall-clock from spawn to exit (Rust Instant).");
+    out.line("    Rust daemon p50  = daemon-reported search duration (--profile 'daemon: N ms').");
+    out.line("    CLI overhead     = wall − daemon  (process start + IPC + file write).");
+    out.line("    C++ has no daemon — its wall-clock IS its total cost (full MFT re-read every run).");
+
+    // ── Warm-up recap ──────────────────────────────────────────────────────
+    out.divider("Summary — daemon warm-up (Phase 0b)");
+    out.line(&format!("  Wall-clock    : {:.2} s", warmup_wall));
+    if let Some(rm) = warmup_ready_ms {
+        out.line(&format!(
+            "  Await ready   : {rm} ms  (daemon spawn + MFT load + index build)"
+        ));
+    }
+    if let Some(rec) = warmup_records {
+        out.line(&format!("  Total records : {}", fmt_count(rec)));
+    }
+    out.line(&format!(
+        "  Mode          : {}",
+        if args.purge_cache { "COLD" } else { "WARM" }
+    ));
+
+    out.divider("Done");
+    if let Some(path) = &args.output_file {
+        println!("Full log written to: {path}");
+    }
+}
