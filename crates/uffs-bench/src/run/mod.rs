@@ -262,7 +262,12 @@ impl Orchestrator<'_> {
                 available.len()
             )));
         }
-        let card = tool_selection_card(&available, &missing);
+        let es_available = fp
+            .tools
+            .iter()
+            .any(|tv| tv.name == "everything" && tv.version != "unknown");
+        let preflight_steps = if es_available { 2 } else { 1 };
+        let card = tool_selection_card(&available, &missing, preflight_steps);
         if matches!(
             confirm(self.host, &mut session.mode, &mut session.seen, &card),
             Decision::Back | Decision::Abort

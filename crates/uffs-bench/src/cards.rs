@@ -146,7 +146,7 @@ fn unique_product_names(ids: &[&str]) -> Vec<String> {
 /// Always fires — even when all tools are present — so the operator can
 /// confirm (or in the future, deselect) which products will be benchmarked.
 /// When some tools are missing, the card notes them and points to the table.
-pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str]) -> Card {
+pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str], step_total: u32) -> Card {
     let avail_products = unique_product_names(available);
     let avail_names = avail_products.join(" and ");
     let avail_count = avail_products.len();
@@ -179,7 +179,7 @@ pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str]) -> Card 
         id: "tool-selection".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
         step_num: 1,
-        step_total: 1,
+        step_total,
         title,
         why,
         commands: Vec::new(),
