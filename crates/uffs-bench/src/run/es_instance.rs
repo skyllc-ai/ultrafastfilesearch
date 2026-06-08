@@ -59,8 +59,10 @@ fn bench_ini_path(host: &dyn Host, bundle_dir: &Path) -> PathBuf {
 /// Launch an isolated Everything instance that indexes only `drives`.
 ///
 /// Writes a temp ini and spawns `Everything.exe -config <ini>
-/// -instance uffs-bench -startup`.  Returns the ini path so the caller can
-/// remove it after [`stop`].
+/// -instance uffs-bench [-admin] -startup`.  Returns the ini path so the
+/// caller can remove it after [`stop`].
+///
+/// Pass `admin = true` to add `-admin` (run Everything elevated).
 ///
 /// Does nothing and returns `None` when `everything_exe` resolves to the
 /// GUI-less `es.exe` stub (non-Windows hosts where Everything cannot run).
@@ -69,6 +71,7 @@ pub(super) fn launch(
     everything_exe: &str,
     drives: &[char],
     bundle_dir: &Path,
+    admin: bool,
 ) -> Option<PathBuf> {
     if drives.is_empty() {
         return None;
@@ -80,8 +83,9 @@ pub(super) fn launch(
         ));
         return None;
     }
+    let admin_tag = if admin { " (admin)" } else { "" };
     host.out(&format!(
-        "[es-instance] launching Everything (drives: {}) …",
+        "[es-instance] launching Everything{admin_tag} (drives: {}) …",
         drives
             .iter()
             .map(char::to_string)
@@ -89,13 +93,12 @@ pub(super) fn launch(
             .join(", ")
     ));
     let ini_str = ini_path.to_string_lossy();
-    if let Err(err) = host.run(everything_exe, &[
-        "-config",
-        ini_str.as_ref(),
-        "-instance",
-        INSTANCE_NAME,
-        "-startup",
-    ]) {
+    let mut args: Vec<&str> = vec!["-config", ini_str.as_ref(), "-instance", INSTANCE_NAME];
+    if admin {
+        args.push("-admin");
+    }
+    args.push("-startup");
+    if let Err(err) = host.run(everything_exe, &args) {
         host.out(&format!(
             "[es-instance] WARNING: could not launch Everything — {err}"
         ));

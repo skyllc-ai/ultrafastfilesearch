@@ -194,6 +194,56 @@ pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str]) -> Card 
     }
 }
 
+/// Build the ES-instance launch confirmation [`Card`].
+///
+/// Shown after the negotiated matrix is displayed, before the bench tool
+/// actually spawns `Everything.exe`.  Gives the operator a chance to cancel
+/// if they don't want the bench to touch the Everything process.
+pub(crate) fn es_launch_card(capable_drives: &[char], admin: bool) -> Card {
+    let drive_list: String = capable_drives
+        .iter()
+        .map(char::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let admin_note = if admin {
+        " (as Administrator — `Everything.exe -admin`)"
+    } else {
+        ""
+    };
+    let title = format!("Launch isolated Everything.exe instance for drives: {drive_list}");
+    let why = format!(
+        "Everything is not running. The bench will start a private instance{admin_note} \
+         restricted to the RAM-budget-capable drives ({drive_list}) and shut it down \
+         when the run completes. Your permanent Everything.ini is not modified."
+    );
+    let cmd = if admin {
+        "Everything.exe -config <temp.ini> -instance uffs-bench -admin -startup".to_owned()
+    } else {
+        "Everything.exe -config <temp.ini> -instance uffs-bench -startup".to_owned()
+    };
+    Card {
+        id: "es-instance-launch".to_owned(),
+        stage: "STAGE 0: PREFLIGHT".to_owned(),
+        step_num: 2,
+        step_total: 2,
+        title,
+        why: why.clone(),
+        commands: vec![cmd],
+        resources: capable_drives
+            .iter()
+            .map(|ch| format!("{ch}: (Everything index)"))
+            .collect(),
+        backups: Vec::new(),
+        est_time: "~1-5 min (indexing)".to_owned(),
+        recovery: "Aborting here skips ES cells entirely — UFFS-only run.".to_owned(),
+        long_why: format!(
+            "{why}\n\nThe instance is named `uffs-bench` so it runs in parallel with \
+             any existing Everything session without interfering.\n\
+             Pass `--es-admin` on the command line to spawn it elevated."
+        ),
+    }
+}
+
 /// The [`StepResult`] used when a step is dry-run (rendered, not executed).
 pub(crate) fn dry_run_result() -> StepResult {
     StepResult {

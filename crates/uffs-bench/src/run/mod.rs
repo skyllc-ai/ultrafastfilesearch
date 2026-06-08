@@ -32,8 +32,8 @@ use specs::{
 
 use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
-    assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
-    tool_selection_card,
+    assembly_card, dry_run_result, es_launch_card, measurement_card, plan_card, report_scope,
+    stage0_result, tool_selection_card,
 };
 use crate::cli::{Cli, Command};
 use crate::env::{self, EnvFingerprint};
@@ -169,6 +169,11 @@ struct Capture {
     preflight: PreflightResult,
     /// Stage 0d negotiated matrix (its `capable_drives` feed Stage 1).
     matrix: Matrix,
+    /// Drives that need an ES instance launched (from first-pass matrix).
+    ///
+    /// Non-empty iff `es_needs_launch` was true after the first preflight pass.
+    /// Consumed by `launch_es_if_needed()` to decide whether to show the gate.
+    es_capable_drives: Vec<char>,
     /// Path to the temporary Everything ini written for the bench instance.
     ///
     /// `None` when Everything was already running or no instance was needed.
@@ -176,6 +181,12 @@ struct Capture {
     es_ini_path: Option<PathBuf>,
     /// Resolved path to `Everything.exe`, used for teardown.
     everything_exe: String,
+    /// Whether the first-pass preflight found ES not running on any capable
+    /// drive.
+    ///
+    /// When `true`, `launch_es_if_needed()` will show the confirmation gate and
+    /// (if the operator proceeds) launch the isolated Everything instance.
+    es_needs_launch: bool,
 }
 
 /// Mutable per-run gate state threaded through every staged confirm.
@@ -262,61 +273,98 @@ impl Orchestrator<'_> {
         }
         let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
         daemon::ensure_daemon_ready(self.host, &resolve::uffs_exe(self.host))?;
-        // First pass: probe without an ES instance to discover which drives
-        // exist and what ES state they are in.
+        // Probe drives and display the drive table + negotiated matrix.
+        // ES launch (if needed) is deferred to `launch_es_if_needed()` so the
+        // operator can confirm before the bench touches the Everything process.
         let preflight_first = preflight::capture(
             self.host,
             &preflight_spec_from_cli(self.host, self.cli, es_ram_budget),
         );
+        self.host.out(&preflight::render_drive_table(
+            &preflight_first,
+            es_ram_budget,
+        ));
         let matrix_first = matrix::compute_matrix(
             &matrix_spec_from_cli(self.cli, es_ram_budget),
             &preflight_first,
         );
-        // If Everything is not running, launch an isolated instance restricted
-        // to the RAM-budget-capable drives, then re-run the ES probes only.
+        self.host.out(&matrix::render_md(&matrix_first));
         let everything_exe = resolve::everything_exe(self.host);
-        let es_ini_path =
-            if es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives) {
-                let ini = es_instance::launch(
-                    self.host,
-                    &everything_exe,
-                    &matrix_first.capable_drives,
-                    &self.bundle_dir,
-                );
-                if ini.is_some() {
-                    es_instance::wait_until_loaded(
-                        self.host,
-                        &resolve::es_exe(self.host),
-                        &matrix_first.capable_drives,
-                    );
-                }
-                ini
-            } else {
-                None
-            };
-        // Second pass (or same result if no instance was launched): re-probe
-        // ES status now that the instance is (or was already) running.
-        let mut spec2 = preflight_spec_from_cli(self.host, self.cli, es_ram_budget);
-        if es_ini_path.is_some() {
-            spec2.es_instance_name = String::from(es_instance::INSTANCE_NAME);
-        }
-        let preflight = if es_ini_path.is_some() {
-            preflight::capture(self.host, &spec2)
-        } else {
-            preflight_first
-        };
-        self.host
-            .out(&preflight::render_drive_table(&preflight, es_ram_budget));
-        let matrix =
-            matrix::compute_matrix(&matrix_spec_from_cli(self.cli, es_ram_budget), &preflight);
-        self.host.out(&matrix::render_md(&matrix));
+        let needs_launch =
+            es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives);
         Ok(Capture {
             fp,
-            preflight,
-            matrix,
-            es_ini_path,
+            preflight: preflight_first,
+            matrix: matrix_first,
+            es_capable_drives: Vec::new(), // populated by launch_es_if_needed()
+            es_ini_path: None,
             everything_exe,
+            es_needs_launch: needs_launch,
         })
+    }
+
+    /// Gate and (if confirmed) launch the bench-local Everything instance.
+    ///
+    /// Called from `execute()` after `capture()` has displayed the matrix.
+    /// When the operator confirms, writes a temp ini, spawns
+    /// `Everything.exe -instance uffs-bench [-admin]`, waits for the index to
+    /// load, then re-runs the ES preflight probes so `cap.preflight` and
+    /// `cap.matrix` reflect the loaded state.
+    ///
+    /// If the operator aborts the card, ES cells are silently skipped (the
+    /// matrix already shows them as UFFS-only).
+    fn launch_es_if_needed(&self, session: &mut Session, cap: &mut Capture) {
+        if !cap.es_needs_launch || cap.matrix.capable_drives.is_empty() {
+            return;
+        }
+        let card = es_launch_card(&cap.matrix.capable_drives, self.cli.es_admin);
+        match confirm(self.host, &mut session.mode, &mut session.seen, &card) {
+            Decision::Back | Decision::Abort => {
+                self.host.out(
+                    "[es-instance] operator skipped ES launch — \
+                     proceeding with UFFS-only cells",
+                );
+                return;
+            }
+            Decision::ProceedNoop => {
+                self.host
+                    .out("[es-instance] dry-run: skipping Everything.exe launch");
+                return;
+            }
+            Decision::Proceed | Decision::Autopilot | Decision::Skip => {}
+        }
+        let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
+        let ini = es_instance::launch(
+            self.host,
+            &cap.everything_exe,
+            &cap.matrix.capable_drives,
+            &self.bundle_dir,
+            self.cli.es_admin,
+        );
+        if ini.is_some() {
+            es_instance::wait_until_loaded(
+                self.host,
+                &resolve::es_exe(self.host),
+                &cap.matrix.capable_drives,
+            );
+        }
+        cap.es_ini_path = ini;
+        // Second-pass preflight: re-probe ES now the instance is loaded.
+        let mut spec2 = preflight_spec_from_cli(self.host, self.cli, es_ram_budget);
+        if cap.es_ini_path.is_some() {
+            spec2.es_instance_name = String::from(es_instance::INSTANCE_NAME);
+        }
+        cap.preflight = preflight::capture(self.host, &spec2);
+        cap.matrix = matrix::compute_matrix(
+            &matrix_spec_from_cli(self.cli, es_ram_budget),
+            &cap.preflight,
+        );
+        cap.es_capable_drives = cap.matrix.capable_drives.clone();
+        self.host.out(&preflight::render_drive_table(
+            &cap.preflight,
+            es_ram_budget,
+        ));
+        self.host.out(&matrix::render_md(&cap.matrix));
     }
 
     /// Build the [`StageCfg`] shared by every measurement stage from the CLI
@@ -481,9 +529,15 @@ impl Orchestrator<'_> {
         let measure_live = (1..=MEASUREMENT_STAGES).any(|stage| {
             stage_selected(self.cli, stage) && !state.should_skip(&stage_step_id(stage), hash)
         });
-        let capture = ((stage0_selected && !stage0_skip) || measure_live)
+        let mut capture = ((stage0_selected && !stage0_skip) || measure_live)
             .then(|| self.capture(session))
             .transpose()?;
+        // Show the ES-instance confirm gate and launch if the operator agrees.
+        // This runs after the matrix is displayed and before the plan card, so
+        // the final (post-launch) matrix is what gets locked into stage0.
+        if let Some(cap) = capture.as_mut() {
+            self.launch_es_if_needed(session, cap);
+        }
 
         if stage0_selected {
             let flow = if stage0_skip {
