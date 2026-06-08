@@ -192,6 +192,11 @@ pub struct StageCfg {
     pub patterns: Vec<PatternProbe>,
     /// The UFFS executable invoked for Stage 3 native timing.
     pub uffs_exe: String,
+    /// Named Everything instance to connect to via `es.exe -instance <name>`.
+    /// `None` means the default IPC window (system-wide Everything instance).
+    /// Set to `Some(INSTANCE_NAME)` when the bench tool launched a private
+    /// `Everything.exe -instance uffs-bench` so the harness can find it.
+    pub es_instance_name: Option<String>,
 }
 
 /// The card-facing plan for one measurement stage.
@@ -310,6 +315,10 @@ fn cross_tool_invocation(cfg: &StageCfg) -> Invocation {
             .collect::<Vec<_>>()
             .join(","),
     );
+    if let Some(inst) = &cfg.es_instance_name {
+        args.push("--es-instance".to_owned());
+        args.push(inst.clone());
+    }
     args.push("--rounds".to_owned());
     args.push(cfg.rounds.to_string());
     args.push("--out".to_owned());

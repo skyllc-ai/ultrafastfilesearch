@@ -205,6 +205,11 @@ struct Cfg { uffs: PathBuf, uffs_cpp: Option<PathBuf>, es: Option<PathBuf>,
              drives: Vec<String>, rounds: usize,
              tools: Vec<Tool>, sinks: Vec<OutputSink>, skip_cold: bool,
              patterns: Option<Vec<String>>,
+             /// Named Everything instance to connect to via `-instance <name>`.
+             /// When the bench tool launches a private Everything.exe with
+             /// `-instance uffs-bench`, the default IPC window is absent and
+             /// es.exe must be told which instance to query.
+             es_instance: Option<String>,
              /// Optional summary CSV output path.  When `Some`, the post-run
              /// summary (one row per Tool × Phase × Sink × Drive × Pattern
              /// combination, with p50/p95/rows/bad/verdict) is written to
@@ -529,14 +534,22 @@ fn parse_daemon_ms(s: &str) -> u64 {
 /// File sink: `-export-csv <file>`; Stdout sink: default CSV to stdout; Null
 /// sink: default to stdout then redirect via cmd.  No -n limit — all results
 /// are returned.
-fn run_es(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: OutputSink) -> Timing {
+fn run_es(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: OutputSink, es_instance: Option<&str>) -> Timing {
     cleanup_bench_file();
     let bpath = bench_out_path();
     // es.exe expects path filter and search term as SEPARATE arguments:
     //   es.exe "C:\" ext:dll -export-csv file.csv
     // NOT as one combined string.
+    // When a named instance is in use (private bench instance launched with
+    // -instance <name>), prepend -instance <name> so es.exe connects to the
+    // correct IPC window instead of the default one.
     let drive_path = format!("{drive}:\\");
-    let mut args: Vec<String> = vec![drive_path];
+    let mut args: Vec<String> = Vec::new();
+    if let Some(inst) = es_instance {
+        args.push("-instance".into());
+        args.push(inst.into());
+    }
+    args.push(drive_path);
     if pattern != "*" { args.push(pattern.into()); }
     if matches!(sink, OutputSink::File) {
         args.push("-export-csv".into());
@@ -663,6 +676,7 @@ fn parse_args() -> Cfg {
     let mut uffs_bin: Option<PathBuf> = None;
     let mut patterns_filter: Option<Vec<String>> = None;
     let mut out: Option<PathBuf> = None;
+    let mut es_instance: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -674,6 +688,7 @@ fn parse_args() -> Cfg {
             "--skip-cold" => { skip_cold = true; }
             "--uffs-bin" => { i += 1; uffs_bin = Some(PathBuf::from(&args[i])); }
             "--out" => { i += 1; out = Some(PathBuf::from(&args[i])); }
+            "--es-instance" => { i += 1; es_instance = Some(args[i].clone()); }
             "--help" | "-h" => { print_help(); std::process::exit(0); }
             other => {
                 if other.starts_with('-') {
@@ -707,7 +722,7 @@ fn parse_args() -> Cfg {
         .map(OutputSink::parse_list)
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| vec![OutputSink::File]);
-    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter, out }
+    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter, es_instance, out }
 }
 
 fn print_help() {
@@ -727,6 +742,10 @@ fn print_help() {
     eprintln!("                        ext_rare, ext_dll, ext_regex_alt, substring");
     eprintln!("  --skip-cold           Skip UFFS COLD and WARM phases");
     eprintln!("  --uffs-bin <path>     Path to uffs.exe (Rust)");
+    eprintln!("  --es-instance <name>  Connect es.exe to a named Everything instance");
+    eprintln!("                        (passes -instance <name> to every es.exe call).");
+    eprintln!("                        Required when Everything.exe was launched with");
+    eprintln!("                        -instance <name> (e.g. uffs-bench private instance).");
     eprintln!("  --out <path>          Write the post-run summary table to CSV at <path>.");
     eprintln!("                        Columns: tool,phase,sink,drive,pattern,p50_ms,");
     eprintln!("                        p95_ms,rows,bad,verdict,rounds_ok,rounds_total.");
@@ -913,7 +932,7 @@ fn main() {
                         let mut runs = Vec::new();
                         let mut aborted_early = false;
                         for round in 0..cfg.rounds {
-                            let t = check_dnf(run_es(es, drive, es_pat, validate, sink));
+                            let t = check_dnf(run_es(es, drive, es_pat, validate, sink, cfg.es_instance.as_deref()));
                             // If round 0 is a fast deterministic failure (e.g.
                             // es.exe -export-csv IPC buffer overflow on result
                             // sets past the ~150 K-row ceiling), the next 29

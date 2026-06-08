@@ -389,6 +389,10 @@ impl Orchestrator<'_> {
             drop_cache: self.cli.drop_os_cache,
             patterns: resolve::default_pattern_probes(),
             uffs_exe: resolve::uffs_exe(self.host),
+            es_instance_name: cap
+                .es_ini_path
+                .is_some()
+                .then(|| es_instance::INSTANCE_NAME.to_owned()),
         }
     }
 
