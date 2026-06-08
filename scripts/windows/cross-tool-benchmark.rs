@@ -118,6 +118,7 @@ fn bench_out_path() -> String {
 /// cpp_ext: if non-empty, C++ UFFS uses `* --ext=<val>` instead of glob
 /// validate: case-insensitive substring that every result line must contain
 ///           (empty = skip validation, e.g. full_scan)
+/// cpp_pattern: empty string means C++ does not support this pattern — skip.
 ///
 /// `ext_regex_alt` exercises the v0.5.66 regex-alternation → ExtensionIndex
 /// promotion (`extract_extensions_from_regex`).  UFFS takes the regex form
@@ -152,7 +153,9 @@ fn bench_out_path() -> String {
 const PATTERNS: &[(&str, &str, &str, &str, &str, &str)] = &[
     ("full_scan",     "*",                         "*",                    "*",           "",              ""),
     ("exact",         "notepad.exe",               "notepad.exe",          "notepad.exe", "",              "notepad"),
-    ("prefix",        "win*",                      "win*",                 "win*",        "",              "win"),
+    ("prefix",        "win*",                      "win*",                 "",            "",              "win"),
+    // ^^ cpp_pattern="" — uffs.com does not support trailing-wildcard prefix
+    //    glob (win* returns nothing/errors).  UFFS Rust vs Everything only.
     ("ext_rare",      "*.dbt",                     "ext:dbt",              "*.dbt",       "dbt",           ".dbt"),
     ("ext_dll",       "*.dll",                     "ext:dll",              "*.dll",       "dll",           ".dll"),
     ("ext_regex_alt", ">.*\\.(wav|idrc|cmake)$",   "*.wav|*.idrc|*.cmake", "*",           "wav,idrc,cmake", ""),
@@ -895,12 +898,16 @@ fn main() {
                 if let Some(ref cpp) = cfg.uffs_cpp {
                     eprintln!("  UFFS C++ (MFT re-read, no --limit) [sink={}]:  {} rounds",
                         sink.label(), cfg.rounds);
-                    for &(label, pat, _, _, cpp_ext, validate) in PATTERNS {
+                    for &(label, _, _, cpp_pat, cpp_ext, validate) in PATTERNS {
                         if cfg.skip_pattern(label) { continue; }
+                        if cpp_pat.is_empty() {
+                            eprintln!("    {label:<12} SKIP (C++ does not support this pattern)");
+                            continue;
+                        }
                         eprint!("    {label:<12} ");  flush();
                         let mut runs = Vec::new();
                         for _ in 0..cfg.rounds {
-                            runs.push(check_dnf(run_uffs_cpp(cpp, drive, pat, cpp_ext, validate, sink)));
+                            runs.push(check_dnf(run_uffs_cpp(cpp, drive, cpp_pat, cpp_ext, validate, sink)));
                         }
                         let s = sw(&runs);
                         let first_ok = runs.iter().find(|r| r.ok);
