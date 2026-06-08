@@ -46,23 +46,29 @@ const LOAD_POLL_INTERVAL_MS: u64 = 5_000;
 /// - remaining `ntfs_volume_*` keys explicitly blank so ES doesn't inherit
 ///   stale values from a partially-written config
 fn write_bench_ini(host: &dyn Host, path: &Path, drives: &[char]) -> std::io::Result<()> {
+    // Everything.ini uses a quoted comma-separated format for parallel arrays,
+    // e.g. ntfs_volume_paths="C:","D:","G:"
+    // ntfs_volume_includes / monitors / roots follow the same positional order.
+    let n = drives.len();
     let volume_paths: String = drives
         .iter()
-        .map(|letter| format!("{letter}:"))
+        .map(|letter| format!("\"{letter}:\""))
         .collect::<Vec<_>>()
         .join(",");
+    let ones = vec!["1"; n].join(",");
+    let empty_quoted = vec!["\"\""; n].join(",");
     let ini = format!(
         "[Everything]\n\
          auto_include_fixed_volumes=0\n\
          auto_include_removable_volumes=0\n\
          auto_remove_offline_ntfs_volumes=0\n\
-         ntfs_volume_paths={volume_paths}\n\
          ntfs_volume_guids=\n\
-         ntfs_volume_roots=\n\
-         ntfs_volume_includes=\n\
-         ntfs_volume_load_recent_changes=\n\
-         ntfs_volume_include_onlys=\n\
-         ntfs_volume_monitors=\n"
+         ntfs_volume_paths={volume_paths}\n\
+         ntfs_volume_roots={empty_quoted}\n\
+         ntfs_volume_includes={ones}\n\
+         ntfs_volume_load_recent_changes={ones}\n\
+         ntfs_volume_include_onlys={empty_quoted}\n\
+         ntfs_volume_monitors={ones}\n"
     );
     host.write_file(path, ini.as_bytes())
 }
