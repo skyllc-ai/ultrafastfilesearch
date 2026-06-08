@@ -248,6 +248,15 @@ impl Orchestrator<'_> {
     /// Returns [`BenchError::MissingTools`] if fewer than 2 tools are available
     /// after the operator's decision, or if the operator chooses to abort.
     fn capture(&self, session: &mut Session) -> Result<Capture> {
+        // Kill and restart the daemon with NO drive restrictions before any
+        // other probe so the first preflight sees the full set of NTFS drives
+        // the host can index.  Env probes + the operator gate run while the
+        // daemon is warming up; `ensure_daemon_ready` blocks just before the
+        // first preflight query.
+        let uffs_exe = resolve::uffs_exe(self.host);
+        if !self.cli.drives.is_empty() {
+            daemon::kill_and_restart_all_drives(self.host, &uffs_exe);
+        }
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
         self.host.out(&env::render_md(&fp));
         let missing: Vec<&str> = fp
@@ -293,6 +302,15 @@ impl Orchestrator<'_> {
             ));
         }
         let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
+        // Block here until the daemon is ready.  In most cases it will have
+        // finished loading during the env-probe + tool-selection gate above.
+        if !self.cli.drives.is_empty()
+            && let Err(err) = daemon::ensure_daemon_ready(self.host, &uffs_exe)
+        {
+            self.host.out(&format!(
+                "[uffs-daemon] WARNING: daemon did not become ready before preflight: {err}"
+            ));
+        }
         // Probe drives and display the drive table + negotiated matrix.
         // ES launch (if needed) is deferred to `launch_es_if_needed()` so the
         // operator can confirm before the bench touches the Everything process.

@@ -20,6 +20,32 @@ pub(super) const DAEMON_READY_POLL_ATTEMPTS: u32 = 90;
 pub(super) const DAEMON_READY_POLL_INTERVAL_MS: u64 = 2_000;
 
 /// Kill the running UFFS daemon (hard stop) and start a fresh instance
+/// with **no `--drive` restrictions** so the daemon self-discovers every
+/// available drive.
+///
+/// Called at the start of preflight so the first drive-negotiation probe
+/// sees the full set of drives the host can index.  Returns immediately
+/// after the start command — the caller must call [`ensure_daemon_ready`]
+/// before issuing preflight queries.
+pub(super) fn kill_and_restart_all_drives(host: &dyn Host, uffs_exe: &str) {
+    host.out("[uffs-daemon] killing daemon to restart with all drives …");
+    if let Err(err) = host.run(uffs_exe, &["daemon", "kill"]) {
+        host.out(&format!(
+            "[uffs-daemon] WARNING: kill returned error (may not have been running): {err}"
+        ));
+    }
+    // Brief pause to allow the OS to release sockets / named-pipe handles
+    // before we immediately re-launch.
+    host.sleep_ms(1_500);
+    host.out(&format!("[uffs-daemon] spawn: {uffs_exe} daemon start"));
+    if let Err(err) = host.run(uffs_exe, &["daemon", "start"]) {
+        host.out(&format!(
+            "[uffs-daemon] WARNING: could not restart UFFS daemon: {err}"
+        ));
+    }
+}
+
+/// Kill the running UFFS daemon (hard stop) and start a fresh instance
 /// restricted to `capable_drives`.
 ///
 /// Fires `uffs daemon kill` first, waits briefly for the process to exit,
