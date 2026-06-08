@@ -200,43 +200,35 @@ fn configured_zero_drive_is_polled_with_backoff() {
 }
 
 #[test]
-fn unconfigured_drive_probed_once_without_sleep() {
-    // E is absent from the first daemon status → warm_parked_drives fires
-    // `preload E` then a second `daemon status`.  E stays absent after the
-    // second status too (simulate it not warming up), so uffs_record_count=0.
+fn drive_unknown_to_daemon_is_skipped() {
+    // E is absent from both daemon status reads (not a UFFS-indexed drive) →
+    // it must be filtered out entirely: no es-probe, drives list is empty.
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
         .with_run_result(stdout_of(                  // 2: uffs daemon status (E absent)
             "Status: Ready\n  [Warm]   C: \u{2014}  100,000 records (live) \u{2014} 10 MB\n"
         ))
-        .with_run_result(stdout_of("Promoted to Hot")) // 3: preload E
+        .with_run_result(stdout_of("Promoted to Hot")) // 3: preload E (attempt)
         .with_run_result(stdout_of(                  // 4: uffs daemon status re-check
             "Status: Ready\n  [Warm]   C: \u{2014}  100,000 records (live) \u{2014} 10 MB\n"
-        ))
-        .with_run_result(stdout_of("0")); // 5: E es result-count → not loaded
+        ));
+    // No es-probe call — E is dropped before probe_drive is reached.
     let mut spec = spec_for(&['E'], 5);
     spec.patterns.clear();
 
     let result = capture(&host, &spec);
 
-    assert_eq!(
-        result.drives.first().map(|drive| drive.configured),
-        Some(false)
-    );
-    // E absent from both status reads → uffs_record_count = 0.
-    assert_eq!(
-        result.drives.first().map(|drive| drive.uffs_record_count),
-        Some(0)
-    );
+    // E absent from both status reads → dropped entirely, not shown.
+    assert!(result.drives.is_empty(), "unknown drive must be skipped");
     let runs = host
         .calls()
         .into_iter()
         .filter(|call| matches!(call, Call::Run(_, _)))
         .count();
-    // 1 es availability + 1 daemon status + 1 preload + 1 daemon status + 1 es
-    // probe
-    assert_eq!(runs, 5);
+    // 1 es availability + 1 daemon status + 1 preload + 1 daemon status (no es
+    // probe)
+    assert_eq!(runs, 4);
     assert!(
         !host
             .calls()
