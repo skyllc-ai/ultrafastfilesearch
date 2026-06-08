@@ -220,7 +220,7 @@ pub(super) fn launch(
         args.push("-admin");
     }
     args.push("-startup");
-    if let Err(err) = host.run(everything_exe, &args) {
+    if let Err(err) = host.spawn(everything_exe, &args) {
         host.out(&format!(
             "[es-instance] WARNING: could not launch Everything — {err}"
         ));

@@ -96,6 +96,17 @@ pub trait Host {
     /// Returns an error if the process cannot be spawned.
     fn run(&self, exe: &str, args: &[&str]) -> io::Result<ProcOutput>;
 
+    /// Spawn `exe` with `args` as a detached background process.
+    ///
+    /// The child's stdout and stderr are discarded and the bench tool does not
+    /// wait for it to exit.  Used for long-running GUI processes (e.g.
+    /// `Everything.exe`) that must run concurrently while the bench polls them
+    /// via the CLI.
+    ///
+    /// # Errors
+    /// Returns an error if the process cannot be spawned.
+    fn spawn(&self, exe: &str, args: &[&str]) -> io::Result<()>;
+
     /// Read an environment variable, if present and valid UTF-8.
     fn env(&self, key: &str) -> Option<String>;
 
