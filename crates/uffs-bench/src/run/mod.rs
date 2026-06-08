@@ -291,7 +291,14 @@ impl Orchestrator<'_> {
         let everything_exe = resolve::everything_exe(self.host);
         let needs_launch =
             es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives);
-        self.host.out(&matrix::render_md(&matrix_first));
+        // When ES needs launching, the UFFS-only reasons are all "ES not
+        // started/starting" — noisy and misleading before the launch gate.
+        // Only show capable drives; the full matrix is shown after launch.
+        if needs_launch {
+            self.host.out(&matrix::render_capable_drives(&matrix_first));
+        } else {
+            self.host.out(&matrix::render_md(&matrix_first));
+        }
         Ok(Capture {
             fp,
             preflight: preflight_first,
@@ -350,7 +357,10 @@ impl Orchestrator<'_> {
         }
         cap.es_ini_path = ini;
         // Second-pass preflight: re-probe ES now the instance is loaded.
+        // Restrict candidate_drives to drives that survived the first pass
+        // (UFFS-known) so H/I and other unknown drives are not re-warned.
         let mut spec2 = preflight_spec_from_cli(self.host, self.cli, es_ram_budget);
+        spec2.candidate_drives = cap.preflight.drives.iter().map(|dp| dp.drive).collect();
         if cap.es_ini_path.is_some() {
             spec2.es_instance_name = String::from(es_instance::INSTANCE_NAME);
         }

@@ -285,6 +285,26 @@ pub fn render_md(matrix: &Matrix) -> String {
     )
 }
 
+/// Render only the capable-drives line of the negotiated matrix.
+///
+/// Used before the ES launch gate where the full matrix would show only
+/// misleading UFFS-only reasons ("ES not started").  The full matrix is
+/// rendered after the second-pass preflight once ES is loaded.
+#[must_use]
+pub fn render_capable_drives(matrix: &Matrix) -> String {
+    let capable = if matrix.capable_drives.is_empty() {
+        "_none_".to_owned()
+    } else {
+        matrix
+            .capable_drives
+            .iter()
+            .map(char::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!("## Negotiated matrix\n\n- **Capable drives (all tools):** {capable}\n")
+}
+
 /// Serialize `matrix` to `bundle_dir/matrix.json`.
 ///
 /// # Errors
