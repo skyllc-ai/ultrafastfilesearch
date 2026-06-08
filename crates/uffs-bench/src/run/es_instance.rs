@@ -60,10 +60,15 @@ fn parse_ini_array(value: &str) -> Vec<String> {
 
 /// Write the bench `Everything.ini` into `path`.
 ///
-/// Reads the permanent `Everything.ini` and copies it line-for-line, replacing
-/// the `ntfs_volume_*` parallel arrays with versions filtered to only the
-/// `drives` the bench needs (alphabetically sorted, quoted format exactly as
-/// Everything writes them — `"C:","D:"`).
+/// Reads the permanent `Everything.ini` verbatim and produces the temp ini
+/// with two changes:
+///   1. `ntfs_volume_includes` and `ntfs_volume_monitors` are recomputed: `1`
+///      for each drive in `drives`, `0` for all other drives in the permanent
+///      ini.  All other volume arrays (guids/paths/roots/
+///      `load_recent_changes`/`include_onlys`) are kept as-is so the temp ini
+///      the same full set of drives as the permanent ini.
+///   2. `auto_include_fixed_volumes` (and siblings) are forced to `0` so ES
+///      does not auto-discover drives outside the configured set.
 fn write_bench_ini(host: &dyn Host, path: &Path, drives: &[char]) -> std::io::Result<()> {
     let permanent_ini = everything_ini_path(host);
     let text = host
@@ -72,95 +77,55 @@ fn write_bench_ini(host: &dyn Host, path: &Path, drives: &[char]) -> std::io::Re
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .unwrap_or_default();
 
-    let mut bench_drives: Vec<char> = drives.to_vec();
-    bench_drives.sort_unstable_by_key(char::to_ascii_uppercase);
     let bench_set: std::collections::HashSet<char> =
-        bench_drives.iter().map(char::to_ascii_uppercase).collect();
+        drives.iter().map(char::to_ascii_uppercase).collect();
 
-    // Parse the seven parallel ntfs_volume_* arrays.
-    let mut guids = Vec::new();
-    let mut paths = Vec::new();
-    let mut roots = Vec::new();
-    let mut includes = Vec::new();
-    let mut load_recent = Vec::new();
-    let mut include_onlys = Vec::new();
-    let mut monitors = Vec::new();
-
+    // Parse ntfs_volume_paths to know which index maps to which drive letter.
+    let mut paths: Vec<String> = Vec::new();
     for line in text.lines() {
-        let Some((key, val)) = line.split_once('=') else {
-            continue;
-        };
-        match key.trim() {
-            "ntfs_volume_guids" => guids = parse_ini_array(val),
-            "ntfs_volume_paths" => paths = parse_ini_array(val),
-            "ntfs_volume_roots" => roots = parse_ini_array(val),
-            "ntfs_volume_includes" => includes = parse_ini_array(val),
-            "ntfs_volume_load_recent_changes" => load_recent = parse_ini_array(val),
-            "ntfs_volume_include_onlys" => include_onlys = parse_ini_array(val),
-            "ntfs_volume_monitors" => monitors = parse_ini_array(val),
-            _ => {}
+        if let Some((key, val)) = line.split_once('=')
+            && key.trim() == "ntfs_volume_paths"
+        {
+            paths = parse_ini_array(val);
+            break;
         }
     }
 
-    // Which indices correspond to bench drives?
-    let indices: Vec<usize> = paths
+    // Build includes/monitors: 1 for bench drives, 0 for all others,
+    // preserving the full positional array length from the permanent ini.
+    let includes: String = paths
         .iter()
-        .enumerate()
-        .filter(|(_, path_tok)| {
-            let letter = path_tok.trim_matches('"').chars().next().unwrap_or(' ');
-            bench_set.contains(&letter.to_ascii_uppercase())
+        .map(|tok| {
+            let letter = tok.trim_matches('"').chars().next().unwrap_or(' ');
+            if bench_set.contains(&letter.to_ascii_uppercase()) {
+                "1"
+            } else {
+                "0"
+            }
         })
-        .map(|(i, _)| i)
-        .collect();
-
-    let select = |arr: &[String], fallback: &str| -> String {
-        indices
-            .iter()
-            .map(|&i| arr.get(i).map_or(fallback, String::as_str))
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-
-    let out_guids = select(&guids, "\"\"");
-    let out_paths = select(&paths, "\"\"");
-    let out_roots = select(&roots, "\"\"");
-    let out_includes = select(&includes, "1");
-    let out_load_recent = select(&load_recent, "1");
-    let out_include_onlys = select(&include_onlys, "\"\"");
-    let out_monitors = select(&monitors, "1");
+        .collect::<Vec<_>>()
+        .join(",");
+    let monitors = includes.clone();
 
     let arrays = VolumeArrays {
-        guids: &out_guids,
-        paths: &out_paths,
-        roots: &out_roots,
-        includes: &out_includes,
-        load_recent: &out_load_recent,
-        include_onlys: &out_include_onlys,
-        monitors: &out_monitors,
+        includes: &includes,
+        monitors: &monitors,
     };
     let out = rebuild_ini(&text, &arrays);
     host.write_file(path, out.as_bytes())
 }
 
-/// Filtered `ntfs_volume_*` array strings for the bench ini.
+/// Recomputed per-drive bit arrays for the bench ini.
 struct VolumeArrays<'a> {
-    /// `ntfs_volume_guids` value.
-    guids: &'a str,
-    /// `ntfs_volume_paths` value.
-    paths: &'a str,
-    /// `ntfs_volume_roots` value.
-    roots: &'a str,
-    /// `ntfs_volume_includes` value.
+    /// `ntfs_volume_includes` value — `1` for bench drives, `0` for others.
     includes: &'a str,
-    /// `ntfs_volume_load_recent_changes` value.
-    load_recent: &'a str,
-    /// `ntfs_volume_include_onlys` value.
-    include_onlys: &'a str,
-    /// `ntfs_volume_monitors` value.
+    /// `ntfs_volume_monitors` value — mirrors `includes`.
     monitors: &'a str,
 }
 
-/// Rebuild the ini text, replacing only the seven `ntfs_volume_*` array lines.
+/// Rebuild the ini text from `text`, replacing only `ntfs_volume_includes`,
+/// `ntfs_volume_monitors`, and the `auto_include_*`/`auto_remove_*` keys.
+/// All other lines are copied verbatim.
 fn rebuild_ini(text: &str, arrays: &VolumeArrays<'_>) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
@@ -168,39 +133,29 @@ fn rebuild_ini(text: &str, arrays: &VolumeArrays<'_>) -> String {
             .split_once('=')
             .map_or("", |(key_part, _)| key_part.trim());
         match key {
-            "ntfs_volume_guids" => {
-                out.push_str("ntfs_volume_guids=");
-                out.push_str(arrays.guids);
-                out.push('\n');
-            }
-            "ntfs_volume_paths" => {
-                out.push_str("ntfs_volume_paths=");
-                out.push_str(arrays.paths);
-                out.push('\n');
-            }
-            "ntfs_volume_roots" => {
-                out.push_str("ntfs_volume_roots=");
-                out.push_str(arrays.roots);
-                out.push('\n');
-            }
             "ntfs_volume_includes" => {
                 out.push_str("ntfs_volume_includes=");
                 out.push_str(arrays.includes);
                 out.push('\n');
             }
-            "ntfs_volume_load_recent_changes" => {
-                out.push_str("ntfs_volume_load_recent_changes=");
-                out.push_str(arrays.load_recent);
-                out.push('\n');
-            }
-            "ntfs_volume_include_onlys" => {
-                out.push_str("ntfs_volume_include_onlys=");
-                out.push_str(arrays.include_onlys);
-                out.push('\n');
-            }
             "ntfs_volume_monitors" => {
                 out.push_str("ntfs_volume_monitors=");
                 out.push_str(arrays.monitors);
+                out.push('\n');
+            }
+            // Force to 0 — without this ES ignores ntfs_volume_paths and
+            // auto-discovers every fixed NTFS drive on the machine.
+            "auto_include_fixed_volumes"
+            | "auto_include_removable_volumes"
+            | "auto_include_fixed_refs_volumes"
+            | "auto_include_removable_refs_volumes"
+            | "auto_remove_offline_ntfs_volumes"
+            | "auto_remove_moved_ntfs_volumes"
+            | "auto_remove_offline_refs_volumes"
+            | "auto_remove_moved_refs_volumes" => {
+                out.push_str(key);
+                out.push('=');
+                out.push('0');
                 out.push('\n');
             }
             _ => {
