@@ -209,27 +209,22 @@ fn drive_unknown_to_daemon_is_skipped() {
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
         .with_run_result(stdout_of(                  // 2: uffs daemon status (E absent)
             "Status: Ready\n  [Warm]   C: \u{2014}  100,000 records (live) \u{2014} 10 MB\n"
-        ))
-        .with_run_result(stdout_of("Promoted to Hot")) // 3: preload E (attempt)
-        .with_run_result(stdout_of(                  // 4: uffs daemon status re-check
-            "Status: Ready\n  [Warm]   C: \u{2014}  100,000 records (live) \u{2014} 10 MB\n"
         ));
-    // No es-probe call — E is dropped before probe_drive is reached.
+    // E is not in known_drives at all — no preload attempt, no re-check.
     let mut spec = spec_for(&['E'], 5);
     spec.patterns.clear();
 
     let result = capture(&host, &spec);
 
-    // E absent from both status reads → dropped entirely, not shown.
+    // E absent from status → dropped entirely, not shown.
     assert!(result.drives.is_empty(), "unknown drive must be skipped");
     let runs = host
         .calls()
         .into_iter()
         .filter(|call| matches!(call, Call::Run(_, _)))
         .count();
-    // 1 es availability + 1 daemon status + 1 preload + 1 daemon status (no es
-    // probe)
-    assert_eq!(runs, 4);
+    // 1 es availability + 1 daemon status only (no preload, no re-check)
+    assert_eq!(runs, 2);
     assert!(
         !host
             .calls()
@@ -245,7 +240,9 @@ fn parked_drive_is_preloaded_and_count_populated() {
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
-        .with_run_result(stdout_of("Status: Ready\nDrives:\n")) // 2: status (C absent)
+        .with_run_result(stdout_of(                  // 2: status (C parked — in known_drives)
+            "Status: Ready\n  [Parked]  C:\n"
+        ))
         .with_run_result(stdout_of("Promoted to Hot"))          // 3: preload C
         .with_run_result(stdout_of(                  // 4: status re-check (C now Warm)
             "Status: Ready\n  [Warm]   C: \u{2014}  500,000 records (live) \u{2014} 50 MB\n"

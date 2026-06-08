@@ -266,6 +266,34 @@ fn poll_result_count(
     0
 }
 
+/// Parse the set of drive letters UFFS knows about from `uffs daemon status`
+/// stdout, regardless of tier or record count.
+///
+/// Parked drives appear without a record count (`[Parked]  C:`) so
+/// [`parse_daemon_status_drives`] does not capture them.  This function
+/// captures every drive letter that appears on a bracketed-tier line so
+/// callers can distinguish "UFFS knows this drive but it is parked" from
+/// "UFFS has never heard of this drive".
+#[must_use]
+pub(crate) fn parse_daemon_known_drives(status: &str) -> alloc::collections::BTreeSet<char> {
+    let mut set = alloc::collections::BTreeSet::new();
+    for line in status.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('[') {
+            continue;
+        }
+        // Lines look like:  [Warm]   C: — …  or  [Parked]  D:
+        // The drive letter is the first alphabetic token that ends with ':'.
+        if let Some(letter) = trimmed.split_whitespace().find_map(|token| {
+            let ch = token.trim_end_matches(':').chars().next()?;
+            (ch.is_ascii_alphabetic() && token.ends_with(':')).then(|| ch.to_ascii_uppercase())
+        }) {
+            set.insert(letter);
+        }
+    }
+    set
+}
+
 /// Parse per-drive record counts from `uffs daemon status` stdout.
 ///
 /// Each loaded drive appears as a line matching:
@@ -418,13 +446,23 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
     let status = daemon_status_output(host, &spec.uffs_exe);
     let mut uffs_counts = parse_daemon_status_drives(&status);
 
-    // Preload any candidate drives that are parked/cold (absent from warm map),
-    // then re-read status once so the record counts are available.
-    warm_parked_drives(host, &spec.uffs_exe, &spec.candidate_drives, &uffs_counts);
+    // Preload any candidate drives that UFFS knows about (present in the
+    // status output, even as [Parked]) but whose record count is not yet
+    // available.  Drives completely absent from the status (e.g. a drive
+    // letter the operator typed but UFFS has never indexed) are silently
+    // skipped — the filter below will warn and drop them.
+    let known_drives = parse_daemon_known_drives(&status);
+    warm_parked_drives(
+        host,
+        &spec.uffs_exe,
+        &spec.candidate_drives,
+        &uffs_counts,
+        &known_drives,
+    );
     if spec
         .candidate_drives
         .iter()
-        .any(|drive| !uffs_counts.contains_key(drive))
+        .any(|drive| known_drives.contains(drive) && !uffs_counts.contains_key(drive))
     {
         let status2 = daemon_status_output(host, &spec.uffs_exe);
         uffs_counts = parse_daemon_status_drives(&status2);
@@ -486,10 +524,14 @@ fn warm_parked_drives(
     uffs_exe: &str,
     candidates: &[char],
     warm_counts: &alloc::collections::BTreeMap<char, u64>,
+    known_drives: &alloc::collections::BTreeSet<char>,
 ) {
     for &drive in candidates {
         if warm_counts.contains_key(&drive) {
             continue; // already warm
+        }
+        if !known_drives.contains(&drive) {
+            continue; // UFFS has never heard of this drive — skip silently
         }
         host.out(&format!(
             "[preflight] Preloading parked drive {drive}: into Warm tier …"
