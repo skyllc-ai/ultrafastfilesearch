@@ -21,6 +21,14 @@ use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod daemon;
+mod es_instance;
+mod specs;
+
+pub(crate) use specs::everything_ini_path;
+use specs::{
+    decisions_from_cli, env_spec_from_cli, matrix_spec_from_cli, plan_input_hash,
+    preflight_spec_from_cli,
+};
 
 use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
@@ -28,15 +36,15 @@ use crate::cards::{
     tool_selection_card,
 };
 use crate::cli::{Cli, Command};
-use crate::env::{self, EnvFingerprint, EnvSpec, StateProbe, ToolProbe};
+use crate::env::{self, EnvFingerprint};
 use crate::error::{BenchError, CrumbError, Result};
 use crate::gate::{Decision, Mode, StepResult, confirm, done_panel};
 use crate::host::Host;
-use crate::matrix::{self, EVERYTHING_GUI_TOOL, Matrix, MatrixSpec};
-use crate::preflight::{self, PreflightResult, PreflightSpec};
+use crate::matrix::{self, Matrix};
+use crate::preflight::{self, PreflightResult};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
-use crate::state::{Decisions, State, Status, input_hash};
+use crate::state::{Decisions, State, Status};
 use crate::tooling::Disposition;
 use crate::{competitors, report, resolve, teardown};
 
@@ -70,120 +78,13 @@ enum Flow {
 }
 
 /// The fixed name string for a launch [`Mode`] (feeds `state.json` + hashes).
-const fn mode_name(mode: Mode) -> &'static str {
+pub(super) const fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Guided => "guided",
         Mode::Interactive => "interactive",
         Mode::AutoPilot => "auto",
         Mode::DryRun => "dry-run",
     }
-}
-
-/// Build a version + state probe for one tool id.
-///
-/// - `everything`     → `es.exe -version` (ES CLI version, no IPC), state via
-///   `tasklist`
-/// - `everything_gui` → `es.exe -get-everything-version` (daemon IPC version,
-///   `daemon_error_markers` turn IPC errors into `"not running"`), display exe
-///   = `Everything.exe`, state via `tasklist`
-/// - `uffs`           → `uffs --version`, state via `uffs daemon status`
-/// - `uffs_cpp`       → `uffs.com --version` (resolved via `~/bin` cascade), no
-///   daemon state
-/// - anything else    → `<exe> --version`, no daemon state
-fn tool_probe(host: &dyn Host, name: &str) -> ToolProbe {
-    let tasklist_state = || StateProbe {
-        exe: "tasklist.exe".to_owned(),
-        args: vec![
-            "/FI".to_owned(),
-            "IMAGENAME eq Everything.exe".to_owned(),
-            "/NH".to_owned(),
-            "/FO".to_owned(),
-            "CSV".to_owned(),
-        ],
-        // tasklist CSV output contains the image name when the process is
-        // present; if the filter matches nothing it prints a "no tasks are
-        // running" message that does NOT contain this string.
-        running_marker: "Everything.exe".to_owned(),
-    };
-
-    if name == matrix::EVERYTHING_TOOL {
-        ToolProbe {
-            name: name.to_owned(),
-            exe: resolve::es_exe(host),
-            display_exe: None,
-            // Use `-version` (ES CLI version, no IPC/daemon required) rather
-            // than `-get-everything-version` which exits 0 but prints an IPC
-            // error when the Everything daemon is not running.
-            args: vec!["-version".to_owned()],
-            version_line_prefix: None,
-            daemon_error_markers: vec![],
-            state_probe: Some(tasklist_state()),
-        }
-    } else if name == EVERYTHING_GUI_TOOL {
-        ToolProbe {
-            name: name.to_owned(),
-            // Version is queried via es.exe IPC; display path is Everything.exe.
-            exe: resolve::es_exe(host),
-            display_exe: Some(resolve::everything_exe(host)),
-            // `-get-everything-version` queries the running daemon via IPC and
-            // returns the GUI version. When the daemon is not running it exits
-            // 0 but prints an IPC error — daemon_error_markers turns this into
-            // "not running" in the version field.
-            args: vec!["-get-everything-version".to_owned()],
-            version_line_prefix: None,
-            daemon_error_markers: vec!["Error 8".to_owned(), "IPC window not found".to_owned()],
-            state_probe: Some(tasklist_state()),
-        }
-    } else if name == "uffs_cpp" {
-        ToolProbe {
-            name: name.to_owned(),
-            exe: resolve::uffs_cpp_exe(host),
-            display_exe: None,
-            args: vec!["--version".to_owned()],
-            version_line_prefix: Some("UFFS version:".to_owned()),
-            daemon_error_markers: vec![],
-            state_probe: None,
-        }
-    } else if name == "uffs" {
-        ToolProbe {
-            name: name.to_owned(),
-            exe: resolve::uffs_exe(host),
-            display_exe: None,
-            // `uffs --version` prints e.g. `uffs 0.5.117`; strip the prefix.
-            args: vec!["--version".to_owned()],
-            version_line_prefix: Some("uffs ".to_owned()),
-            daemon_error_markers: vec![],
-            // The daemon (uttfd) is started/restarted by the bench itself, so
-            // its pre-run state is irrelevant — report n/a.
-            state_probe: None,
-        }
-    } else {
-        ToolProbe {
-            name: name.to_owned(),
-            exe: name.to_owned(),
-            display_exe: None,
-            args: vec!["--version".to_owned()],
-            version_line_prefix: None,
-            daemon_error_markers: vec![],
-            state_probe: None,
-        }
-    }
-}
-
-/// Resolve the read-only `Everything.ini` path from the host environment.
-///
-/// Uses `%APPDATA%\Everything\Everything.ini` when `APPDATA` is set (the
-/// Windows install default), falling back to a bare relative name otherwise so
-/// the preflight simply observes an absent ini on other hosts.
-pub(crate) fn everything_ini_path(host: &dyn Host) -> PathBuf {
-    host.env("APPDATA").map_or_else(
-        || PathBuf::from("Everything.ini"),
-        |appdata| {
-            Path::new(&appdata)
-                .join("Everything")
-                .join("Everything.ini")
-        },
-    )
 }
 
 /// Normalized action a gate [`Decision`] maps to for one stage step.
@@ -205,71 +106,6 @@ const fn act_of(decision: Decision) -> Act {
         Decision::ProceedNoop => Act::Noop,
         Decision::Skip => Act::Skip,
         Decision::Back | Decision::Abort => Act::Stop,
-    }
-}
-
-/// Build the persisted [`Decisions`] record from the parsed CLI.
-fn decisions_from_cli(cli: &Cli) -> Decisions {
-    Decisions {
-        mode: mode_name(cli.mode()).to_owned(),
-        drives: cli
-            .drives_or_default()
-            .iter()
-            .map(char::to_string)
-            .collect(),
-        tools: cli.tools_or_default(),
-        rounds: cli.rounds,
-        drop_cache: cli.drop_os_cache,
-    }
-}
-
-/// Hash the plan-defining decisions into the Stage 0 resume `input_hash`.
-fn plan_input_hash(decisions: &Decisions) -> String {
-    let drives = decisions.drives.join(",");
-    let tools = decisions.tools.join(",");
-    let rounds = decisions.rounds.to_string();
-    let drop = if decisions.drop_cache { "drop" } else { "keep" };
-    input_hash(&[&decisions.mode, &drives, &tools, &rounds, drop])
-}
-
-/// Build the Stage 0a [`EnvSpec`] (one version probe per requested tool).
-fn env_spec_from_cli(host: &dyn Host, cli: &Cli) -> EnvSpec {
-    EnvSpec {
-        tools: cli
-            .tools_or_default()
-            .iter()
-            .map(|tool| tool_probe(host, tool))
-            .collect(),
-    }
-}
-
-/// Build the Stage 0c [`PreflightSpec`] from the CLI and captured env.
-///
-/// `es_ram_budget_bytes` is set to 50 % of the system's physical RAM so that
-/// the greedy drive selector avoids OOM-ing Everything's in-process index.
-fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli, es_ram_budget_bytes: u64) -> PreflightSpec {
-    PreflightSpec {
-        ini_path: everything_ini_path(host),
-        candidate_drives: cli.drives_or_default(),
-        es_exe: resolve::es_exe(host),
-        uffs_exe: resolve::uffs_exe(host),
-        patterns: resolve::default_pattern_probes(),
-        poll_attempts: PREFLIGHT_POLL_ATTEMPTS,
-        poll_interval_ms: PREFLIGHT_POLL_INTERVAL_MS,
-        es_ram_budget_bytes,
-    }
-}
-
-/// Build the Stage 0d [`MatrixSpec`] from the CLI.
-fn matrix_spec_from_cli(cli: &Cli, es_ram_budget_bytes: u64) -> MatrixSpec {
-    MatrixSpec {
-        required_tools: cli.tools_or_default(),
-        candidate_drives: cli.drives_or_default(),
-        patterns: resolve::DEFAULT_PATTERNS
-            .iter()
-            .map(|(name, _)| (*name).to_owned())
-            .collect(),
-        es_ram_budget_bytes,
     }
 }
 
@@ -333,6 +169,13 @@ struct Capture {
     preflight: PreflightResult,
     /// Stage 0d negotiated matrix (its `capable_drives` feed Stage 1).
     matrix: Matrix,
+    /// Path to the temporary Everything ini written for the bench instance.
+    ///
+    /// `None` when Everything was already running or no instance was needed.
+    /// Dropped (file removed + instance exited) at the end of `execute()`.
+    es_ini_path: Option<PathBuf>,
+    /// Resolved path to `Everything.exe`, used for teardown.
+    everything_exe: String,
 }
 
 /// Mutable per-run gate state threaded through every staged confirm.
@@ -419,10 +262,49 @@ impl Orchestrator<'_> {
         }
         let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
         daemon::ensure_daemon_ready(self.host, &resolve::uffs_exe(self.host))?;
-        let preflight = preflight::capture(
+        // First pass: probe without an ES instance to discover which drives
+        // exist and what ES state they are in.
+        let preflight_first = preflight::capture(
             self.host,
             &preflight_spec_from_cli(self.host, self.cli, es_ram_budget),
         );
+        let matrix_first = matrix::compute_matrix(
+            &matrix_spec_from_cli(self.cli, es_ram_budget),
+            &preflight_first,
+        );
+        // If Everything is not running, launch an isolated instance restricted
+        // to the RAM-budget-capable drives, then re-run the ES probes only.
+        let everything_exe = resolve::everything_exe(self.host);
+        let es_ini_path =
+            if es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives) {
+                let ini = es_instance::launch(
+                    self.host,
+                    &everything_exe,
+                    &matrix_first.capable_drives,
+                    &self.bundle_dir,
+                );
+                if ini.is_some() {
+                    es_instance::wait_until_loaded(
+                        self.host,
+                        &resolve::es_exe(self.host),
+                        &matrix_first.capable_drives,
+                    );
+                }
+                ini
+            } else {
+                None
+            };
+        // Second pass (or same result if no instance was launched): re-probe
+        // ES status now that the instance is (or was already) running.
+        let mut spec2 = preflight_spec_from_cli(self.host, self.cli, es_ram_budget);
+        if es_ini_path.is_some() {
+            spec2.es_instance_name = String::from(es_instance::INSTANCE_NAME);
+        }
+        let preflight = if es_ini_path.is_some() {
+            preflight::capture(self.host, &spec2)
+        } else {
+            preflight_first
+        };
         self.host
             .out(&preflight::render_drive_table(&preflight, es_ram_budget));
         let matrix =
@@ -432,6 +314,8 @@ impl Orchestrator<'_> {
             fp,
             preflight,
             matrix,
+            es_ini_path,
+            everything_exe,
         })
     }
 
@@ -642,6 +526,10 @@ impl Orchestrator<'_> {
             } else if matches!(self.run_assembly(state, session, hash)?, Flow::Stop) {
                 return Ok(());
             }
+        }
+        // Tear down the bench-local Everything instance (if we launched one).
+        if let Some(cap) = capture.as_ref() {
+            es_instance::stop(self.host, &cap.everything_exe, cap.es_ini_path.as_deref());
         }
         Ok(())
     }

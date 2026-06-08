@@ -36,6 +36,7 @@ fn spec_for(drives: &[char], attempts: u32) -> PreflightSpec {
         poll_attempts: attempts,
         poll_interval_ms: 500,
         es_ram_budget_bytes: 0,
+        es_instance_name: String::new(),
     }
 }
 
@@ -56,7 +57,7 @@ fn check_es_daemon_not_running_when_process_absent() {
     let host = MockHost::new()
         .with_run_result(ipc_error_output()) // es.exe -get-everything-version
         .with_run_result(stdout_of("")); // tasklist / pgrep: process NOT found
-    let status = super::check_es_available(&host, "es.exe");
+    let status = super::check_es_available(&host, "es.exe", "");
     assert_eq!(status, Some(EsStatus::DaemonNotRunning));
 }
 
@@ -65,7 +66,7 @@ fn check_es_daemon_starting_when_process_present() {
     let host = MockHost::new()
         .with_run_result(ipc_error_output()) // es.exe -get-everything-version
         .with_run_result(stdout_of("\"Everything.exe\",\"1234\"")); // tasklist: found
-    let status = super::check_es_available(&host, "es.exe");
+    let status = super::check_es_available(&host, "es.exe", "");
     assert_eq!(status, Some(EsStatus::DaemonStarting));
 }
 

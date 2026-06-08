@@ -103,6 +103,12 @@ pub struct PreflightSpec {
     /// cross-tool capable set.  Defaults to 0 (no cap = any drive is capable
     /// regardless of size) when not set by the caller.
     pub es_ram_budget_bytes: u64,
+    /// When non-empty, all `es.exe` calls append `-instance <name>` so they
+    /// target an isolated Everything instance rather than the default one.
+    ///
+    /// Set after the bench suite launches its own Everything instance via
+    /// `Everything.exe -config <tempini> -instance <name> -startup`.
+    pub es_instance_name: String,
 }
 
 /// Per-drive competitor state observed during preflight.
@@ -181,8 +187,13 @@ pub fn parse_drives_from_ini(ini: &str) -> Vec<char> {
 /// - `DaemonStarting` — IPC error but `Everything.exe` is in the process list
 ///   (started but not yet ready).
 /// - `DaemonNotRunning` — IPC error and `Everything.exe` is not running at all.
-fn check_es_available(host: &dyn Host, es_exe: &str) -> Option<EsStatus> {
-    match host.run(es_exe, &["-get-everything-version"]) {
+fn check_es_available(host: &dyn Host, es_exe: &str, instance: &str) -> Option<EsStatus> {
+    let args: &[&str] = if instance.is_empty() {
+        &["-get-everything-version"]
+    } else {
+        &["-instance", instance, "-get-everything-version"]
+    };
+    match host.run(es_exe, args) {
         Err(_) => Some(EsStatus::NotInstalled),
         Ok(out) => {
             let combined = format!("{} {}", out.stdout, out.stderr);
@@ -228,6 +239,7 @@ fn is_everything_process_running(host: &dyn Host) -> bool {
 fn poll_result_count(
     host: &dyn Host,
     es_exe: &str,
+    instance: &str,
     drive: char,
     attempts: u32,
     interval_ms: u64,
@@ -237,8 +249,13 @@ fn poll_result_count(
         if attempt > 0 {
             host.sleep_ms(interval_ms);
         }
+        let args: &[&str] = if instance.is_empty() {
+            &[search.as_str(), "-get-result-count"]
+        } else {
+            &["-instance", instance, search.as_str(), "-get-result-count"]
+        };
         let count = host
-            .run(es_exe, &[search.as_str(), "-get-result-count"])
+            .run(es_exe, args)
             .ok()
             .and_then(|out| out.stdout.trim().parse::<u64>().ok())
             .unwrap_or(0);
@@ -320,8 +337,14 @@ fn probe_drive(
     } else {
         1
     };
-    let record_count =
-        poll_result_count(host, &spec.es_exe, drive, attempts, spec.poll_interval_ms);
+    let record_count = poll_result_count(
+        host,
+        &spec.es_exe,
+        &spec.es_instance_name,
+        drive,
+        attempts,
+        spec.poll_interval_ms,
+    );
     let loaded = record_count > 0;
     let es_status = if loaded {
         EsStatus::Loaded
@@ -390,7 +413,7 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
         .unwrap_or_default();
     let configured_drives = parse_drives_from_ini(&ini);
 
-    let es_available = check_es_available(host, &spec.es_exe);
+    let es_available = check_es_available(host, &spec.es_exe, &spec.es_instance_name);
 
     let status = daemon_status_output(host, &spec.uffs_exe);
     let mut uffs_counts = parse_daemon_status_drives(&status);
