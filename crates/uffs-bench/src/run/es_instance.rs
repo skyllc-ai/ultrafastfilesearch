@@ -34,14 +34,36 @@ const LOAD_POLL_INTERVAL_MS: u64 = 5_000;
 
 /// Write a minimal `Everything.ini` restricted to `drives` into `path`.
 ///
-/// Only `ntfs_volume_paths` is written; Everything fills in all other defaults.
+/// Must explicitly disable `auto_include_fixed_volumes` — without it
+/// Everything ignores `ntfs_volume_paths` and indexes every fixed NTFS volume
+/// on the machine automatically (confirmed via voidtools forum, author `void`).
+///
+/// The full set of keys required to pin indexing to exactly `drives`:
+/// - `auto_include_fixed_volumes=0` — don't auto-discover fixed drives
+/// - `auto_include_removable_volumes=0` — don't auto-discover removable drives
+/// - `auto_remove_offline_ntfs_volumes=0` — don't remove offline volumes
+/// - `ntfs_volume_paths=C:,D:,…` — exactly the bench drives to index
+/// - remaining `ntfs_volume_*` keys explicitly blank so ES doesn't inherit
+///   stale values from a partially-written config
 fn write_bench_ini(host: &dyn Host, path: &Path, drives: &[char]) -> std::io::Result<()> {
     let volume_paths: String = drives
         .iter()
-        .map(|letter| format!("{letter}:\\"))
+        .map(|letter| format!("{letter}:"))
         .collect::<Vec<_>>()
         .join(",");
-    let ini = format!("[Everything]\nntfs_volume_paths={volume_paths}\n");
+    let ini = format!(
+        "[Everything]\n\
+         auto_include_fixed_volumes=0\n\
+         auto_include_removable_volumes=0\n\
+         auto_remove_offline_ntfs_volumes=0\n\
+         ntfs_volume_paths={volume_paths}\n\
+         ntfs_volume_guids=\n\
+         ntfs_volume_roots=\n\
+         ntfs_volume_includes=\n\
+         ntfs_volume_load_recent_changes=\n\
+         ntfs_volume_include_onlys=\n\
+         ntfs_volume_monitors=\n"
+    );
     host.write_file(path, ini.as_bytes())
 }
 
