@@ -387,43 +387,27 @@ impl Orchestrator<'_> {
         }
     }
 
-    /// Render the captured Stage 0 plan and gate it.
-    fn run_stage0(
-        &self,
-        state: &mut State,
-        session: &mut Session,
-        cap: &Capture,
-        hash: &str,
-    ) -> Result<Flow> {
+    /// Write the Stage 0 artifacts and mark the step done.
+    ///
+    /// No operator gate — by the time we reach here the operator has already
+    /// confirmed tool selection and (if needed) the ES launch.  Writing the
+    /// plan artifacts is a silent bookkeeping step.
+    fn run_stage0(&self, state: &mut State, cap: &Capture, hash: &str) -> Result<Flow> {
         let card = plan_card(&self.bundle_dir);
-        match act_of(confirm(
-            self.host,
-            &mut session.mode,
-            &mut session.seen,
-            &card,
-        )) {
-            Act::Run => {
-                self.write_stage0(&cap.fp, &cap.preflight, &cap.matrix)?;
-                state.set_step(
-                    self.host,
-                    STAGE0_ID,
-                    Status::Done,
-                    hash,
-                    stage0_outputs(&self.bundle_dir),
-                );
-                done_panel(self.host, &card, &stage0_result(&self.bundle_dir));
-                Ok(Flow::Continue)
-            }
-            Act::Noop => {
-                done_panel(self.host, &card, &dry_run_result());
-                Ok(Flow::Continue)
-            }
-            Act::Skip => {
-                state.set_step(self.host, STAGE0_ID, Status::Skipped, hash, Vec::new());
-                Ok(Flow::Continue)
-            }
-            Act::Stop => Ok(Flow::Stop),
+        if self.cli.mode() == Mode::DryRun {
+            done_panel(self.host, &card, &dry_run_result());
+            return Ok(Flow::Continue);
         }
+        self.write_stage0(&cap.fp, &cap.preflight, &cap.matrix)?;
+        state.set_step(
+            self.host,
+            STAGE0_ID,
+            Status::Done,
+            hash,
+            stage0_outputs(&self.bundle_dir),
+        );
+        done_panel(self.host, &card, &stage0_result(&self.bundle_dir));
+        Ok(Flow::Continue)
     }
 
     /// Plan, gate, and (on proceed) run one measurement stage through
@@ -549,7 +533,7 @@ impl Orchestrator<'_> {
                 self.host.out("-> STAGE 0: PLAN cached (resume) - skipping");
                 Flow::Continue
             } else if let Some(cap) = capture.as_ref() {
-                self.run_stage0(state, session, cap, hash)?
+                self.run_stage0(state, cap, hash)?
             } else {
                 Flow::Continue
             };
