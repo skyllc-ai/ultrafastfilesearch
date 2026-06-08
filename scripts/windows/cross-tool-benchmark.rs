@@ -162,6 +162,21 @@ const PATTERNS: &[(&str, &str, &str, &str, &str, &str)] = &[
     ("substring",     "config",                    "config",               "config",      "",              "config"),
 ];
 
+/// Patterns worth running in the COLD and WARM phases.
+///
+/// COLD/WARM wall time is dominated by the MFT read + index (de)serialisation
+/// — a fixed per-drive cost that is **independent of the query pattern**.  The
+/// only thing the pattern changes in those phases is the output-write cost,
+/// which scales with result-set size.  Running all 7 patterns there just
+/// re-measures the same index-load floor 7 times, so we restrict COLD/WARM to:
+///
+///   - `exact`     — tiny result set ⇒ measures the pure index-load floor.
+///   - `full_scan` — 3M+ rows       ⇒ measures the max output-write cost.
+///
+/// All 7 patterns still run in HOT, where pure query execution dominates and
+/// the engines (trie / prefix / regex / full-scan) genuinely diverge.
+const COLD_WARM_PATTERNS: &[&str] = &["exact", "full_scan"];
+
 // ── Types ────────────────────────────────────────────────────────────────────
 #[derive(Clone, Copy, PartialEq, Eq)] enum Tool { Uffs, UffsCpp, Everything }
 impl Tool { fn label(self) -> &'static str { match self { Self::Uffs=>"UFFS", Self::UffsCpp=>"UFFS-C++", Self::Everything=>"Everything" } } }
@@ -937,6 +952,7 @@ fn main() {
             eprintln!(" done.");
 
             for &(label, pat, _, _, _, validate) in PATTERNS {
+                if !COLD_WARM_PATTERNS.contains(&label) { continue; }
                 if cfg.skip_pattern(label) { continue; }
                 eprint!("    {label:<12} ");  flush();
                 // COLD: only 1 round (destructive — restarts daemon each time)
@@ -958,6 +974,7 @@ fn main() {
             eprintln!(" done.");
 
             for &(label, pat, _, _, _, validate) in PATTERNS {
+                if !COLD_WARM_PATTERNS.contains(&label) { continue; }
                 if cfg.skip_pattern(label) { continue; }
                 eprint!("    {label:<12} ");  flush();
                 uffs_stop(&cfg.uffs);
