@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! UFFS daemon readiness helpers for the bench orchestrator.
+//! UFFS daemon control helpers for the bench orchestrator.
 //!
-//! The bench tool kicks off the daemon as the very first action in Stage 0 so
-//! the index load runs in parallel with env capture and the tool-selection
-//! gate. Readiness is only polled once the drive-inventory table is needed,
-//! giving the daemon the maximum possible warm-up time before the hard wait.
+//! The daemon is always killed and restarted with only the negotiated capable
+//! drives before measurement begins, so index RAM and query routing are
+//! confined to the drives under test.
 
 use crate::error::{BenchError, Result};
 use crate::host::Host;
@@ -14,37 +13,54 @@ use crate::host::Host;
 /// Maximum poll attempts waiting for the UFFS daemon to reach `Status: Ready`.
 ///
 /// 90 attempts × 2 s = 3 minutes maximum — matches the user-facing timeout
-/// promise. The daemon is kicked off at the very start of `capture()`, so the
-/// index load runs in parallel with env capture and the tool-selection gate.
-/// Polling only starts once those steps are done and the drive table is needed.
+/// promise.
 pub(super) const DAEMON_READY_POLL_ATTEMPTS: u32 = 90;
 
 /// Milliseconds between UFFS daemon readiness polls.
 pub(super) const DAEMON_READY_POLL_INTERVAL_MS: u64 = 2_000;
 
-/// Check if the UFFS daemon is already running and ready.
+/// Kill the running UFFS daemon (hard stop) and start a fresh instance
+/// restricted to `capable_drives`.
 ///
-/// Returns `true` when `uffs daemon status` exits 0 and its output contains
-/// `Status:        Ready` (the literal string the daemon emits).
-fn daemon_is_ready(host: &dyn Host, uffs_exe: &str) -> bool {
-    host.run(uffs_exe, &["daemon", "status"])
-        .is_ok_and(|out| out.stdout.contains("Status:        Ready"))
-}
-
-/// Start the UFFS daemon if it is not already running or ready.
-///
-/// Fires `uffs daemon start` and returns immediately — the caller does not
-/// wait for the index to finish loading. Any start error is printed as a
-/// warning and swallowed; a subsequent [`ensure_daemon_ready`] call will
-/// catch the failure with a clear message.
-pub(super) fn daemon_start_if_needed(host: &dyn Host, uffs_exe: &str) {
-    if daemon_is_ready(host, uffs_exe) {
-        return; // already up
-    }
-    host.out("[preflight] UFFS daemon not ready — starting …");
-    if let Err(err) = host.run(uffs_exe, &["daemon", "start"]) {
+/// Fires `uffs daemon kill` first, waits briefly for the process to exit,
+/// then calls `uffs daemon start --drive X --drive Y …`.  Returns immediately
+/// after the start command — the caller must call [`ensure_daemon_ready`] to
+/// poll until the index is loaded.
+pub(super) fn kill_and_restart_with_drives(
+    host: &dyn Host,
+    uffs_exe: &str,
+    capable_drives: &[char],
+) {
+    host.out(&format!(
+        "[uffs-daemon] killing daemon to restart with drives: {} …",
+        capable_drives
+            .iter()
+            .map(char::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    if let Err(err) = host.run(uffs_exe, &["daemon", "kill"]) {
         host.out(&format!(
-            "[preflight] WARNING: could not start UFFS daemon: {err}"
+            "[uffs-daemon] WARNING: kill returned error (may not have been running): {err}"
+        ));
+    }
+    // Brief pause to allow the OS to release sockets / named-pipe handles
+    // before we immediately re-launch.
+    host.sleep_ms(1_500);
+
+    let drive_strs: Vec<String> = capable_drives.iter().map(char::to_string).collect();
+    let mut args: Vec<&str> = vec!["daemon", "start"];
+    for drive_s in &drive_strs {
+        args.push("--drive");
+        args.push(drive_s.as_str());
+    }
+    host.out(&format!(
+        "[uffs-daemon] spawn: {uffs_exe} {}",
+        args.join(" ")
+    ));
+    if let Err(err) = host.run(uffs_exe, &args) {
+        host.out(&format!(
+            "[uffs-daemon] WARNING: could not restart UFFS daemon: {err}"
         ));
     }
 }

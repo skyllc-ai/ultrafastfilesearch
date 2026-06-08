@@ -20,20 +20,21 @@
 use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod bootstrap;
 mod daemon;
 mod es_instance;
 mod specs;
 
+use bootstrap::{load_or_new_state, resolve_bundle_dir, run_fetch_competitors};
 pub(crate) use specs::everything_ini_path;
 use specs::{
     decisions_from_cli, env_spec_from_cli, matrix_spec_from_cli, plan_input_hash,
     preflight_spec_from_cli,
 };
 
-use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
     assembly_card, dry_run_result, es_launch_card, measurement_card, plan_card, report_scope,
-    stage0_result, tool_selection_card,
+    stage0_result, tool_selection_card, uffs_restart_card,
 };
 use crate::cli::{Cli, Command};
 use crate::env::{self, EnvFingerprint};
@@ -44,9 +45,8 @@ use crate::matrix::{self, Matrix};
 use crate::preflight::{self, PreflightResult};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
-use crate::state::{Decisions, State, Status};
-use crate::tooling::Disposition;
-use crate::{competitors, report, resolve, teardown};
+use crate::state::{State, Status};
+use crate::{report, resolve, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -191,6 +191,10 @@ struct Capture {
     /// When `true`, `launch_es_if_needed()` will show the confirmation gate and
     /// (if the operator proceeds) launch the isolated Everything instance.
     es_needs_launch: bool,
+    /// Whether the UFFS daemon should be killed and restarted with only the
+    /// negotiated capable drives before measurement begins.
+    /// Always `true` when capable drives are non-empty.
+    uffs_needs_restart: bool,
 }
 
 /// Mutable per-run gate state threaded through every staged confirm.
@@ -244,7 +248,6 @@ impl Orchestrator<'_> {
     /// Returns [`BenchError::MissingTools`] if fewer than 2 tools are available
     /// after the operator's decision, or if the operator chooses to abort.
     fn capture(&self, session: &mut Session) -> Result<Capture> {
-        daemon::daemon_start_if_needed(self.host, &resolve::uffs_exe(self.host));
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
         self.host.out(&env::render_md(&fp));
         let missing: Vec<&str> = fp
@@ -270,6 +273,10 @@ impl Orchestrator<'_> {
             .tools
             .iter()
             .any(|tv| tv.name == "everything" && tv.version != "unknown");
+        // preflight_steps: tool-selection (step 1) is always present.
+        // ES launch adds a step when Everything is available.
+        // The UFFS restart step is checked post-matrix; we use a conservative
+        // upper bound here — the actual step numbers on each card are precise.
         let preflight_steps = if es_available { 2 } else { 1 };
         let card = tool_selection_card(&available, &missing, preflight_steps);
         if matches!(
@@ -281,7 +288,6 @@ impl Orchestrator<'_> {
             ));
         }
         let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
-        daemon::ensure_daemon_ready(self.host, &resolve::uffs_exe(self.host))?;
         // Probe drives and display the drive table + negotiated matrix.
         // ES launch (if needed) is deferred to `launch_es_if_needed()` so the
         // operator can confirm before the bench touches the Everything process.
@@ -300,6 +306,7 @@ impl Orchestrator<'_> {
         let everything_exe = resolve::everything_exe(self.host);
         let needs_launch =
             es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives);
+        let needs_uffs_restart = !matrix_first.capable_drives.is_empty();
         // When ES needs launching, the UFFS-only reasons are all "ES not
         // started/starting" — noisy and misleading before the launch gate.
         // Only show capable drives; the full matrix is shown after launch.
@@ -316,7 +323,56 @@ impl Orchestrator<'_> {
             es_ini_path: None,
             everything_exe,
             es_needs_launch: needs_launch,
+            uffs_needs_restart: needs_uffs_restart,
         })
+    }
+
+    /// Gate and (if confirmed) kill the running UFFS daemon and restart it
+    /// restricted to the negotiated capable drives.
+    ///
+    /// Always shown when capable drives are non-empty.  The daemon is always
+    /// killed and restarted (not conditionally) so measurements are confined
+    /// to the negotiated drive set regardless of what was loaded before.
+    fn restart_uffs_if_needed(
+        &self,
+        session: &mut Session,
+        cap: &mut Capture,
+        preflight_steps: u32,
+    ) {
+        if cap.matrix.capable_drives.is_empty() {
+            return;
+        }
+        let es_step = if cap.es_needs_launch {
+            preflight_steps
+        } else {
+            0
+        };
+        let uffs_step_num = preflight_steps - es_step;
+        let card = uffs_restart_card(&cap.matrix.capable_drives, uffs_step_num, preflight_steps);
+        match confirm(self.host, &mut session.mode, &mut session.seen, &card) {
+            Decision::Back | Decision::Abort => {
+                self.host.out(
+                    "[uffs-daemon] operator skipped UFFS restart — \
+                     daemon keeps all drives loaded",
+                );
+                cap.uffs_needs_restart = false;
+                return;
+            }
+            Decision::ProceedNoop => {
+                self.host
+                    .out("[uffs-daemon] dry-run: skipping daemon kill/restart");
+                cap.uffs_needs_restart = false;
+                return;
+            }
+            Decision::Proceed | Decision::Autopilot | Decision::Skip => {}
+        }
+        let uffs_exe = resolve::uffs_exe(self.host);
+        daemon::kill_and_restart_with_drives(self.host, &uffs_exe, &cap.matrix.capable_drives);
+        if let Err(err) = daemon::ensure_daemon_ready(self.host, &uffs_exe) {
+            self.host.out(&format!(
+                "[uffs-daemon] WARNING: daemon did not become ready: {err}"
+            ));
+        }
     }
 
     /// Gate and (if confirmed) launch the bench-local Everything instance.
@@ -329,11 +385,22 @@ impl Orchestrator<'_> {
     ///
     /// If the operator aborts the card, ES cells are silently skipped (the
     /// matrix already shows them as UFFS-only).
-    fn launch_es_if_needed(&self, session: &mut Session, cap: &mut Capture) {
+    fn launch_es_if_needed(
+        &self,
+        session: &mut Session,
+        cap: &mut Capture,
+        step_num: u32,
+        step_total: u32,
+    ) {
         if !cap.es_needs_launch || cap.matrix.capable_drives.is_empty() {
             return;
         }
-        let card = es_launch_card(&cap.matrix.capable_drives, self.cli.es_admin);
+        let card = es_launch_card(
+            &cap.matrix.capable_drives,
+            self.cli.es_admin,
+            step_num,
+            step_total,
+        );
         match confirm(self.host, &mut session.mode, &mut session.seen, &card) {
             Decision::Back | Decision::Abort => {
                 self.host.out(
@@ -534,11 +601,32 @@ impl Orchestrator<'_> {
         let mut capture = ((stage0_selected && !stage0_skip) || measure_live)
             .then(|| self.capture(session))
             .transpose()?;
-        // Show the ES-instance confirm gate and launch if the operator agrees.
-        // This runs after the matrix is displayed and before the plan card, so
-        // the final (post-launch) matrix is what gets locked into stage0.
+        // Show UFFS restart gate (kill + start with only capable drives), then
+        // ES-instance gate, in that order — both before the plan card so the
+        // final matrix is what gets locked into stage0.
         if let Some(cap) = capture.as_mut() {
-            self.launch_es_if_needed(session, cap);
+            // Compute exact step numbers: UFFS restart (if needed) comes
+            // before ES launch; ES launch is always last.
+            let uffs_restart_step = cap.uffs_needs_restart.then_some(2_u32);
+            let es_launch_step = cap
+                .es_needs_launch
+                .then(|| uffs_restart_step.map_or(2, |prev| prev + 1));
+            let total_steps = es_launch_step.or(uffs_restart_step).unwrap_or(1);
+            if uffs_restart_step.is_some() {
+                self.restart_uffs_if_needed(session, cap, total_steps);
+                // After restart, re-run second-pass preflight to get fresh
+                // drive counts from the restricted daemon.
+                let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
+                let mut spec2 = preflight_spec_from_cli(self.host, self.cli, es_ram_budget);
+                spec2.candidate_drives = cap.preflight.drives.iter().map(|dp| dp.drive).collect();
+                if cap.es_ini_path.is_some() {
+                    spec2.es_instance_name = String::from(es_instance::INSTANCE_NAME);
+                }
+                cap.preflight = preflight::capture(self.host, &spec2);
+            }
+            if let Some(step) = es_launch_step {
+                self.launch_es_if_needed(session, cap, step, total_steps);
+            }
         }
 
         if stage0_selected {
@@ -594,77 +682,6 @@ impl Orchestrator<'_> {
             es_instance::stop(self.host, &cap.everything_exe, cap.es_ini_path.as_deref());
         }
         Ok(())
-    }
-}
-
-/// Resolve the bundle directory: resume an explicit `--bundle`, else mint a new
-/// timestamped one (a dry-run computes the path without creating it).
-fn resolve_bundle_dir(host: &dyn Host, cli: &Cli, dry_run: bool) -> Result<PathBuf> {
-    if let Some(dir) = &cli.bundle {
-        return Ok(dir.clone());
-    }
-    if dry_run {
-        Ok(bundle_path(host, &cli.bundle_root, SUITE_VERSION))
-    } else {
-        new_bundle(host, &cli.bundle_root, SUITE_VERSION)
-    }
-}
-
-/// Disposition for tools the suite acquires (the `--keep-tools` toggle).
-const fn tool_disposition(cli: &Cli) -> Disposition {
-    if cli.keep_tools {
-        Disposition::Keep
-    } else {
-        Disposition::Remove
-    }
-}
-
-/// Handle the `fetch-competitors` subcommand.
-///
-/// Resolves (or resumes) a bundle, fetches + SHA-256-verifies the pinned
-/// competitor from `competitors.toml` into `<bundle>/tools/`, and records the
-/// verified [`Acquisition`](crate::tooling::Acquisition) in `state.json`. A
-/// dry-run acquires nothing.
-///
-/// # Errors
-/// Returns an error if bundle/state I/O fails or provisioning fails (a
-/// malformed manifest, a failed download, or a SHA-256 mismatch — all fail
-/// closed).
-fn run_fetch_competitors(host: &dyn Host, cli: &Cli) -> Result<()> {
-    if cli.mode() == Mode::DryRun {
-        host.out("dry-run: competitor fetch acquires nothing");
-        return Ok(());
-    }
-    let decisions = decisions_from_cli(cli);
-    let bundle_dir = resolve_bundle_dir(host, cli, false)?;
-    let state_path = bundle_dir.join("state.json");
-    let mut state = load_or_new_state(host, cli, &state_path, &decisions)?;
-
-    let manifest = competitors::load_manifest(host, Path::new(competitors::MANIFEST_PATH))?;
-    let acquisition = competitors::fetch(host, &manifest, &bundle_dir, tool_disposition(cli))?;
-    host.out(&format!(
-        "fetched {} (Everything v{}) -> {} [sha256 verified, {:?}]",
-        acquisition.name,
-        manifest.everything.version,
-        acquisition.path.display(),
-        acquisition.disposition
-    ));
-    state.acquisitions.push(acquisition);
-    state.save(host, &state_path)?;
-    Ok(())
-}
-
-/// Load `state.json` when resuming an existing bundle, else start fresh.
-fn load_or_new_state(
-    host: &dyn Host,
-    cli: &Cli,
-    state_path: &Path,
-    decisions: &Decisions,
-) -> Result<State> {
-    if cli.bundle.is_some() && host.path_exists(state_path) {
-        State::load(host, state_path)
-    } else {
-        Ok(State::new(host, SUITE_VERSION, decisions.clone()))
     }
 }
 

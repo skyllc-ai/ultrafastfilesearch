@@ -194,12 +194,67 @@ pub(crate) fn tool_selection_card(available: &[&str], missing: &[&str], step_tot
     }
 }
 
+/// Build the UFFS daemon restart confirmation [`Card`].
+///
+/// Shown after the negotiated matrix when the daemon is currently loaded with
+/// more drives than the negotiated set.  The bench must kill the running daemon
+/// and restart it restricted to the capable drives so measurements are
+/// not polluted by index load on unused drives.
+pub(crate) fn uffs_restart_card(capable_drives: &[char], step_num: u32, step_total: u32) -> Card {
+    let drive_list: String = capable_drives
+        .iter()
+        .map(char::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let drive_args: String = capable_drives
+        .iter()
+        .map(|ch| format!("--drive {ch}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title = format!("Restart UFFS daemon restricted to negotiated drives: {drive_list}");
+    let why = format!(
+        "The daemon is currently loaded with more drives than the negotiated set ({drive_list}). \
+         The bench will kill it and restart it with only those drives so index RAM, \
+         warmup time, and query routing are confined to the drives under test."
+    );
+    let cmd_kill = "uffs daemon kill".to_owned();
+    let cmd_start = format!("uffs daemon start {drive_args}");
+    Card {
+        id: "uffs-daemon-restart".to_owned(),
+        stage: "STAGE 0: PREFLIGHT".to_owned(),
+        step_num,
+        step_total,
+        title,
+        why: why.clone(),
+        commands: vec![cmd_kill, cmd_start],
+        resources: capable_drives
+            .iter()
+            .map(|ch| format!("{ch}: (UFFS index)"))
+            .collect(),
+        backups: vec!["uffs daemon run-state: restored to as-found state on teardown".to_owned()],
+        est_time: "~10-60 s (index load)".to_owned(),
+        recovery: "Aborting here keeps the daemon in its current state — all drives remain loaded."
+            .to_owned(),
+        long_why: format!(
+            "{why}\n\nThe daemon is stopped with `uffs daemon kill` (hard stop) rather than \
+             `restart` because `restart` reloads with the previous drive set. \
+             On teardown the bench will stop the restricted instance so your normal \
+             daemon session can reload with all drives on next use."
+        ),
+    }
+}
+
 /// Build the ES-instance launch confirmation [`Card`].
 ///
 /// Shown after the negotiated matrix is displayed, before the bench tool
 /// actually spawns `Everything.exe`.  Gives the operator a chance to cancel
 /// if they don't want the bench to touch the Everything process.
-pub(crate) fn es_launch_card(capable_drives: &[char], admin: bool) -> Card {
+pub(crate) fn es_launch_card(
+    capable_drives: &[char],
+    admin: bool,
+    step_num: u32,
+    step_total: u32,
+) -> Card {
     let drive_list: String = capable_drives
         .iter()
         .map(char::to_string)
@@ -224,8 +279,8 @@ pub(crate) fn es_launch_card(capable_drives: &[char], admin: bool) -> Card {
     Card {
         id: "es-instance-launch".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
-        step_num: 2,
-        step_total: 2,
+        step_num,
+        step_total,
         title,
         why: why.clone(),
         commands: vec![cmd],

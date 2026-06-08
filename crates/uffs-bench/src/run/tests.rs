@@ -29,9 +29,56 @@ const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
 
 /// Queue the run results needed for the `--dry-run` code path.
 ///
-/// `--dry-run` skips `teardown::baseline`, call order is:
-///  1. `daemon_start_if_needed` — `uffs daemon status` (already Ready → skip
-///     start)
+/// `--dry-run` skips `teardown::baseline`.  Early `daemon_start_if_needed`
+/// and `ensure_daemon_ready` are removed — the daemon is always killed and
+/// restarted after the matrix is negotiated.  In dry-run mode the
+/// restart gate fires as `ProceedNoop` so the kill/start are skipped;
+/// no second-pass preflight is run.
+///
+///  1. `resolve::es_exe`         — `where.exe es.exe` (for `everything`)
+///  2. `resolve::es_exe`         — `where.exe es.exe` (for `everything_gui`)
+///  3. `resolve::everything_exe` — `where.exe Everything.exe`
+///  4. `env::capture` hostname
+///  5. `env::capture` cpu
+///  6. `env::capture` `logical_cpus`
+///  7. `env::capture` `total_ram`
+///  8. `env::capture` uffs --version
+///  9. `env::capture` `uffs_cpp` --version
+/// 10. `env::capture` es -version
+/// 11. tasklist (everything state probe — stopped)
+/// 12. `env::capture` es -get-everything-version
+/// 13. tasklist (`everything_gui` state probe — stopped)
+/// 14. `preflight`  — `es -get-everything-version` (availability)
+/// 15. `preflight`  — `uffs daemon status` (record counts for C)
+/// 16. `preflight`  — `es -get-result-count C:` → loaded
+fn dry_run_host() -> MockHost {
+    let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
+    MockHost::new()
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  1: where.exe es.exe
+        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  2: where.exe es.exe
+        .with_run_result(stdout_of(evr))                      //  3: where.exe Everything.exe
+        .with_run_result(stdout_of("myhost"))                 //  4: hostname
+        .with_run_result(stdout_of("Name=Test CPU"))          //  5: cpu
+        .with_run_result(stdout_of("8"))                      //  6: logical_cpus
+        .with_run_result(stdout_of("8589934592"))             //  7: total_ram
+        .with_run_result(stdout_of("uffs 0.0.0"))             //  8: uffs --version
+        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) //  9: uffs_cpp --version
+        .with_run_result(stdout_of("1.1.0.30"))               // 10: es -version
+        .with_run_result(stdout_of(""))                       // 11: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 12: es -get-everything-version
+        .with_run_result(stdout_of(""))                       // 13: tasklist (stopped)
+        .with_run_result(stdout_of("1.4.1.1032"))             // 14: preflight es availability
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 15: preflight daemon status
+        .with_run_result(stdout_of("1000")) // 16: es result-count C
+}
+
+/// Queue the run results needed for the autopilot (non-dry-run) path.
+///
+/// `teardown::baseline` fires `uffs daemon status` before the env probes.
+/// After the matrix is computed the UFFS daemon is always killed and
+/// restarted with `--drive C`; a second-pass preflight follows.
+///
+///  1. `teardown::baseline`      — `uffs daemon status`
 ///  2. `resolve::es_exe`         — `where.exe es.exe` (for `everything`)
 ///  3. `resolve::es_exe`         — `where.exe es.exe` (for `everything_gui`)
 ///  4. `resolve::everything_exe` — `where.exe Everything.exe`
@@ -39,21 +86,25 @@ const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
 ///  6. `env::capture` cpu
 ///  7. `env::capture` `logical_cpus`
 ///  8. `env::capture` `total_ram`
-///  9. `env::capture` uffs --version (prefix stripped: `"uffs 0.0.0"` →
-///     `"0.0.0"`)
-///  10. `env::capture` `uffs_cpp` --version
-///  11. `env::capture` es -version
-///  12. tasklist (everything state probe — stopped)
-///  13. `env::capture` es -get-everything-version
-///  14. tasklist (`everything_gui` state probe — stopped)
-///  15. `ensure_daemon_ready`  — `uffs daemon status` → Ready on first poll
-///  16. `preflight`             — `es -get-everything-version` (availability)
-///  17. `preflight`             — `uffs daemon status` (record counts for C)
-///  18. `preflight`             — `es -get-result-count C:` → loaded
-fn dry_run_host() -> MockHost {
+///  9. `env::capture` uffs --version
+/// 10. `env::capture` `uffs_cpp` --version
+/// 11. `env::capture` es -version
+/// 12. tasklist (everything state probe — stopped)
+/// 13. `env::capture` es -get-everything-version
+/// 14. tasklist (`everything_gui` state probe — stopped)
+/// 15. `preflight`  — `es -get-everything-version` (availability)
+/// 16. `preflight`  — `uffs daemon status` (record counts for C)
+/// 17. `preflight`  — `es -get-result-count C:` → loaded
+/// 18. `uffs daemon kill`   (restart gate: autopilot → proceed)
+/// 19. `uffs daemon start --drive C`
+/// 20. `ensure_daemon_ready` poll — `uffs daemon status` → Ready
+/// 21. second-pass preflight  — `es -get-everything-version`
+/// 22. second-pass preflight  — `uffs daemon status`
+/// 23. second-pass preflight  — `es -get-result-count C:`
+fn autopilot_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
     MockHost::new()
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      //  1: daemon status (Ready)
+        .with_run_result(stdout_of("running"))                 //  1: teardown daemon status
         .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  2: where.exe es.exe
         .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  3: where.exe es.exe
         .with_run_result(stdout_of(evr))                      //  4: where.exe Everything.exe
@@ -67,58 +118,15 @@ fn dry_run_host() -> MockHost {
         .with_run_result(stdout_of(""))                       // 12: tasklist (stopped)
         .with_run_result(stdout_of("1.4.1.1032"))             // 13: es -get-everything-version
         .with_run_result(stdout_of(""))                       // 14: tasklist (stopped)
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 15: ensure_daemon_ready poll
-        .with_run_result(stdout_of("1.4.1.1032"))             // 16: preflight es availability
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 17: preflight daemon status
-        .with_run_result(stdout_of("1000")) // 18: es result-count C
-}
-
-/// Queue the run results needed for the autopilot (non-dry-run) path.
-///
-/// `teardown::baseline` fires `uffs daemon status` before the env probes:
-///  1. `teardown::baseline`      — `uffs daemon status`
-///  2. `daemon_start_if_needed`  — `uffs daemon status` (already Ready → skip
-///     start)
-///  3. `resolve::es_exe`         — `where.exe es.exe` (for `everything`)
-///  4. `resolve::es_exe`         — `where.exe es.exe` (for `everything_gui`)
-///  5. `resolve::everything_exe` — `where.exe Everything.exe`
-///  6. `env::capture` hostname
-///  7. `env::capture` cpu
-///  8. `env::capture` `logical_cpus`
-///  9. `env::capture` `total_ram`
-///  10. `env::capture` uffs --version (prefix stripped: `"uffs 0.0.0"` →
-///      `"0.0.0"`)
-///  11. `env::capture` `uffs_cpp` --version
-///  12. `env::capture` es -version
-///  13. tasklist (everything state probe — stopped)
-///  14. `env::capture` es -get-everything-version
-///  15. tasklist (`everything_gui` state probe — stopped)
-///  16. `ensure_daemon_ready`    — `uffs daemon status` → Ready on first poll
-///  17. `preflight`              — `es -get-everything-version` (availability)
-///  18. `preflight`              — `uffs daemon status` (record counts for C)
-///  19. `preflight`              — `es -get-result-count C:` → loaded
-fn autopilot_host() -> MockHost {
-    let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
-    MockHost::new()
-        .with_run_result(stdout_of("running"))                 //  1: teardown daemon status
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      //  2: daemon_start_if_needed
-        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  3: where.exe es.exe
-        .with_run_result(stdout_of("C:\\bin\\es.exe"))         //  4: where.exe es.exe
-        .with_run_result(stdout_of(evr))                      //  5: where.exe Everything.exe
-        .with_run_result(stdout_of("myhost"))                 //  6: hostname
-        .with_run_result(stdout_of("Name=Test CPU"))          //  7: cpu
-        .with_run_result(stdout_of("8"))                      //  8: logical_cpus
-        .with_run_result(stdout_of("8589934592"))             //  9: total_ram
-        .with_run_result(stdout_of("uffs 0.0.0"))             // 10: uffs --version
-        .with_run_result(stdout_of("\tUFFS version:\t1.0.0")) // 11: uffs_cpp --version
-        .with_run_result(stdout_of("1.1.0.30"))               // 12: es -version
-        .with_run_result(stdout_of(""))                       // 13: tasklist (stopped)
-        .with_run_result(stdout_of("1.4.1.1032"))             // 14: es -get-everything-version
-        .with_run_result(stdout_of(""))                       // 15: tasklist (stopped)
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 16: ensure_daemon_ready poll
-        .with_run_result(stdout_of("1.4.1.1032"))             // 17: preflight es availability
-        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 18: preflight daemon status
-        .with_run_result(stdout_of("1000")) // 19: es result-count C
+        .with_run_result(stdout_of("1.4.1.1032"))             // 15: preflight es availability
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 16: preflight daemon status
+        .with_run_result(stdout_of("1000"))                   // 17: es result-count C
+        .with_run_result(stdout_of(""))                       // 18: daemon kill
+        .with_run_result(stdout_of(""))                       // 19: daemon start --drive C
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 20: ensure_daemon_ready poll
+        .with_run_result(stdout_of("1.4.1.1032"))             // 21: 2nd-pass preflight es avail
+        .with_run_result(stdout_of(DAEMON_READY_STATUS))      // 22: 2nd-pass preflight status
+        .with_run_result(stdout_of("1000")) // 23: 2nd-pass es result-count C
 }
 
 /// Whether any recorded call mutated the host filesystem.
