@@ -831,6 +831,17 @@ fn bench_ini_path() -> PathBuf {
     env::temp_dir().join("uffs-bench-everything.ini")
 }
 
+/// Temp path for the bench instance's Everything database.  Pinned (rather
+/// than the per-instance default) so it can be deleted before every launch,
+/// forcing a fresh index scoped to the current `ntfs_volume_includes` mask.
+/// Without this the `uffs-bench` instance reuses the db from the PREVIOUS
+/// per-drive launch (e.g. the C run), loads those drives, ignores the new
+/// includes mask, and rewrites our temp ini to match — so an E run ends up
+/// indexing C.
+fn bench_db_path() -> PathBuf {
+    env::temp_dir().join("uffs-bench-everything.db")
+}
+
 /// Parse a `key=val1,val2,...` Everything.ini array value into tokens.
 /// Handles the quoted-string format ES uses (`"C:","D:"`); quoted tokens are
 /// kept whole.
@@ -855,10 +866,10 @@ fn parse_ini_array(value: &str) -> Vec<String> {
 }
 
 /// Rebuild ini text replacing `ntfs_volume_includes`, `ntfs_volume_monitors`,
-/// and `ntfs_volume_load_recent_changes` with the provided bitmask, and
-/// forcing the `auto_include_*`/`auto_remove_*` keys to `0`.  Every other
-/// line is copied verbatim.
-fn rebuild_ini(text: &str, includes: &str, monitors: &str) -> String {
+/// and `ntfs_volume_load_recent_changes` with the provided bitmask, pinning
+/// `db_location` to `db_location`, and forcing the `auto_include_*`/
+/// `auto_remove_*` keys to `0`.  Every other line is copied verbatim.
+fn rebuild_ini(text: &str, includes: &str, monitors: &str, db_location: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         let key = line.split_once('=').map_or("", |(k, _)| k.trim());
@@ -876,6 +887,14 @@ fn rebuild_ini(text: &str, includes: &str, monitors: &str) -> String {
             "ntfs_volume_load_recent_changes" => {
                 out.push_str("ntfs_volume_load_recent_changes=");
                 out.push_str(includes);
+                out.push('\n');
+            }
+            // Pin the db to our known temp path so es_launch can delete it
+            // before each launch, guaranteeing a fresh index that honours the
+            // includes mask above (instead of reusing a prior run's db).
+            "db_location" => {
+                out.push_str("db_location=");
+                out.push_str(db_location);
                 out.push('\n');
             }
             // Force to 0 — without this ES ignores ntfs_volume_paths and
@@ -924,7 +943,9 @@ fn write_bench_ini(ini_out: &Path, drives: &[String]) -> std::io::Result<()> {
         .map(|(tok, bit)| format!("{}={bit}", tok.trim_matches('"')))
         .collect::<Vec<_>>().join(" ");
     eprintln!("  [es-instance] ini volumes ({} entries): {map}", paths.len());
-    let out = rebuild_ini(&text, &includes, &monitors);
+    let db = bench_db_path();
+    let db_str = db.to_string_lossy();
+    let out = rebuild_ini(&text, &includes, &monitors, &db_str);
     std::fs::write(ini_out, out.as_bytes())
 }
 
@@ -949,6 +970,18 @@ fn es_launch(everything: &Path, drives: &[String]) -> Option<PathBuf> {
     // the process can flush its db before we spawn our own.
     es_kill_existing(everything);
     std::thread::sleep(ES_KILL_GRACE);
+    // Delete the prior bench db so the relaunched instance rebuilds a fresh
+    // index from the includes mask just written, rather than loading the
+    // previous per-drive run's db (which would index the wrong drive and
+    // rewrite our temp ini to match).
+    let db = bench_db_path();
+    if db.exists() {
+        if let Err(e) = std::fs::remove_file(&db) {
+            eprintln!("  [es-instance] WARNING: could not remove stale db {} — {e}", db.display());
+        } else {
+            eprintln!("  [es-instance] removed stale db {}", db.display());
+        }
+    }
     eprintln!("  [es-instance] launching Everything (drives: {}) …", drives.join(","));
     let ini_str = ini.to_string_lossy().to_string();
     let args = ["-config", ini_str.as_str(), "-instance", ES_INSTANCE_NAME, "-startup"];
@@ -986,11 +1019,14 @@ fn es_wait_until_loaded(es: &Path, drives: &[String]) -> bool {
     false
 }
 
-/// Send `Everything.exe -instance uffs-bench -exit` and remove the temp ini.
+/// Send `Everything.exe -instance uffs-bench -exit` and remove the temp ini
+/// and pinned bench db so nothing stale is left for the next run.
 fn es_stop(everything: &Path, ini: Option<&Path>) {
     let _ = Command::new(everything).args(["-instance", ES_INSTANCE_NAME, "-exit"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    std::thread::sleep(ES_KILL_GRACE);
     if let Some(p) = ini { let _ = std::fs::remove_file(p); }
+    let _ = std::fs::remove_file(bench_db_path());
 }
 
 // ── Run: UFFS C++ (uffs.com) ─────────────────────────────────────────────────
