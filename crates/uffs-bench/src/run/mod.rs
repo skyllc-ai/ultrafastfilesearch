@@ -365,10 +365,6 @@ impl Orchestrator<'_> {
             &cap.preflight,
         );
         cap.es_capable_drives = cap.matrix.capable_drives.clone();
-        self.host.out(&preflight::render_drive_table(
-            &cap.preflight,
-            es_ram_budget,
-        ));
         self.host.out(&matrix::render_md(&cap.matrix));
     }
 
