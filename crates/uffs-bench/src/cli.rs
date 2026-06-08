@@ -88,6 +88,11 @@ pub struct Cli {
     /// Resume from this stage onward (1-based).
     #[arg(long = "from-stage")]
     pub from_stage: Option<u32>,
+    /// Skip these stages entirely (comma-separated, 1-based, e.g.
+    /// `--skip-stages 1,2`). Useful during development to bypass
+    /// long-running measurement stages.
+    #[arg(long = "skip-stages", value_delimiter = ',')]
+    pub skip_stages: Vec<u32>,
 
     /// Resume an existing bundle directory (loads its `state.json`).
     #[arg(long)]

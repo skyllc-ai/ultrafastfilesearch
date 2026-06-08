@@ -109,8 +109,12 @@ const fn act_of(decision: Decision) -> Act {
     }
 }
 
-/// Whether `stage` is selected by the `--only-stage` / `--from-stage` filters.
-const fn stage_selected(cli: &Cli, stage: u32) -> bool {
+/// Whether `stage` is selected by the `--only-stage` / `--from-stage` /
+/// `--skip-stages` filters.
+fn stage_selected(cli: &Cli, stage: u32) -> bool {
+    if cli.skip_stages.contains(&stage) {
+        return false;
+    }
     match (cli.only_stage, cli.from_stage) {
         (Some(only), _) => stage == only,
         (None, Some(from)) => stage >= from,
@@ -552,6 +556,12 @@ impl Orchestrator<'_> {
         }
         for stage in 1..=MEASUREMENT_STAGES {
             if !stage_selected(self.cli, stage) {
+                if self.cli.skip_stages.contains(&stage) {
+                    self.host.out(&format!(
+                        "-> {} skipped (--skip-stages)",
+                        stage_banner(stage)
+                    ));
+                }
                 continue;
             }
             if state.should_skip(&stage_step_id(stage), hash) {
