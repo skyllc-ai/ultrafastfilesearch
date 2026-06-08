@@ -309,6 +309,20 @@ fn find_uffs_cpp() -> Option<PathBuf> {
         find_in(&[PathBuf::from(&h).join("bin").join("uffs.com")])
     })
 }
+/// Locate `Everything.exe` (the GUI/service binary) so the bench can launch a
+/// private, drive-scoped instance.  Distinct from `es.exe` (the CLI client).
+fn find_everything() -> Option<PathBuf> {
+    where_exe("Everything.exe").or_else(|| {
+        let (h, pf, pf86) = (env::var("USERPROFILE").unwrap_or_default(),
+            env::var("ProgramFiles").unwrap_or_default(),
+            env::var("ProgramFiles(x86)").unwrap_or_default());
+        find_in(&[
+            PathBuf::from(&pf).join("Everything").join("Everything.exe"),
+            PathBuf::from(&pf86).join("Everything").join("Everything.exe"),
+            PathBuf::from(&h).join("bin").join("Everything.exe"),
+        ])
+    })
+}
 
 
 // ── UFFS lifecycle ───────────────────────────────────────────────────────────
@@ -476,16 +490,37 @@ fn diff_paths(a: &[String], b: &[String]) -> DiffResult {
     DiffResult { only_in_a, only_in_b }
 }
 
-/// Print a human-readable diff summary between two tool outputs.  Shows up to
+/// Resolve a (possibly relative) bench output path to an absolute path string
+/// for display, so the diff header names the exact file each side came from.
+fn abs_display(path: &str) -> String {
+    env::current_dir()
+        .map(|d| d.join(path))
+        .unwrap_or_else(|_| PathBuf::from(path))
+        .display()
+        .to_string()
+}
+
+/// Print a human-readable diff summary between two tool outputs.
+///
+/// The header names the **full source file** each side was read from and its
+/// row count; both lists were sorted + normalised by `normalise_paths` before
+/// the merge-walk, so the examples appear in sorted order.  Shows up to
 /// `max_examples` lines from each side so operators can spot patterns.
-fn print_diff(a_label: &str, b_label: &str, diff: &DiffResult, max_examples: usize) {
+fn print_diff(
+    a_label: &str, a_path: &str, a_n: usize,
+    b_label: &str, b_path: &str, b_n: usize,
+    diff: &DiffResult, max_examples: usize,
+) {
+    eprintln!("      diff {a_label} vs {b_label}  (sorted + normalised):");
+    eprintln!("        {a_label:<4} ({a_n:>8} rows): {}", abs_display(a_path));
+    eprintln!("        {b_label:<4} ({b_n:>8} rows): {}", abs_display(b_path));
     if diff.is_identical() {
-        eprintln!("      {a_label} vs {b_label}: identical ✓");
+        eprintln!("        result: identical ✓");
         return;
     }
     let show_a = diff.only_in_a.len().min(max_examples);
     let show_b = diff.only_in_b.len().min(max_examples);
-    eprintln!("      {a_label} vs {b_label}: ⚠ {} only in {a_label}, {} only in {b_label}",
+    eprintln!("        result: ⚠ {} only in {a_label}, {} only in {b_label}",
         diff.only_in_a.len(), diff.only_in_b.len());
     if show_a > 0 {
         eprintln!("        only in {a_label} (first {show_a}):");
@@ -722,6 +757,189 @@ fn run_es_to(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: Outpu
     Timing { wall_ms: out.wall_ms, rows, bad_rows, ok: true, ..Default::default() }
 }
 
+// ── Everything: isolated bench instance ─────────────────────────────────────
+// Ported from `crates/uffs-bench/src/run/es_instance.rs`.  When ES is part of
+// the run the bench KILLS every running `Everything.exe` and launches a private
+// sandbox instance:
+//
+//     Everything.exe -config <tempini> -instance uffs-bench -startup
+//
+// `<tempini>` is generated from the permanent `Everything.ini` but with
+// `ntfs_volume_includes`/`ntfs_volume_monitors` set to 1 ONLY for the requested
+// drives (0 for the rest) and all `auto_include_*`/`auto_remove_*` keys forced
+// to 0 so ES does not auto-discover other volumes.  The permanent ini is never
+// modified.  `es.exe` queries target the sandbox via `-instance uffs-bench`.
+
+/// Named instance used for the bench-local Everything process.
+const ES_INSTANCE_NAME: &str = "uffs-bench";
+/// Poll budget waiting for the bench instance to finish indexing (60×5s = 5m).
+const ES_LOAD_POLL_ATTEMPTS: u32 = 60;
+const ES_LOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// Grace after asking existing instances to exit before spawning ours.
+const ES_KILL_GRACE: Duration = Duration::from_secs(3);
+/// Grace after spawning before the first IPC readiness poll.
+const ES_STARTUP_GRACE: Duration = Duration::from_secs(5);
+
+/// Permanent Everything.ini path (`%APPDATA%\Everything\Everything.ini`).
+fn everything_ini_path() -> PathBuf {
+    PathBuf::from(env::var("APPDATA").unwrap_or_default())
+        .join("Everything").join("Everything.ini")
+}
+
+/// Temp path for the bench ini (prefers `%TEMP%`).
+fn bench_ini_path() -> PathBuf {
+    env::temp_dir().join("uffs-bench-everything.ini")
+}
+
+/// Parse a `key=val1,val2,...` Everything.ini array value into tokens.
+/// Handles the quoted-string format ES uses (`"C:","D:"`); quoted tokens are
+/// kept whole.
+fn parse_ini_array(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut rest = value.trim();
+    while !rest.is_empty() {
+        if rest.starts_with('"') {
+            let close = rest.char_indices().skip(1).find(|(_, ch)| *ch == '"');
+            let end = close.map_or(rest.len(), |(idx, _)| idx + 1);
+            let (tok, tail) = rest.split_at(end);
+            tokens.push(tok.to_owned());
+            rest = tail.trim_start_matches(',');
+        } else {
+            let end = rest.find(',').unwrap_or(rest.len());
+            let (tok, tail) = rest.split_at(end);
+            tokens.push(tok.to_owned());
+            rest = tail.trim_start_matches(',');
+        }
+    }
+    tokens
+}
+
+/// Rebuild ini text replacing only `ntfs_volume_includes`/`ntfs_volume_monitors`
+/// and forcing the `auto_include_*`/`auto_remove_*` keys to `0`.  Every other
+/// line is copied verbatim.
+fn rebuild_ini(text: &str, includes: &str, monitors: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let key = line.split_once('=').map_or("", |(k, _)| k.trim());
+        match key {
+            "ntfs_volume_includes" => {
+                out.push_str("ntfs_volume_includes=");
+                out.push_str(includes);
+                out.push('\n');
+            }
+            "ntfs_volume_monitors" => {
+                out.push_str("ntfs_volume_monitors=");
+                out.push_str(monitors);
+                out.push('\n');
+            }
+            // Force to 0 — without this ES ignores ntfs_volume_paths and
+            // auto-discovers every fixed NTFS drive on the machine.
+            "auto_include_fixed_volumes"
+            | "auto_include_removable_volumes"
+            | "auto_include_fixed_refs_volumes"
+            | "auto_include_removable_refs_volumes"
+            | "auto_remove_offline_ntfs_volumes"
+            | "auto_remove_moved_ntfs_volumes"
+            | "auto_remove_offline_refs_volumes"
+            | "auto_remove_moved_refs_volumes" => {
+                out.push_str(key);
+                out.push_str("=0\n");
+            }
+            _ => { out.push_str(line); out.push('\n'); }
+        }
+    }
+    out
+}
+
+/// Write the bench `Everything.ini` into `ini_out`, including only `drives`.
+fn write_bench_ini(ini_out: &Path, drives: &[String]) -> std::io::Result<()> {
+    let permanent = everything_ini_path();
+    let text = std::fs::read_to_string(&permanent).unwrap_or_default();
+    let bench_set: Vec<char> = drives.iter()
+        .filter_map(|d| d.chars().next())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    // Map positional ntfs_volume_paths → include bit (1 for bench drives).
+    let mut paths: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == "ntfs_volume_paths" { paths = parse_ini_array(v); break; }
+        }
+    }
+    let includes: String = paths.iter().map(|tok| {
+        let letter = tok.trim_matches('"').chars().next().unwrap_or(' ').to_ascii_uppercase();
+        if bench_set.contains(&letter) { "1" } else { "0" }
+    }).collect::<Vec<_>>().join(",");
+    let monitors = includes.clone();
+    let out = rebuild_ini(&text, &includes, &monitors);
+    std::fs::write(ini_out, out.as_bytes())
+}
+
+/// Ask any running Everything instances (default + stale bench) to exit.
+fn es_kill_existing(everything: &Path) {
+    let _ = Command::new(everything).args(["-exit"])
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = Command::new(everything).args(["-instance", ES_INSTANCE_NAME, "-exit"])
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+/// Launch the sandboxed Everything instance indexing only `drives`.  Returns
+/// the temp ini path so the caller can remove it on [`es_stop`].
+fn es_launch(everything: &Path, drives: &[String]) -> Option<PathBuf> {
+    if drives.is_empty() { return None; }
+    let ini = bench_ini_path();
+    if let Err(e) = write_bench_ini(&ini, drives) {
+        eprintln!("  [es-instance] WARNING: could not write temp ini — {e}");
+        return None;
+    }
+    // Clean slate: terminate existing instances, then a short grace period so
+    // the process can flush its db before we spawn our own.
+    es_kill_existing(everything);
+    std::thread::sleep(ES_KILL_GRACE);
+    eprintln!("  [es-instance] launching Everything (drives: {}) …", drives.join(","));
+    let ini_str = ini.to_string_lossy().to_string();
+    let args = ["-config", ini_str.as_str(), "-instance", ES_INSTANCE_NAME, "-startup"];
+    eprintln!("  [es-instance] spawn: {} {}", everything.display(), args.join(" "));
+    match Command::new(everything).args(args)
+        .stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(_)  => Some(ini),
+        Err(e) => { eprintln!("  [es-instance] WARNING: could not launch Everything — {e}"); None }
+    }
+}
+
+/// Poll `es.exe -instance uffs-bench` until every drive reports a non-zero
+/// result count, or the poll budget is exhausted.  Returns `true` when loaded.
+fn es_wait_until_loaded(es: &Path, drives: &[String]) -> bool {
+    std::thread::sleep(ES_STARTUP_GRACE);
+    for attempt in 1..=ES_LOAD_POLL_ATTEMPTS {
+        let counts: Vec<(String, u64)> = drives.iter().map(|d| {
+            let search = format!("{d}:");
+            let n = Command::new(es)
+                .args(["-instance", ES_INSTANCE_NAME, search.as_str(), "-get-result-count"])
+                .stdout(Stdio::piped()).stderr(Stdio::null()).output().ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            (d.clone(), n)
+        }).collect();
+        if counts.iter().all(|(_, n)| *n > 0) {
+            eprintln!("  [es-instance] Everything index loaded — proceeding");
+            return true;
+        }
+        let cs = counts.iter().map(|(d, n)| format!("{d}:{n}")).collect::<Vec<_>>().join(" ");
+        eprintln!("  [es-instance] waiting for Everything to finish indexing … (attempt {attempt}/{ES_LOAD_POLL_ATTEMPTS}) [{cs}]");
+        std::thread::sleep(ES_LOAD_POLL_INTERVAL);
+    }
+    eprintln!("  [es-instance] WARNING: Everything did not finish indexing within 5 minutes — ES cells measured with a partial index");
+    false
+}
+
+/// Send `Everything.exe -instance uffs-bench -exit` and remove the temp ini.
+fn es_stop(everything: &Path, ini: Option<&Path>) {
+    let _ = Command::new(everything).args(["-instance", ES_INSTANCE_NAME, "-exit"])
+        .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    if let Some(p) = ini { let _ = std::fs::remove_file(p); }
+}
+
 // ── Run: UFFS C++ (uffs.com) ─────────────────────────────────────────────────
 /// C++ UFFS reads MFT every invocation (no daemon). No --limit flag.
 /// Extension filter uses --ext=<ext> instead of glob *.ext.
@@ -729,10 +947,12 @@ fn run_es_to(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: Outpu
 ///
 /// # Sink notes
 ///
-/// - `File`: emit `--out=<bench>` and use `Stdio::inherit()` on stdout/stderr.
-///   The C++ binary internally `freopen()`s stdout onto the `--out=` file;
-///   pre-redirecting stdout to a Rust pipe or NUL makes freopen fail silently
-///   and the output file comes out empty.  Inherit is the only safe choice here.
+/// - `File`: emit `--out=<bench>`, inherit stdout (the C++ binary internally
+///   `freopen()`s stdout onto the `--out=` file; pre-redirecting stdout to a
+///   Rust pipe or NUL makes freopen fail silently and the output file comes out
+///   empty), and send stderr to NUL.  stderr carries only the decorative
+///   `Drives? … / Finished in N s` footer, which otherwise spams the console
+///   and makes the per-round diff output unreadable.
 /// - `Stdout` / `Null`: drop `--out=` entirely.  With no `--out=` the freopen
 ///   path never fires, so piped-capture (Stdout) and `cmd /C "... > NUL"`
 ///   (Null) behave normally.
@@ -757,12 +977,13 @@ fn run_uffs_cpp_to(bin: &Path, drive: &str, pattern: &str, cpp_ext: &str, valida
     eprintln!("      CMD: & '{}' {}  [sink={}]", bin.display(), args.join(" "), sink.label());
     let out: ToolOutput = match sink {
         OutputSink::File => {
-            // freopen on --out= requires inherited stdout.  Inherit both streams
-            // and use .status(); we get no captured bytes back but the file is
-            // what we validate here anyway.
+            // freopen on --out= requires inherited stdout.  stderr (the
+            // decorative footer) is discarded so it does not clutter the
+            // bench's own progress/diff output.  We get no captured bytes
+            // back but the file is what we validate here anyway.
             let t = Instant::now();
             let r = Command::new(bin).args(&args)
-                .stdout(Stdio::inherit()).stderr(Stdio::inherit())
+                .stdout(Stdio::inherit()).stderr(Stdio::null())
                 .status();
             let wall_ms = t.elapsed().as_millis() as u64;
             match r {
@@ -906,7 +1127,7 @@ fn print_help() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 fn main() {
-    let cfg = parse_args();
+    let mut cfg = parse_args();
 
     println!("╔══════════════════════════════════════════════════════════════════════════════╗");
     println!("║                     Cross-Tool Benchmark v1.0                               ║");
@@ -937,6 +1158,30 @@ fn main() {
     println!();
 
     let mut all_rows: Vec<Row> = Vec::new();
+
+    // ── Everything: launch a private, drive-scoped bench instance ─────────
+    // KILL every running Everything.exe and start a sandbox instance that
+    // indexes ONLY the requested drives via a custom temp ini (the permanent
+    // Everything.ini is never touched).  es.exe queries target it through
+    // `-instance uffs-bench`.  Skipped when the operator already passed
+    // `--es-instance` (they manage their own) or Everything.exe is missing.
+    let mut es_everything: Option<PathBuf> = None;
+    let mut es_bench_ini: Option<PathBuf> = None;
+    if cfg.tools.contains(&Tool::Everything) && cfg.es.is_some() && cfg.es_instance.is_none() {
+        match find_everything() {
+            Some(ev) => {
+                es_bench_ini = es_launch(&ev, &cfg.drives);
+                if es_bench_ini.is_some() {
+                    cfg.es_instance = Some(ES_INSTANCE_NAME.to_string());
+                    if let Some(ref es) = cfg.es { es_wait_until_loaded(es, &cfg.drives); }
+                }
+                es_everything = Some(ev);
+            }
+            None => eprintln!(
+                "  [es-instance] WARNING: Everything.exe not found — es.exe will \
+                 query whatever instance is running (if any)"),
+        }
+    }
 
     // ── Daemon warmup (once for the requested drives) ──────────────────
     if cfg.tools.contains(&Tool::Uffs) && cfg.skip_cold {
@@ -1071,7 +1316,7 @@ fn main() {
                     let order_labels: Vec<&str> = order.iter().map(|&s| match s {
                         0 => "uffs", 1 => "cpp", 2 => "es", _ => "?"
                     }).collect();
-                    eprint!("    [round {:>2}/{}] order=[{}] ",
+                    eprintln!("    [round {:>2}/{}] order=[{}]",
                         round + 1, cfg.rounds, order_labels.join(","));
                     flush();
 
@@ -1099,8 +1344,7 @@ fn main() {
                                     es, drive, es_pat, validate, sink,
                                     cfg.es_instance.as_deref(), &f_es));
                                 if round == 0 && is_fast_deterministic_fail(&t) {
-                                    eprintln!();
-                                    eprintln!("    es.exe fast-fail (exit={}); skipping remaining es rounds", t.err);
+                                    eprintln!("      es.exe fast-fail ({}); skipping remaining es rounds", t.err);
                                     es_aborted = true;
                                 }
                                 round_rows[2] = t.ok.then_some(t.rows);
@@ -1111,7 +1355,7 @@ fn main() {
                     }
 
                     // ── Line-count summary for this round ─────────────────
-                    eprintln!("uffs={} cpp={} es={}",
+                    eprintln!("      rows:  uffs={}  cpp={}  es={}",
                         round_rows[0].map_or("-".into(), |n| n.to_string()),
                         round_rows[1].map_or("-".into(), |n| n.to_string()),
                         round_rows[2].map_or("-".into(), |n| n.to_string()),
@@ -1129,15 +1373,21 @@ fn main() {
                         let any_data = !uffs_paths.is_empty() || !cpp_paths.is_empty() || !es_paths.is_empty();
                         if any_data {
                             if run_uffs_tool && run_cpp_tool && !uffs_paths.is_empty() && !cpp_paths.is_empty() {
-                                print_diff("uffs", "cpp", &diff_paths(&uffs_paths, &cpp_paths), 10);
+                                print_diff("uffs", &f_uffs, uffs_paths.len(),
+                                           "cpp",  &f_cpp,  cpp_paths.len(),
+                                           &diff_paths(&uffs_paths, &cpp_paths), 10);
                             }
                             if run_uffs_tool && run_es_tool && !es_aborted
                                 && !uffs_paths.is_empty() && !es_paths.is_empty() {
-                                print_diff("uffs", "es", &diff_paths(&uffs_paths, &es_paths), 10);
+                                print_diff("uffs", &f_uffs, uffs_paths.len(),
+                                           "es",   &f_es,   es_paths.len(),
+                                           &diff_paths(&uffs_paths, &es_paths), 10);
                             }
                             if run_cpp_tool && run_es_tool && !es_aborted
                                 && !cpp_paths.is_empty() && !es_paths.is_empty() {
-                                print_diff("cpp", "es", &diff_paths(&cpp_paths, &es_paths), 10);
+                                print_diff("cpp", &f_cpp, cpp_paths.len(),
+                                           "es",  &f_es,  es_paths.len(),
+                                           &diff_paths(&cpp_paths, &es_paths), 10);
                             }
                         }
                     }
@@ -1198,6 +1448,11 @@ fn main() {
         }
 
         println!();
+    }
+
+    // ── Everything: tear down the private bench instance ──────────────────
+    if let Some(ev) = &es_everything {
+        es_stop(ev, es_bench_ini.as_deref());
     }
 
     // ── Summary table ────────────────────────────────────────────────────────
