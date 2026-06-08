@@ -145,7 +145,7 @@ fn show_full(host: &dyn Host, card: &Card) {
         "| est: {}   recovery: {}",
         card.est_time, card.recovery
     ));
-    host.out("|\n+- [y] proceed   [a] autopilot   [b] back   [q] quit   [e] explain   [?] help");
+    host.out("+- [Enter/y] proceed   [a] autopilot   [b] back   [q] quit   [e] explain   [?] help");
 }
 
 /// Render the DONE panel after a step has run.
@@ -208,6 +208,18 @@ fn prompt(host: &dyn Host, mode: &mut Mode, seen: &mut BTreeSet<String>, card: &
             return Decision::Abort;
         };
         if let Some(decision) = interpret_key(host, mode, card, key) {
+            let echo = match key {
+                '\n' | '\r' => "[Enter] → proceeding",
+                'y' | 'Y' => "[y] → proceeding",
+                'a' | 'A' => "[a] → autopilot",
+                's' | 'S' => "[s] → skipping",
+                'b' | 'B' => "[b] → going back",
+                'q' | 'Q' => "[q] → aborting",
+                _ => "",
+            };
+            if !echo.is_empty() {
+                host.out(&format!("   {echo}"));
+            }
             return decision;
         }
     }
