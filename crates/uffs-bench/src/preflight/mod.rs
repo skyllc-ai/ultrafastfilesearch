@@ -466,9 +466,9 @@ fn warm_parked_drives(
 /// Render a GFM ES RAM budget table for display before the matrix.
 ///
 /// Columns: Drive | UFFS records | Est. RAM | ES index | Fits budget
-/// Drives are greedily accepted smallest-first until `es_ram_budget_bytes`
-/// would be exceeded.  A footer shows the total RAM of fitting drives vs the
-/// budget cap.
+/// Drives are accepted in candidate order (as the operator specified them)
+/// until `es_ram_budget_bytes` would be exceeded.  A footer shows the total
+/// RAM of fitting drives vs the budget cap.
 #[must_use]
 pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) -> String {
     if result.drives.is_empty() {
@@ -478,10 +478,8 @@ pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) ->
     let sep = "|-------|-------------|----------|-----------|-------------|";
 
     let mut cumulative_bytes: u64 = 0;
-    let mut sorted_drives: Vec<&DrivePreflight> = result.drives.iter().collect();
-    sorted_drives.sort_by_key(|dp| dp.uffs_record_count);
     let mut budget_fits: alloc::collections::BTreeSet<char> = alloc::collections::BTreeSet::new();
-    for dp in &sorted_drives {
+    for dp in &result.drives {
         let est = dp.uffs_record_count.saturating_mul(UFFS_BYTES_PER_RECORD);
         if es_ram_budget_bytes == 0 || cumulative_bytes.saturating_add(est) <= es_ram_budget_bytes {
             cumulative_bytes = cumulative_bytes.saturating_add(est);

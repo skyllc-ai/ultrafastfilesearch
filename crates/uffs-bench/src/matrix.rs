@@ -101,10 +101,9 @@ fn everything_serves(preflight: &PreflightResult, drive: char) -> bool {
 
 /// Greedy RAM-budget drive selector for Everything.
 ///
-/// Sorts candidate drives by UFFS record count ascending (maximize drive count
-/// within budget), then accumulates until `es_ram_budget_bytes` would be
-/// exceeded. When budget is 0 (unlimited), falls back to the `loaded && hot`
-/// check only.
+/// Accumulates candidate drives in the order the operator specified them
+/// until `es_ram_budget_bytes` would be exceeded. When budget is 0
+/// (unlimited), falls back to the `loaded && hot` check only.
 fn ram_budget_capable_drives(spec: &MatrixSpec, preflight: &PreflightResult) -> Vec<char> {
     if spec.es_ram_budget_bytes == 0 {
         return spec
@@ -114,28 +113,19 @@ fn ram_budget_capable_drives(spec: &MatrixSpec, preflight: &PreflightResult) -> 
             .filter(|&drive| everything_serves(preflight, drive))
             .collect();
     }
-    let mut candidates: Vec<(char, u64)> = spec
-        .candidate_drives
-        .iter()
-        .copied()
-        .filter(|&drive| everything_serves(preflight, drive))
-        .map(|drive| {
-            let uffs_count =
-                find_drive(&preflight.drives, drive).map_or(0, |dp| dp.uffs_record_count);
-            (drive, uffs_count)
-        })
-        .collect();
-    candidates.sort_by_key(|&(_, count)| count);
     let mut cumulative: u64 = 0;
     let mut result = Vec::new();
-    for (drive, count) in candidates {
+    for &drive in &spec.candidate_drives {
+        if !everything_serves(preflight, drive) {
+            continue;
+        }
+        let count = find_drive(&preflight.drives, drive).map_or(0, |dp| dp.uffs_record_count);
         let est = count.saturating_mul(UFFS_BYTES_PER_RECORD);
         if cumulative.saturating_add(est) <= spec.es_ram_budget_bytes {
             cumulative = cumulative.saturating_add(est);
             result.push(drive);
         }
     }
-    result.sort_unstable();
     result
 }
 
