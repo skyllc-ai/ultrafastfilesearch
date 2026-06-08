@@ -101,6 +101,8 @@ pub struct EnvFingerprint {
     pub logical_cpus: String,
     /// Total physical RAM (best-effort, human-readable).
     pub total_ram: String,
+    /// Total physical RAM in bytes (`0` when the probe fails).
+    pub ram_bytes: u64,
     /// Probed tool versions.
     pub tools: Vec<ToolVersion>,
 }
@@ -224,6 +226,14 @@ fn probe_value(host: &dyn Host, probe: &Probe) -> String {
     }
 }
 
+/// Run the RAM probe and return the raw byte count (`0` on failure).
+fn probe_ram_bytes(host: &dyn Host, probe: &Probe) -> u64 {
+    host.run(probe.exe, probe.args)
+        .ok()
+        .and_then(|out| clean_value(&out.stdout).parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
 /// Run a [`StateProbe`] and return `"running"` or `"stopped"`.
 fn probe_state(host: &dyn Host, sp: &StateProbe) -> String {
     let arg_refs: Vec<&str> = sp.args.iter().map(String::as_str).collect();
@@ -308,7 +318,12 @@ pub fn capture(host: &dyn Host, spec: &EnvSpec) -> EnvFingerprint {
     let [model_probe, cores_probe, ram_probe] = sys_probes();
     let cpu = probe_value(host, &model_probe);
     let logical_cpus = probe_value(host, &cores_probe);
-    let total_ram = probe_value(host, &ram_probe);
+    let ram_bytes = probe_ram_bytes(host, &ram_probe);
+    let total_ram = if ram_bytes > 0 {
+        bytes_to_gib(ram_bytes)
+    } else {
+        probe_value(host, &ram_probe)
+    };
     let elevated = host.is_elevated();
     let tools = spec
         .tools
@@ -324,6 +339,7 @@ pub fn capture(host: &dyn Host, spec: &EnvSpec) -> EnvFingerprint {
         cpu,
         logical_cpus,
         total_ram,
+        ram_bytes,
         tools,
     }
 }
@@ -630,6 +646,7 @@ mod tests {
             cpu: "Test CPU".to_owned(),
             logical_cpus: "8".to_owned(),
             total_ram: "16.0 GiB".to_owned(),
+            ram_bytes: 17_179_869_184,
             tools: vec![ToolVersion {
                 name: "uffs".to_owned(),
                 exe: "uffs.exe".to_owned(),

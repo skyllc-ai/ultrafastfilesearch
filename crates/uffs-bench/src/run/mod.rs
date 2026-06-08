@@ -241,8 +241,11 @@ fn env_spec_from_cli(host: &dyn Host, cli: &Cli) -> EnvSpec {
     }
 }
 
-/// Build the Stage 0c [`PreflightSpec`] from the CLI and host environment.
-fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli) -> PreflightSpec {
+/// Build the Stage 0c [`PreflightSpec`] from the CLI and captured env.
+///
+/// `es_ram_budget_bytes` is set to 50 % of the system's physical RAM so that
+/// the greedy drive selector avoids OOM-ing Everything's in-process index.
+fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli, es_ram_budget_bytes: u64) -> PreflightSpec {
     PreflightSpec {
         ini_path: everything_ini_path(host),
         candidate_drives: cli.drives_or_default(),
@@ -251,11 +254,12 @@ fn preflight_spec_from_cli(host: &dyn Host, cli: &Cli) -> PreflightSpec {
         patterns: resolve::default_pattern_probes(),
         poll_attempts: PREFLIGHT_POLL_ATTEMPTS,
         poll_interval_ms: PREFLIGHT_POLL_INTERVAL_MS,
+        es_ram_budget_bytes,
     }
 }
 
 /// Build the Stage 0d [`MatrixSpec`] from the CLI.
-fn matrix_spec_from_cli(cli: &Cli) -> MatrixSpec {
+fn matrix_spec_from_cli(cli: &Cli, es_ram_budget_bytes: u64) -> MatrixSpec {
     MatrixSpec {
         required_tools: cli.tools_or_default(),
         candidate_drives: cli.drives_or_default(),
@@ -263,6 +267,7 @@ fn matrix_spec_from_cli(cli: &Cli) -> MatrixSpec {
             .iter()
             .map(|(name, _)| (*name).to_owned())
             .collect(),
+        es_ram_budget_bytes,
     }
 }
 
@@ -409,9 +414,15 @@ impl Orchestrator<'_> {
                 "operator chose to abort — install missing tools and re-run".to_owned(),
             ));
         }
-        let preflight =
-            preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
-        let matrix = matrix::compute_matrix(&matrix_spec_from_cli(self.cli), &preflight);
+        let es_ram_budget = fp.ram_bytes / 2;
+        let preflight = preflight::capture(
+            self.host,
+            &preflight_spec_from_cli(self.host, self.cli, es_ram_budget),
+        );
+        self.host
+            .out(&preflight::render_drive_table(&preflight, es_ram_budget));
+        let matrix =
+            matrix::compute_matrix(&matrix_spec_from_cli(self.cli, es_ram_budget), &preflight);
         self.host.out(&matrix::render_md(&matrix));
         Ok(Capture {
             fp,

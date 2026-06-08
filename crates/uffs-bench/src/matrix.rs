@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BenchError, Result};
 use crate::host::Host;
-use crate::preflight::{CellFeasibility, DrivePreflight, EsStatus, PreflightResult};
+use crate::preflight::{
+    CellFeasibility, DrivePreflight, EsStatus, PreflightResult, UFFS_BYTES_PER_RECORD,
+};
 
 /// Tool id of the Everything CLI (es.exe) competitor.
 pub const EVERYTHING_TOOL: &str = "everything";
@@ -37,6 +39,12 @@ pub struct MatrixSpec {
     pub candidate_drives: Vec<char>,
     /// Pattern names to negotiate, in display order.
     pub patterns: Vec<String>,
+    /// Maximum bytes Everything may use for its in-process index.
+    ///
+    /// Drives are added greedily (smallest UFFS record count first) until the
+    /// cumulative estimated RAM would exceed this budget; any remaining drive
+    /// is excluded from cross-tool cells.  `0` means no cap (unlimited).
+    pub es_ram_budget_bytes: u64,
 }
 
 /// An apples-to-apples cell timed for every required tool.
@@ -89,6 +97,46 @@ fn find_cell<'a>(
 /// Whether Everything can serve `drive` (index loaded *and* hot).
 fn everything_serves(preflight: &PreflightResult, drive: char) -> bool {
     find_drive(&preflight.drives, drive).is_some_and(|state| state.loaded && state.hot)
+}
+
+/// Greedy RAM-budget drive selector for Everything.
+///
+/// Sorts candidate drives by UFFS record count ascending (maximize drive count
+/// within budget), then accumulates until `es_ram_budget_bytes` would be
+/// exceeded. When budget is 0 (unlimited), falls back to the `loaded && hot`
+/// check only.
+fn ram_budget_capable_drives(spec: &MatrixSpec, preflight: &PreflightResult) -> Vec<char> {
+    if spec.es_ram_budget_bytes == 0 {
+        return spec
+            .candidate_drives
+            .iter()
+            .copied()
+            .filter(|&drive| everything_serves(preflight, drive))
+            .collect();
+    }
+    let mut candidates: Vec<(char, u64)> = spec
+        .candidate_drives
+        .iter()
+        .copied()
+        .filter(|&drive| everything_serves(preflight, drive))
+        .map(|drive| {
+            let uffs_count =
+                find_drive(&preflight.drives, drive).map_or(0, |dp| dp.uffs_record_count);
+            (drive, uffs_count)
+        })
+        .collect();
+    candidates.sort_by_key(|&(_, count)| count);
+    let mut cumulative: u64 = 0;
+    let mut result = Vec::new();
+    for (drive, count) in candidates {
+        let est = count.saturating_mul(UFFS_BYTES_PER_RECORD);
+        if cumulative.saturating_add(est) <= spec.es_ram_budget_bytes {
+            cumulative = cumulative.saturating_add(est);
+            result.push(drive);
+        }
+    }
+    result.sort_unstable();
+    result
 }
 
 /// Explain why competitors are excluded from a `(drive, pattern)` cell.
@@ -144,12 +192,11 @@ pub fn compute_matrix(spec: &MatrixSpec, preflight: &PreflightResult) -> Matrix 
         .iter()
         .any(|tool| tool == EVERYTHING_TOOL);
 
-    let capable_drives: Vec<char> = spec
-        .candidate_drives
-        .iter()
-        .copied()
-        .filter(|&drive| !everything_required || everything_serves(preflight, drive))
-        .collect();
+    let capable_drives: Vec<char> = if everything_required {
+        ram_budget_capable_drives(spec, preflight)
+    } else {
+        spec.candidate_drives.clone()
+    };
 
     let mut cross_cells = Vec::new();
     let mut uffs_only = Vec::new();
@@ -256,6 +303,7 @@ mod tests {
             loaded: true,
             hot: true,
             record_count,
+            uffs_record_count: record_count,
             es_status: EsStatus::Loaded,
         }
     }
@@ -289,6 +337,7 @@ mod tests {
                 loaded: false,
                 hot: false,
                 record_count: 0,
+                uffs_record_count: 0,
                 es_status: EsStatus::NotConfigured,
             }],
             cells: vec![
@@ -300,6 +349,7 @@ mod tests {
             required_tools: three_tools(),
             candidate_drives: vec!['C', 'D', 'E', 'F', 'M', 'S'],
             patterns: vec!["all_dlls".to_owned()],
+            es_ram_budget_bytes: 0,
         };
 
         let matrix = compute_matrix(&spec, &preflight);
@@ -336,6 +386,7 @@ mod tests {
             required_tools: three_tools(),
             candidate_drives: vec!['C'],
             patterns: vec!["full_scan".to_owned()],
+            es_ram_budget_bytes: 0,
         };
 
         let matrix = compute_matrix(&spec, &preflight);
@@ -356,6 +407,7 @@ mod tests {
                 loaded: false,
                 hot: false,
                 record_count: 0,
+                uffs_record_count: 0,
                 es_status: EsStatus::StillIndexing,
             }],
             cells: Vec::new(),
@@ -364,6 +416,7 @@ mod tests {
             required_tools: three_tools(),
             candidate_drives: vec!['C'],
             patterns: vec!["all_dlls".to_owned()],
+            es_ram_budget_bytes: 0,
         };
 
         let matrix = compute_matrix(&spec, &preflight);
@@ -389,6 +442,7 @@ mod tests {
             required_tools: vec!["uffs".to_owned(), "uffs_cpp".to_owned()],
             candidate_drives: vec!['C', 'E'],
             patterns: vec!["all_dlls".to_owned()],
+            es_ram_budget_bytes: 0,
         };
 
         let matrix = compute_matrix(&spec, &preflight);
