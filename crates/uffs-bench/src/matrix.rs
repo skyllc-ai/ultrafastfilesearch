@@ -102,12 +102,28 @@ fn find_cell<'a>(
 /// RAM is within the budget.  When budget is 0 (unlimited), all candidate
 /// drives are included.
 fn ram_budget_capable_drives(spec: &MatrixSpec, preflight: &PreflightResult) -> Vec<char> {
+    // Only consider drives that made it through preflight (known to the UFFS
+    // daemon).  Drives absent from preflight.drives were dropped during capture
+    // and must not reappear here.
+    let known: alloc::collections::BTreeSet<char> = preflight
+        .drives
+        .iter()
+        .map(|preflight_dp| preflight_dp.drive)
+        .collect();
     if spec.es_ram_budget_bytes == 0 {
-        return spec.candidate_drives.clone();
+        return spec
+            .candidate_drives
+            .iter()
+            .copied()
+            .filter(|letter| known.contains(letter))
+            .collect();
     }
     let mut cumulative: u64 = 0;
     let mut result = Vec::new();
     for &drive in &spec.candidate_drives {
+        if !known.contains(&drive) {
+            continue;
+        }
         let count = find_drive(&preflight.drives, drive).map_or(0, |dp| dp.uffs_record_count);
         let est = count.saturating_mul(UFFS_BYTES_PER_RECORD);
         if cumulative.saturating_add(est) <= spec.es_ram_budget_bytes {
@@ -160,10 +176,10 @@ fn solo_reason(preflight: &PreflightResult, drive: char, pattern: &str) -> Strin
 
 /// Negotiate the cross-tool vs UFFS-only matrix (execution-plan §8.4).
 ///
-/// `capable_drives` is the candidate set intersected with every required tool's
-/// servable set (only Everything constrains it today). A cell is cross-tool
-/// when its drive is capable and Everything finds it feasible; otherwise it is
-/// UFFS-only with a per-cell reason.
+/// Only drives present in `preflight.drives` (confirmed by the UFFS daemon)
+/// participate.  `capable_drives` is the RAM-budget-filtered subset of those.
+/// A cell is cross-tool when its drive is capable and Everything finds it
+/// feasible; otherwise it is UFFS-only with a per-cell reason.
 #[must_use]
 pub fn compute_matrix(spec: &MatrixSpec, preflight: &PreflightResult) -> Matrix {
     let everything_required = spec
@@ -174,12 +190,27 @@ pub fn compute_matrix(spec: &MatrixSpec, preflight: &PreflightResult) -> Matrix 
     let capable_drives: Vec<char> = if everything_required {
         ram_budget_capable_drives(spec, preflight)
     } else {
-        spec.candidate_drives.clone()
+        // No budget constraint: all preflight-confirmed drives, in candidate order.
+        let known: alloc::collections::BTreeSet<char> = preflight
+            .drives
+            .iter()
+            .map(|preflight_dp| preflight_dp.drive)
+            .collect();
+        spec.candidate_drives
+            .iter()
+            .copied()
+            .filter(|letter| known.contains(letter))
+            .collect()
     };
 
     let mut cross_cells = Vec::new();
     let mut uffs_only = Vec::new();
-    for &drive in &spec.candidate_drives {
+    // Iterate only drives confirmed by preflight, preserving candidate order.
+    for &drive in spec
+        .candidate_drives
+        .iter()
+        .filter(|letter| preflight.drives.iter().any(|pdp| pdp.drive == **letter))
+    {
         let capable = capable_drives.contains(&drive);
         for pattern in &spec.patterns {
             let feasible = !everything_required
@@ -335,8 +366,10 @@ mod tests {
 
         let matrix = compute_matrix(&spec, &preflight);
 
-        // Budget=0 → all candidates are capable regardless of ES running state.
-        assert_eq!(matrix.capable_drives, vec!['C', 'D', 'E', 'F', 'M', 'S']);
+        // Budget=0 → all preflight-confirmed candidates are capable.
+        // F/M/S are in spec.candidate_drives but NOT in preflight.drives
+        // (dropped during capture as unknown to daemon) → excluded.
+        assert_eq!(matrix.capable_drives, vec!['C', 'D', 'E']);
         // Only C and D have feasibility cells → cross-tool.
         assert_eq!(
             matrix
@@ -346,9 +379,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!['C', 'D']
         );
-        // E/F/M/S: capable but no feasibility cell → UFFS-only.
+        // E: confirmed but no feasibility cell → UFFS-only.
+        // F/M/S: not in preflight → not emitted at all.
         let solo_drives: Vec<char> = matrix.uffs_only.iter().map(|cell| cell.drive).collect();
-        assert_eq!(solo_drives, vec!['E', 'F', 'M', 'S']);
+        assert_eq!(solo_drives, vec!['E']);
     }
 
     #[test]
@@ -414,7 +448,7 @@ mod tests {
     #[test]
     fn without_everything_every_cell_is_cross_tool() {
         let preflight = PreflightResult {
-            drives: Vec::new(),
+            drives: vec![hot_drive('C', 100), hot_drive('E', 200)],
             cells: Vec::new(),
         };
         let spec = MatrixSpec {

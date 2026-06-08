@@ -410,15 +410,22 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
     let drives: Vec<DrivePreflight> = spec
         .candidate_drives
         .iter()
-        .filter(|&&drive| {
-            let known = uffs_counts.contains_key(&drive);
-            if !known {
+        .filter(|&&drive| match uffs_counts.get(&drive).copied() {
+            None => {
                 host.out(&format!(
                     "[preflight] WARNING: drive {drive}: not found in UFFS daemon \
-                     index — skipping"
+                         index — skipping"
                 ));
+                false
             }
-            known
+            Some(0) => {
+                host.out(&format!(
+                    "[preflight] WARNING: drive {drive}: 0 records in UFFS daemon \
+                         index — skipping"
+                ));
+                false
+            }
+            Some(_) => true,
         })
         .map(|&drive| {
             let uffs_record_count = uffs_counts.get(&drive).copied().unwrap_or(0);
