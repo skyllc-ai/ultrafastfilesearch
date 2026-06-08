@@ -141,9 +141,11 @@ pub(crate) fn es_exe(host: &dyn Host) -> String {
 
 /// Default measurement patterns: display name + UFFS row-count argument
 /// template (`{DRIVE}` is substituted per drive during preflight).
+///
+/// Correct CLI form: `uffs.exe <pattern> --drives <DRIVE> --count`
 pub(crate) const DEFAULT_PATTERNS: [(&str, &[&str]); 2] = [
-    ("all_dlls", &["{DRIVE}:\\", "*.dll", "--count"]),
-    ("full_scan", &["{DRIVE}:\\", "*", "--count"]),
+    ("all_dlls", &["*.dll", "--drives", "{DRIVE}", "--count"]),
+    ("full_scan", &["*", "--drives", "{DRIVE}", "--count"]),
 ];
 
 /// Build the default measurement [`PatternProbe`] set (shared by preflight and

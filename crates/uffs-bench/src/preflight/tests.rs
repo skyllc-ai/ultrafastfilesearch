@@ -28,8 +28,9 @@ fn spec_for(drives: &[char], attempts: u32) -> PreflightSpec {
         patterns: vec![PatternProbe {
             name: "all_dlls".to_owned(),
             args: vec![
-                "{DRIVE}:\\".to_owned(),
                 "*.dll".to_owned(),
+                "--drives".to_owned(),
+                "{DRIVE}".to_owned(),
                 "--count".to_owned(),
             ],
         }],
