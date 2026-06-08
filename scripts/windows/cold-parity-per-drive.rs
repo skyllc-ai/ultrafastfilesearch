@@ -392,6 +392,11 @@ fn purge_drive_cache(cache_dir: &PathBuf, drive: &str, dump_raw: bool) {
 /// Kill any running daemon and start a fresh one with the given drives.
 /// If `drives` is empty the daemon auto-discovers all system drives.
 /// Sleeps briefly after kill to let the OS release socket / named-pipe handles.
+///
+/// The daemon is started with extended idle-demote TTLs so it stays HOT
+/// for the entire bench run without spurious Hot→Warm or Warm→Parked demotes:
+///   `UFFS_HOT_TO_WARM_IDLE_SECS=3600`   (1 hr — default 10 min)
+///   `UFFS_WARM_TO_PARKED_IDLE_SECS=7200` (2 hr — default 30 min)
 fn kill_and_restart_daemon(uffs_bin: &str, drives: &[String]) {
     let _ = Command::new(uffs_bin)
         .args(["daemon", "kill"])
@@ -409,6 +414,8 @@ fn kill_and_restart_daemon(uffs_bin: &str, drives: &[String]) {
     }
     let _ = Command::new(uffs_bin)
         .args(&start_args)
+        .env("UFFS_HOT_TO_WARM_IDLE_SECS", "3600")
+        .env("UFFS_WARM_TO_PARKED_IDLE_SECS", "7200")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();

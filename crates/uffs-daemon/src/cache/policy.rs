@@ -82,15 +82,16 @@ use super::shard::ShardState;
 /// drives don't re-warm just because their bloom got faulted in by
 /// a wildcard scan.
 ///
-/// 60 s default makes the Hot → Warm transition observable in
-/// normal dev iteration; the runtime-mmap rebuild on the next
-/// query is sub-millisecond so the demotion is essentially free.
+/// 10 min (600 s) default — enough time to cover typical interactive
+/// usage bursts without demoting mid-session.  The runtime-mmap
+/// rebuild on the next query is sub-millisecond so the demotion cost
+/// is negligible when it does fire.
 ///
 /// Consumed by [`crate::index::IndexManager::demote_idle_shards`]
 /// (Phase 3 Commit D) via [`next_state_for_idle_with_thresholds`]
 /// — Phase 6 Commit C feeds it adaptive thresholds derived from
 /// this constant via `crate::config::TiersConfig::default()`.
-pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 60;
+pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 600;
 
 /// Default for the `Warm` → `Parked` idle threshold.
 ///
@@ -98,14 +99,13 @@ pub(crate) const HOT_TO_WARM_IDLE_SECS: u64 = 60;
 /// `Parked` drops the runtime mmap (the records / names columns
 /// are released; bloom + trie persist for Phase 4+ search-skip).
 ///
-/// 5 min default lets dev iteration exercise the Phase 4
-/// re-promote path (which #93 parallelised) without waiting the
-/// 30 min the original prototype used.  The bloom + trie pre-check
-/// from Commit F means a Parked re-promote only re-decrypts the
-/// compact body when the query actually hits the drive, so the
-/// extra demote/promote churn at this cadence is bounded by query
-/// pattern, not by the timer alone.
-pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 300;
+/// 30 min (1 800 s) default — keeps the body resident across typical
+/// human-scale gaps in usage (lunch break, context switch) while
+/// still freeing memory on genuinely idle drives.  The bloom + trie
+/// pre-check from Commit F means a Parked re-promote only
+/// re-decrypts the compact body when the query actually hits the
+/// drive, so the cost of a miss is bounded by query pattern.
+pub(crate) const WARM_TO_PARKED_IDLE_SECS: u64 = 1_800;
 
 /// Default for the `Parked` → `Cold` idle threshold.
 ///
@@ -124,11 +124,10 @@ pub(crate) const PARKED_TO_COLD_IDLE_SECS: u64 = 86_400;
 /// idle-tier transition.
 ///
 /// 5 min is a deliberate trade-off: short enough that `Warm` shards
-/// don't drift more than `WARM_TO_PARKED_IDLE_SECS / 6` between
-/// refreshes (so nothing demotes mid-refresh), long enough that the
-/// USN journal accumulates a meaningful batch (per-drive replay
-/// dominated by fixed setup, not by record count).  Override at
-/// daemon startup via [`USN_REFRESH_INTERVAL_ENV`].
+/// accumulate at most ~5 min of filesystem churn before a refresh,
+/// long enough that the USN journal builds a meaningful batch
+/// (per-drive replay is dominated by fixed setup cost, not record
+/// count).  Override at daemon startup via [`USN_REFRESH_INTERVAL_ENV`].
 pub(crate) const USN_REFRESH_INTERVAL_SECS: u64 = 300;
 
 /// Env var that overrides [`HOT_TO_WARM_IDLE_SECS`].

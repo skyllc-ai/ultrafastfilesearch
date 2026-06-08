@@ -285,6 +285,19 @@ fn uffs_stop(bin: &Path) {
     let _ = Command::new(bin).args(["daemon","kill"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     std::thread::sleep(Duration::from_secs(2));
 }
+/// Start the daemon with bench-safe idle-demote TTLs so it never demotes
+/// Hot→Warm or Warm→Parked mid-run.  These env vars are scoped to the
+/// daemon child process only — the bench script's own env is unchanged,
+/// and teardown's next `uffs daemon start` gets production defaults.
+fn uffs_start(bin: &Path) {
+    let _ = Command::new(bin)
+        .args(["daemon", "start"])
+        .env("UFFS_HOT_TO_WARM_IDLE_SECS",   "3600")
+        .env("UFFS_WARM_TO_PARKED_IDLE_SECS", "7200")
+        .stdout(Stdio::null()).stderr(Stdio::null())
+        .status();
+    std::thread::sleep(Duration::from_millis(500));
+}
 fn uffs_purge_cache() {
     // Remove both cache locations:
     //   %LOCALAPPDATA%\uffs\cache\  (primary)
@@ -794,9 +807,11 @@ fn main() {
 
     // ── Daemon warmup (once for all drives) ─────────────────────────────
     if cfg.tools.contains(&Tool::Uffs) && cfg.skip_cold {
-        // When skipping COLD/WARM, ensure the daemon is running before HOT.
-        // The daemon loads ALL drives on startup, so one probe is enough.
+        // When skipping COLD/WARM, kill+restart with bench-safe TTLs then
+        // issue one probe so the daemon is fully loaded before HOT starts.
         eprint!("  Warming up UFFS daemon (all drives)...");  flush();
+        uffs_stop(&cfg.uffs);
+        uffs_start(&cfg.uffs);
         let _ = Command::new(&cfg.uffs)
             .args(["__uffs_warmup_probe__", "--limit", "1"])
             .stdout(Stdio::null()).stderr(Stdio::null())
@@ -840,6 +855,7 @@ fn main() {
                 if cfg.skip_pattern(label) { continue; }
                 eprint!("    {label:<12} ");  flush();
                 uffs_stop(&cfg.uffs);
+                uffs_start(&cfg.uffs);
                 let t = check_dnf(run_uffs(&cfg.uffs, drive, pat, validate, OutputSink::File));
                 let verdict = if t.dnf { "DNF" } else if t.bad_rows > 0 { "WRONG" } else if t.ok { "PASS" } else { "ERROR" };
                 let bad_str = if t.bad_rows > 0 { format!("  bad={}", t.bad_rows) } else { String::new() };
@@ -856,6 +872,7 @@ fn main() {
             // minimise I/O.  Done once per drive — the daemon stays warm
             // across every sink iteration below.
             eprint!("  UFFS HOT:  warming up daemon...");  flush();
+            uffs_start(&cfg.uffs);
             let _ = Command::new(&cfg.uffs)
                 .args(["__uffs_warmup_probe__", "--drive", drive, "--limit", "1"])
                 .stdout(Stdio::null()).stderr(Stdio::null())
