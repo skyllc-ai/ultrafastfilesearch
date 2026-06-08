@@ -273,11 +273,16 @@ impl Orchestrator<'_> {
             .tools
             .iter()
             .any(|tv| tv.name == "everything" && tv.version != "unknown");
-        // preflight_steps: tool-selection (step 1) is always present.
-        // ES launch adds a step when Everything is available.
-        // The UFFS restart step is checked post-matrix; we use a conservative
-        // upper bound here — the actual step numbers on each card are precise.
-        let preflight_steps = if es_available { 2 } else { 1 };
+        // Step numbering (all known here before any gate fires):
+        //   step 1: tool selection          — always
+        //   step 2: UFFS restart            — whenever drives are specified
+        //   step 2 or 3: ES launch          — whenever Everything is available
+        // The UFFS restart always fires when capable drives are non-empty;
+        // since the matrix hasn't run yet, use `!cli.drives.is_empty()` as the
+        // conservative proxy (if drives are empty, the matrix will be empty too
+        // and the restart gate is skipped anyway).
+        let uffs_restart_present = !self.cli.drives.is_empty();
+        let preflight_steps = 1 + u32::from(uffs_restart_present) + u32::from(es_available);
         let card = tool_selection_card(&available, &missing, preflight_steps);
         if matches!(
             confirm(self.host, &mut session.mode, &mut session.seen, &card),
@@ -342,12 +347,10 @@ impl Orchestrator<'_> {
         if cap.matrix.capable_drives.is_empty() {
             return;
         }
-        let es_step = if cap.es_needs_launch {
-            preflight_steps
-        } else {
-            0
-        };
-        let uffs_step_num = preflight_steps - es_step;
+        // UFFS restart is always step 2 (tool selection is step 1).
+        // total_steps is passed in from execute() where it is computed with
+        // full knowledge of which gates are active.
+        let uffs_step_num: u32 = 2;
         let card = uffs_restart_card(&cap.matrix.capable_drives, uffs_step_num, preflight_steps);
         match confirm(self.host, &mut session.mode, &mut session.seen, &card) {
             Decision::Back | Decision::Abort => {
@@ -607,12 +610,15 @@ impl Orchestrator<'_> {
         if let Some(cap) = capture.as_mut() {
             // Compute exact step numbers: UFFS restart (if needed) comes
             // before ES launch; ES launch is always last.
-            let uffs_restart_step = cap.uffs_needs_restart.then_some(2_u32);
-            let es_launch_step = cap
-                .es_needs_launch
-                .then(|| uffs_restart_step.map_or(2, |prev| prev + 1));
-            let total_steps = es_launch_step.or(uffs_restart_step).unwrap_or(1);
-            if uffs_restart_step.is_some() {
+            // Step 1: tool selection (shown in capture()).
+            // Step 2: UFFS restart (if capable drives exist).
+            // Step 2 or 3: ES launch (if Everything available, after UFFS).
+            let total_steps: u32 =
+                1 + u32::from(cap.uffs_needs_restart) + u32::from(cap.es_needs_launch);
+            let es_launch_step =
+                cap.es_needs_launch
+                    .then_some(if cap.uffs_needs_restart { 3_u32 } else { 2_u32 });
+            if cap.uffs_needs_restart {
                 self.restart_uffs_if_needed(session, cap, total_steps);
                 // After restart, re-run second-pass preflight to get fresh
                 // drive counts from the restricted daemon.
