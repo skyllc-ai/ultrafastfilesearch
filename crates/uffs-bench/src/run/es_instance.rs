@@ -33,6 +33,10 @@ const LOAD_POLL_ATTEMPTS: u32 = 60;
 /// Milliseconds between bench-instance readiness polls.
 const LOAD_POLL_INTERVAL_MS: u64 = 5_000;
 
+/// Milliseconds to wait after sending `-exit` to any existing Everything
+/// instances before spawning our own, giving the process time to flush its db.
+const ES_KILL_GRACE_MS: u64 = 2_000;
+
 /// Parse a `key=val1,val2,...` Everything.ini array value into tokens.
 ///
 /// Handles the quoted-string format Everything uses: `"C:","D:"` for paths
@@ -205,6 +209,11 @@ pub(super) fn launch(
         ));
         return None;
     }
+    // Terminate any existing Everything instances (default + stale bench) so
+    // we start from a clean slate with our own temp ini.  A short grace period
+    // lets the process finish writing its db before we spawn the new instance.
+    kill_existing_instances(host, everything_exe);
+    host.sleep_ms(ES_KILL_GRACE_MS);
     let admin_tag = if admin { " (admin)" } else { "" };
     host.out(&format!(
         "[es-instance] launching Everything{admin_tag} (drives: {}) …",
@@ -263,6 +272,17 @@ pub(super) fn wait_until_loaded(host: &dyn Host, es_exe: &str, drives: &[char]) 
          — ES cells will be measured with a partial index",
     );
     false
+}
+
+/// Ask any running Everything instances to exit before we launch our own.
+///
+/// Sends `-exit` to both the default (unnamed) instance and any stale
+/// `uffs-bench` instance left over from a previous interrupted run.
+/// Errors are non-fatal: if no instance is running the IPC call simply fails
+/// silently, which is the desired outcome.
+fn kill_existing_instances(host: &dyn Host, everything_exe: &str) {
+    drop(host.run(everything_exe, &["-exit"]));
+    drop(host.run(everything_exe, &["-instance", INSTANCE_NAME, "-exit"]));
 }
 
 /// Send `Everything.exe -instance uffs-bench -exit` and remove the temp ini.
