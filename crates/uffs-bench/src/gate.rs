@@ -145,7 +145,7 @@ fn show_full(host: &dyn Host, card: &Card) {
         "| est: {}   recovery: {}",
         card.est_time, card.recovery
     ));
-    host.out("+- [Enter/y] proceed   [a] autopilot   [b] back   [q] quit   [e] explain   [?] help");
+    host.out("+- [Enter/y] proceed   [s] skip   [a] autopilot   [b] back   [q] quit   [e] explain   [?] help");
 }
 
 /// Render the DONE panel after a step has run.
