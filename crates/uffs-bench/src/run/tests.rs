@@ -17,9 +17,15 @@ fn stdout_of(text: &str) -> ProcOutput {
     }
 }
 
-/// The `Status:        Ready` line the daemon emits when fully loaded.
-const DAEMON_READY_STATUS: &str =
-    "Version:       0.0.0\nDaemon PID:    1\nStatus:        Ready\nDrives:\n";
+/// The `Status:        Ready` output the daemon emits when fully loaded.
+///
+/// Includes a `[Warm]` line for `C:` so the preflight `warm_parked_drives`
+/// step skips the preload call for the `--drives C` test spec.
+const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
+    Daemon PID:    1\n\
+    Status:        Ready\n\
+    Drives:\n\
+      [Warm]   C: \u{2014}  3,000,000 records (live) \u{2014} 300 MB\n";
 
 /// Queue the run results needed for the `--dry-run` code path.
 ///
