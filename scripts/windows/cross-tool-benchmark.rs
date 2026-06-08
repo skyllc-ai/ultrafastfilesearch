@@ -1269,32 +1269,39 @@ fn run_hot_compare(cfg: &Cfg, drive: &str, all_rows: &mut Vec<Row>) {
                 );
 
                 // ── Content diff (File sink only) ─────────────────────
-                // Normalise: strip headers, lowercase, sort, dedup.
-                // Compare every active pair and show up to 10 examples
-                // per side so the operator can spot naming/path patterns.
+                // Expected subset invariant: ES ⊆ CPP ⊆ UFFS.
+                // Only print a diff when that invariant is violated —
+                // i.e. when the smaller tool has rows the larger doesn't.
+                // Identical sets and clean supersets are silent.
                 if matches!(sink, OutputSink::File) {
                     let uffs_paths = if run_uffs_tool { normalise_paths(&f_uffs) } else { Vec::new() };
                     let cpp_paths  = if run_cpp_tool  { normalise_paths(&f_cpp)  } else { Vec::new() };
                     let es_paths   = if run_es_tool && !es_aborted { normalise_paths(&f_es) } else { Vec::new() };
 
-                    let any_data = !uffs_paths.is_empty() || !cpp_paths.is_empty() || !es_paths.is_empty();
-                    if any_data {
-                        if run_uffs_tool && run_cpp_tool && !uffs_paths.is_empty() && !cpp_paths.is_empty() {
+                    // cpp ⊆ uffs: violation = something in cpp not in uffs
+                    if run_uffs_tool && run_cpp_tool && !uffs_paths.is_empty() && !cpp_paths.is_empty() {
+                        let d = diff_paths(&uffs_paths, &cpp_paths);
+                        if !d.only_in_b.is_empty() {
                             print_diff("uffs", &f_uffs, uffs_paths.len(),
-                                       "cpp",  &f_cpp,  cpp_paths.len(),
-                                       &diff_paths(&uffs_paths, &cpp_paths), 10);
+                                       "cpp",  &f_cpp,  cpp_paths.len(), &d, 10);
                         }
-                        if run_uffs_tool && run_es_tool && !es_aborted
-                            && !uffs_paths.is_empty() && !es_paths.is_empty() {
+                    }
+                    // es ⊆ uffs: violation = something in es not in uffs
+                    if run_uffs_tool && run_es_tool && !es_aborted
+                        && !uffs_paths.is_empty() && !es_paths.is_empty() {
+                        let d = diff_paths(&uffs_paths, &es_paths);
+                        if !d.only_in_b.is_empty() {
                             print_diff("uffs", &f_uffs, uffs_paths.len(),
-                                       "es",   &f_es,   es_paths.len(),
-                                       &diff_paths(&uffs_paths, &es_paths), 10);
+                                       "es",   &f_es,   es_paths.len(), &d, 10);
                         }
-                        if run_cpp_tool && run_es_tool && !es_aborted
-                            && !cpp_paths.is_empty() && !es_paths.is_empty() {
+                    }
+                    // es ⊆ cpp: violation = something in es not in cpp
+                    if run_cpp_tool && run_es_tool && !es_aborted
+                        && !cpp_paths.is_empty() && !es_paths.is_empty() {
+                        let d = diff_paths(&cpp_paths, &es_paths);
+                        if !d.only_in_b.is_empty() {
                             print_diff("cpp", &f_cpp, cpp_paths.len(),
-                                       "es",  &f_es,  es_paths.len(),
-                                       &diff_paths(&cpp_paths, &es_paths), 10);
+                                       "es",  &f_es,  es_paths.len(), &d, 10);
                         }
                     }
                 }
