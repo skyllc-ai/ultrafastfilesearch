@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::host::Host;
+use crate::run::specs::everything_ini_path;
 
 /// Named instance used for the bench-local Everything process.
 pub(super) const INSTANCE_NAME: &str = "uffs-bench";
@@ -32,44 +33,45 @@ const LOAD_POLL_ATTEMPTS: u32 = 60;
 /// Milliseconds between bench-instance readiness polls.
 const LOAD_POLL_INTERVAL_MS: u64 = 5_000;
 
-/// Write a minimal `Everything.ini` restricted to `drives` into `path`.
+/// Keys overridden in the temp ini to prevent ES from auto-discovering all
+/// fixed/removable volumes on the machine.
+const AUTO_INCLUDE_OVERRIDE: &str = "\
+auto_include_fixed_volumes=0\n\
+auto_include_removable_volumes=0\n\
+auto_include_fixed_refs_volumes=0\n\
+auto_include_removable_refs_volumes=0\n\
+auto_remove_offline_ntfs_volumes=0\n\
+auto_remove_moved_ntfs_volumes=0\n\
+auto_remove_offline_refs_volumes=0\n\
+auto_remove_moved_refs_volumes=0\n";
+
+/// Write the bench `Everything.ini` into `path`.
 ///
-/// Must explicitly disable `auto_include_fixed_volumes` — without it
-/// Everything ignores `ntfs_volume_paths` and indexes every fixed NTFS volume
-/// on the machine automatically (confirmed via voidtools forum, author `void`).
+/// Copies the `ntfs_volume_*` lines **verbatim** from the permanent
+/// `Everything.ini` (so GUIDs, paths, includes, monitors all match exactly
+/// what the operator has configured), then prepends the `[Everything]` header
+/// with `auto_include_fixed_volumes=0` (and friends) so ES does not
+/// auto-discover drives outside the operator's configured set.
 ///
-/// The full set of keys required to pin indexing to exactly `drives`:
-/// - `auto_include_fixed_volumes=0` — don't auto-discover fixed drives
-/// - `auto_include_removable_volumes=0` — don't auto-discover removable drives
-/// - `auto_remove_offline_ntfs_volumes=0` — don't remove offline volumes
-/// - `ntfs_volume_paths=C:,D:,…` — exactly the bench drives to index
-/// - remaining `ntfs_volume_*` keys explicitly blank so ES doesn't inherit
-///   stale values from a partially-written config
-fn write_bench_ini(host: &dyn Host, path: &Path, drives: &[char]) -> std::io::Result<()> {
-    // Everything.ini uses a quoted comma-separated format for parallel arrays,
-    // e.g. ntfs_volume_paths="C:","D:","G:"
-    // ntfs_volume_includes / monitors / roots follow the same positional order.
-    let n = drives.len();
-    let volume_paths: String = drives
-        .iter()
-        .map(|letter| format!("\"{letter}:\""))
-        .collect::<Vec<_>>()
-        .join(",");
-    let ones = vec!["1"; n].join(",");
-    let empty_quoted = vec!["\"\""; n].join(",");
-    let ini = format!(
-        "[Everything]\n\
-         auto_include_fixed_volumes=0\n\
-         auto_include_removable_volumes=0\n\
-         auto_remove_offline_ntfs_volumes=0\n\
-         ntfs_volume_guids=\n\
-         ntfs_volume_paths={volume_paths}\n\
-         ntfs_volume_roots={empty_quoted}\n\
-         ntfs_volume_includes={ones}\n\
-         ntfs_volume_load_recent_changes={ones}\n\
-         ntfs_volume_include_onlys={empty_quoted}\n\
-         ntfs_volume_monitors={ones}\n"
-    );
+/// Falls back to an empty `ntfs_volume_*` block if the permanent ini cannot
+/// be read (non-Windows hosts, missing file, etc.).
+fn write_bench_ini(host: &dyn Host, path: &Path, _drives: &[char]) -> std::io::Result<()> {
+    let permanent_ini = everything_ini_path(host);
+    let ntfs_lines = host
+        .read_file(&permanent_ini)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|text| {
+            text.lines()
+                .filter(|line| {
+                    let key = line.split('=').next().unwrap_or("").trim();
+                    key.starts_with("ntfs_volume_") || key.starts_with("refs_volume_")
+                })
+                .flat_map(|line| [line, "\n"])
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let ini = format!("[Everything]\n{AUTO_INCLUDE_OVERRIDE}{ntfs_lines}");
     host.write_file(path, ini.as_bytes())
 }
 
