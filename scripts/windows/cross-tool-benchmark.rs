@@ -854,8 +854,9 @@ fn parse_ini_array(value: &str) -> Vec<String> {
     tokens
 }
 
-/// Rebuild ini text replacing only `ntfs_volume_includes`/`ntfs_volume_monitors`
-/// and forcing the `auto_include_*`/`auto_remove_*` keys to `0`.  Every other
+/// Rebuild ini text replacing `ntfs_volume_includes`, `ntfs_volume_monitors`,
+/// and `ntfs_volume_load_recent_changes` with the provided bitmask, and
+/// forcing the `auto_include_*`/`auto_remove_*` keys to `0`.  Every other
 /// line is copied verbatim.
 fn rebuild_ini(text: &str, includes: &str, monitors: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -870,6 +871,11 @@ fn rebuild_ini(text: &str, includes: &str, monitors: &str) -> String {
             "ntfs_volume_monitors" => {
                 out.push_str("ntfs_volume_monitors=");
                 out.push_str(monitors);
+                out.push('\n');
+            }
+            "ntfs_volume_load_recent_changes" => {
+                out.push_str("ntfs_volume_load_recent_changes=");
+                out.push_str(includes);
                 out.push('\n');
             }
             // Force to 0 — without this ES ignores ntfs_volume_paths and
@@ -911,6 +917,13 @@ fn write_bench_ini(ini_out: &Path, drives: &[String]) -> std::io::Result<()> {
         if bench_set.contains(&letter) { "1" } else { "0" }
     }).collect::<Vec<_>>().join(",");
     let monitors = includes.clone();
+    // Diagnostic: surface the exact bit→volume mapping so a wrong bitpattern
+    // (or an empty/garbled ntfs_volume_paths that would misalign the mask) is
+    // visible in the run log. e.g. "C:=0 D:=0 E:=1 F:=0 ...".
+    let map: String = paths.iter().zip(includes.split(','))
+        .map(|(tok, bit)| format!("{}={bit}", tok.trim_matches('"')))
+        .collect::<Vec<_>>().join(" ");
+    eprintln!("  [es-instance] ini volumes ({} entries): {map}", paths.len());
     let out = rebuild_ini(&text, &includes, &monitors);
     std::fs::write(ini_out, out.as_bytes())
 }
