@@ -962,18 +962,17 @@ fn es_kill_existing(everything: &Path) {
 fn es_launch(everything: &Path, drives: &[String]) -> Option<PathBuf> {
     if drives.is_empty() { return None; }
     let ini = bench_ini_path();
-    if let Err(e) = write_bench_ini(&ini, drives) {
-        eprintln!("  [es-instance] WARNING: could not write temp ini — {e}");
-        return None;
-    }
-    // Clean slate: terminate existing instances, then a short grace period so
-    // the process can flush its db before we spawn our own.
+    // ORDER MATTERS. Kill any running instance FIRST and wait for it to fully
+    // exit. A previous uffs-bench instance was launched with `-config <this
+    // same temp ini>`; on shutdown Everything writes its current (wrong-drive)
+    // volume state back to that ini. If we wrote the ini before killing, the
+    // dying instance would clobber our freshly-written includes mask — which
+    // is exactly why the relaunched instance kept indexing the old drive.
     es_kill_existing(everything);
     std::thread::sleep(ES_KILL_GRACE);
     // Delete the prior bench db so the relaunched instance rebuilds a fresh
-    // index from the includes mask just written, rather than loading the
-    // previous per-drive run's db (which would index the wrong drive and
-    // rewrite our temp ini to match).
+    // index from the includes mask, rather than loading the previous per-drive
+    // run's db.
     let db = bench_db_path();
     if db.exists() {
         if let Err(e) = std::fs::remove_file(&db) {
@@ -981,6 +980,11 @@ fn es_launch(everything: &Path, drives: &[String]) -> Option<PathBuf> {
         } else {
             eprintln!("  [es-instance] removed stale db {}", db.display());
         }
+    }
+    // Now that no instance is alive to overwrite it, write the fresh ini.
+    if let Err(e) = write_bench_ini(&ini, drives) {
+        eprintln!("  [es-instance] WARNING: could not write temp ini — {e}");
+        return None;
     }
     eprintln!("  [es-instance] launching Everything (drives: {}) …", drives.join(","));
     let ini_str = ini.to_string_lossy().to_string();
