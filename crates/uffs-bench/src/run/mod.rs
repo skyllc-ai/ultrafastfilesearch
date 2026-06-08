@@ -414,6 +414,7 @@ impl Orchestrator<'_> {
         let preflight =
             preflight::capture(self.host, &preflight_spec_from_cli(self.host, self.cli));
         let matrix = matrix::compute_matrix(&matrix_spec_from_cli(self.cli), &preflight);
+        self.host.out(&matrix::render_md(&matrix));
         Ok(Capture {
             fp,
             preflight,
@@ -444,8 +445,6 @@ impl Orchestrator<'_> {
         cap: &Capture,
         hash: &str,
     ) -> Result<Flow> {
-        self.host.out(&matrix::render_md(&cap.matrix));
-
         let card = plan_card(&self.bundle_dir);
         match act_of(confirm(
             self.host,
