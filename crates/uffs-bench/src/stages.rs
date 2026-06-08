@@ -138,10 +138,23 @@ impl Invocation {
         }
     }
 
-    /// Spawn the command through the [`Host`] seam.
+    /// Spawn the command through the [`Host`] seam, capturing all output.
     fn run(&self, host: &dyn Host) -> io::Result<ProcOutput> {
         let refs: Vec<&str> = self.args.iter().map(String::as_str).collect();
         host.run(&self.exe, &refs)
+    }
+
+    /// Spawn the command, inheriting the parent's stdout/stderr so output
+    /// flows live to the operator's terminal.  Returns a synthetic
+    /// [`ProcOutput`] with the exit code and empty captured streams.
+    fn run_streaming(&self, host: &dyn Host) -> io::Result<ProcOutput> {
+        let refs: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let code = host.run_streaming(&self.exe, &refs)?;
+        Ok(ProcOutput {
+            code,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
     }
 }
 
@@ -553,7 +566,7 @@ fn step_from_output(out: &ProcOutput, output_path: &Path, label: &str) -> StepRe
 fn run_cross_tool(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
     snapshot_daemon(host, guard);
     let out = cross_tool_invocation(cfg)
-        .run(host)
+        .run_streaming(host)
         .map_err(|err| BenchError::Command(format!("cross-tool harness: {err}")))?;
     let out_path = cfg.bundle_dir.join(CROSS_TOOL_OUT);
     Ok(step_from_output(&out, &out_path, "cross-tool"))
@@ -566,7 +579,7 @@ fn run_parity(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Resu
         snapshot_cache(host, guard, cfg)?;
     }
     let out = parity_invocation(cfg)
-        .run(host)
+        .run_streaming(host)
         .map_err(|err| BenchError::Command(format!("parity harness: {err}")))?;
     let out_path = cfg.bundle_dir.join(PARITY_OUT);
     Ok(step_from_output(&out, &out_path, "parity"))

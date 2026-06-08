@@ -79,6 +79,13 @@ impl Host for SystemHost {
         })
     }
 
+    fn run_streaming(&self, exe: &str, args: &[&str]) -> io::Result<Option<i32>> {
+        Command::new(exe)
+            .args(args)
+            .status()
+            .map(|status| status.code())
+    }
+
     fn spawn(&self, exe: &str, args: &[&str]) -> io::Result<()> {
         use std::process::Stdio;
         Command::new(exe)

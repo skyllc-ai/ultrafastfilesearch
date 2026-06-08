@@ -96,6 +96,18 @@ pub trait Host {
     /// Returns an error if the process cannot be spawned.
     fn run(&self, exe: &str, args: &[&str]) -> io::Result<ProcOutput>;
 
+    /// Spawn `exe` with `args`, inheriting the parent's stdout and stderr so
+    /// the child's output streams live to the operator's terminal.
+    ///
+    /// Returns the process exit code (`None` if the OS did not provide one).
+    /// Use this for long-running harness scripts (Stage 1, Stage 2) where
+    /// buffering all output and returning it at the end would leave the
+    /// operator watching a blank screen for several minutes.
+    ///
+    /// # Errors
+    /// Returns an error if the process cannot be spawned.
+    fn run_streaming(&self, exe: &str, args: &[&str]) -> io::Result<Option<i32>>;
+
     /// Spawn `exe` with `args` as a detached background process.
     ///
     /// The child's stdout and stderr are discarded and the bench tool does not
