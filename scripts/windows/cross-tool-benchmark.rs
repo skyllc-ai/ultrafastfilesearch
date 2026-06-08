@@ -322,9 +322,21 @@ fn uffs_stop(bin: &Path) {
 /// Hot→Warm or Warm→Parked mid-run.  These env vars are scoped to the
 /// daemon child process only — the bench script's own env is unchanged,
 /// and teardown's next `uffs daemon start` gets production defaults.
-fn uffs_start(bin: &Path) {
+///
+/// `drives` scopes which drives the daemon loads on startup.  This is
+/// **essential** for fair timing: without an explicit `--drive` flag the
+/// daemon discovers and loads *every* NTFS volume on the host, so the
+/// WARM/HOT load cost would reflect all drives rather than just the one(s)
+/// under test.  Each letter is forwarded as a separate `--drive <X>`
+/// (`parse_daemon_start` in uffs-cli accumulates them).
+fn uffs_start(bin: &Path, drives: &[String]) {
+    let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+    for d in drives {
+        args.push("--drive".into());
+        args.push(d.clone());
+    }
     let _ = Command::new(bin)
-        .args(["daemon", "start"])
+        .args(&args)
         .env("UFFS_HOT_TO_WARM_IDLE_SECS",   "3600")
         .env("UFFS_WARM_TO_PARKED_IDLE_SECS", "7200")
         .stdout(Stdio::null()).stderr(Stdio::null())
@@ -926,17 +938,20 @@ fn main() {
 
     let mut all_rows: Vec<Row> = Vec::new();
 
-    // ── Daemon warmup (once for all drives) ─────────────────────────────
+    // ── Daemon warmup (once for the requested drives) ──────────────────
     if cfg.tools.contains(&Tool::Uffs) && cfg.skip_cold {
-        // When skipping COLD/WARM, kill+restart with bench-safe TTLs then
-        // issue one probe so the daemon is fully loaded before HOT starts.
-        eprint!("  Warming up UFFS daemon (all drives)...");  flush();
+        // When skipping COLD/WARM, kill+restart scoped to the requested
+        // drives with bench-safe TTLs, then probe each so the daemon is
+        // fully loaded before HOT starts.
+        eprint!("  Warming up UFFS daemon ({})...", cfg.drives.join(","));  flush();
         uffs_stop(&cfg.uffs);
-        uffs_start(&cfg.uffs);
-        let _ = Command::new(&cfg.uffs)
-            .args(["__uffs_warmup_probe__", "--limit", "1"])
-            .stdout(Stdio::null()).stderr(Stdio::null())
-            .status();
+        uffs_start(&cfg.uffs, &cfg.drives);
+        for drive in &cfg.drives {
+            let _ = Command::new(&cfg.uffs)
+                .args(["__uffs_warmup_probe__", "--drive", drive, "--limit", "1"])
+                .stdout(Stdio::null()).stderr(Stdio::null())
+                .status();
+        }
         eprintln!(" ready.");
     }
 
@@ -978,7 +993,7 @@ fn main() {
                 if cfg.skip_pattern(label) { continue; }
                 eprint!("    {label:<12} ");  flush();
                 uffs_stop(&cfg.uffs);
-                uffs_start(&cfg.uffs);
+                uffs_start(&cfg.uffs, std::slice::from_ref(drive));
                 let t = check_dnf(run_uffs(&cfg.uffs, drive, pat, validate, OutputSink::File));
                 let verdict = if t.dnf { "DNF" } else if t.bad_rows > 0 { "WRONG" } else if t.ok { "PASS" } else { "ERROR" };
                 let bad_str = if t.bad_rows > 0 { format!("  bad={}", t.bad_rows) } else { String::new() };
@@ -995,7 +1010,7 @@ fn main() {
             // minimise I/O.  Done once per drive — the daemon stays warm
             // across every sink iteration below.
             eprint!("  UFFS HOT:  warming up daemon...");  flush();
-            uffs_start(&cfg.uffs);
+            uffs_start(&cfg.uffs, std::slice::from_ref(drive));
             let _ = Command::new(&cfg.uffs)
                 .args(["__uffs_warmup_probe__", "--drive", drive, "--limit", "1"])
                 .stdout(Stdio::null()).stderr(Stdio::null())
