@@ -120,14 +120,36 @@ pub(crate) fn report_scope(cli: &Cli) -> String {
     }
 }
 
+/// Map a probe id to a human-readable product name.
+///
+/// `everything` and `everything_gui` are two probes of the same product.
+fn tool_display_name(id: &str) -> &str {
+    match id {
+        "uffs" => "UFFS",
+        "uffs_cpp" => "UFFS (C++ ref)",
+        "everything" | "everything_gui" => "Everything",
+        _ => id,
+    }
+}
+
+/// Deduplicate a list of probe ids into unique, ordered product display names.
+fn unique_product_names(ids: &[&str]) -> Vec<String> {
+    let mut seen = alloc::collections::BTreeSet::new();
+    ids.iter()
+        .map(|id| tool_display_name(id).to_owned())
+        .filter(|name| seen.insert(name.clone()))
+        .collect()
+}
+
 /// Build a gate [`Card`] presented when one or more tools are missing.
 ///
 /// The operator can press **proceed** to continue with the available tools or
 /// **abort** to quit and install the missing binaries first.
 pub(crate) fn missing_tools_card(missing: &[&str], available: &[&str]) -> Card {
-    let missing_list = missing.join(", ");
-    let avail_names = available.join(" and ");
-    let avail_count = available.len();
+    let missing_products = unique_product_names(missing).join(", ");
+    let avail_products = unique_product_names(available);
+    let avail_names = avail_products.join(" and ");
+    let avail_count = avail_products.len();
     Card {
         id: "missing-tools".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
@@ -135,16 +157,19 @@ pub(crate) fn missing_tools_card(missing: &[&str], available: &[&str]) -> Card {
         step_total: 1,
         title: format!("Benchmarking {avail_names} — proceed or quit to install missing tools?"),
         why: format!(
-            "Not found: {missing_list} (see install links in table above). \
-             Proceeding benchmarks only the {avail_count} available tool(s)."
+            "Not found: {missing_products} (see install links in table above). \
+             Proceeding benchmarks only the {avail_count} available product(s)."
         ),
         commands: Vec::new(),
-        resources: available.iter().map(|name| format!("✓  {name}")).collect(),
+        resources: avail_products
+            .iter()
+            .map(|name| format!("✓  {name}"))
+            .collect(),
         backups: Vec::new(),
         est_time: "0 s".to_owned(),
         recovery: "Read-only — aborting changes nothing.".to_owned(),
         long_why: format!(
-            "Missing: {missing_list}.\n\
+            "Missing: {missing_products}.\n\
              The table above shows install URLs for each missing tool.\n\
              Install the binaries and re-run for a full comparison, or\n\
              proceed now with: {avail_names}."
