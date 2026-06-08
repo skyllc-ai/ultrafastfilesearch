@@ -291,12 +291,7 @@ impl Orchestrator<'_> {
         let everything_exe = resolve::everything_exe(self.host);
         let needs_launch =
             es_instance::es_needs_launch(&preflight_first, &matrix_first.capable_drives);
-        // Only render the first-pass matrix when ES is already running — if ES
-        // needs to be launched the matrix is stale (all UFFS-only) and the
-        // correct one will be rendered after the second-pass preflight.
-        if !needs_launch {
-            self.host.out(&matrix::render_md(&matrix_first));
-        }
+        self.host.out(&matrix::render_md(&matrix_first));
         Ok(Capture {
             fp,
             preflight: preflight_first,
@@ -365,7 +360,6 @@ impl Orchestrator<'_> {
             &cap.preflight,
         );
         cap.es_capable_drives = cap.matrix.capable_drives.clone();
-        self.host.out(&matrix::render_md(&cap.matrix));
     }
 
     /// Build the [`StageCfg`] shared by every measurement stage from the CLI

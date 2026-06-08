@@ -35,7 +35,11 @@ const LOAD_POLL_INTERVAL_MS: u64 = 5_000;
 
 /// Milliseconds to wait after sending `-exit` to any existing Everything
 /// instances before spawning our own, giving the process time to flush its db.
-const ES_KILL_GRACE_MS: u64 = 2_000;
+const ES_KILL_GRACE_MS: u64 = 3_000;
+
+/// Milliseconds to wait after spawning Everything.exe before the first IPC
+/// poll — gives the process time to register its IPC window.
+const ES_STARTUP_GRACE_MS: u64 = 5_000;
 
 /// Parse a `key=val1,val2,...` Everything.ini array value into tokens.
 ///
@@ -229,6 +233,11 @@ pub(super) fn launch(
         args.push("-admin");
     }
     args.push("-startup");
+    host.out(&format!(
+        "[es-instance] spawn: {} {}",
+        everything_exe,
+        args.join(" ")
+    ));
     if let Err(err) = host.spawn(everything_exe, &args) {
         host.out(&format!(
             "[es-instance] WARNING: could not launch Everything — {err}"
@@ -243,27 +252,38 @@ pub(super) fn launch(
 ///
 /// Returns `true` when all drives are loaded within the budget.
 pub(super) fn wait_until_loaded(host: &dyn Host, es_exe: &str, drives: &[char]) -> bool {
+    host.sleep_ms(ES_STARTUP_GRACE_MS);
     for attempt in 1..=LOAD_POLL_ATTEMPTS {
-        let all_loaded = drives.iter().all(|&letter| {
-            let search = format!("{letter}:");
-            host.run(es_exe, &[
-                "-instance",
-                INSTANCE_NAME,
-                search.as_str(),
-                "-get-result-count",
-            ])
-            .ok()
-            .and_then(|out| out.stdout.trim().parse::<u64>().ok())
-            .unwrap_or(0)
-                > 0
-        });
+        let counts: Vec<(char, u64)> = drives
+            .iter()
+            .map(|&letter| {
+                let search = format!("{letter}:");
+                let count = host
+                    .run(es_exe, &[
+                        "-instance",
+                        INSTANCE_NAME,
+                        search.as_str(),
+                        "-get-result-count",
+                    ])
+                    .ok()
+                    .and_then(|out| out.stdout.trim().parse::<u64>().ok())
+                    .unwrap_or(0);
+                (letter, count)
+            })
+            .collect();
+        let all_loaded = counts.iter().all(|(_, n)| *n > 0);
         if all_loaded {
             host.out("[es-instance] Everything index loaded — proceeding");
             return true;
         }
+        let counts_str = counts
+            .iter()
+            .map(|(ch, n)| format!("{ch}:{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         host.out(&format!(
             "[es-instance] waiting for Everything to finish indexing … \
-             (attempt {attempt}/{LOAD_POLL_ATTEMPTS})"
+             (attempt {attempt}/{LOAD_POLL_ATTEMPTS}) [{counts_str}]"
         ));
         host.sleep_ms(LOAD_POLL_INTERVAL_MS);
     }
