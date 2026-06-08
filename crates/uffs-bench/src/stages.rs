@@ -220,13 +220,17 @@ fn join_drives(drives: &[char]) -> String {
         .join(",")
 }
 
-/// Map a bench tool id to the cross-tool harness's accepted spelling.
+/// Map a bench CLI tool name to the token the cross-tool harness accepts,
+/// or `None` if the harness does not support that tool.
 ///
-/// The harness accepts `uffs`, `uffs-cpp`/`cpp`, and `everything`/`es`; the
-/// bench CLI uses underscored ids (`uffs_cpp`), so a single `_`→`-` rewrite
-/// (`uffs_cpp`→`uffs-cpp`) lands on an alias the harness understands.
-fn harness_tool(name: &str) -> String {
-    name.replace('_', "-")
+/// `everything_gui` (`Everything.exe`) has no CLI benchmarking interface
+/// the harness can drive; it is benchmarked indirectly via `es.exe` (the
+/// `everything` token).  All other names are passed through with `_` → `-`.
+fn harness_tool(name: &str) -> Option<String> {
+    match name {
+        "everything_gui" | "everything-gui" => None,
+        other => Some(other.replace('_', "-")),
+    }
 }
 
 /// Card note describing the daemon restore taken before mutating.
@@ -302,7 +306,7 @@ fn cross_tool_invocation(cfg: &StageCfg) -> Invocation {
     args.push(
         cfg.tools
             .iter()
-            .map(|tool| harness_tool(tool))
+            .filter_map(|tool| harness_tool(tool))
             .collect::<Vec<_>>()
             .join(","),
     );
