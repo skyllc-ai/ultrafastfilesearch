@@ -343,9 +343,9 @@ fn parity_invocation(cfg: &StageCfg) -> Invocation {
         "-File".to_owned(),
         PARITY_SCRIPT.to_owned(),
     ];
-    if !cfg.drives.is_empty() {
+    if !cfg.capable_drives.is_empty() {
         args.push("-Drives".to_owned());
-        args.push(join_drives(&cfg.drives));
+        args.push(join_drives(&cfg.capable_drives));
     }
     args.push("-Rounds".to_owned());
     args.push(cfg.rounds.to_string());
@@ -646,8 +646,8 @@ pub fn plan(stage: u32, cfg: &StageCfg) -> StagePlan {
             let mut resources = vec![DAEMON_RESOURCE.to_owned()];
             let mut backups = vec![daemon_backup_note()];
             if cfg.drop_cache {
-                resources.push(format!("uffs cache: {}", join_drives(&cfg.drives)));
-                backups.push(cache_backup_note(&cfg.drives));
+                resources.push(format!("uffs cache: {}", join_drives(&cfg.capable_drives)));
+                backups.push(cache_backup_note(&cfg.capable_drives));
             }
             StagePlan {
                 commands: vec![parity_invocation(cfg).display()],
