@@ -429,41 +429,54 @@ fn daemon_total_records(uffs_bin: &str) -> Option<u64> {
     None
 }
 
+/// Result of the three-pass daemon warm-up sequence.
+struct WarmupResult {
+    /// Wall-clock for each of the three passes (seconds).
+    pass_wall_sec: [f64; 3],
+    /// `Await ready` from pass-1 stderr (ms): daemon spawn + MFT load + index build.
+    await_ready_ms: Option<u64>,
+    /// `daemon:` search time from each pass's stderr (ms).
+    pass_daemon_ms: [Option<u64>; 3],
+    /// Total records indexed, read after all passes settle.
+    total_records: Option<u64>,
+}
+
 /// Prime the daemon with three `uffs * --limit 1 --profile` queries.
 ///
-/// The first call triggers the initial load + JIT index warm-up (the slow
-/// path).  Calls 2 and 3 exercise the HOT path and get the daemon into its
-/// fully-primed query state.  We report the wall-clock of the **first** call
-/// as the load time and `await_ready` from its stderr; the final record count
-/// is read once after all three queries settle.
+/// Pass 1 — COLD load path: daemon reads MFT (or compact cache) and builds
+///          the in-memory index; `await_ready` measures this.
+/// Pass 2 — first HOT query: JIT query structures are built for the first time.
+/// Pass 3 — fully primed HOT query: steady-state latency.
 ///
-/// Returns `(load_wall_sec, await_ready_ms, total_records)`.
-fn warmup_daemon_primed(uffs_bin: &str, dump_raw: bool) -> (f64, Option<u64>, Option<u64>) {
-    let mut load_wall = 0.0f64;
-    let mut ready_ms = None;
-    for pass in 1u8..=3 {
+/// All three wall times are returned so the caller can display the full
+/// COLD → WARM → HOT trajectory.
+fn warmup_daemon_primed(uffs_bin: &str, dump_raw: bool) -> WarmupResult {
+    let mut pass_wall_sec = [0.0f64; 3];
+    let mut pass_daemon_ms = [None::<u64>; 3];
+    let mut await_ready_ms = None;
+    for pass in 0usize..3 {
         let t = Instant::now();
         let result = Command::new(uffs_bin)
             .args(["*", "--limit", "1", "--profile"])
             .output();
-        let elapsed = t.elapsed().as_secs_f64();
+        pass_wall_sec[pass] = t.elapsed().as_secs_f64();
         let stderr = match result {
             Ok(ref o) => String::from_utf8_lossy(&o.stderr).into_owned(),
             Err(ref e) => {
-                eprintln!("    WARNING: warm-up pass {pass} failed: {e}");
+                eprintln!("    WARNING: warm-up pass {} failed: {e}", pass + 1);
                 continue;
             }
         };
         if dump_raw {
-            eprintln!("    [warm-up pass {pass}] {stderr}");
+            eprintln!("    [warm-up pass {}]\n{stderr}", pass + 1);
         }
-        if pass == 1 {
-            load_wall = elapsed;
-            ready_ms = parse_tagged_ms(&stderr, "Await ready:");
+        pass_daemon_ms[pass] = parse_tagged_ms(&stderr, "daemon:");
+        if pass == 0 {
+            await_ready_ms = parse_tagged_ms(&stderr, "Await ready:");
         }
     }
-    let records = daemon_total_records(uffs_bin);
-    (load_wall, ready_ms, records)
+    let total_records = daemon_total_records(uffs_bin);
+    WarmupResult { pass_wall_sec, await_ready_ms, pass_daemon_ms, total_records }
 }
 
 fn parse_tagged_ms(text: &str, marker: &str) -> Option<u64> {
@@ -742,15 +755,25 @@ fn main() {
 
     // ── Phase 0b: daemon warm-up (3 priming passes) ────────────────────────
     out.divider("Phase 0b: daemon warm-up — 3 priming passes");
-    out.line("  Pass 1: load path + await_ready (COLD).  Passes 2-3: prime HOT query state.");
+    out.line("  Pass 1 = COLD load (MFT read / cache hit + await_ready)");
+    out.line("  Pass 2 = WARM (first HOT query, JIT structures built)");
+    out.line("  Pass 3 = HOT  (fully primed, steady-state latency)");
     out.line("  Running `uffs '*' --limit 1 --profile`  ×3 …");
-    let (warmup_wall, warmup_ready_ms, warmup_records) =
-        warmup_daemon_primed(&uffs_bin, args.dump_raw);
+    let wu = warmup_daemon_primed(&uffs_bin, args.dump_raw);
+    let pass_labels = ["COLD", "WARM", "HOT "];
+    for i in 0..3 {
+        out.line(&format!(
+            "    [pass {} — {}]  wall = {:.2} s   daemon = {}",
+            i + 1,
+            pass_labels[i],
+            wu.pass_wall_sec[i],
+            opt_ms(wu.pass_daemon_ms[i]),
+        ));
+    }
     out.line(&format!(
-        "    -> pass-1 wall = {:.2} s   await_ready = {}   total_records = {}",
-        warmup_wall,
-        opt_ms(warmup_ready_ms),
-        opt_count(warmup_records),
+        "  await_ready (pass 1) = {}   total_records = {}",
+        opt_ms(wu.await_ready_ms),
+        opt_count(wu.total_records),
     ));
     out.line(&format!(
         "  Mode: {}",
@@ -965,13 +988,27 @@ fn main() {
 
     // ── Warm-up recap ──────────────────────────────────────────────────────
     out.divider("Summary — daemon warm-up (Phase 0b)");
-    out.line(&format!("  Pass-1 wall   : {:.2} s  (daemon load + await_ready)", warmup_wall));
-    if let Some(rm) = warmup_ready_ms {
-        out.line(&format!("  Await ready   : {rm} ms  (MFT read + index build)"));
+    let pass_labels = ["COLD", "WARM", "HOT "];
+    let pass_notes  = [
+        "daemon load + MFT read / cache hit",
+        "first HOT query — JIT structures built",
+        "fully primed — steady-state latency",
+    ];
+    for i in 0..3 {
+        out.line(&format!(
+            "  Pass {} [{} ]  wall = {:.2} s   daemon = {}   ({})",
+            i + 1,
+            pass_labels[i],
+            wu.pass_wall_sec[i],
+            opt_ms(wu.pass_daemon_ms[i]),
+            pass_notes[i],
+        ));
     }
-    if let Some(rec) = warmup_records {
-        out.line(&format!("  Total records : {}", fmt_count(rec)));
-    }
+    out.line(&format!(
+        "  Await ready   : {}   total_records = {}",
+        opt_ms(wu.await_ready_ms),
+        opt_count(wu.total_records),
+    ));
     out.line(&format!(
         "  Mode          : {}",
         if args.purge_cache {
