@@ -238,6 +238,24 @@ fn p50(s: &[u64]) -> u64 { if s.is_empty() { 0 } else { s[s.len()/2] } }
 fn p95(s: &[u64]) -> u64 { if s.is_empty() { 0 } else { s[(s.len() as f64 * 0.95) as usize % s.len()] } }
 fn sw(runs: &[Timing]) -> Vec<u64> { let mut v: Vec<u64> = runs.iter().filter(|r| r.ok).map(|r| r.wall_ms).collect(); v.sort(); v }
 
+/// Shuffle three indices [0,1,2] using a minimal LCG seeded from a nanosecond
+/// timestamp.  No external deps — works inside `rust-script` with zero cargo
+/// overhead.  The LCG constants are the same ones used by glibc's `rand()`.
+fn lcg_shuffle3(seed: u64) -> [usize; 3] {
+    let mut s = seed ^ (seed >> 33);
+    let mut next = || -> u64 {
+        s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        s
+    };
+    let mut idx = [0usize, 1, 2];
+    // Fisher-Yates on 3 elements
+    let j = (next() % 3) as usize;
+    idx.swap(0, j);
+    let j = 1 + (next() % 2) as usize;
+    idx.swap(1, j);
+    idx
+}
+
 // ── Discovery ────────────────────────────────────────────────────────────────
 fn find_in(cs: &[PathBuf]) -> Option<PathBuf> { cs.iter().find(|p| p.exists()).cloned() }
 fn where_exe(name: &str) -> Option<PathBuf> {
@@ -880,111 +898,173 @@ fn main() {
             eprintln!(" ready.");
         }
 
-        // ── Per-sink HOT rotation (UFFS HOT + UFFS C++ + Everything) ──────
+        // ── Per-sink HOT rotation (interleaved rounds, randomised tool order) ─
+        //
+        // For each (sink, pattern) the tools run in a freshly shuffled order
+        // every round so no tool consistently benefits from OS file-system
+        // caching warmed up by a prior tool.  After every round the superset
+        // constraint is checked immediately:
+        //
+        //   uffs.exe rows  ≥  uffs.com rows  ≥  es.exe rows
+        //
+        // This reflects the fact that UFFS (Rust) covers all files including
+        // system files / ADS when --hide-system / --hide-ads are NOT passed
+        // (here they ARE, so the counts should be close), and that Everything
+        // does not index NTFS metadata files that uffs.com does include.
+        // A violation is printed as a warning per round — it does not abort —
+        // so timing data is preserved even when parity is off.
         for sink in cfg.sinks.iter().copied() {
             if cfg.sinks.len() > 1 {
                 println!("  ── sink={}  ──────────────────────────────────────────────", sink.label());
             }
 
-            // ── UFFS HOT ────────────────────────────────────────────────
-            if cfg.tools.contains(&Tool::Uffs) {
-                eprintln!("  UFFS HOT [sink={}]:  {} rounds", sink.label(), cfg.rounds);
-                for &(label, pat, _, _, _, validate) in PATTERNS {
-                    if cfg.skip_pattern(label) { continue; }
-                    eprint!("    {label:<12} ");  flush();
-                    let mut runs = Vec::new();
-                    for _ in 0..cfg.rounds {
-                        runs.push(check_dnf(run_uffs(&cfg.uffs, drive, pat, validate, sink)));
-                    }
-                    let s = sw(&runs);
-                    let mut dm: Vec<u64> = runs.iter().filter(|r| r.ok && r.daemon_ms > 0).map(|r| r.daemon_ms).collect();
-                    dm.sort();
-                    let any_bad = runs.iter().any(|r| r.bad_rows > 0);
-                    let verdict = if runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else { "PASS" };
-                    let daemon_str = if dm.is_empty() { String::new() } else { format!("  daemon_p50={}", fms(p50(&dm))) };
-                    let first_ok = runs.iter().find(|r| r.ok);
-                    let bad_str = first_ok.filter(|r| r.bad_rows > 0).map_or(String::new(), |r| format!("  bad={}", r.bad_rows));
-                    eprintln!("p50={:>6}  p95={:>6}{}  rows={}{}  {}", fms(p50(&s)), fms(p95(&s)), daemon_str, first_ok.map_or(0, |r| r.rows), bad_str, verdict);
-                    all_rows.push(Row { tool: Tool::Uffs, phase: Phase::Hot, sink,
-                        drive: drive.clone(), pat: label.into(), runs });
-                }
-            }
+            for &(label, pat, es_pat, cpp_pat, cpp_ext, validate) in PATTERNS {
+                if cfg.skip_pattern(label) { continue; }
 
-            // ── UFFS C++ (uffs.com) ─────────────────────────────────────
-            if cfg.tools.contains(&Tool::UffsCpp) {
-                if let Some(ref cpp) = cfg.uffs_cpp {
-                    eprintln!("  UFFS C++ (MFT re-read, no --limit) [sink={}]:  {} rounds",
-                        sink.label(), cfg.rounds);
-                    for &(label, _, _, cpp_pat, cpp_ext, validate) in PATTERNS {
-                        if cfg.skip_pattern(label) { continue; }
-                        if cpp_pat.is_empty() {
-                            eprintln!("    {label:<12} SKIP (C++ does not support this pattern)");
-                            continue;
-                        }
-                        eprint!("    {label:<12} ");  flush();
-                        let mut runs = Vec::new();
-                        for _ in 0..cfg.rounds {
-                            runs.push(check_dnf(run_uffs_cpp(cpp, drive, cpp_pat, cpp_ext, validate, sink)));
-                        }
-                        let s = sw(&runs);
-                        let first_ok = runs.iter().find(|r| r.ok);
-                        let any_bad = runs.iter().any(|r| r.bad_rows > 0);
-                        let verdict = if runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
-                        let bad_str = first_ok.filter(|r| r.bad_rows > 0).map_or(String::new(), |r| format!("  bad={}", r.bad_rows));
-                        eprintln!("p50={:>6}  p95={:>6}  rows={}{}  {}", fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows), bad_str, verdict);
-                        all_rows.push(Row { tool: Tool::UffsCpp, phase: Phase::Hot, sink,
-                            drive: drive.clone(), pat: label.into(), runs });
-                    }
-                }
-            }
+                // Skip full_scan for Everything (2GB IPC ceiling).
+                let es_skip = label == "full_scan";
+                // Skip patterns C++ does not support.
+                let cpp_skip = cpp_pat.is_empty();
 
-            // ── Everything ──────────────────────────────────────────────
-            if cfg.tools.contains(&Tool::Everything) {
-                if let Some(ref es) = cfg.es {
-                    eprintln!("  Everything HOT [sink={}]:  {} rounds (always-hot, daemon model)",
-                        sink.label(), cfg.rounds);
-                    for &(label, _, es_pat, _, _, validate) in PATTERNS {
-                        if cfg.skip_pattern(label) { continue; }
-                        // Skip full_scan for Everything — es.exe has a 2GB IPC
-                        // memory limit that crashes on drives with >2M entries.
-                        // See verify_parity.rs and Everything 1.4 known limitation.
-                        if label == "full_scan" {
-                            eprintln!("    {label:<12} SKIP (es.exe 2GB IPC limit)");
-                            continue;
-                        }
-                        eprint!("    {label:<12} ");  flush();
-                        let mut runs = Vec::new();
-                        let mut aborted_early = false;
-                        for round in 0..cfg.rounds {
-                            let t = check_dnf(run_es(es, drive, es_pat, validate, sink, cfg.es_instance.as_deref()));
-                            // If round 0 is a fast deterministic failure (e.g.
-                            // es.exe -export-csv IPC buffer overflow on result
-                            // sets past the ~150 K-row ceiling), the next 29
-                            // rounds will repeat the same exit code in the same
-                            // ~50 ms.  Short-circuit and mark the verdict as
-                            // ERROR; the summary table will still show the
-                            // observed (failing) run with rows=0.
-                            let abort = round == 0 && is_fast_deterministic_fail(&t);
-                            runs.push(t);
-                            if abort {
-                                aborted_early = true;
-                                break;
+                let run_uffs_tool  = cfg.tools.contains(&Tool::Uffs);
+                let run_cpp_tool   = cfg.tools.contains(&Tool::UffsCpp) && cfg.uffs_cpp.is_some() && !cpp_skip;
+                let run_es_tool    = cfg.tools.contains(&Tool::Everything) && cfg.es.is_some() && !es_skip;
+
+                if !run_uffs_tool && !run_cpp_tool && !run_es_tool { continue; }
+
+                eprintln!("  HOT [{sink}] {label:<12}  {} rounds  (tools shuffled each round)",
+                    cfg.rounds, sink = sink.label());
+
+                let mut uffs_runs: Vec<Timing> = Vec::new();
+                let mut cpp_runs:  Vec<Timing> = Vec::new();
+                let mut es_runs:   Vec<Timing> = Vec::new();
+                let mut es_aborted = false;
+
+                for round in 0..cfg.rounds {
+                    // Fresh random tool order every round — seeded from wall clock
+                    // nanoseconds so consecutive rounds get different seeds.
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as u64 + round as u64 * 1_000_000_007)
+                        .unwrap_or(round as u64 + 1);
+                    let order = lcg_shuffle3(seed);
+
+                    // Collect (tool_id, timing) for this round so we can do the
+                    // superset check right after all three fire.
+                    let mut round_rows: [Option<u64>; 3] = [None; 3]; // [uffs, cpp, es]
+
+                    for &slot in &order {
+                        match slot {
+                            0 if run_uffs_tool => {
+                                let t = check_dnf(run_uffs(&cfg.uffs, drive, pat, validate, sink));
+                                round_rows[0] = t.ok.then_some(t.rows);
+                                uffs_runs.push(t);
                             }
+                            1 if run_cpp_tool => {
+                                let cpp = cfg.uffs_cpp.as_ref().unwrap();
+                                let t = check_dnf(run_uffs_cpp(cpp, drive, cpp_pat, cpp_ext, validate, sink));
+                                round_rows[1] = t.ok.then_some(t.rows);
+                                cpp_runs.push(t);
+                            }
+                            2 if run_es_tool && !es_aborted => {
+                                let es = cfg.es.as_ref().unwrap();
+                                let t = check_dnf(run_es(es, drive, es_pat, validate, sink, cfg.es_instance.as_deref()));
+                                // Fast deterministic failure on round 0 → abort es for this pattern.
+                                if round == 0 && is_fast_deterministic_fail(&t) {
+                                    eprintln!("    [round {round}] es.exe fast-fail (exit={:?}); skipping remaining es rounds", t.err);
+                                    es_aborted = true;
+                                }
+                                round_rows[2] = t.ok.then_some(t.rows);
+                                es_runs.push(t);
+                            }
+                            _ => {}
                         }
-                        let s = sw(&runs);
-                        let first_ok = runs.iter().find(|r| r.ok);
-                        let any_bad = runs.iter().any(|r| r.bad_rows > 0);
-                        let verdict = if runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
-                        let bad_str = first_ok.filter(|r| r.bad_rows > 0).map_or(String::new(), |r| format!("  bad={}", r.bad_rows));
-                        let abort_str = if aborted_early {
-                            format!("  (fast-fail, skipped {} rounds)", cfg.rounds - 1)
-                        } else { String::new() };
-                        eprintln!("p50={:>6}  p95={:>6}  rows={}{}  {}{}",
-                            fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows),
-                            bad_str, verdict, abort_str);
-                        all_rows.push(Row { tool: Tool::Everything, phase: Phase::Hot, sink,
-                            drive: drive.clone(), pat: label.into(), runs });
                     }
+
+                    // ── Superset check after every round ──────────────────
+                    // uffs.exe ≥ uffs.com  (both index same MFT, uffs.exe has parity filters)
+                    // uffs.exe ≥ es.exe    (Everything skips system/ADS files)
+                    // uffs.com ≥ es.exe    (C++ also includes system files)
+                    let mut violations: Vec<String> = Vec::new();
+                    if let (Some(u), Some(c)) = (round_rows[0], round_rows[1]) {
+                        if u < c {
+                            violations.push(format!("uffs({u}) < cpp({c})"));
+                        }
+                    }
+                    if let (Some(u), Some(e)) = (round_rows[0], round_rows[2]) {
+                        if u < e {
+                            violations.push(format!("uffs({u}) < es({e})"));
+                        }
+                    }
+                    if let (Some(c), Some(e)) = (round_rows[1], round_rows[2]) {
+                        if c < e {
+                            violations.push(format!("cpp({c}) < es({e})"));
+                        }
+                    }
+                    let round_order_labels: Vec<&str> = order.iter().map(|&s| match s {
+                        0 => "uffs", 1 => "cpp", 2 => "es", _ => "?"
+                    }).collect();
+                    if violations.is_empty() {
+                        eprintln!("    [round {:>2}] order=[{}]  rows: uffs={} cpp={} es={}  ✓ superset ok",
+                            round + 1,
+                            round_order_labels.join(","),
+                            round_rows[0].map_or("-".into(), |n| n.to_string()),
+                            round_rows[1].map_or("-".into(), |n| n.to_string()),
+                            round_rows[2].map_or("-".into(), |n| n.to_string()),
+                        );
+                    } else {
+                        eprintln!("    [round {:>2}] order=[{}]  rows: uffs={} cpp={} es={}  ⚠ SUPERSET VIOLATION: {}",
+                            round + 1,
+                            round_order_labels.join(","),
+                            round_rows[0].map_or("-".into(), |n| n.to_string()),
+                            round_rows[1].map_or("-".into(), |n| n.to_string()),
+                            round_rows[2].map_or("-".into(), |n| n.to_string()),
+                            violations.join(", "),
+                        );
+                    }
+                }
+
+                // ── Per-tool summary lines ────────────────────────────────
+                if run_uffs_tool && !uffs_runs.is_empty() {
+                    let s = sw(&uffs_runs);
+                    let mut dm: Vec<u64> = uffs_runs.iter().filter(|r| r.ok && r.daemon_ms > 0).map(|r| r.daemon_ms).collect();
+                    dm.sort();
+                    let daemon_str = if dm.is_empty() { String::new() } else { format!("  daemon_p50={}", fms(p50(&dm))) };
+                    let any_bad = uffs_runs.iter().any(|r| r.bad_rows > 0);
+                    let verdict = if uffs_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else { "PASS" };
+                    let first_ok = uffs_runs.iter().find(|r| r.ok);
+                    eprintln!("    UFFS     p50={:>6}  p95={:>6}{}  rows={}  {}",
+                        fms(p50(&s)), fms(p95(&s)), daemon_str,
+                        first_ok.map_or(0, |r| r.rows), verdict);
+                    all_rows.push(Row { tool: Tool::Uffs, phase: Phase::Hot, sink,
+                        drive: drive.clone(), pat: label.into(), runs: uffs_runs });
+                }
+                if run_cpp_tool && !cpp_runs.is_empty() {
+                    let s = sw(&cpp_runs);
+                    let any_bad = cpp_runs.iter().any(|r| r.bad_rows > 0);
+                    let verdict = if cpp_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if cpp_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
+                    let first_ok = cpp_runs.iter().find(|r| r.ok);
+                    eprintln!("    UFFS-C++ p50={:>6}  p95={:>6}  rows={}  {}",
+                        fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows), verdict);
+                    all_rows.push(Row { tool: Tool::UffsCpp, phase: Phase::Hot, sink,
+                        drive: drive.clone(), pat: label.into(), runs: cpp_runs });
+                }
+                if run_es_tool && !es_runs.is_empty() {
+                    let s = sw(&es_runs);
+                    let any_bad = es_runs.iter().any(|r| r.bad_rows > 0);
+                    let abort_str = if es_aborted { format!("  (fast-fail, {} rounds)", es_runs.len()) } else { String::new() };
+                    let verdict = if es_runs.iter().any(|r| r.dnf) { "DNF" } else if any_bad { "WRONG" } else if es_runs.iter().all(|r| r.ok) { "PASS" } else { "ERROR" };
+                    let first_ok = es_runs.iter().find(|r| r.ok);
+                    eprintln!("    ES       p50={:>6}  p95={:>6}  rows={}  {}{}",
+                        fms(p50(&s)), fms(p95(&s)), first_ok.map_or(0, |r| r.rows), verdict, abort_str);
+                    all_rows.push(Row { tool: Tool::Everything, phase: Phase::Hot, sink,
+                        drive: drive.clone(), pat: label.into(), runs: es_runs });
+                }
+                if run_es_tool && es_skip {
+                    eprintln!("    {label:<12} ES SKIP (es.exe 2GB IPC limit)");
+                }
+                if run_cpp_tool && cpp_skip {
+                    eprintln!("    {label:<12} C++ SKIP (pattern not supported)");
                 }
             }
         }
