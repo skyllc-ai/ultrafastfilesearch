@@ -94,31 +94,20 @@ fn find_cell<'a>(
         .find(|cell| cell.drive == drive && cell.pattern == pattern)
 }
 
-/// Whether Everything can serve `drive` (index loaded *and* hot).
-fn everything_serves(preflight: &PreflightResult, drive: char) -> bool {
-    find_drive(&preflight.drives, drive).is_some_and(|state| state.loaded && state.hot)
-}
-
 /// Greedy RAM-budget drive selector for Everything.
 ///
 /// Accumulates candidate drives in the order the operator specified them
-/// until `es_ram_budget_bytes` would be exceeded. When budget is 0
-/// (unlimited), falls back to the `loaded && hot` check only.
+/// until `es_ram_budget_bytes` would be exceeded.  Whether Everything is
+/// currently running does NOT gate inclusion — a drive fits if its estimated
+/// RAM is within the budget.  When budget is 0 (unlimited), all candidate
+/// drives are included.
 fn ram_budget_capable_drives(spec: &MatrixSpec, preflight: &PreflightResult) -> Vec<char> {
     if spec.es_ram_budget_bytes == 0 {
-        return spec
-            .candidate_drives
-            .iter()
-            .copied()
-            .filter(|&drive| everything_serves(preflight, drive))
-            .collect();
+        return spec.candidate_drives.clone();
     }
     let mut cumulative: u64 = 0;
     let mut result = Vec::new();
     for &drive in &spec.candidate_drives {
-        if !everything_serves(preflight, drive) {
-            continue;
-        }
         let count = find_drive(&preflight.drives, drive).map_or(0, |dp| dp.uffs_record_count);
         let est = count.saturating_mul(UFFS_BYTES_PER_RECORD);
         if cumulative.saturating_add(est) <= spec.es_ram_budget_bytes {
@@ -318,8 +307,10 @@ mod tests {
     }
 
     #[test]
-    fn everything_only_serves_loaded_hot_drives() {
-        // Everything holds only C and D; the operator asked for C,D,E,F,M,S.
+    fn ram_budget_gates_capable_drives_not_es_running_state() {
+        // RAM budget = 0 (unlimited) → all candidate drives are capable.
+        // ES running state only gates per-cell feasibility: C and D have
+        // feasibility cells and are cross-tool; E/F/M/S have no cell → solo.
         let preflight = PreflightResult {
             drives: vec![hot_drive('C', 1000), hot_drive('D', 2000), DrivePreflight {
                 drive: 'E',
@@ -344,7 +335,9 @@ mod tests {
 
         let matrix = compute_matrix(&spec, &preflight);
 
-        assert_eq!(matrix.capable_drives, vec!['C', 'D']);
+        // Budget=0 → all candidates are capable regardless of ES running state.
+        assert_eq!(matrix.capable_drives, vec!['C', 'D', 'E', 'F', 'M', 'S']);
+        // Only C and D have feasibility cells → cross-tool.
         assert_eq!(
             matrix
                 .cross_cells
@@ -353,17 +346,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!['C', 'D']
         );
-        // E/F/M/S all land in UFFS-only; E is NotConfigured, F/M/S have no
-        // DrivePreflight record at all (also maps to NotConfigured).
+        // E/F/M/S: capable but no feasibility cell → UFFS-only.
         let solo_drives: Vec<char> = matrix.uffs_only.iter().map(|cell| cell.drive).collect();
         assert_eq!(solo_drives, vec!['E', 'F', 'M', 'S']);
-        assert!(
-            matrix
-                .uffs_only
-                .iter()
-                .all(|cell| cell.reason.contains("Everything Options")
-                    || cell.reason.contains("not in Everything"))
-        );
     }
 
     #[test]
@@ -389,7 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn configured_but_indexing_drive_is_uffs_only() {
+    fn indexing_drive_is_capable_but_cell_is_uffs_only() {
+        // C is budget-capable (within RAM limit) but ES is still indexing →
+        // no feasibility cell → solo.  capable_drives includes C.
         let preflight = PreflightResult {
             drives: vec![DrivePreflight {
                 drive: 'C',
@@ -411,7 +398,9 @@ mod tests {
 
         let matrix = compute_matrix(&spec, &preflight);
 
-        assert!(matrix.capable_drives.is_empty());
+        // Budget=0 → C is capable.
+        assert_eq!(matrix.capable_drives, vec!['C']);
+        // No feasibility cell → ES can't serve this cell → solo.
         assert!(
             matrix
                 .uffs_only
