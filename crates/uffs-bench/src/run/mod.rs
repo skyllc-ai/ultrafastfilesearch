@@ -20,6 +20,8 @@
 use alloc::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod daemon;
+
 use crate::bundle::{bundle_path, new_bundle};
 use crate::cards::{
     assembly_card, dry_run_result, measurement_card, plan_card, report_scope, stage0_result,
@@ -384,6 +386,7 @@ impl Orchestrator<'_> {
     /// Returns [`BenchError::MissingTools`] if fewer than 2 tools are available
     /// after the operator's decision, or if the operator chooses to abort.
     fn capture(&self, session: &mut Session) -> Result<Capture> {
+        daemon::daemon_start_if_needed(self.host, &resolve::uffs_exe(self.host));
         let fp = env::capture(self.host, &env_spec_from_cli(self.host, self.cli));
         self.host.out(&env::render_md(&fp));
         let missing: Vec<&str> = fp
@@ -415,6 +418,7 @@ impl Orchestrator<'_> {
             ));
         }
         let es_ram_budget = fp.ram_bytes / 2;
+        daemon::ensure_daemon_ready(self.host, &resolve::uffs_exe(self.host))?;
         let preflight = preflight::capture(
             self.host,
             &preflight_spec_from_cli(self.host, self.cli, es_ram_budget),
