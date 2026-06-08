@@ -1193,6 +1193,7 @@ fn run_hot_compare(cfg: &Cfg, drive: &str, all_rows: &mut Vec<Row>) {
 
             if !run_uffs_tool && !run_cpp_tool && !run_es_tool { continue; }
 
+            eprintln!();
             if es_skip  { eprintln!("  HOT  {label:<12}  ES  SKIP (es.exe 2GB IPC limit)"); }
             if cpp_skip { eprintln!("  HOT  {label:<12}  C++ SKIP (pattern not supported)"); }
 
@@ -1409,6 +1410,7 @@ fn main() {
     // Returns the temp-ini path of the (re)launched ES sandbox, if any.
     let scope_tools = |cfg: &Cfg, drives: &[String]| -> Option<PathBuf> {
         let ini = es_everything.as_ref().and_then(|ev| {
+            eprintln!();
             let p = es_launch(ev, drives);
             if p.is_some() {
                 if let Some(ref es) = cfg.es { es_wait_until_loaded(es, drives); }
@@ -1418,6 +1420,7 @@ fn main() {
         if cfg.tools.contains(&Tool::Uffs) {
             uffs_stop(&cfg.uffs);
             uffs_start(&cfg.uffs, drives);
+            eprintln!();
             prime_daemon(&cfg.uffs, &drives.join(","), PRIME_ROUNDS);
         }
         ini
@@ -1452,6 +1455,7 @@ fn main() {
 
         // ── UFFS WARM (file sink only; same reasoning as COLD) ────────────
         if cfg.tools.contains(&Tool::Uffs) && !cfg.skip_cold {
+            eprintln!();
             eprint!("  UFFS WARM: stopping daemon (cache stays)...");  flush();
             uffs_stop(&cfg.uffs);
             eprintln!(" done.");
