@@ -404,7 +404,7 @@ fn snapshot_cache(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> 
     let backup_dir = cfg.bundle_dir.join("backup");
     host.create_dir_all(&backup_dir)
         .map_err(|err| BenchError::io(&backup_dir, err))?;
-    for &drive in &cfg.drives {
+    for &drive in &cfg.capable_drives {
         for suffix in CACHE_SUFFIXES {
             let src = dir.join(format!("{drive}{suffix}"));
             if !host.path_exists(&src) {
@@ -598,7 +598,7 @@ fn run_native(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Resu
     let version = probe_version(host, &cfg.uffs_exe);
     let mut cells = Vec::new();
     let mut all_ok = true;
-    for &drive in &cfg.drives {
+    for &drive in &cfg.capable_drives {
         for probe in &cfg.patterns {
             let cell = measure_cell(host, cfg, drive, probe);
             all_ok = all_ok && cell.ok;
@@ -651,7 +651,7 @@ pub fn plan(stage: u32, cfg: &StageCfg) -> StagePlan {
         }
         _ => {
             let commands = cfg
-                .drives
+                .capable_drives
                 .iter()
                 .flat_map(|&drive| {
                     cfg.patterns
