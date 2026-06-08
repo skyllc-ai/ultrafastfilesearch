@@ -59,6 +59,13 @@ pub const ES_IPC_ROW_CEILING: u64 = 150_000;
 /// Used to estimate how much RAM Everything needs to index a drive.
 pub const UFFS_BYTES_PER_RECORD: u64 = 100;
 
+/// Maximum RAM Everything can use for its in-process index before it OOMs.
+///
+/// Empirically determined: C (325 MiB) + D (673 MiB) = 998 MiB succeeds;
+/// adding E (279 MiB) → 1,277 MiB causes an out-of-memory crash.
+/// 1 GiB is used as a conservative safe ceiling.
+pub const ES_RAM_BUDGET_BYTES: u64 = 1_073_741_824; // 1 GiB
+
 /// A pattern whose per-drive result size is estimated via UFFS.
 ///
 /// `args` are passed to the UFFS binary; the literal token `{DRIVE}` is
@@ -456,29 +463,29 @@ fn warm_parked_drives(
     }
 }
 
-/// Render a GFM drive-status table for display before the matrix.
+/// Render a GFM ES RAM budget table for display before the matrix.
 ///
-/// Columns: Drive | UFFS records | Est. RAM | ES index  | ES capable
-/// "ES capable" uses the same RAM-budget logic as `matrix::compute_matrix` to
-/// show which drives would be included in cross-tool cells.
+/// Columns: Drive | UFFS records | Est. RAM | ES index | Fits budget
+/// Drives are greedily accepted smallest-first until `es_ram_budget_bytes`
+/// would be exceeded.  A footer shows the total RAM of fitting drives vs the
+/// budget cap.
 #[must_use]
 pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) -> String {
     if result.drives.is_empty() {
         return String::new();
     }
-    let header = "| Drive | UFFS records | Est. RAM | ES index  | ES capable |";
-    let sep = "|-------|-------------|----------|-----------|------------|";
+    let header = "| Drive | UFFS records | Est. RAM | ES index  | Fits budget |";
+    let sep = "|-------|-------------|----------|-----------|-------------|";
 
     let mut cumulative_bytes: u64 = 0;
     let mut sorted_drives: Vec<&DrivePreflight> = result.drives.iter().collect();
     sorted_drives.sort_by_key(|dp| dp.uffs_record_count);
-    let mut budget_capable: alloc::collections::BTreeSet<char> =
-        alloc::collections::BTreeSet::new();
+    let mut budget_fits: alloc::collections::BTreeSet<char> = alloc::collections::BTreeSet::new();
     for dp in &sorted_drives {
         let est = dp.uffs_record_count.saturating_mul(UFFS_BYTES_PER_RECORD);
         if es_ram_budget_bytes == 0 || cumulative_bytes.saturating_add(est) <= es_ram_budget_bytes {
             cumulative_bytes = cumulative_bytes.saturating_add(est);
-            budget_capable.insert(dp.drive);
+            budget_fits.insert(dp.drive);
         }
     }
 
@@ -488,7 +495,7 @@ pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) ->
         .map(|dp| {
             let records = fmt_count(dp.uffs_record_count);
             let est_ram = fmt_ram(dp.uffs_record_count.saturating_mul(UFFS_BYTES_PER_RECORD));
-            let es_status = match dp.es_status {
+            let es_index = match dp.es_status {
                 EsStatus::Loaded => "loaded",
                 EsStatus::NotInstalled => "not installed",
                 EsStatus::DaemonNotRunning => "not running",
@@ -496,20 +503,31 @@ pub fn render_drive_table(result: &PreflightResult, es_ram_budget_bytes: u64) ->
                 EsStatus::StillIndexing => "indexing",
                 EsStatus::NotConfigured => "not configured",
             };
-            let capable = if budget_capable.contains(&dp.drive) {
+            let fits = if budget_fits.contains(&dp.drive) {
                 "✓"
             } else {
                 "✗ over budget"
             };
             format!(
-                "| {drive}     | {records:>12} | {est_ram:>8} | {es_status:<9} | {capable:<10} |",
+                "| {drive}     | {records:>12} | {est_ram:>8} | {es_index:<9} | {fits:<11} |",
                 drive = dp.drive
             )
         })
         .collect();
 
+    let budget_summary = if es_ram_budget_bytes > 0 {
+        format!(
+            "\n> ES RAM budget: {} used of {} cap ({} drive(s) fit)",
+            fmt_ram(cumulative_bytes),
+            fmt_ram(es_ram_budget_bytes),
+            budget_fits.len()
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        "### Drive inventory\n\n{header}\n{sep}\n{}\n",
+        "### ES RAM budget\n\n{header}\n{sep}\n{}\n{budget_summary}\n",
         rows.join("\n")
     )
 }

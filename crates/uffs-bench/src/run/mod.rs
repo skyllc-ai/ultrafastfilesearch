@@ -417,7 +417,7 @@ impl Orchestrator<'_> {
                 "operator chose to abort — install missing tools and re-run".to_owned(),
             ));
         }
-        let es_ram_budget = fp.ram_bytes / 2;
+        let es_ram_budget = preflight::ES_RAM_BUDGET_BYTES;
         daemon::ensure_daemon_ready(self.host, &resolve::uffs_exe(self.host))?;
         let preflight = preflight::capture(
             self.host,
