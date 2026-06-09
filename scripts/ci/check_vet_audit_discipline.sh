@@ -299,7 +299,7 @@ trailers_in_range() {
             value="${value%"${value##*[![:space:]]}"}"
             # Accept `<crate>@<OLD>-><NEW>` with optional spaces around `->`.
             # Normalise to crate<TAB>OLD<TAB>NEW.
-            if [[ "$value" =~ ^([A-Za-z0-9_.+-]+)@([A-Za-z0-9_.+-]+)[[:space:]]*-\>[[:space:]]*([A-Za-z0-9_.+-]+)$ ]]; then
+            if [[ "$value" =~ ^([A-Za-z0-9_.+-]+)@([A-Za-z0-9_.+:@-]+)[[:space:]]*-\>[[:space:]]*([A-Za-z0-9_.+-]+)$ ]]; then
                 printf '%s\t%s\t%s\n' \
                     "${BASH_REMATCH[1]}" \
                     "${BASH_REMATCH[2]}" \
