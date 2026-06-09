@@ -282,10 +282,11 @@ impl IndexManager {
             tracing::info!(drive = %letter, "Loading live drive (parallel)");
             eprintln!("[diag] load_live_drives: spawning thread for drive={letter}");
             join_set.spawn_blocking(move || {
-                let result = uffs_core::compact::load_drive(
-                    &uffs_core::compact::MftSource::Live(letter),
-                    no_cache,
-                );
+                // Guarded warm load: serve the on-disk compact cache fast
+                // when the background USN journal loop can converge the
+                // bounded delta, falling back to a synchronous rebuild
+                // only when it cannot (see `cache::guarded_load`).
+                let result = crate::cache::guarded_load::load_live_drive(letter, no_cache);
                 (letter, result)
             });
         }

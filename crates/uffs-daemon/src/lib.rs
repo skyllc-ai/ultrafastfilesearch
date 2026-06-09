@@ -525,19 +525,25 @@ async fn spawn_journal_loops_for_warm_shards(
     };
     use cache::journal_sink::RegistryPatchSink;
 
-    let (sink, applier_handle) = RegistryPatchSink::spawn_with_applier(idx);
-    let sink_dyn: Arc<dyn PatchSink> = sink;
-
     // Cursor-store choice: Windows persists per-drive cursors next
     // to the compact cache; Mac/Linux uses the always-zero
     // NullCursorStore (no journal → no cursor → fall back to
     // "start from journal head" semantics, which is the correct
     // no-op on those platforms).
+    //
+    // Shared with the applier: the sink persists each loop's cursor
+    // in lockstep with a successful compact-cache body save (the
+    // loops only seed from it and reset it on wrap), so the on-disk
+    // cursor never outruns the on-disk body.  See `journal_sink`.
     let cursor_store: Arc<dyn CursorStore> = if cfg!(windows) {
         Arc::new(DiskCursorStore::new(uffs_mft::cache::cache_dir()))
     } else {
         Arc::new(NullCursorStore)
     };
+
+    let (sink, applier_handle) =
+        RegistryPatchSink::spawn_with_applier(idx, Arc::clone(&cursor_store));
+    let sink_dyn: Arc<dyn PatchSink> = sink;
 
     let config = JournalLoopConfig::default();
     let letters = idx.loaded_drive_letters().await;

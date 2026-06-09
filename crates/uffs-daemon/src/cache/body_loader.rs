@@ -88,6 +88,16 @@ impl BodyLoader for DiskBodyLoader {
         // the daemon's last MFT refresh.  On non-Windows the helper
         // errors out by design and we fall through to the bare
         // compact-cache load below.
+        //
+        // NB: the startup warm-load guard (`cache::guarded_load`) is
+        // deliberately NOT used here.  Re-promote runs while the
+        // daemon is live, and the per-shard journal loop keeps
+        // advancing its persisted cursor while the shard is demoted
+        // (the apply no-ops with no warm body).  Serving the on-disk
+        // compact cache then deferring to that loop would strand the
+        // `[demote, now]` delta forever — the loop's cursor is already
+        // past it.  A synchronous refresh is the only correct choice
+        // on this path.
         match uffs_core::compact_loader::load_drive_with_usn_refresh(letter) {
             Ok((body, _timing)) => return Some(Arc::new(body)),
             Err(err) => {

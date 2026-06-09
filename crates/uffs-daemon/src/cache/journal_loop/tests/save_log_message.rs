@@ -78,7 +78,7 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
     // Age threshold set generously so it can't be the path that
     // fires (we want a deterministic `EventsExceeded` reason).
     let changes = [one_change(10), one_change(11), one_change(12)];
-    let saved = process_tick(
+    process_tick(
         &sink as &dyn PatchSink,
         uffs_mft::platform::DriveLetter::C,
         100, // cursor
@@ -87,14 +87,11 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
         1,                       // save_threshold_events — tight
         Duration::from_hours(1), // save_threshold_age — generous
     );
-    assert!(
-        saved,
-        "process_tick must report saved=true when events threshold crosses"
-    );
 
-    // Sanity: the sink saw the trigger_save callback once with the
-    // expected (letter, reason) pair.  This is the behavioral
-    // contract; the *log message* below is the soak-harness contract.
+    // The sink saw the trigger_save callback once with the expected
+    // (letter, reason) pair — this proves the threshold crossed and
+    // fired a save.  This is the behavioral contract; the *log
+    // message* below is the soak-harness contract.
     let save_calls = sink.save_calls();
     assert_eq!(
         save_calls.as_slice(),
@@ -103,6 +100,13 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
             SaveReason::EventsExceeded
         )],
         "trigger_save must fire exactly once with EventsExceeded reason; got {save_calls:?}",
+    );
+    // The cursor passed to process_tick must be handed through to the
+    // sink so it can persist it in lockstep with the body save.
+    assert_eq!(
+        sink.save_cursors().as_slice(),
+        &[100],
+        "process_tick must forward the tick cursor to trigger_save",
     );
 
     // Find the INFO event the soak harness greps for.

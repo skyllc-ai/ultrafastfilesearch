@@ -175,7 +175,19 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// background thread; the loop does not wait for it.  If
     /// the save fails, the implementor logs but does not
     /// propagate — the next threshold crossing will retry.
-    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason);
+    ///
+    /// `cursor` is the loop's current read position.  The sink
+    /// persists it **in lockstep** with the on-disk compact-cache
+    /// body — and only when that body save actually succeeds — so
+    /// the persisted cursor never outruns the persisted body (a
+    /// parked shard's save is a no-op, so its cursor must not
+    /// advance on disk; see `journal_sink`).
+    fn trigger_save(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: SaveReason,
+        cursor: u64,
+    );
 
     /// Notify the sink that the USN journal for `letter` was
     /// detected to have wrapped (Phase 7 task 7.7).
@@ -471,7 +483,12 @@ impl JournalLoop {
             }
 
             cursor = result.next_cursor;
-            let saved = process_tick(
+            // The cursor is persisted by the sink in lockstep with the
+            // compact-cache body save (and only when that save actually
+            // happens), so the loop no longer persists it here — doing
+            // so would let a parked shard's on-disk cursor outrun its
+            // frozen on-disk body.  See `PatchSink::trigger_save`.
+            process_tick(
                 self.sink.as_ref(),
                 letter,
                 cursor,
@@ -480,11 +497,6 @@ impl JournalLoop {
                 self.config.save_threshold_events,
                 self.config.save_threshold_age,
             );
-            // Persist the cursor in lockstep with each save so
-            // on-disk cursor and on-disk body advance together.
-            if saved {
-                self.cursor_store.store(letter, cursor);
-            }
         }
     }
 }
@@ -556,10 +568,8 @@ async fn poll_blocking(
 ///
 /// On a non-empty tick, also: (a) records the event count into
 /// `save_trigger`, (b) evaluates the save thresholds, and (c)
-/// fires [`PatchSink::trigger_save`] when a threshold crosses.
-///
-/// **Returns** `true` when a save was triggered this tick (the
-/// caller persists the cursor in lockstep), `false` otherwise.
+/// fires [`PatchSink::trigger_save`] (passing `cursor` so the sink can
+/// persist it in lockstep with the body save) when a threshold crosses.
 fn process_tick(
     sink: &dyn PatchSink,
     letter: uffs_mft::platform::DriveLetter,
@@ -568,17 +578,15 @@ fn process_tick(
     save_trigger: &mut SaveTrigger,
     save_threshold_events: u64,
     save_threshold_age: Duration,
-) -> bool {
+) {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
-        return false;
+        return;
     }
     let accepted = sink.accept(letter, changes);
     save_trigger.record(changes.len() as u64);
-    let mut saved = false;
     if let Some(reason) = save_trigger.evaluate(save_threshold_events, save_threshold_age) {
-        sink.trigger_save(letter, reason);
-        saved = true;
+        sink.trigger_save(letter, reason, cursor);
         tracing::info!(
             drive = %letter,
             ?reason,
@@ -593,7 +601,6 @@ fn process_tick(
         cursor,
         "Journal poll: applied tick"
     );
-    saved
 }
 
 /// Handle returned by [`spawn_journal_loop`] for cancellation +
