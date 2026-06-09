@@ -410,7 +410,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.fastrand]]
 version = "2.4.1"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.9"
@@ -729,71 +729,75 @@ version = "0.3.7"
 criteria = "safe-to-run"
 
 [[exemptions.polars]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-arrow]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-arrow-format]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.polars-async]]
+version = "0.54.4"
+criteria = "safe-to-deploy"
+
 [[exemptions.polars-buffer]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-compute]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-config]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-core]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-dtype]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-error]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-expr]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-io]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-json]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-lazy]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-mem-engine]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-ooc]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-ops]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-parquet]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-parquet-format]]
@@ -801,31 +805,31 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-plan]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-row]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-schema]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-sql]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-stream]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-time]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polars-utils]]
-version = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a"
+version = "0.54.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.polyval]]

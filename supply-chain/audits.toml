@@ -133,6 +133,150 @@ Audit rationale (Apr 2026, v0.5.71):
   error on missing var rather than silently succeeding.
 - License: MIT OR Apache-2.0 (inherited from paste)."""
 
+[[audits.polars]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer. Polars 0.54.4 release. Reviewed changelog and diff - no security concerns."
+
+[[audits.polars-arrow]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-async]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-buffer]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-compute]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-config]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-core]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-dtype]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-error]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-expr]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-io]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-json]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-lazy]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-mem-engine]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-ooc]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-ops]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-parquet]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-plan]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-row]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-schema]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-sql]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-stream]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-time]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
+[[audits.polars-utils]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.53.0@git:1e9a63b95923291cd8849d70d96b8cec4e96da6a -> 0.54.4"
+notes = "Migration from git revision to crates.io SemVer."
+
 [[audits.quick-xml]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
