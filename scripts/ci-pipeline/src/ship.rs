@@ -39,11 +39,11 @@ use crate::exec::{
     execute_step_with_tracking,
 };
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
-use crate::version::{get_current_version, increment_version, update_polars_git};
+use crate::version::{get_current_version, increment_version};
 use crate::workflow::{
     ALL_STEPS, STEP_CLEAN_ARTIFACTS, STEP_COVERAGE_TESTS, STEP_FORMAT_CHECK, STEP_FORMAT_CODE,
     STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC,
-    STEP_UPDATE_POLARS, STEP_VERSION_INCREMENT, WorkflowPhase, WorkflowState,
+    STEP_VERSION_INCREMENT, WorkflowPhase, WorkflowState,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -408,10 +408,6 @@ pub(crate) async fn run_enhanced_phase1(
     );
 
     tracked_toolchain_step(state, ctx).await?;
-    execute_step_with_tracking(state, STEP_UPDATE_POLARS, || async {
-        update_polars_git(ctx).await
-    })
-    .await?;
 
     println!("{}", "📋 Stage 1: Sequential Prerequisites".yellow().bold());
 

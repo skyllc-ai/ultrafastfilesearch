@@ -16,8 +16,6 @@
 //!   rust-script that actually rewrites the Cargo.toml in place.
 //! * [`version_bump`] — tracked-step wrapper around [`increment_version`] that
 //!   threads through the pipeline's logging / timeout conventions.
-//! * [`update_polars_git`] — pin the polars git dep to the latest upstream
-//!   `main` HEAD (or honour the `rev = "..."` override if present).
 
 use std::path::Path;
 
@@ -127,96 +125,5 @@ pub(crate) async fn version_bump(ctx: &PipelineContext) -> Result<()> {
         println!("{}", "⚠️  Version script not found".yellow());
         bail!("Version bump failed - ./build/update_all_versions.rs not found");
     }
-    Ok(())
-}
-
-/// Update Polars git dependencies to the latest commit on `main`.
-///
-/// **Skipped** when `uffs-polars/Cargo.toml` uses `rev = "..."` pinning
-/// (which prevents upstream breakage).  In that case the pinned commit
-/// is used as-is and `cargo update` is called with
-/// `--precise <pinned-rev>`.
-///
-/// # Errors
-///
-/// Returns an error if `crates/uffs-polars/Cargo.toml` cannot be read,
-/// if `git ls-remote` fails, or if `cargo update` returns non-zero.
-pub(crate) async fn update_polars_git(_ctx: &PipelineContext) -> Result<()> {
-    // Check if uffs-polars/Cargo.toml uses rev pinning
-    let cargo_toml = std::fs::read_to_string("crates/uffs-polars/Cargo.toml")
-        .context("Failed to read crates/uffs-polars/Cargo.toml")?;
-    if let Some(rev_line) = cargo_toml
-        .lines()
-        .find(|line| line.contains("polars") && line.contains("rev ="))
-    {
-        // Extract the rev hash from `... rev = "<hash>" ...`.  Two
-        // `split_once('"')` steps walk past the opening + closing
-        // quotes without any byte-range slicing, so the lint's
-        // UTF-8-boundary panic concern doesn't apply here.
-        if let Some((_, after_open)) = rev_line.split_once("rev = \"")
-            && let Some((pinned_rev, _)) = after_open.split_once('"')
-        {
-            // Short prefix for display; `.get(..12)` returns None if
-            // the rev is shorter than 12 chars (git hashes are 40)
-            // — fall back to the full string in that defensive case.
-            let short_rev = pinned_rev.get(..12).unwrap_or(pinned_rev);
-            println!(
-                "{}",
-                format!("📌 Polars pinned to rev={short_rev} — skipping auto-update").blue()
-            );
-            // Still run cargo update to ensure lockfile matches the pinned rev
-            let status = Command::new("cargo")
-                .args(["update", "-p", "polars", "--precise", pinned_rev])
-                .status()
-                .await
-                .context("Failed to run cargo update for pinned polars")?;
-            if !status.success() {
-                println!("⚠️  cargo update --precise failed (lockfile may already be correct)");
-            }
-            return Ok(());
-        }
-    }
-
-    println!(
-        "{}",
-        "📦 Updating Polars (git, branch=main) to latest commit...".blue()
-    );
-
-    // 1) Discover latest commit on main
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg("https://github.com/pola-rs/polars")
-        .arg("refs/heads/main")
-        .output()
-        .await
-        .context("Failed to run 'git ls-remote' for Polars")?;
-    if !output.status.success() {
-        bail!("git ls-remote failed for Polars main");
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let sha = stdout
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Unable to parse Polars main HEAD sha"))?;
-
-    // 2) Pin workspace lockfile to that exact commit for the 'polars' package
-    let status = Command::new("cargo")
-        .arg("update")
-        .arg("-w")
-        .arg("-p")
-        .arg("polars")
-        .arg("--precise")
-        .arg(sha)
-        .status()
-        .await
-        .context("Failed to execute 'cargo update -w -p polars --precise <sha>'")?;
-
-    if !status.success() {
-        bail!(
-            "Polars update failed - 'cargo update -w -p polars --precise <sha>' exited with non-zero status"
-        );
-    }
-
-    println!("{} {}", "✅ Polars pinned to commit".green(), sha);
     Ok(())
 }

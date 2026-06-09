@@ -527,53 +527,27 @@ check-quick:
     @printf "\033[0;34m⚡ Quick validation (development speed)...\033[0m\n"
     cargo check --workspace
 
-# Bump Polars to latest main HEAD (updates rev= hash, refreshes lockfile, checks build).
+# Bump Polars within the SemVer requirement in crates/uffs-polars/Cargo.toml
+# (crates.io source). For a major/minor jump, edit the `version = "..."`
+# requirement there first, then run this to refresh the lockfile + build.
 polars:
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m📦 Bumping Polars to latest main HEAD...\033[0m\n"
+    printf "\033[0;34m📦 Updating Polars within its crates.io SemVer requirement...\033[0m\n"
 
-    NEW_REV=$(git ls-remote https://github.com/pola-rs/polars refs/heads/main | awk '{print $1}')
-    if [ -z "$NEW_REV" ]; then
-        printf "\033[0;31m❌ Failed to fetch latest Polars commit\033[0m\n"
-        exit 1
-    fi
-
-    OLD_REV=$(sed -n 's/.*rev = "\([a-f0-9]*\)".*/\1/p' crates/uffs-polars/Cargo.toml)
-    if [ "$OLD_REV" = "$NEW_REV" ]; then
-        printf "\033[0;32m✅ Already at latest: %s\033[0m\n" "${NEW_REV:0:12}"
-        exit 0
-    fi
-
-    printf "   Old: %s\n" "${OLD_REV:0:12}"
-    printf "   New: %s\n" "${NEW_REV:0:12}"
-
-    # macOS sed requires a space after -i, Linux doesn't care — use backup + remove
-    sed -i.bak "s|rev = \"${OLD_REV}\"|rev = \"${NEW_REV}\"|" crates/uffs-polars/Cargo.toml
-    rm -f crates/uffs-polars/Cargo.toml.bak
+    OLD_POLARS_VER=$(awk '/^name = "polars"$/{f=1;next} f&&/^version = /{gsub(/"/,"",$3);print $3;exit}' Cargo.lock)
     cargo update -p polars
+    NEW_POLARS_VER=$(awk '/^name = "polars"$/{f=1;next} f&&/^version = /{gsub(/"/,"",$3);print $3;exit}' Cargo.lock)
 
-    # Per R6 publishability work (release-automation-plan §R6): the polars
-    # git dep ALSO carries `version = "X.Y.Z"` so `cargo package` (invoked
-    # by `release-plz update`) can validate this manifest.  After bumping
-    # the `rev`, the resolved polars version may have advanced — keep the
-    # `version =` field in lockstep with what cargo actually resolves to.
-    # Without this, when polars upstream lands a major-version bump, the
-    # next `release-plz update` (R3+ shadow / R4+ active) fails with
-    # `dependency "polars" does not specify a version` (or a version
-    # requirement mismatch).
-    RESOLVED_POLARS_VER=$(cargo tree -p uffs-polars --depth 1 --prefix none 2>/dev/null \
-        | awk '/^polars v/ {sub(/^v/, "", $2); print $2; exit}')
-    OLD_POLARS_VER=$(awk -F'"' '/^polars = \{/ {for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+/) {print $i; exit}}' crates/uffs-polars/Cargo.toml)
-    if [ -n "${RESOLVED_POLARS_VER:-}" ] && [ -n "${OLD_POLARS_VER:-}" ] && [ "$OLD_POLARS_VER" != "$RESOLVED_POLARS_VER" ]; then
-        printf "   Polars version: %s -> %s\n" "$OLD_POLARS_VER" "$RESOLVED_POLARS_VER"
-        sed -i.bak "s|version = \"${OLD_POLARS_VER}\", default-features|version = \"${RESOLVED_POLARS_VER}\", default-features|" crates/uffs-polars/Cargo.toml
-        rm -f crates/uffs-polars/Cargo.toml.bak
+    if [ "${OLD_POLARS_VER:-}" = "${NEW_POLARS_VER:-}" ]; then
+        printf "\033[0;32m✅ Already at latest within requirement: %s\033[0m\n" "${NEW_POLARS_VER}"
+    else
+        printf "   Polars: %s -> %s\n" "${OLD_POLARS_VER}" "${NEW_POLARS_VER}"
     fi
 
     printf "\033[0;34m🔨 Checking build...\033[0m\n"
     cargo check -p uffs-polars
-    printf "\033[0;32m✅ Polars bumped to %s\033[0m\n" "${NEW_REV:0:12}"
+    printf "\033[0;32m✅ Polars updated to %s\033[0m\n" "${NEW_POLARS_VER}"
 
 # Update all workspace dependencies to latest compatible versions.
 update-deps:

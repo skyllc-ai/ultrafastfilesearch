@@ -33,7 +33,7 @@ _default-help:
     @echo "  just setup           First-time dev environment setup"
     @echo "  just update-tools    Update all tools (Rust, cargo, brew/winget)"
     @echo "  just dev             Watch mode (test + clippy on save)"
-    @echo "  just polars          Bump Polars to latest main HEAD"
+    @echo "  just polars          Bump Polars within its crates.io SemVer requirement"
     @echo "  just update-deps     Update all workspace dependencies"
     @echo "  just clean           Clean build artifacts"
     @echo ""

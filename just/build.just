@@ -680,8 +680,8 @@ use:
 # Reset local `main` to `origin/main`, discarding any uncommitted edits.
 #
 # Motivation: `cargo build` rewrites `Cargo.lock` whenever a transitive
-# dep resolves differently (mtime-driven re-resolution, polars git pin
-# updates, etc.).  After a `just ship` upstream the lockfile has moved,
+# dep resolves differently (mtime-driven re-resolution, dependency
+# bumps, etc.).  After a `just ship` upstream the lockfile has moved,
 # so a plain `git pull` aborts with:
 #     "Your local changes to the following files would be overwritten
 #      by merge: Cargo.lock"

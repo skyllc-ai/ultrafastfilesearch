@@ -34,8 +34,10 @@ use uuid::Uuid;
 
 /// Ensure the pinned nightly (per `rust-toolchain.toml`) is installed.
 pub(crate) const STEP_TOOLCHAIN_SYNC: &str = "00-toolchain-ensure";
-/// Bump the polars git dependency lock to the latest `main` HEAD.
-pub(crate) const STEP_UPDATE_POLARS: &str = "01-update-polars-git";
+// Step 01 (update-polars-git) was removed: Polars is now a plain
+// crates.io SemVer dependency (see crates/uffs-polars/Cargo.toml), so
+// there is no upstream-main HEAD to chase each ship.  Step numbering is
+// preserved to keep in-flight resumable-ship state files compatible.
 /// Clean cached build artefacts to recover from stale incremental state.
 pub(crate) const STEP_CLEAN_ARTIFACTS: &str = "02-clean-artifacts";
 /// Apply `cargo fmt --all` across the workspace.
@@ -66,7 +68,6 @@ pub(crate) const STEP_GIT_PUSH: &str = "11-git-push";
 /// even when intermediate steps (08-build-release, 09-deploy-binary)
 /// are retired.
 pub(crate) const ALL_STEPS: &[&str] = &[
-    STEP_UPDATE_POLARS,
     STEP_CLEAN_ARTIFACTS,
     STEP_FORMAT_CODE,
     STEP_COVERAGE_TESTS,
