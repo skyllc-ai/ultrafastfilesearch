@@ -216,22 +216,16 @@
 #   • https://release-plz.ieni.dev/docs/usage/release
 #   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "💤 Release-plz (deferred — manual-only)"
+name: "🚀 Release-plz (active)"
 
 on:
-  # ─── push trigger DISABLED 2026-05-08 — see DEFERRAL NOTICE above ───
-  # Workflow run 25583934251 on commit d3a1adc1d (R6 → R8 Path A merged)
-  # confirmed that release-plz's hardcoded `cargo package --workspace`
-  # trips the polars-arrow chrono ≤0.4.41 vs workspace 0.4.44 conflict
-  # regardless of `release = false` / `publish = false` flags.  Until
-  # polars upstream ships a chrono-compatible release this workflow is
-  # manual-only.  Uncomment the `push:` block below to re-enable.
-  # push:
-  #   branches: [main]
-  # Manual `gh workflow run release-plz.yml` for the maintainer to spot-
-  # check what release-plz proposes (e.g. on a temporary branch where
-  # the polars rev is updated, ahead of formally re-enabling the push
-  # trigger).
+  # R4 ACTIVATED 2026-06-09 — Polars 0.54.4 on crates.io resolved the
+  # chrono conflict that blocked release-plz's `cargo package --workspace`.
+  # Auto-trigger on every push to main; release-plz analyzes conventional
+  # commits and opens release PRs when feat/fix/perf/security changes land.
+  push:
+    branches: [main]
+  # Manual trigger for ad-hoc inspection or testing workflow changes.
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
@@ -347,6 +341,7 @@ jobs:
         # release PR — release-plz detects this internally.  So this
         # job runs on every push but only does work when the PR
         # actually merged.
+        id: release-plz
         uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
         with:
           command: release
@@ -357,3 +352,78 @@ jobs:
           # comment block at the top of this file.  Adding this env
           # var is the SECOND of TWO layers that must change to
           # enable publishing; both flip in R8.
+
+      # R4/R5: Bridge to release.yml — release-plz creates tags via GITHUB_TOKEN
+      # which doesn't trigger downstream workflows (GitHub anti-loop policy).
+      # Explicitly dispatch release.yml to build binaries.
+      - name: Trigger release.yml for binary builds
+        if: steps.release-plz.outputs.releases_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Releases created: ${{ steps.release-plz.outputs.releases }}"
+          for release in ${{ steps.release-plz.outputs.releases }}; do
+            tag=$(echo "$release" | jq -r '.tag')
+            gh workflow run release.yml --ref main \
+              -f version="$tag" \
+              -f triggered_by="release-plz[$tag]"
+          done
+
+  # ─────────────────────────────────────────────────────────────────
+  # R7: OIDC Trusted Publishing scaffolding (crates.io)
+  # ─────────────────────────────────────────────────────────────────
+  #
+  # Phase R7 — OIDC trusted publisher scaffolding.  This job is gated
+  # by `if: false` until Phase R8 (first dress rehearsal).  It sets
+  # up the OIDC token exchange with crates.io for passwordless,
+  # short-lived publishing credentials.
+  #
+  # Enabling this in R8 requires:
+  #   1. Add `CARGO_REGISTRY_TOKEN` secret (temporary, for bootstrap)
+  #   2. Configure crates.io crate-level trusted publishers (web UI)
+  #   3. Flip `if: false` → `if: github.repository_owner == 'skyllc-ai'`
+  #   4. Remove `CARGO_REGISTRY_TOKEN` env var (OIDC replaces it)
+  #
+  # See: docs/architecture/release-automation-plan.md §Phase R7/R8
+  #
+  crates-io-publish:
+    name: crates.io / OIDC publish (R7 scaffolding)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: release-plz-release
+
+    # DORMANT until R8 — flip this to enable trusted publishing
+    if: false
+
+    environment: crates.io-publish
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC token exchange with crates.io
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust (nightly toolchain)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: crates-io-publish
+
+      # OIDC debug — verify token is available before attempting publish
+      - name: Verify OIDC token availability
+        run: |
+          echo "OIDC token endpoint: $ACTIONS_ID_TOKEN_REQUEST_URL"
+          echo "OIDC request token available: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_TOKEN != '' }}"
+
+      # Placeholder for R8 — actual publish steps will go here
+      # - name: Publish to crates.io (R8)
+      #   env:
+      #     # No CARGO_REGISTRY_TOKEN needed — OIDC handles auth
+      #   run: |
+      #     cargo publish -p uffs-time --dry-run  # Dry-run first
+      #     # Actual publish gated by manual approval in R8

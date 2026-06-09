@@ -6,15 +6,14 @@ version:
     @printf "\033[0;34m📋 Current version:\033[0m\n"
     @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "uffs-cli") | .version'
 
-# Increment version.
+# Version bump — retired in Phase R5.
+#
+# Version increments now happen automatically via release-plz
+# when release-triggering commits (feat/fix/perf/security) land
+# on `main`.  See `docs/architecture/release-automation-plan.md`.
 version-bump:
-    @printf "\033[0;34m📈 Incrementing version...\033[0m\n"
-    @if [ -f "./build/update_all_versions.rs" ]; then \
-        ./build/update_all_versions.rs patch; \
-    else \
-        printf "\033[1;33mVersion script not found, using manual increment...\033[0m\n"; \
-        echo "Manual version increment needed"; \
-    fi
+    @printf "\033[0;33m⚠️  version-bump retired — release-plz handles this automatically\033[0m\n"
+    @printf "\033[0;36m   See docs/architecture/release-automation-plan.md §Phase R5\033[0m\n"
 
 # Build dev binary.
 build:

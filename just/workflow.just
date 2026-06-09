@@ -38,12 +38,12 @@ phase1-test:
     @echo ""
     @printf "\033[0;32m✅ PHASE 1 COMPLETE: Validation passed with no release-side effects.\033[0m\n"
     @printf "\033[0;36m📝 Note: Linux-specific code paths (cfg target_os = linux) are validated by CI on push.\033[0m\n"
-    @printf "\033[0;34m💡 Next: Run 'just phase2-ship' only when ready to version/deploy/commit/push\033[0m\n"
+    @printf "\033[0;34m💡 Next: Run 'just phase2-ship' only when ready to commit/push (version via release-plz)\033[0m\n"
 
-# Phase 2: version, build, deploy, commit, and push.
+# Phase 2: commit and push (version bump retired — release-plz handles it).
 phase2-ship:
     @printf "\033[0;34m🚀 PHASE 2: Explicit Ship Lane\033[0m\n"
-    @printf "\033[1;33mThis lane performs version bump, deploy, commit, and push behavior.\033[0m\n"
+    @printf "\033[1;33mThis lane performs commit and push. Version bumping now handled by release-plz on `main`.\033[0m\n"
     @echo "========================================================"
     cargo run -q --release --target-dir target/ci-bootstrap -p uffs-ci-pipeline -- phase2
 

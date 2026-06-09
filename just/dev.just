@@ -475,16 +475,9 @@ quick-deploy:
     printf "\033[1;33m⚠️  No tests, no linting — debug iteration only!\033[0m\n"
     echo "========================================================"
 
-    # 1. Version bump
-    printf "\n\033[0;34m📈 Step 1/4: Version bump...\033[0m\n"
-    if [ -f "./build/update_all_versions.rs" ]; then
-        ./build/update_all_versions.rs patch
-    else
-        printf "\033[1;31m❌ Version script not found\033[0m\n"
-        exit 1
-    fi
+    # Version bump retired in Phase R5 — using current version
     NEW_VERSION=$(awk '/^\[workspace\.package\]/{flag=1; next} flag && /^version/{print $3; exit}' Cargo.toml | tr -d '"')
-    printf "\033[0;32m  → v%s\033[0m\n" "$NEW_VERSION"
+    printf "\n\033[0;34m📋 Using current version: v%s\033[0m\n" "$NEW_VERSION"
 
     # Sync workflow state so build-cross-all.rs uses the correct version
     STATE_FILE="build/.uffs-workflow-state.json"
@@ -495,14 +488,14 @@ quick-deploy:
         printf "\033[0;36m  → Synced workflow state to v%s\033[0m\n" "$NEW_VERSION"
     fi
 
-    # 2. Cross-compile for Windows (build-cross-all.rs uploads to GitHub Release)
-    printf "\n\033[0;34m🔨 Step 2/4: Cross-compile for Windows...\033[0m\n"
+    # 1. Cross-compile for Windows (build-cross-all.rs uploads to GitHub Release)
+    printf "\n\033[0;34m🔨 Step 1/3: Cross-compile for Windows...\033[0m\n"
     START=$(date +%s)
     rust-script scripts/ci/build-cross-all.rs
     END=$(date +%s)
     printf "\033[0;32m  → Build completed in %ds\033[0m\n" $((END - START))
 
-    # 3. Git commit
+    # 2. Git commit
     #
     # Uses `git commit -S` (force-sign) because this commit is
     # pushed directly to `main`, which has the GitHub branch-
@@ -512,13 +505,13 @@ quick-deploy:
     # the user's `user.signingkey`; fails loudly if no key is
     # configured (correct: the commit cannot land on `main`
     # without one).
-    printf "\n\033[0;34m📝 Step 3/4: Git commit...\033[0m\n"
+    printf "\n\033[0;34m📝 Step 2/3: Git commit...\033[0m\n"
     git add .
     git commit -S -m "debug: quick-deploy v${NEW_VERSION} [skip ci]"
     printf "\033[0;32m  → Committed\033[0m\n"
 
-    # 4. Git push
-    printf "\n\033[0;34m🚀 Step 4/4: Git push...\033[0m\n"
+    # 3. Git push
+    printf "\n\033[0;34m🚀 Step 3/3: Git push...\033[0m\n"
     git pull origin main --rebase
     git push origin main
     printf "\033[0;32m  → Pushed\033[0m\n"

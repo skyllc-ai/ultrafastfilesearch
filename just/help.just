@@ -8,7 +8,7 @@ _default-help:
     @echo ""
     @printf "\033[0;32m🚀 Ship & Validate:\033[0m\n"
     @echo "  just go              Safe validation (no side effects)"
-    @echo "  just ship            Full ship pipeline (validate → version → build → deploy → push)"
+    @echo "  just ship            Full ship pipeline (validate → commit → push; version via release-plz)"
     @echo "  just ship-fresh      Ship from scratch (ignore previous progress)"
     @echo "  just q               Quick deploy to Windows (skip CI, debug only)"
     @echo ""

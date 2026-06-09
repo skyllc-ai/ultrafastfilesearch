@@ -39,11 +39,11 @@ use crate::exec::{
     execute_step_with_tracking,
 };
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
-use crate::version::{get_current_version, increment_version};
+use crate::version::get_current_version;
 use crate::workflow::{
     ALL_STEPS, STEP_CLEAN_ARTIFACTS, STEP_COVERAGE_TESTS, STEP_FORMAT_CHECK, STEP_FORMAT_CODE,
-    STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC,
-    STEP_VERSION_INCREMENT, WorkflowPhase, WorkflowState,
+    STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC, WorkflowPhase,
+    WorkflowState,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -458,14 +458,13 @@ pub(crate) async fn run_enhanced_phase2(
 ) -> Result<()> {
     println!(
         "{}",
-        "📦 PHASE 2: Version Increment + Release PR".blue().bold()
+        "📦 PHASE 2: Release PR (version bump handled by release-plz)"
+            .blue()
+            .bold()
     );
 
-    // Step 07: Version increment
-    execute_step_with_tracking(state, STEP_VERSION_INCREMENT, || async {
-        increment_version().await
-    })
-    .await?;
+    // Note: Version increment (step 07) was retired in Phase R5.
+    // release-plz now handles version bumps automatically on `main`.
 
     if !state.version_incremented {
         state.version_incremented = true;
@@ -474,17 +473,16 @@ pub(crate) async fn run_enhanced_phase2(
         state.save()?;
     }
 
-    // Step 10: Git commit (signed version-bump commit on the working
-    // branch).
+    // Step 10: Git commit (signed commit on the working branch).
     execute_step_with_tracking(state, STEP_GIT_COMMIT, || async { git_commit(ctx).await }).await?;
 
     // Step 11: Git push -- opens release/vX.Y.Z PR with auto-merge
     // queued.
     //
     // Binaries are NOT built here.  Once the PR merges to main,
-    // `auto-tag-release.yml` tags the commit and invokes
-    // `release.yml`, which produces the reproducible cross-platform
-    // binaries on GitHub-hosted runners.
+    // release-plz creates the tag and dispatches `release.yml`,
+    // which produces the reproducible cross-platform binaries on
+    // GitHub-hosted runners.
     //
     // Phase 6 resumable-push fix (docs/architecture/dev-flow.md §
     // 5.1 / dev-flow-implementation-plan.md § 6.3): if the developer

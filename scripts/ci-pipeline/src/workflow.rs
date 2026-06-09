@@ -48,8 +48,10 @@ pub(crate) const STEP_COVERAGE_TESTS: &str = "04-coverage-tests";
 pub(crate) const STEP_PARALLEL_VALIDATION: &str = "05-parallel-validation";
 /// Verify `cargo fmt` produces zero diff (idempotency check).
 pub(crate) const STEP_FORMAT_CHECK: &str = "06-format-check";
-/// Bump the workspace `[package].version` in root `Cargo.toml`.
-pub(crate) const STEP_VERSION_INCREMENT: &str = "07-version-increment";
+// Step 07 (version-increment) was removed: version bumping now happens
+// automatically via release-plz on the `main` branch after PR merge.
+// Step numbering is preserved to keep in-flight resumable-ship state
+// files compatible.
 // Steps 08 (build-release) and 09 (deploy-binary) were removed: `just
 // ship` no longer produces binaries locally.  The release branch PR
 // (step 11) lands the version bump on main; `auto-tag-release.yml`
@@ -73,7 +75,7 @@ pub(crate) const ALL_STEPS: &[&str] = &[
     STEP_COVERAGE_TESTS,
     STEP_PARALLEL_VALIDATION,
     STEP_FORMAT_CHECK,
-    STEP_VERSION_INCREMENT,
+    // STEP_VERSION_INCREMENT retired — release-plz handles version bumps
     STEP_GIT_COMMIT,
     STEP_GIT_PUSH,
 ];
@@ -90,6 +92,9 @@ pub(crate) enum WorkflowPhase {
     /// No pipeline in flight.
     Clean,
     /// Phase 2 step 07: bumping `[workspace.package].version`.
+    /// **RETIRED in Phase R5** — version bumping now handled by release-plz.
+    /// Preserved for backwards compatibility with existing resumable-state
+    /// files.
     VersionIncrementing,
     /// Phase 1 test pass (coverage tests + parallel validation).
     Testing,
