@@ -572,6 +572,16 @@ fn sort_and_localise(
     sort_desc: bool,
     limit: usize,
 ) -> Vec<(u16, u32, i64)> {
+    // Unlimited query fast-path: when `limit` admits every candidate, the
+    // value-sort is wasted work — the downstream `backend::sort_rows` re-sorts
+    // the materialised rows by the user's column anyway, and `truncate` is a
+    // no-op. Skipping it saves a full O(N log N) pass over millions of tuples
+    // on `*` full-scan (e.g. 7.9 M rows on C,D). We still do the cheap
+    // MFT-locality sort so path resolution keeps its warm-`DirCache` ordering.
+    if limit >= candidates.len() {
+        candidates.sort_unstable_by_key(|&(drive_idx, rec_idx, _)| (drive_idx, rec_idx));
+        return candidates;
+    }
     if sort_desc {
         candidates.sort_unstable_by_key(|entry| core::cmp::Reverse(entry.2));
     } else {
