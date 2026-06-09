@@ -378,18 +378,20 @@ pub(super) fn dispatch_regex(
     Some(rows)
 }
 
-/// Dispatch the default branch: tree-walk for path patterns, trigram
-/// for name patterns, both fanned across drives then filtered + sorted
-/// + truncated.
+/// Dispatch the default branch: tree-walk for path patterns, trigram-
+/// accelerated prefix scan for prefix patterns (`win*`), trigram for the
+/// remaining name patterns — all fanned across drives then filtered +
+/// sorted + truncated.
 #[expect(clippy::too_many_arguments, reason = "single call site, flat args")]
 #[expect(
     clippy::fn_params_excessive_bools,
-    reason = "the four bools (is_path / case_sensitive / whole_word / match_path) are orthogonal runtime switches, each controlling a distinct aspect of trigram vs tree matching; bundling them into an enum would lose that orthogonality"
+    reason = "the bools (is_path / is_prefix / case_sensitive / whole_word / match_path) are orthogonal runtime switches, each controlling a distinct aspect of trigram vs tree matching; bundling them into an enum would lose that orthogonality"
 )]
 pub(super) fn dispatch_trigram_or_tree(
     active_drives: &[&DriveCompactIndex],
     needle: &str,
     is_path: bool,
+    is_prefix: bool,
     case_sensitive: bool,
     whole_word: bool,
     match_path: bool,
@@ -405,6 +407,30 @@ pub(super) fn dispatch_trigram_or_tree(
         .map(|drive| {
             if is_path {
                 super::query::search_compact_drive_tree(drive, needle, limit)
+            } else if is_prefix {
+                // `is_prefix` was validated upstream via `is_prefix_pattern`;
+                // re-extract the prefix and fall back to the generic scan if
+                // the (should-be-impossible) re-validation ever fails.
+                super::tree::is_prefix_pattern(needle).map_or_else(
+                    || {
+                        super::query::search_compact_drive(
+                            drive,
+                            needle,
+                            limit,
+                            case_sensitive,
+                            whole_word,
+                            match_path,
+                        )
+                    },
+                    |prefix| {
+                        super::query::search_compact_drive_prefix(
+                            drive,
+                            prefix,
+                            limit,
+                            case_sensitive,
+                        )
+                    },
+                )
             } else {
                 super::query::search_compact_drive(
                     drive,
@@ -427,10 +453,15 @@ pub(super) fn dispatch_trigram_or_tree(
 
 /// Pick the `cache_profile` `mode` tracing label for the chosen
 /// dispatch branch.  Pure function — no side effects.
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "the four bools are independent runtime dispatch flags; bundling into an enum would lose orthogonality and not improve clarity"
+)]
 pub(super) const fn pick_mode_label(
     is_match_all: bool,
     is_regex: bool,
     is_path: bool,
+    is_prefix: bool,
 ) -> &'static str {
     if is_match_all {
         "match-all"
@@ -438,6 +469,8 @@ pub(super) const fn pick_mode_label(
         "regex"
     } else if is_path {
         "tree"
+    } else if is_prefix {
+        "prefix"
     } else {
         "trigram"
     }

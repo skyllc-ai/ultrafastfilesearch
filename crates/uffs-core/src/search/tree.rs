@@ -313,6 +313,38 @@ pub(crate) fn is_path_pattern(pattern: &str) -> bool {
     pattern.contains('\\') || pattern.contains('/')
 }
 
+/// Returns `Some(prefix)` if the pattern is a simple prefix query (e.g.,
+/// `win*`).
+///
+/// A prefix query:
+/// - Ends with `*`
+/// - Contains no other wildcards (`*`, `?`) before the trailing `*`
+/// - Contains no path separators
+/// - Is at least 3 characters (for trigram effectiveness)
+///
+/// The 3-char minimum is what makes the trigram pre-filter worthwhile: the
+/// trigram index keys on 3-byte windows, so a 1–2 char prefix would still
+/// require a full scan. Below the floor we fall through to the regular
+/// `search_compact_drive` path instead.
+#[must_use]
+pub fn is_prefix_pattern(pattern: &str) -> Option<&str> {
+    // Must end with exactly one trailing `*`.
+    let prefix = pattern.strip_suffix('*')?;
+
+    // Must have content and be at least 3 chars (for trigram).
+    if prefix.len() < 3 {
+        return None;
+    }
+
+    // Must not contain other wildcards or path separators.
+    if prefix.contains('*') || prefix.contains('?') || prefix.contains('\\') || prefix.contains('/')
+    {
+        return None;
+    }
+
+    Some(prefix)
+}
+
 /// Search using tree traversal for path patterns like `\photos\*.jpg`.
 ///
 /// Strategy:
@@ -610,4 +642,43 @@ fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
     }
 
     pi == pattern.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_prefix_pattern;
+
+    #[test]
+    fn prefix_accepts_simple_trailing_star() {
+        assert_eq!(is_prefix_pattern("win*"), Some("win"));
+        assert_eq!(is_prefix_pattern("kernel*"), Some("kernel"));
+    }
+
+    #[test]
+    fn prefix_rejects_short_prefix_below_trigram_floor() {
+        // < 3 chars: trigram index can't accelerate, so not a prefix query.
+        assert_eq!(is_prefix_pattern("ab*"), None);
+        assert_eq!(is_prefix_pattern("a*"), None);
+        assert_eq!(is_prefix_pattern("*"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_missing_trailing_star() {
+        // No trailing `*` => exact/substring, not a prefix query.
+        assert_eq!(is_prefix_pattern("windows"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_interior_wildcards() {
+        // A second wildcard before the trailing `*` is a glob, not a prefix.
+        assert_eq!(is_prefix_pattern("wi*n*"), None);
+        assert_eq!(is_prefix_pattern("w?n*"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_path_separators() {
+        // Path-anchored patterns route through the tree walker instead.
+        assert_eq!(is_prefix_pattern("C:\\Win*"), None);
+        assert_eq!(is_prefix_pattern("dir/sub*"), None);
+    }
 }

@@ -10,6 +10,8 @@ mod numeric_sort_key;
 mod numeric_top_n;
 mod path_only_top_n;
 mod path_sorted_top_n;
+mod prefix_search;
+mod row_resolve;
 
 use alloc::collections::BinaryHeap;
 use std::sync::LazyLock;
@@ -17,6 +19,8 @@ use std::sync::LazyLock;
 use numeric_top_n::collect_global_top_n_numeric;
 use path_only_top_n::collect_path_only_sorted_top_n;
 use path_sorted_top_n::collect_path_sorted_top_n;
+pub(crate) use prefix_search::search_compact_drive_prefix;
+use row_resolve::indices_to_rows;
 
 use super::backend::{DisplayRow, FilterMode, PhaseTimings};
 use super::field::FieldId;
@@ -648,7 +652,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Returns a 3-byte `&str` without heap allocation.  Uses safe
 /// `from_utf8` with a fallback — the bytes are always valid ASCII.
 #[inline]
-pub(super) fn stack_volume_prefix(
+pub(crate) fn stack_volume_prefix(
     buf: &mut [u8; 4],
     letter: uffs_mft::platform::DriveLetter,
 ) -> &str {
@@ -675,42 +679,6 @@ pub(super) fn heap_push_capped<T: Ord>(heap: &mut BinaryHeap<T>, entry: T, limit
         drop(heap.pop());
         heap.push(entry);
     }
-}
-
-/// Convert a list of record indices into `DisplayRow`s with resolved paths.
-fn indices_to_rows(
-    drive: &DriveCompactIndex,
-    indices: &[u32],
-    volume_prefix: &str,
-) -> Vec<DisplayRow> {
-    let mut dir_cache = tree::dir_cache_with_capacity(256);
-    let mut mal_cache = tree::malformed_cache_with_capacity(256);
-    indices
-        .iter()
-        .filter_map(|&record_idx| {
-            let rec = drive.records.get(record_idx as usize)?;
-            let name = rec.name(&drive.names);
-            if name.is_empty() {
-                return None;
-            }
-            let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
-                drive,
-                record_idx as usize,
-                volume_prefix,
-                &mut dir_cache,
-                &mut mal_cache,
-            );
-            let forensics = row_forensics(rec, &drive.names, path_malformed);
-            Some(make_display_row(
-                record_idx,
-                drive.letter,
-                rec,
-                name,
-                path,
-                forensics,
-            ))
-        })
-        .collect()
 }
 
 // ════════════════════════════════════════════════════════════════════════

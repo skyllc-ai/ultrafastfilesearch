@@ -625,6 +625,10 @@ impl MultiDriveBackend {
             });
         let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
         let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
+        let is_prefix = !is_match_all
+            && !is_regex
+            && !is_path
+            && crate::search::tree::is_prefix_pattern(&needle).is_some();
 
         if is_match_all {
             let (match_all_rows, match_all_timings) = super::query::collect_global_top_n(
@@ -686,6 +690,35 @@ impl MultiDriveBackend {
                     };
                 }
             }
+        } else if is_prefix {
+            // Trigram-accelerated prefix scan (`win*`). `is_prefix` already
+            // proved `is_prefix_pattern` holds, so the strip is infallible.
+            if let Some(prefix) = crate::search::tree::is_prefix_pattern(&needle) {
+                let drive_results: Vec<Vec<DisplayRow>> = self
+                    .drives
+                    .par_iter()
+                    .map(|drive| {
+                        super::query::search_compact_drive_prefix(
+                            drive,
+                            prefix,
+                            limit,
+                            case_sensitive,
+                        )
+                    })
+                    .collect();
+                for drive_rows in drive_results {
+                    rows.extend(drive_rows);
+                }
+                super::filters::apply_filter(&mut rows, filter_mode);
+                super::filters::apply_search_filters(&mut rows, search_filters);
+                sort_rows(
+                    &mut rows,
+                    self.sort_column,
+                    self.sort_desc,
+                    &self.extra_sort_tiers,
+                );
+                rows.truncate(limit);
+            }
         } else {
             let drive_results: Vec<Vec<DisplayRow>> = self
                 .drives
@@ -733,6 +766,8 @@ impl MultiDriveBackend {
             "regex"
         } else if is_path {
             "tree"
+        } else if is_prefix {
+            "prefix"
         } else {
             "trigram"
         };
@@ -888,6 +923,10 @@ pub fn search_index(
         });
     let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
     let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
+    let is_prefix = !is_match_all
+        && !is_regex
+        && !is_path
+        && crate::search::tree::is_prefix_pattern(&needle).is_some();
 
     tracing::debug!(
         pattern,
@@ -935,6 +974,7 @@ pub fn search_index(
                 &active_drives,
                 &needle,
                 is_path,
+                is_prefix,
                 case_sensitive,
                 whole_word,
                 match_path,
@@ -951,7 +991,7 @@ pub fn search_index(
 
     let scanned = active_drives.iter().map(|dr| dr.records.len()).sum();
     let wall_ms = start.elapsed().as_millis();
-    let mode = pick_mode_label(is_match_all, is_regex, is_path);
+    let mode = pick_mode_label(is_match_all, is_regex, is_path, is_prefix);
     tracing::debug!(
         target: "cache_profile",
         wall_ms = %wall_ms,

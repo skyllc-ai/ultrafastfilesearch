@@ -319,6 +319,61 @@ fn unlimited_returns_more_than_capped() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Prefix search (search_compact_drive_prefix) — trigram fast-path
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn prefix_search_matches_generic_glob_path() {
+    // The trigram-accelerated prefix path must return exactly the same set of
+    // rows as the ground-truth generic glob scan. `f000` matches f00000..f00099.
+    let drive = build_large_drive(1_500);
+    let prefix_rows = search_compact_drive_prefix(&drive, "f000", 10_000, false);
+    let glob_rows = search_compact_drive(&drive, "f000*", 10_000, false, false, false);
+
+    let mut prefix_names: Vec<&str> = prefix_rows.iter().map(DisplayRow::name).collect();
+    let mut glob_names: Vec<&str> = glob_rows.iter().map(DisplayRow::name).collect();
+    prefix_names.sort_unstable();
+    glob_names.sort_unstable();
+
+    assert!(!prefix_names.is_empty(), "fixture must contain f000* files");
+    assert_eq!(
+        prefix_names, glob_names,
+        "prefix fast-path must return the same set as the generic glob scan"
+    );
+}
+
+#[test]
+fn prefix_search_respects_limit() {
+    let drive = build_large_drive(1_500);
+    let rows = search_compact_drive_prefix(&drive, "f00", 25, false);
+    assert!(
+        rows.len() <= 25,
+        "prefix search must respect limit, got {}",
+        rows.len()
+    );
+}
+
+#[test]
+fn large_glob_uses_parallel_resolve_with_correct_rows() {
+    // 9 000 files all share the "f0" stem, so a "f0*" glob yields more than
+    // RESOLVE_CHUNK_SIZE (4 096) matches and drives indices_to_rows down its
+    // parallel branch. Verify that path returns every match with intact paths
+    // (no dropped, duplicated, or misordered rows from the chunk reduce).
+    let drive = build_large_drive(9_000);
+    let rows = search_compact_drive(&drive, "f0*", 20_000, false, false, false);
+    assert_eq!(
+        rows.len(),
+        9_000,
+        "every f0* file must resolve via the parallel path"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.path.starts_with("C:\\") && row.name().starts_with("f0")),
+        "parallel-resolved rows must keep correct volume prefix and name"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Regex search (search_compact_drive_regex)
 // ═══════════════════════════════════════════════════════════════════════
 
