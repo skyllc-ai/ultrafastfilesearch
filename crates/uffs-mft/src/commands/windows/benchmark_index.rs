@@ -104,7 +104,7 @@ pub(crate) async fn cmd_benchmark_index(drive: uffs_mft::platform::DriveLetter) 
     let is_dir_col = df.column("is_directory").ok().and_then(|c| c.bool().ok());
 
     let (files_count, dirs_count) = is_dir_col.map_or((total_entries, 0), |col| {
-        let dirs = usize_to_u64(col.into_iter().filter(|v| v.unwrap_or(false)).count());
+        let dirs = usize_to_u64(col.iter().filter(|v| v.unwrap_or(false)).count());
         let files = total_entries.saturating_sub(dirs);
         (files, dirs)
     });
