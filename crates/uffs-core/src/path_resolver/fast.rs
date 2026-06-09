@@ -105,7 +105,7 @@ impl FastPathResolver {
         let name_col = df.column("name")?.str()?;
 
         // Find max FRS to size the Vec
-        let max_frs = frs_col.into_iter().flatten().max().unwrap_or(0);
+        let max_frs = frs_col.iter().flatten().max().unwrap_or(0);
 
         // Estimate name arena size (average 20 bytes per name)
         let estimated_name_bytes = df.height() * 20;
@@ -267,7 +267,7 @@ impl FastPathResolver {
         let frs_col = df.column("frs")?.u64()?;
 
         let paths: Vec<String> = frs_col
-            .into_iter()
+            .iter()
             .map(|frs| {
                 frs.map_or_else(
                     || "<null>".to_owned(),
@@ -299,7 +299,7 @@ impl FastPathResolver {
         let frs_col = df.column("frs")?.u64()?;
 
         // Collect FRS values to a Vec for parallel iteration
-        let frs_values: Vec<Option<u64>> = frs_col.into_iter().collect();
+        let frs_values: Vec<Option<u64>> = frs_col.iter().collect();
 
         // Resolve paths in parallel
         let paths: Vec<String> = frs_values
@@ -348,12 +348,12 @@ impl FastPathResolver {
         let stream_name_col = df.column("stream_name").ok().and_then(|col| col.str().ok());
 
         // Collect values for parallel iteration
-        let parent_frs_values: Vec<Option<u64>> = parent_frs_col.into_iter().collect();
-        let name_values: Vec<Option<&str>> = name_col.into_iter().collect();
-        let is_dir_values: Vec<Option<bool>> = is_dir_col.into_iter().collect();
+        let parent_frs_values: Vec<Option<u64>> = parent_frs_col.iter().collect();
+        let name_values: Vec<Option<&str>> = name_col.iter().collect();
+        let is_dir_values: Vec<Option<bool>> = is_dir_col.iter().collect();
         let stream_names: Vec<Option<&str>> = stream_name_col.map_or_else(
             || vec![None; parent_frs_values.len()],
-            |col| col.into_iter().collect(),
+            |col| col.iter().collect(),
         );
 
         // Resolve paths in parallel: parent_path + name + optional stream
@@ -445,7 +445,7 @@ pub fn add_path_only_column(df: &DataFrame) -> Result<DataFrame> {
     let path_col = df.column("path")?.str()?;
 
     let path_only: Vec<String> = path_col
-        .into_iter()
+        .iter()
         .map(|path_opt| {
             path_opt.map_or_else(String::new, |path| {
                 // Find the last backslash - use get() for safe UTF-8 slicing

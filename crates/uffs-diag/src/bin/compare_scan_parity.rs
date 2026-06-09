@@ -155,10 +155,7 @@ fn add_normalized_paths(df: &DataFrame) -> Result<DataFrame> {
     let path_col = df.column("Path").or_else(|_| df.column("path"))?;
     let path_str = path_col.str()?;
 
-    let normalized: StringChunked = path_str
-        .into_iter()
-        .map(|opt| opt.map(normalize_path))
-        .collect();
+    let normalized: StringChunked = path_str.iter().map(|opt| opt.map(normalize_path)).collect();
 
     let mut result = df.clone();
     result.with_column(uffs_polars::Column::new(
@@ -192,7 +189,7 @@ fn build_path_map(df: &DataFrame) -> Result<HashMap<String, usize>> {
     let path_col = df.column("path_norm")?.str()?;
     let mut map = HashMap::with_capacity(df.height());
 
-    for (idx, opt_path) in path_col.into_iter().enumerate() {
+    for (idx, opt_path) in path_col.iter().enumerate() {
         if let Some(path) = opt_path {
             map.insert(path.to_string(), idx);
         }

@@ -104,7 +104,7 @@ fn load_csv(path: &Path, name: &str) -> Result<DataFrame> {
 fn normalize_paths(input_df: &DataFrame) -> Result<DataFrame> {
     let path_col = input_df.column("Path")?.str()?;
     let normalized: StringChunked = path_col
-        .into_iter()
+        .iter()
         .map(|opt: Option<&str>| opt.map(|val| val.to_lowercase().replace('\\', "/")))
         .collect();
 
@@ -230,14 +230,14 @@ fn main() -> Result<()> {
     let reference_paths: HashSet<String> = reference
         .column("path_norm")?
         .str()?
-        .into_iter()
+        .iter()
         .filter_map(|opt_str: Option<&str>| opt_str.map(String::from))
         .collect();
 
     let rust_paths: HashSet<String> = rust
         .column("path_norm")?
         .str()?
-        .into_iter()
+        .iter()
         .filter_map(|opt_str: Option<&str>| opt_str.map(String::from))
         .collect();
 
