@@ -1886,15 +1886,19 @@ fn verify_single_drive(
 
     println!("  Computing streaming SHA256 + order-independent fingerprints...");
     let t_hash = Instant::now();
-    let golden_stats = compute_streaming_stats(&golden_baseline_file);
+    // The golden baseline (cpp_*.txt) is immutable across reruns, so its hash
+    // is cached in a sidecar keyed on (size, mtime).  Only the regenerated Rust
+    // output is hashed every run.
+    let (golden_stats, golden_cached) = compute_streaming_stats_cached(&golden_baseline_file);
     let rust_stats = compute_streaming_stats(rust_output);
     let hash_elapsed = t_hash.elapsed();
 
     println!(
-        "  Golden baseline: {} ({} lines) [{:.1}s]",
+        "  Golden baseline: {} ({} lines) [{:.1}s{}]",
         golden_stats.ordered_hash,
         golden_stats.line_count,
-        hash_elapsed.as_secs_f64()
+        hash_elapsed.as_secs_f64(),
+        if golden_cached { ", golden cached" } else { "" }
     );
     println!(
         "  Rust output:     {} ({} lines)",
@@ -3143,6 +3147,89 @@ fn compute_streaming_stats(path: &Path) -> StreamingFileStats {
         xor_fingerprint: xor_fp,
         sum_fingerprint: sum_fp,
     }
+}
+
+/// File identity used to validate a cached fingerprint: (size_bytes, mtime_nanos).
+fn file_identity(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), mtime_ns))
+}
+
+/// Sidecar path holding the cached streaming stats for a baseline file.
+fn parity_hash_sidecar(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".parityhash");
+    path.with_file_name(name)
+}
+
+/// Load cached `StreamingFileStats` for `path`, but only if the sidecar's
+/// recorded (size, mtime) matches the current file (else the baseline changed).
+fn load_cached_stats(path: &Path, identity: (u64, u128)) -> Option<StreamingFileStats> {
+    let contents = fs::read_to_string(parity_hash_sidecar(path)).ok()?;
+    let (mut size, mut mtime_ns): (Option<u64>, Option<u128>) = (None, None);
+    let (mut ordered_hash, mut line_count): (Option<String>, Option<usize>) = (None, None);
+    let (mut xor_fp, mut sum_fp): (Option<u64>, Option<u128>) = (None, None);
+    for line in contents.lines() {
+        let mut parts = line.splitn(2, ' ');
+        let key = parts.next().unwrap_or("");
+        let val = parts.next().unwrap_or("");
+        match key {
+            "size" => size = val.parse().ok(),
+            "mtime_ns" => mtime_ns = val.parse().ok(),
+            "ordered_hash" => ordered_hash = Some(val.to_string()),
+            "line_count" => line_count = val.parse().ok(),
+            "xor_fingerprint" => xor_fp = val.parse().ok(),
+            "sum_fingerprint" => sum_fp = val.parse().ok(),
+            _ => {}
+        }
+    }
+    if size? != identity.0 || mtime_ns? != identity.1 {
+        return None;
+    }
+    Some(StreamingFileStats {
+        ordered_hash: ordered_hash?,
+        line_count: line_count?,
+        xor_fingerprint: xor_fp?,
+        sum_fingerprint: sum_fp?,
+    })
+}
+
+/// Persist `StreamingFileStats` to the sidecar cache (best-effort; failures
+/// just mean the next run recomputes).
+fn store_cached_stats(path: &Path, identity: (u64, u128), stats: &StreamingFileStats) {
+    let body = format!(
+        "parityhash v1\nsize {}\nmtime_ns {}\nordered_hash {}\nline_count {}\nxor_fingerprint {}\nsum_fingerprint {}\n",
+        identity.0,
+        identity.1,
+        stats.ordered_hash,
+        stats.line_count,
+        stats.xor_fingerprint,
+        stats.sum_fingerprint,
+    );
+    let _ = fs::write(parity_hash_sidecar(path), body);
+}
+
+/// Like `compute_streaming_stats`, but caches the result in a `.parityhash`
+/// sidecar keyed on (size, mtime).  Intended for the immutable golden baseline:
+/// reruns skip rehashing the multi-GB `cpp_*.txt` unless it actually changes.
+/// Returns `(stats, cache_hit)`.
+fn compute_streaming_stats_cached(path: &Path) -> (StreamingFileStats, bool) {
+    let Some(identity) = file_identity(path) else {
+        // Could not stat the file → fall back to an uncached compute.
+        return (compute_streaming_stats(path), false);
+    };
+    if let Some(cached) = load_cached_stats(path, identity) {
+        return (cached, true);
+    }
+    let stats = compute_streaming_stats(path);
+    store_cached_stats(path, identity, &stats);
+    (stats, false)
 }
 
 /// Check if two files have the same lines (order-independent) using streaming stats.
