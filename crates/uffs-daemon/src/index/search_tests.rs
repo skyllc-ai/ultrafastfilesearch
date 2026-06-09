@@ -150,7 +150,7 @@ fn write_rows_to_file_ignores_pre_planted_predictable_tmp() {
     )];
     let cfg = build_output_config(&SearchParams::default());
 
-    let written = IndexManager::write_rows_to_file(&rows, target.to_str().unwrap(), &cfg).unwrap();
+    let written = write_rows_to_file(&rows, target.to_str().unwrap(), &cfg).unwrap();
     assert_eq!(written, 1);
 
     // Target exists with the row's filename in it.

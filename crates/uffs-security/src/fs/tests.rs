@@ -202,6 +202,59 @@ fn paths_identical_false_for_different_files() {
     );
 }
 
+#[test]
+fn create_new_file_exclusive_rejects_existing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("exists.bin");
+    std::fs::write(&path, b"pre-existing").unwrap();
+    let err = create_new_file_exclusive(&path).expect_err("must refuse existing path");
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+}
+
+#[cfg(unix)]
+#[test]
+fn create_new_file_exclusive_rejects_symlink() {
+    // The TOCTOU/symlink hardening must survive even without the owner-only
+    // ACL: `create_new` still refuses to follow a pre-planted symlink.
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.bin");
+    std::fs::write(&target, b"sentinel").unwrap();
+    let link = dir.path().join("link.bin");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let err = create_new_file_exclusive(&link).expect_err("must refuse symlink");
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&target).unwrap(), b"sentinel");
+}
+
+#[test]
+fn create_new_file_exclusive_writes_content() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("out.csv");
+    let mut file = create_new_file_exclusive(&path).unwrap();
+    file.write_all(b"a,b,c\n").unwrap();
+    drop(file);
+    assert_eq!(std::fs::read(&path).unwrap(), b"a,b,c\n");
+}
+
+/// Regression guard for the v0.5.111 performance regression: the secure-fs
+/// module must never shell out to a subprocess (the old owner-only ACL path
+/// invoked `icacls.exe`) to set permissions. That put a ~tens-of-ms process
+/// spawn on every result write, because `create_new_secure_file` runs per
+/// `--out` query. Permissions are now applied via native Win32 ACL APIs; this
+/// test fails loudly if a `process::Command` spawn creeps back into `fs.rs`.
+/// We match the spawn API (not the word "icacls", which appears in the
+/// explanatory comments) so the guard tracks behaviour, not prose.
+#[test]
+fn fs_module_spawns_no_subprocess() {
+    let source = include_str!("../fs.rs");
+    assert!(
+        !source.contains("Command::new") && !source.contains("process::Command"),
+        "fs.rs must not spawn a subprocess (perf regression guard, WI-8.1 / v0.5.111)"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn secure_remove_follows_symlink_to_target_then_unlinks_link() {
