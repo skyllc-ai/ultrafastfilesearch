@@ -232,6 +232,20 @@ on:
 # Matches the release-plz repo's own workflow shape.
 permissions: {}
 
+env:
+  # sccache is configured for local dev via .cargo/config.toml
+  # (`rustc-wrapper = "sccache"`); the GitHub-hosted runners don't
+  # have it installed, so release-plz's internal `cargo package`
+  # invocation dies with "could not execute process `sccache ...`
+  # (never executed)".  An empty RUSTC_WRAPPER defeats the config
+  # value without touching .cargo/config.toml (which would hurt
+  # local dev UX).  Mirrors the same guard in pr-fast.yml.
+  RUSTC_WRAPPER: ""
+  # Match local policy (.cargo/config.toml sets `incremental = false`)
+  # so green-locally ↔ green-in-CI, and so sccache's CARGO_INCREMENTAL
+  # refusal can't resurface here.
+  CARGO_INCREMENTAL: 0
+
 jobs:
   # ────────────────────────────────────────────────────────────────
   # Release PR job — opens/updates the release PR on every push.
@@ -374,15 +388,27 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   #
   # Phase R7 — OIDC trusted publisher scaffolding.  This job is gated
-  # by `if: false` until Phase R8 (first dress rehearsal).  It sets
-  # up the OIDC token exchange with crates.io for passwordless,
-  # short-lived publishing credentials.
+  # by the repo variable `ENABLE_CRATES_IO_PUBLISH` (unset → dormant)
+  # until Phase R8 (first dress rehearsal).  It sets up the OIDC token
+  # exchange with crates.io for passwordless, short-lived credentials.
+  #
+  # A repo-variable gate is used instead of a literal `if: false` for
+  # two reasons: (1) actionlint rejects constant `if:` conditions, and
+  # (2) it makes R8 activation a one-click Settings → Variables toggle
+  # rather than a workflow edit + PR cycle.  The gate is a genuine
+  # dormancy switch, NOT a lint-suppression hack — the job still never
+  # runs until the maintainer deliberately sets the variable.
   #
   # Enabling this in R8 requires:
-  #   1. Add `CARGO_REGISTRY_TOKEN` secret (temporary, for bootstrap)
-  #   2. Configure crates.io crate-level trusted publishers (web UI)
-  #   3. Flip `if: false` → `if: github.repository_owner == 'skyllc-ai'`
-  #   4. Remove `CARGO_REGISTRY_TOKEN` env var (OIDC replaces it)
+  #   1. Configure crates.io crate-level trusted publishers (web UI)
+  #   2. Create the `crates.io-publish` environment with required
+  #      reviewers (manual approval gate for the dress rehearsal)
+  #   3. Set repo variable `ENABLE_CRATES_IO_PUBLISH = true`
+  #      (Settings → Secrets and variables → Actions → Variables)
+  #   4. Uncomment the publish step below
+  #
+  # OIDC replaces the legacy `CARGO_REGISTRY_TOKEN` secret entirely —
+  # no long-lived token is ever stored once trusted publishing is on.
   #
   # See: docs/architecture/release-automation-plan.md §Phase R7/R8
   #
@@ -392,8 +418,9 @@ jobs:
     timeout-minutes: 15
     needs: release-plz-release
 
-    # DORMANT until R8 — flip this to enable trusted publishing
-    if: false
+    # DORMANT until R8 — set repo variable ENABLE_CRATES_IO_PUBLISH=true
+    # to activate.  Unset / any-other-value keeps the job from running.
+    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' }}
 
     environment: crates.io-publish
     permissions:
