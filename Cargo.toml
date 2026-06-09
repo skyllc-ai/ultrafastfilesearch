@@ -145,8 +145,8 @@ uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.5.12
 # workspace member as a library.
 
 # ───── Polars (via facade crate for compilation isolation) ─────
-# Polars is pinned to a specific commit in crates/uffs-polars/Cargo.toml (rev = "...").
-# Run `just polars` to bump to the latest main HEAD.
+# Polars is a crates.io dependency pinned by SemVer in
+# crates/uffs-polars/Cargo.toml. Bump with `cargo update -p polars`.
 
 # ───── Async Runtime ─────
 # Net-free feature set so the CLI binary does not pull in `ws2_32.dll`

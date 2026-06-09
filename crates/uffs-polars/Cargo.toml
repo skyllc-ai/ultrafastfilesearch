@@ -11,9 +11,10 @@
 #
 # All other crates depend on this instead of Polars directly.
 #
-# NOTE: Polars is pinned to a specific main branch commit for deterministic builds.
-#       Run `just polars` to bump to the latest main HEAD.
-#       This avoids surprise recompiles while keeping upgrades intentional.
+# NOTE: Polars is a normal crates.io dependency pinned by SemVer in the
+#       [dependencies] section below. Bump intentionally with
+#       `cargo update -p polars` (within the version requirement) or by
+#       editing the requirement for a major jump.
 # ============================================================================
 
 [package]
@@ -28,21 +29,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-# Phase R6→R8 deviation row 5 — polars-subtree publishability deferred.
-# This crate carries the polars `git/rev` pin
-# (`https://github.com/pola-rs/polars`, rev `1e9a63b9...`) whose
-# polars-arrow declares `chrono ^0.4.42`, while crates.io polars-arrow
-# 0.53.0 declares `chrono <=0.4.41`.  These are mutually exclusive: no
-# chrono version satisfies both, so `cargo package` (which simulates
-# crates.io publishing by stripping git rev info) hard-fails.  Path B-i
-# (drop the git rev, use crates.io polars 0.53.0 directly) was probed
-# on 2026-05-08 and rejected: crates.io polars 0.53.0 has accumulated
-# multiple nightly-rust-API regressions (std::simd::LaneCount in
-# polars-arrow's bitmap.rs, core::unicode::Cased in polars-ops's
-# case.rs, …) that the git rev was actively patching.  Until polars
-# upstream publishes a release with those patches, this crate cannot
-# ship to crates.io.  See `docs/architecture/release-automation-plan.md`
-# deviation log row 5 for the full trail.
+# Publishable: this crate now depends on a plain crates.io polars
+# release (0.54.x), so `cargo package` no longer hits the old polars
+# git-rev / chrono-constraint clash that previously blocked publishing
+# (release-automation-plan.md deviation row 5 — now resolved).
 publish.workspace = true
 
 # Phase R6 of `release-automation-plan.md` step 3 — docs.rs build config.
@@ -67,35 +57,25 @@ test = false
 # ──────────────────────────────────────────────────────────────────────────────
 [dependencies]
 # ONLY Polars — all other dependencies provided by consuming crates.
-# Pinned to a specific commit on main. Bump via: just polars
 #
-# `version = "0.53.0"` is REQUIRED in addition to `git/rev` so that
-# `cargo package` (invoked by release-plz `update`) can validate this
-# manifest.  Without `version =`, cargo refuses to package any crate
-# that has unversioned dependencies (path, git, or otherwise).
+# Sourced from crates.io (no git/rev).  Bump with a deliberate
+# `cargo update -p polars` (patch/minor within the `0.54` requirement)
+# or by editing the version requirement below for a major jump.
 #
-# Local-build semantics: cargo uses the git/rev source.  The `version`
-# field is a verification hint — cargo confirms the resolved git source
-# claims a Cargo.toml version that satisfies the requirement (`= 0.53.0`
-# matches the polars Cargo.toml at the pinned rev).
-#
-# Publish semantics (R8+ when `uffs-polars` ships to crates.io): cargo
-# strips the `git/rev` and emits only `polars = "0.53.0"`.  Consumers
-# installing `uffs-polars` from crates.io get crates.io polars 0.53.0,
-# NOT our pinned rev.  This is a known divergence — the rev pin exists
-# for deterministic in-workspace builds with the specific feature set
-# below; published consumers fall back to whatever 0.53.0 features
-# crates.io polars exposes.  R8 dress rehearsal will surface any
-# real-world incompatibility (most likely we'd flip to a published
-# polars version then or mark `uffs-polars` `publish = false`).
-polars = { git = "https://github.com/pola-rs/polars", rev = "1e9a63b95923291cd8849d70d96b8cec4e96da6a", version = "0.53.0", default-features = false, features = [
+# History: we previously pinned a `git` + `rev` on `pola-rs/polars` main
+# because the published 0.53.0 lacked nightly-Rust API patches and its
+# polars-arrow declared `chrono ^0.4.42` (clashing with crates.io
+# polars-arrow 0.53.0's `chrono <=0.4.41`), which broke `cargo package`.
+# polars 0.54.x ships those patches and accepts modern chrono, so the
+# git source — and the whole track-upstream-main machinery — is retired.
+polars = { version = "0.54.4", default-features = false, features = [
   # ===== Core =====
-  "lazy",          # Lazy evaluation (query optimization)
-  "new_streaming", # Streaming engine for large queries
-  "performant",    # Internal performance optimizations
-  "serde",         # Serialization (compact index wire format)
-  "nightly",       # Nightly Rust features
-  "simd",          # SIMD vectorization
+  "lazy",       # Lazy evaluation (query optimization)
+  "streaming",  # Streaming engine for large queries (was `new_streaming` in 0.53)
+  "performant", # Internal performance optimizations
+  "serde",      # Serialization (compact index wire format)
+  "nightly",    # Nightly Rust features
+  "simd",       # SIMD vectorization
 
   # ===== Data Types (replaces blanket "dtype-full") =====
   "dtype-u8",       # UInt8  — flags column
