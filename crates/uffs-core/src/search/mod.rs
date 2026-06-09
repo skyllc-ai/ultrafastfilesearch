@@ -12,6 +12,7 @@ pub mod columns;
 mod dataframe_convert;
 pub mod derived;
 mod dispatch;
+mod display_row;
 pub mod field;
 pub mod filters;
 pub mod query;

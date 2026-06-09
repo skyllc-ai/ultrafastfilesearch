@@ -21,5 +21,4 @@ crates/uffs-core/src/search/query_tests.rs|PERMANENT: Integration query test sui
 crates/uffs-core/src/aggregate/integration_tests.rs|PERMANENT: Aggregate engine integration test suite; shared synthetic drive fixture requires cohesion
 crates/uffs-mft/src/platform/volume.rs|PERMANENT: Volume handle + write-protect fallback handles; splitting would fragment the handle lifecycle
 crates/uffs-mft/src/platform/system.rs|PERMANENT: Cross-platform module covering Windows Win32 FFI (privilege, volume, drive detection) and Unix stubs (geteuid, /proc/meminfo, sysctl); splitting by OS would duplicate shared types or add indirection for marginal gain
-crates/uffs-core/src/search/backend.rs|PERMANENT: Search backend facade — DisplayRow, PhaseTimings, SearchResult, FilterMode, MultiDriveBackend orchestrator; cross-cutting types for the whole search pipeline
 crates/uffs-daemon/src/lifecycle.rs|PERMANENT: LifecycleManager + LifecycleHandle + idle-timer state machine; splitting the cohesive run_idle_timer + load_stalled_force_retire + extended_timeout_for_activity cluster fragments the active-connection / load-stall / shutdown semantics across files
