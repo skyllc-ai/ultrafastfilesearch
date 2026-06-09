@@ -19,7 +19,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-readme.workspace = true
+# Per-crate README override.  Inheriting `readme.workspace = true`
+# resolves to the workspace-root README via `../../README.md`, which
+# cargo flags with the "readme appears to be a path outside of the
+# package" warning even though the archived crate already contains a
+# copy.  Pointing at this crate's own `README.md` (alongside this
+# manifest) ships the right doc on the crates.io detail page and
+# silences the warning.  Permitted by manifest-audit invariant 3.5 via
+# `KnownExceptions::readme_override_ok` (see
+# `scripts/ci/manifest-audit/src/audit.rs`).  Issue #240.
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
