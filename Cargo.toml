@@ -75,12 +75,17 @@ keywords = ["mft", "ntfs", "file-search", "windows", "polars"]
 categories = ["filesystem", "command-line-utilities"]
 # Default publish policy: most workspace members are internal-only tooling
 # / facade / orchestration crates that must never accidentally hit crates.io.
-# Five crates intentionally override this with explicit `publish = true`
-# (`uffs-broker`, `uffs-broker-protocol`, `uffs-security`, `uffs-text`,
-# `uffs-time`) — see `release-automation-baseline.md` §10 row 5 for the
-# full publishable-set rationale.  Non-publishable members opt into this
-# default via `publish.workspace = true` (rather than declaring their own
-# `publish = false`) so the root manifest stays the single source of truth.
+# Exactly TWO crates intentionally override this with explicit `publish = true`
+# (`uffs-text`, `uffs-time`) — they are dependency-free leaf crates that are
+# the only members currently cleared for crates.io.  `uffs-broker`,
+# `uffs-broker-protocol`, and `uffs-security` were once earmarked publishable
+# but have since been flipped back to `publish = false` (name-squat
+# reservations / internal-only; see each crate's per-manifest rationale and
+# `docs/refactor/crates-io-publishability-deep-dive.md` §7.3–7.5).  Verify the
+# live set any time with `cargo metadata --no-deps` (publishable == `publish`
+# is null/ANY).  Non-publishable members opt into this default via
+# `publish.workspace = true` (rather than declaring their own `publish = false`)
+# so the root manifest stays the single source of truth.
 # Phase 1 closure gap A — see `docs/dev/baseline/2026-05-12/phase_1_findings.md`.
 publish = false
 
