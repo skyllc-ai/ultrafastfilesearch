@@ -216,16 +216,45 @@
 #   • https://release-plz.ieni.dev/docs/usage/release
 #   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "🚀 Release-plz (active)"
+name: "🚀 Release-plz (manual-only — re-deferred pending crates.io bootstrap)"
 
 on:
-  # R4 ACTIVATED 2026-06-09 — Polars 0.54.4 on crates.io resolved the
-  # chrono conflict that blocked release-plz's `cargo package --workspace`.
-  # Auto-trigger on every push to main; release-plz analyzes conventional
-  # commits and opens release PRs when feat/fix/perf/security changes land.
-  push:
-    branches: [main]
-  # Manual trigger for ad-hoc inspection or testing workflow changes.
+  # ─── RE-DEFERRED 2026-06-09 (auto-trigger disabled) ──────────────────
+  # The 2026-06-09 activation (push: branches: [main]) was PREMATURE.
+  # Polars 0.54.4 on crates.io resolved the chrono conflict that was the
+  # FIRST blocker — but it was necessary, not sufficient.  release-plz's
+  # git_only mode hardcodes `cargo package --allow-dirty --workspace`
+  # (see the DEFERRAL NOTICE above), and that step still fails one layer
+  # later on the crates.io BOOTSTRAP problem:
+  #
+  #   cargo package failed: no matching package named `uffs-broker-protocol`
+  #   found, location searched: crates.io index, required by `uffs-broker`
+  #
+  # `cargo package` verifies each crate's *versioned* internal deps
+  # against crates.io.  Nothing is published yet, so every member that
+  # carries an internal `uffs-*` dep fails (uffs-broker -> uffs-broker-
+  # protocol; uffs-diag -> uffs-mft + uffs-polars; the publishable
+  # uffs-mft/-client/-mcp/-cli -> uffs-polars/-security/-format; etc.).
+  # Only `uffs-time` + `uffs-text` (zero internal deps) package cleanly.
+  #
+  # This is NOT fixable by `release = false` / `publish = false` config
+  # (both are ignored by the hardcoded `cargo package --workspace` step,
+  # confirmed on release-plz CLI 0.3.158, run #79) nor by the nightly
+  # `-Zpackage-workspace` flag (which explicitly excludes `publish =
+  # false` crates — exactly our never-publish set).  The workspace has
+  # never-publish crates with versioned internal deps (uffs-broker ->
+  # uffs-broker-protocol) that will NEVER be on crates.io, so the
+  # hardcoded `--workspace` package step can never fully succeed.
+  #
+  # Re-enable the push trigger ONLY after the crates.io bootstrap is
+  # complete (the dependency graph's internal crates are published, so
+  # `cargo package --workspace` resolves every versioned dep).  Until
+  # then this workflow is workflow_dispatch-only and the first publish
+  # is driven per-crate (`cargo publish -p <crate>`), NOT via release-plz
+  # release-pr.  See issue #241 (publish-day umbrella).
+  #
+  # push:
+  #   branches: [main]
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
