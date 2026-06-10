@@ -428,13 +428,16 @@ jobs:
   # dormancy switch, NOT a lint-suppression hack — the job still never
   # runs until the maintainer deliberately sets the variable.
   #
-  # Enabling this in R8 requires:
+  # The OIDC auth + publish steps below are now wired (R8 bootstrap
+  # complete: uffs-time + uffs-text published manually with a token on
+  # 2026-06-10).  Activating this automated path requires only:
   #   1. Configure crates.io crate-level trusted publishers (web UI)
+  #      — Workflow filename `release-plz.yml`, Environment
+  #        `crates.io-publish` (must match `environment:` below exactly)
   #   2. Create the `crates.io-publish` environment with required
-  #      reviewers (manual approval gate for the dress rehearsal)
+  #      reviewers (manual approval gate for each published version)
   #   3. Set repo variable `ENABLE_CRATES_IO_PUBLISH = true`
   #      (Settings → Secrets and variables → Actions → Variables)
-  #   4. Uncomment the publish step below
   #
   # OIDC replaces the legacy `CARGO_REGISTRY_TOKEN` secret entirely —
   # no long-lived token is ever stored once trusted publishing is on.
@@ -476,10 +479,38 @@ jobs:
           echo "OIDC token endpoint: $ACTIONS_ID_TOKEN_REQUEST_URL"
           echo "OIDC request token available: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_TOKEN != '' }}"
 
-      # Placeholder for R8 — actual publish steps will go here
-      # - name: Publish to crates.io (R8)
-      #   env:
-      #     # No CARGO_REGISTRY_TOKEN needed — OIDC handles auth
-      #   run: |
-      #     cargo publish -p uffs-time --dry-run  # Dry-run first
-      #     # Actual publish gated by manual approval in R8
+      # Mint a short-lived crates.io token via OIDC trusted publishing.
+      # No long-lived CARGO_REGISTRY_TOKEN secret is ever stored — the
+      # token is exchanged at runtime against the trusted-publisher
+      # registrations on crates.io (one per publishable crate, bound to
+      # this workflow filename + the `crates.io-publish` environment).
+      - name: Authenticate with crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
+      # Publish the publishable crates, dependency-ordered.  The set is
+      # derived from `cargo metadata` (publish != []) so it adapts as
+      # more crates flip to publishable — today this is exactly
+      # uffs-time + uffs-text (both dependency-free leaves, any order).
+      #
+      # `cargo publish` is a no-op-error if the version already exists,
+      # so in steady state release-plz bumps the version first; this job
+      # then publishes the freshly bumped version.  `--locked` enforces
+      # the committed Cargo.lock.  `--no-verify` is intentionally NOT
+      # used — we want the pre-upload build to catch packaging errors.
+      - name: Publish to crates.io (OIDC, dependency-ordered)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t crates < <(
+            cargo metadata --no-deps --format-version 1 \
+              | jq -r '.packages[] | select(.publish != []) | .name' \
+              | sort
+          )
+          echo "Publishable crates: ${crates[*]}"
+          for crate in "${crates[@]}"; do
+            echo "::group::cargo publish -p ${crate}"
+            cargo publish -p "${crate}" --locked
+            echo "::endgroup::"
+          done
