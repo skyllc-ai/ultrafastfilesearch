@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Commitlint — Conventional Commits advisory check on PR titles
+# Commitlint — Conventional Commits REQUIRED check on PR titles
 #
-# Phase R1a of `docs/architecture/release-automation-plan.md`.
+# Phase R1b of `docs/architecture/release-automation-plan.md`
+# (promoted from the R1a advisory gate on 2026-06-10 after ≥1 month of
+# observation; the trailing 80 first-parent merges on `main` were 100%
+# conformant at promotion time).
 #
 # Why this exists:
 #
@@ -19,21 +22,22 @@
 #   This workflow surfaces non-conforming titles at PR-open time so the
 #   author can fix them before merge.
 #
-# Why advisory (not enforcing):
+# Why required (now enforcing):
 #
-#   Phase R1a is the OBSERVATION period.  We're at ~100% adherence over
-#   the last 3 days (24/24 PRs) but only 83.3% over the last 30 days
-#   (75/90 PRs).  The 15 non-conforming PRs use project-internal prefixes
-#   like `security:`, `bench:`, `shmem:`, `stream-stress:`,
-#   `cross-tool-benchmark:`, `gitignore:` (see
-#   `docs/architecture/release-automation-baseline.md` §4).  Some of those
-#   may be re-tagged as `chore(security):`, `bench:` (if we choose to
-#   accept it as a real type), etc.  Phase R1a gathers the data; Phase
-#   R1b (≥1 month later) makes the gate mandatory using the refined type
-#   list informed by the observation.
+#   Phase R1a (2026-04-25 → 2026-06-10) was the OBSERVATION period.  At
+#   R1a start adherence was ~100% over the last 3 days (24/24 PRs) but
+#   only 83.3% over the last 30 days (75/90 PRs); the non-conforming PRs
+#   used project-internal prefixes like `security:`, `bench:`, `shmem:`.
+#   Over the observation window the project converged on the 11 standard
+#   Conventional Commits types (the `security:` carve-out was migrated to
+#   `fix(security):` / `chore(security):` — see the R1b CC-type
+#   convergence deviation row).  At promotion the trailing 80 first-parent
+#   merges on `main` were 100% conformant, so the gate is now mandatory
+#   with negligible false-positive risk.
 #
-#   In advisory mode this workflow ALWAYS exits 0.  Non-conforming titles
-#   produce a sticky PR comment, never a merge block.
+#   In required mode this workflow exits non-zero on a non-conforming
+#   title AND posts the sticky PR comment, so the author both sees the
+#   guidance and is blocked from merging until the title conforms.
 #
 # Sticky-comment design:
 #
@@ -47,7 +51,6 @@
 #
 # What this does NOT do:
 #
-#   • Block merge.  Always exits 0.  R1b will flip a single line to enforce.
 #   • Validate individual commit messages on the feature branch.  UFFS
 #     uses squash-merge exclusively, so the PR title (which becomes the
 #     squash subject) is the only commit message that lands on `main`.
@@ -62,7 +65,7 @@
 #     (the spec that defines the type list and breaking-change syntax)
 #   • plan §2.8 (current adherence baseline) and §3 (R1a → R1b transition)
 
-name: "📝 Commitlint (advisory)"
+name: "📝 Commitlint (required)"
 
 on:
   pull_request:
@@ -132,7 +135,7 @@ jobs:
             echo "| --- | --- |"
             echo "| Title | \`${TITLE}\` |"
             echo "| Pattern | \`${PATTERN}\` |"
-            echo "| Mode | **advisory** (Phase R1a) — never blocks merge |"
+            echo "| Mode | **required** (Phase R1b) — blocks merge until the title conforms |"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -200,9 +203,9 @@ jobs:
 
           ---
 
-          **🟡 This check is ADVISORY during release-automation Phase R1a** — non-conforming titles do **not** block merge.  Phase R1b (scheduled after ≥1 month of observation) will make this a required gate.  Until then, please update the title when convenient; this comment will auto-delete on the next workflow run once the title conforms.
+          **🔴 This check is REQUIRED (release-automation Phase R1b)** — a non-conforming title **blocks merge**.  Edit the PR title to match the pattern above; this check re-runs on every title edit and turns green (and this comment auto-deletes) once the title conforms.
 
-          *(Workflow: \`.github/workflows/commitlint.yml\` · Plan: [\`docs/architecture/release-automation-plan.md\`](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/architecture/release-automation-plan.md) Phase R1a)*
+          *(Workflow: \`.github/workflows/commitlint.yml\` · Plan: [\`docs/architecture/release-automation-plan.md\`](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/architecture/release-automation-plan.md) Phase R1b)*
           EOF
           )
 
@@ -229,7 +232,9 @@ jobs:
               --body "${BODY}"
           fi
 
-          # ADVISORY MODE: exit 0 even on non-conformance.
-          # Phase R1b will replace this single line with `exit 1` to
-          # promote the check from advisory to required.
-          exit 0
+          # REQUIRED MODE (Phase R1b): exit non-zero on non-conformance
+          # so the check fails and (once added to branch protection's
+          # required-status-checks for `main`) blocks merge until the
+          # author fixes the title.  The sticky comment above tells them
+          # how.  Promoted from the R1a advisory `exit 0` on 2026-06-10.
+          exit 1
