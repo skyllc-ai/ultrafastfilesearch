@@ -7,14 +7,22 @@ UFFS Publishing Runbook
 
 # UFFS Publishing Runbook
 
-> **STATUS**: **DORMANT** — publishing is not yet live.
+> **STATUS**: **BOOTSTRAP DONE — automated publishing still DORMANT.**
 >
-> Do not execute any of the steps in this runbook until the **R9 go-live
-> decision** has been recorded in
+> R8 bootstrap complete (2026-06-10): `uffs-time` and `uffs-text`
+> v0.5.120 were published to crates.io **once, by hand**, using a
+> maintainer `CARGO_REGISTRY_TOKEN` (the chicken-and-egg below).
+> Automated, ongoing publishing via the `release-plz.yml` OIDC job is
+> still **dormant** and must not be activated until the **R9 go-live
+> decision** is recorded in
 > [`docs/architecture/release-automation-plan.md` §8 status dashboard][dashboard].
-> Until then this document is a **forward-looking specification** of how
-> UFFS will eventually ship to crates.io, captured here so the steps can
-> be reviewed, audited, and refined while still safe to do so.
+>
+> **Chicken-and-egg (why the bootstrap is manual):** crates.io Trusted
+> Publishing (OIDC) is configured per-crate on the crate's settings
+> page, which only exists *after* the crate is published. There is no
+> pending-publisher flow. So the **first** publish of each crate must
+> use a token; OIDC is wired up afterwards and every subsequent publish
+> is tokenless.
 >
 > [dashboard]: architecture/release-automation-plan.md#8-status-dashboard
 
@@ -25,20 +33,24 @@ in the release-PR review step. Release-plz opens a release PR; a
 maintainer reviews the changelog, confirms the version bump, merges,
 and at that point the OIDC publish job fires (from R9 onward).
 
-The four-layer dormancy stack that protects us until R9 is live:
+The dormancy stack that keeps *automated* publishing off until R9:
 
-1. **`publish = false`** at the workspace level in `release-plz.toml`
-   — release-plz never invokes `cargo publish` while this is `false`.
-2. **`publish = false`** per-package in selected `Cargo.toml`s
-   (`crates/uffs-diag`, `scripts/ci-pipeline`, `scripts/ci/gen-hooks`,
-   `scripts/ci/gen-workflow`) — even a manual `cargo publish` from a
-   developer machine refuses these.
-3. **`if: false`** on the OIDC publish job (added in R7) — the
-   workflow step never runs even when triggered.
-4. **No `CARGO_REGISTRY_TOKEN`** secret in the repository — even a
-   misconfigured workflow has no credential to authenticate with.
+1. **`ENABLE_CRATES_IO_PUBLISH` repo variable unset** — the
+   `crates-io-publish` OIDC job in `release-plz.yml` is gated on
+   `if: vars.ENABLE_CRATES_IO_PUBLISH == 'true'`, so it never runs
+   until a maintainer deliberately sets the variable. (Replaces the
+   former `if: false`, which actionlint rejected as a constant
+   condition.)
+2. **No trusted-publisher registration** on crates.io for the
+   `crates.io-publish` environment — even if the job ran, the OIDC
+   token mint would fail with no registered publisher to match.
+3. **No `crates.io-publish` GitHub Environment** with reviewers — the
+   `environment:` reference would not resolve to an approval gate.
+4. **No long-lived `CARGO_REGISTRY_TOKEN`** secret in the repository
+   — the bootstrap token lived only on the maintainer's machine and
+   is revoked after R9 registration; CI never stores it.
 
-All four must be defeated independently to ship a crate. There is no
+All must be defeated independently to ship a crate via CI. There is no
 single accidental flip that can leak.
 
 ## Phase status as of this document's last update
@@ -46,14 +58,14 @@ single accidental flip that can leak.
 | Phase | What it adds | Status |
 |---|---|---|
 | R3   | Shadow-mode `release-plz update` workflow                     | ✅ landed |
-| R3.5 | `version = ` requirements on internal & polars deps (this PR) | 🟡 in progress |
-| R4   | Active-mode release-PR generator                              | ⬜ pending |
-| R5   | Retire bespoke `build/update_all_versions.rs` tooling         | ⬜ pending |
-| R6   | Per-crate metadata + dry-run CI workflow (this PR's R6 work)  | 🟡 in progress |
-| R6 step 6 | Crate-name reservations on crates.io                     | ⬜ deferred |
-| R7   | OIDC trusted-publishing scaffolding (`if: false` gated)       | ⬜ pending |
-| R8   | Dress rehearsal — publish `uffs-time` (foundation crate)      | ⬜ pending |
-| R9   | Live publishing for the full publishable set                  | ⬜ pending |
+| R3.5 | `version = ` requirements on internal & polars deps           | ✅ landed |
+| R4   | Active-mode release-PR generator                              | ✅ landed |
+| R5   | Retire bespoke `build/update_all_versions.rs` tooling         | ✅ landed |
+| R6   | Per-crate metadata + dry-run CI workflow                      | ✅ landed |
+| R6 step 6 | Crate-name reservations on crates.io                     | ✅ via bootstrap (2 crates) |
+| R7   | OIDC trusted-publishing scaffolding (repo-variable gated, wired) | 🟡 wired, dormant |
+| R8   | Bootstrap publish — `uffs-time` + `uffs-text` v0.5.120        | ✅ done (token, manual) |
+| R9   | Live OIDC publishing for the publishable set                  | ⬜ pending |
 
 See the canonical dashboard at
 [`docs/architecture/release-automation-plan.md` §8][dashboard].
@@ -62,22 +74,22 @@ See the canonical dashboard at
 
 These must all be ✅ before the R9 go-live PR opens:
 
-- [ ] All publishable crate names reserved on crates.io under the
-      project owner's account (R6 step 6, deferred).
-- [ ] **Known-blocker resolution**: the `uffs-polars` git pin's
-      published-form `polars = "0.53.0"` resolves cleanly against
-      the workspace `chrono` pin OR `uffs-polars` is converted to
-      `publish = false`. (Tracked in
-      [release-automation-plan.md §6.1 risk #13][r6-known-blockers]
-      and the `crates-io-dry-run.yml` workflow header comment.)
+- [x] Publishable crate names exist on crates.io under the project
+      owner's account (`uffs-time`, `uffs-text` — published in the
+      2026-06-10 bootstrap; R6 step 6 satisfied for the 2-crate set).
+- [x] **Known-blocker resolution**: `uffs-polars` now uses plain
+      `polars = "0.54.4"` from crates.io (git pin dropped), so the
+      chrono clash is gone. Moot for the publishable set anyway —
+      `uffs-polars` resolves to `publish = false`. (History:
+      [release-automation-plan.md §6.1 risk #13][r6-known-blockers].)
 - [ ] Trusted-publisher (OIDC) registrations complete for every
-      publishable crate name (R7).
-- [ ] `crates-io-production` GitHub Environment exists with the
+      publishable crate name (`uffs-time`, `uffs-text`) with
+      environment `crates.io-publish`.
+- [ ] `crates.io-publish` GitHub Environment exists with the
       required-reviewer rule active.
-- [ ] `release-plz.yml` publish job has `if: true` (currently
-      `if: false` per the four-layer dormancy stack above).
-- [ ] `release-plz.toml` has `publish = true` at the workspace
-      level (currently `publish = false`).
+- [ ] Repo variable `ENABLE_CRATES_IO_PUBLISH = true` set (this is
+      the live gate; replaces the former `if: false`).
+- [ ] Bootstrap `CARGO_REGISTRY_TOKEN` revoked once OIDC verified.
 - [ ] First-release communication drafted (blog post, release
       notes, social-media announcement).
 
@@ -99,7 +111,8 @@ These must all be ✅ before the R9 go-live PR opens:
       1 CHECKSUMS, 13 SBOMs — see `release.yml` for the asset
       manifest).
 - [ ] Publish job succeeds for all eligible crates (check Actions
-      run logs; expect 12 successful per-crate publish steps).
+      run logs; expect one successful publish step per publishable
+      crate — currently 2: `uffs-time`, `uffs-text`).
 - [ ] Each published crate appears on crates.io within 60 sec
       (`cargo search uffs-time`, `uffs-text`, etc.).
 - [ ] docs.rs builds succeed for all published crates within
@@ -144,23 +157,20 @@ release MUST ship, fall back to manual `cargo publish` in dependency
 order. **Use this only as an emergency lever — the standard path is
 release-plz.**
 
-The publish order is the topological sort of the internal-dep DAG.
-For UFFS as of v0.5.90:
+The publishable set as of v0.5.120 is exactly **two** dependency-free
+leaves (`cargo metadata --no-deps` is authoritative; all other members
+resolve to `publish = false`):
 
 ```
 1. uffs-time         (zero internal deps)
 2. uffs-text         (zero internal deps)
-3. uffs-security     (zero internal deps)
-4. uffs-polars       (zero internal deps; external git pin)
-5. uffs-mft          (deps: polars, text, security)
-6. uffs-format       (deps: time, mft)
-7. uffs-core         (deps: polars, text, time, mft, format, security)
-8. uffs-client       (deps: security, format)
-9. uffs-broker       (deps: security)
-10. uffs-mcp         (deps: client)
-11. uffs-daemon      (deps: security, mft, core, client)
-12. uffs-cli         (deps: client, format, time)
 ```
+
+Order is interchangeable — neither depends on the other. No other crate
+can join the set without first flipping its never-publish internal deps
+(`uffs-polars`/`uffs-security`/`uffs-format` → blocking `uffs-mft` →
+blocking `uffs-client`/`uffs-mcp`/`uffs-cli`), a deliberate architecture
+decision (see `docs/refactor/crates-io-publishability-deep-dive.md`).
 
 Per-crate command:
 
@@ -173,20 +183,36 @@ the index has time to update — otherwise the next crate's
 `cargo publish` may fail with "no matching package named `<dep>`
 found".
 
-## Trusted publishing (OIDC) configuration — to be filled in during R7
+## Trusted publishing (OIDC) configuration
 
-This section will document:
+The `crates-io-publish` job in `release-plz.yml` mints a short-lived
+crates.io token via `rust-lang/crates-io-auth-action` and runs a
+dependency-ordered `cargo publish` loop. To activate it (R9), register
+a trusted publisher on crates.io for **each** publishable crate with
+these exact form-field values:
 
-- Each crate's trusted-publisher form-field values on crates.io
-  (repository, workflow filename, environment name).
-- The `crates-io-production` GitHub Environment's required-reviewer
-  list.
-- Rotation procedure if the OIDC trust breaks (e.g., the workflow
-  filename changes or the repository is renamed).
-- Revocation procedure if a maintainer leaves or a credential
-  is suspected compromised.
+| Field | Value |
+|---|---|
+| Repository owner | `skyllc-ai` |
+| Repository name | `UltraFastFileSearch` |
+| Workflow filename | `release-plz.yml` |
+| Environment | `crates.io-publish` |
 
-Until R7 lands, the section is intentionally empty.
+**The environment name MUST be `crates.io-publish`** — it has to match
+the `environment:` value in `release-plz.yml` exactly, or the OIDC
+token mint fails. (An earlier draft of the plan said
+`crates-io-production`; that was a doc bug, corrected 2026-06-10.)
+
+Then create the `crates.io-publish` GitHub Environment (Settings →
+Environments) with a required-reviewer rule, and set the repo variable
+`ENABLE_CRATES_IO_PUBLISH = true`.
+
+- **Rotation**: if the workflow filename changes or the repo is
+  renamed, ALL trusted-publisher registrations break and must be
+  re-registered with the new values.
+- **Revocation**: revoke the bootstrap `CARGO_REGISTRY_TOKEN` (crates.io
+  → Account Settings → API Tokens) once OIDC is verified working; after
+  that, no long-lived credential exists anywhere.
 
 ## References
 
@@ -200,7 +226,8 @@ Until R7 lands, the section is intentionally empty.
   shared between `release-plz update` and `git cliff` developer
   iteration.
 - [`.github/workflows/release-plz.yml`](../.github/workflows/release-plz.yml)
-  — shadow-mode release-PR generator.
+  — active release-PR generator + tag/release bridge + the dormant
+  `crates-io-publish` OIDC job.
 - [`.github/workflows/crates-io-dry-run.yml`](../.github/workflows/crates-io-dry-run.yml)
   — weekly metadata-drift detection job (R6 step 4).
 - crates.io documentation:
