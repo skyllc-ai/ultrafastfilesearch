@@ -364,6 +364,12 @@ jobs:
     permissions:
       contents: write
 
+    # Exposed for the `crates-io-publish` job below: publish only fires
+    # when this run actually cut a release (version bump merged), never
+    # on the no-op pushes where release-plz detects nothing to do.
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+
     steps:
       - name: Checkout repository (full history for tag analysis)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -450,9 +456,15 @@ jobs:
     timeout-minutes: 15
     needs: release-plz-release
 
-    # DORMANT until R8 — set repo variable ENABLE_CRATES_IO_PUBLISH=true
-    # to activate.  Unset / any-other-value keeps the job from running.
-    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' }}
+    # Two gates, both required:
+    #   1. Repo variable ENABLE_CRATES_IO_PUBLISH=true — the R9 master
+    #      switch (unset / any-other-value keeps the job dormant).
+    #   2. releases_created — `release-plz-release` runs on EVERY push
+    #      to main and no-ops internally when HEAD isn't a release-PR
+    #      merge; without this gate the publish job would fire (and
+    #      page the environment reviewer) on every push, then fail
+    #      republishing the already-live version.
+    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && needs.release-plz-release.outputs.releases_created == 'true' }}
 
     environment: crates.io-publish
     permissions:
