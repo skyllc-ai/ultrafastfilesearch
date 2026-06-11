@@ -408,6 +408,91 @@ fn uffs_start(bin: &Path, drives: &[String]) {
         .status();
     std::thread::sleep(Duration::from_millis(500));
 }
+// ── As-found run-state snapshot/restore ──────────────────────────────────────
+// The bench repeatedly kills the daemon and restarts it scoped to the drives
+// under test.  To leave the host as we found it, snapshot the original run-state
+// (which drives the daemon had loaded, MCP up/down) BEFORE the first kill and
+// restore it at teardown.  ES is untouched — it always runs as a private
+// `-instance` sandbox.
+
+/// The host's UFFS run-state at bench start.
+struct RunState {
+    /// Drive letters the daemon had loaded, or `None` if it was not running.
+    daemon_drives: Option<Vec<String>>,
+    /// Whether the MCP HTTP gateway was running.
+    mcp_running: bool,
+}
+
+/// Whether a `Status:` value reads as "running" (`"not running"` contains the
+/// substring `"running"`, so it is excluded first).
+fn status_is_running(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    !lower.contains("not running") && !lower.contains("not responding") && lower.contains("running")
+}
+
+/// Extract a drive letter from a `uffs status` line like `"[W] G:  … records"`.
+fn status_drive_letter(line: &str) -> Option<String> {
+    let after = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
+    let mut chars = after.chars();
+    let letter = chars.next()?;
+    (letter.is_ascii_alphabetic() && chars.next() == Some(':'))
+        .then(|| letter.to_ascii_uppercase().to_string())
+}
+
+/// Parse `uffs status` stdout into a [`RunState`], scoping each `Status:` line
+/// and the `[T] L:` drive lines to their section.
+fn parse_run_state(stdout: &str) -> RunState {
+    let (mut section, mut daemon_running, mut daemon_seen, mut mcp_running) = (0_u8, false, false, false);
+    let mut drives: Vec<String> = Vec::new();
+    for raw in stdout.lines() {
+        let line = raw.trim();
+        if line.contains("── Daemon") { section = 1; daemon_seen = true; continue; }
+        if line.contains("MCP HTTP Gateway") { section = 2; continue; }
+        if line.contains("MCP Stdio") { section = 3; continue; }
+        match section {
+            1 => {
+                if let Some(rest) = line.strip_prefix("Status:") { daemon_running = status_is_running(rest); }
+                else if let Some(d) = status_drive_letter(line) { drives.push(d); }
+            }
+            2 => if let Some(rest) = line.strip_prefix("Status:") { mcp_running = status_is_running(rest); },
+            _ => {}
+        }
+    }
+    RunState {
+        daemon_drives: if daemon_seen && daemon_running { Some(drives) } else { None },
+        mcp_running,
+    }
+}
+
+/// Capture the as-found daemon + MCP state via `<bin> status`.
+fn capture_run_state(bin: &Path) -> RunState {
+    match Command::new(bin).arg("status").output() {
+        Ok(out) => parse_run_state(&String::from_utf8_lossy(&out.stdout)),
+        Err(_) => RunState { daemon_drives: None, mcp_running: false },
+    }
+}
+
+/// Restore the daemon + MCP to the captured `state`, using **production** TTL
+/// defaults (not the bench-safe idle envs `uffs_start` sets).
+fn restore_run_state(bin: &Path, state: &RunState) {
+    eprintln!("── Restoring UFFS run-state to as-found ──");
+    uffs_stop(bin); // hard-kill whatever the bench left running
+    match &state.daemon_drives {
+        None => eprintln!("  daemon was stopped at start — leaving it stopped"),
+        Some(drives) => {
+            let scope = if drives.is_empty() { "(all)".to_string() } else { drives.join(",") };
+            eprintln!("  restarting daemon on as-found drives: {scope}");
+            let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+            for d in drives { args.push("--drive".into()); args.push(d.clone()); }
+            let _ = Command::new(bin).args(&args).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+    if state.mcp_running {
+        eprintln!("  restarting MCP gateway (was up at start)");
+        let _ = Command::new(bin).args(["mcp", "start"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+}
+
 fn uffs_purge_cache() {
     // Remove both cache locations:
     //   %LOCALAPPDATA%\uffs\cache\  (primary)
@@ -1540,6 +1625,17 @@ fn main() {
     println!("╚══════════════════════════════════════════════════════════════════════════════╝");
     println!();
 
+    // Snapshot the as-found UFFS run-state BEFORE the first daemon kill, so we
+    // can put the host back exactly as we found it at teardown.
+    let as_found = capture_run_state(&cfg.uffs);
+    match &as_found.daemon_drives {
+        None => eprintln!("[run-state] as-found: daemon stopped; mcp {}",
+            if as_found.mcp_running { "up" } else { "down" }),
+        Some(drives) => eprintln!("[run-state] as-found: daemon on {}; mcp {}",
+            if drives.is_empty() { "(all)".to_string() } else { drives.join(",") },
+            if as_found.mcp_running { "up" } else { "down" }),
+    }
+
     let mut all_rows: Vec<Row> = Vec::new();
 
     // ── Everything: discover Everything.exe for the private sandbox ───────
@@ -1659,6 +1755,11 @@ fn main() {
     if let Some(ev) = &es_everything {
         es_stop(ev, es_bench_ini.as_deref());
     }
+
+    // ── UFFS daemon + MCP: restore to as-found state ──────────────────────
+    // Done before the summary (and before any `process::exit` in the CSV-sink
+    // path below) so the host is restored even on the error exit.
+    restore_run_state(&cfg.uffs, &as_found);
 
     // ── Summary table ────────────────────────────────────────────────────────
     print_summary(&cfg, &all_rows);
@@ -1858,7 +1959,37 @@ fn write_summary_csv(_cfg: &Cfg, rows: &[Row], path: &Path) -> std::io::Result<(
 }
 #[cfg(test)]
 mod tests {
-    use super::{canon_path, diff_paths, first_csv_field, normalise_paths, resolve_bench_dir};
+    use super::{canon_path, diff_paths, first_csv_field, normalise_paths, parse_run_state, resolve_bench_dir};
+
+    #[test]
+    fn parse_run_state_reads_drives_and_mcp() {
+        // The operator's real `uffs status` output: 7 drives loaded, MCP up.
+        let out = "\
+── Daemon ──
+  Status:      running (PID 62036)
+  Drives:      7 loaded (25,925,871 records, 7 active / 0 parked / 0 cold)
+    [W] G:     15,162 records
+    [W] M:  1,908,812 records
+    [W] C:  3,506,664 records
+
+── MCP HTTP Gateway ──
+  Status:      running (PID 60016)
+
+── MCP Stdio Sessions ──
+  (none)
+";
+        let state = parse_run_state(out);
+        assert_eq!(state.daemon_drives.as_deref(), Some(["G", "M", "C"].map(str::to_owned).as_slice()));
+        assert!(state.mcp_running);
+    }
+
+    #[test]
+    fn parse_run_state_stopped_daemon_and_down_mcp() {
+        let out = "── Daemon ──\n  Status:      not running\n\n── MCP HTTP Gateway ──\n  Status:      not running\n";
+        let state = parse_run_state(out);
+        assert!(state.daemon_drives.is_none());
+        assert!(!state.mcp_running);
+    }
 
     #[test]
     fn out_dir_flag_takes_precedence_over_env() {
