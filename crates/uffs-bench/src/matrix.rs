@@ -253,17 +253,6 @@ pub fn render_md(matrix: &Matrix) -> String {
             .join(", ")
     };
 
-    let cross = if matrix.cross_cells.is_empty() {
-        "_none_".to_owned()
-    } else {
-        matrix
-            .cross_cells
-            .iter()
-            .map(|cell| format!("- `{}:` {}", cell.drive, cell.pattern))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
     let solo = if matrix.uffs_only.is_empty() {
         "_none_".to_owned()
     } else {
@@ -275,13 +264,16 @@ pub fn render_md(matrix: &Matrix) -> String {
             .join("\n")
     };
 
+    // The negotiation OUTCOME: capable drives, how many head-to-head cells were
+    // admitted (their timings live in the Cross-tool results section, so they
+    // are not re-listed here), and the cells excluded to UFFS-only with reasons.
     format!(
         "## Negotiated matrix\n\n\
          - **Capable drives (all tools):** {capable}\n\
-         \n### Cross-tool cells (head-to-head)\n\n\
-         {cross}\n\
-         \n### UFFS-only cells\n\n\
-         {solo}\n"
+         - **Cross-tool cells:** {} (each timed head-to-head in the Cross-tool section below)\n\
+         \n### UFFS-only cells (excluded from cross-tool)\n\n\
+         {solo}\n",
+        matrix.cross_cells.len()
     )
 }
 
@@ -503,8 +495,10 @@ mod tests {
         let md = render_md(&matrix);
 
         assert!(md.contains("**Capable drives (all tools):** C, D"));
-        assert!(md.contains("- `C:` all_dlls"));
-        assert!(md.contains("E: es not loaded"));
+        // Cross-tool cells are summarized by count (detailed in the §1 results),
+        // not re-listed; UFFS-only exclusions keep their per-cell reason.
+        assert!(md.contains("**Cross-tool cells:** 1"));
+        assert!(md.contains("- `E:` all_dlls — E: es not loaded"));
     }
 
     #[test]

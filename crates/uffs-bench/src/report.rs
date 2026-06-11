@@ -151,9 +151,11 @@ pub fn render(inputs: &ReportInputs) -> String {
         ),
         embedded("## At a glance", inputs.summary_md.as_ref()),
         embedded("## Test environment", inputs.env_md.as_ref()),
+        // Flow: what we have (storage) → why ES is constrained (budget) →
+        // what we negotiated (matrix) → the measurements.
         embedded("## Storage devices", inputs.storage_md.as_ref()),
-        embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
         embedded("## Everything RAM budget", inputs.es_budget_md.as_ref()),
+        embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
         fenced(
             "## Cross-tool head-to-head (§1)",
             CROSS_TOOL_CSV,
@@ -373,7 +375,8 @@ mod tests {
         let md = String::from_utf8(bytes).expect("utf8 draft");
         assert!(md.contains("Suggested canonical name: `2023-11-v9.9.9-cd.md`"));
         assert!(md.contains("## Test environment\n\nbody"));
-        assert!(md.contains("`C:` all_dlls"));
+        // Negotiated matrix summarizes cross-tool cells by count now.
+        assert!(md.contains("**Cross-tool cells:** 1"));
         assert!(md.contains("```csv\ntool,rows\nuffs,5\n```"));
         // Storage devices: C is the matrix's only capable drive → flagged ✓;
         // E is listed but not benched.
