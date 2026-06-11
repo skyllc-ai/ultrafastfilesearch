@@ -46,7 +46,9 @@ pub(crate) fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
 /// ~4 M-record per-drive scan the parallelism enables.
 #[derive(Debug, Default, Clone)]
 pub struct SearchFilters {
-    /// Hide files whose name starts with `$`.
+    /// Hide reserved NTFS metafiles (`$MFT`, `$LogFile`, the `$Extend` family,
+    /// …) — see [`crate::compact::is_ntfs_metafile_name`].  Ordinary
+    /// `$`-prefixed files (`$Recycle.Bin`, `WinSxS` `$$_*.cdf-ms`) are NOT hidden.
     pub hide_system: bool,
     /// Hide NTFS Alternate Data Streams (names containing `:`).
     pub hide_ads: bool,
@@ -148,7 +150,8 @@ pub struct SearchFilters {
 /// extensible without touching every call site.
 #[derive(Debug, Default)]
 pub struct SearchFilterParams<'a> {
-    /// Hide system files (names starting with `$`).
+    /// Hide reserved NTFS metafiles (`$MFT`, `$LogFile`, the `$Extend` family,
+    /// …).  Ordinary `$`-prefixed files are NOT hidden.
     pub hide_system: bool,
     /// Hide NTFS Alternate Data Streams.
     pub hide_ads: bool,
@@ -531,9 +534,12 @@ impl SearchFilters {
         fold_buf: &mut Vec<u8>,
         fold: uffs_text::case_fold::CaseFold,
     ) -> bool {
-        // `hide_system` uses the cached `name_first_byte` field — avoids
-        // random access into the names arena (25M records → cache misses).
-        if self.hide_system && rec.is_system_metafile() {
+        // `hide_system` excludes only *true* NTFS metafiles.  The cached
+        // `name_first_byte` gate inside `is_system_metafile` avoids random
+        // access into the names arena (25M records → cache misses) for the
+        // ~all records that do not start with `$`; only `$`-prefixed
+        // candidates pay the arena lookup + allowlist check.
+        if self.hide_system && rec.is_system_metafile(names) {
             return false;
         }
         if self.hide_ads {

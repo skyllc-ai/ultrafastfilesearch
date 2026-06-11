@@ -714,3 +714,49 @@ fn clean_child_under_crooked_dir_is_path_malformed_not_leaf_malformed() {
         "name_hex is the lowercase hex of the true WTF-8 bytes of `evil<D800>.exe`"
     );
 }
+
+// ── is_ntfs_metafile_name: exact-allowlist classifier ──────────────
+//
+// 2026-06-11: `--hide-system` used to hide every name starting with `$`,
+// which wrongly suppressed ordinary `$`-prefixed files that Everything (and
+// every file manager) displays — `$Recycle.Bin`, `$PatchCache`, and the
+// WinSxS `$$_*.cdf-ms` filemaps.  The classifier now matches only the fixed
+// set of reserved NTFS metafiles.
+
+#[test]
+fn metafile_name_matches_reserved_set_case_insensitively() {
+    for name in [
+        "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef", "$Bitmap",
+        "$Boot", "$BadClus", "$Secure", "$UpCase", "$Extend", "$ObjId",
+        "$Quota", "$Reparse", "$UsnJrnl", "$RmMetadata", "$Repair", "$Txf",
+    ] {
+        assert!(
+            is_ntfs_metafile_name(name),
+            "{name} is a reserved NTFS metafile and must classify as one"
+        );
+    }
+    // NTFS is case-insensitive; canonical casing varies in the wild.
+    assert!(is_ntfs_metafile_name("$mft"));
+    assert!(is_ntfs_metafile_name("$BADCLUS"));
+}
+
+#[test]
+fn metafile_name_rejects_ordinary_dollar_files() {
+    for name in [
+        "$Recycle.Bin",
+        "$PatchCache",
+        "$WinREAgent",
+        "$secret.dbt",
+        // WinSxS filemaps — the concrete files the old filter wrongly hid.
+        "$$_diagnostics_system_windowsmediaplayerconfiguration_537e287f.cdf-ms",
+        "$MFTfoo",  // prefix of a metafile name, but not an exact match
+        "normal.txt",
+        "config",
+        "",
+    ] {
+        assert!(
+            !is_ntfs_metafile_name(name),
+            "{name:?} is an ordinary file and must NOT classify as a metafile"
+        );
+    }
+}

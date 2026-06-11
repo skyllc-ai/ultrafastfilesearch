@@ -4,6 +4,7 @@
 //! Filter application logic: retain/reject rows against `SearchFilters`.
 
 use super::super::backend::DisplayRow;
+use super::super::derived::is_system_name;
 use super::super::tree::name_matches;
 use super::{
     SearchFilters, extension_matches_filter, extract_extension_after_dot, lowercase_into,
@@ -37,7 +38,7 @@ pub(crate) fn row_passes_filters(
     if filters.is_empty() {
         return true;
     }
-    if filters.hide_system && row.name().starts_with('$') {
+    if filters.hide_system && is_system_name(row.name()) {
         return false;
     }
     if filters.hide_ads && row.name().contains(':') {

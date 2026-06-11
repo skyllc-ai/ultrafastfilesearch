@@ -79,10 +79,15 @@ pub fn extension_from_name(name: &str) -> Option<&str> {
     name.get(dot + 1..)
 }
 
-/// Return whether a name is an NTFS metadata/system entry.
+/// Return whether a name is a reserved NTFS metafile (`$MFT`, `$LogFile`,
+/// the `$Extend` family, …).
+///
+/// Delegates to [`crate::compact::is_ntfs_metafile_name`], the single source of
+/// truth.  An ordinary `$`-prefixed file (`$Recycle.Bin`, `$PatchCache`, the
+/// `WinSxS` `$$_*.cdf-ms` filemaps) is NOT a metafile and returns `false`.
 #[must_use]
 pub fn is_system_name(name: &str) -> bool {
-    name.starts_with('$')
+    crate::compact::is_ntfs_metafile_name(name)
 }
 
 /// Semantic type/category name for a row.

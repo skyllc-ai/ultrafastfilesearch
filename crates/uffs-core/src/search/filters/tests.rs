@@ -437,7 +437,7 @@ fn filter_max_descendants_rejects_high_count() {
 // ── Hide system ───────────────────────────────────────────────────
 
 #[test]
-fn filter_hide_system_rejects_dollar_prefix() {
+fn filter_hide_system_rejects_true_metafile() {
     let mut names = Vec::new();
     let rec = test_record("$MFT", &mut names);
     let filters = SearchFilters {
@@ -446,7 +446,24 @@ fn filter_hide_system_rejects_dollar_prefix() {
     };
     assert!(
         !filters.matches_record(&rec, &names, &mut Vec::new(), CaseFold::default_table()),
-        "$MFT should be rejected by hide_system=true"
+        "$MFT is a reserved metafile and must be rejected by hide_system=true"
+    );
+}
+
+/// Companion to [`filter_hide_system_rejects_true_metafile`]: an ordinary
+/// `$`-prefixed file (the `WinSxS` / `$Recycle.Bin` case) must NOT be hidden.
+/// This is the 2026-06-11 fix — `hide_system` no longer rejects every `$`-name.
+#[test]
+fn filter_hide_system_keeps_ordinary_dollar_file() {
+    let mut names = Vec::new();
+    let rec = test_record("$Recycle.Bin", &mut names);
+    let filters = SearchFilters {
+        hide_system: true,
+        ..Default::default()
+    };
+    assert!(
+        filters.matches_record(&rec, &names, &mut Vec::new(), CaseFold::default_table()),
+        "$Recycle.Bin is an ordinary file, not a metafile — hide_system must keep it"
     );
 }
 

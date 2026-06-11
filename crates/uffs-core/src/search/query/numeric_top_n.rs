@@ -185,7 +185,7 @@ fn ext_candidate_passes(
     if matches!(filter_mode, FilterMode::FilesOnly) && rec.is_directory() {
         return false;
     }
-    if filters.hide_system && rec.is_system_metafile() {
+    if filters.hide_system && rec.is_system_metafile(names) {
         return false;
     }
     if filters.hide_ads {

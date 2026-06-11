@@ -75,10 +75,11 @@ pub struct CompactRecord {
 
     /// First byte of the filename (e.g. `b'$'` for NTFS metafiles).
     ///
-    /// Cached here so that hot-path filters like `--hide-system` (which only
-    /// need to check `name.starts_with('$')`) can avoid touching the names
-    /// arena entirely — turning a random cache-miss into a sequential field
-    /// read from the `CompactRecord` array.
+    /// Cached here as a cheap hot-path *gate*: only `$`-prefixed records can be
+    /// NTFS metafiles, so [`is_system_metafile`](Self::is_system_metafile) can
+    /// reject virtually every record with one sequential field read instead of
+    /// a random cache-miss into the names arena.  The handful of `$`-prefixed
+    /// candidates then pay one arena lookup for the authoritative name check.
     pub name_first_byte: u8,
 
     /// Explicit tail padding for 8-byte struct alignment.
@@ -88,6 +89,59 @@ pub struct CompactRecord {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad: [u8; 1],
+}
+
+/// The fixed set of reserved NTFS metafile names: the `$`-prefixed records at
+/// reserved FRS 0–15 and under the `$Extend` directory.  An NTFS volume can
+/// only ever contain *these* specific metafiles.
+///
+/// Any *other* `$`-prefixed name — `$Recycle.Bin`, `$PatchCache`, `$WinREAgent`,
+/// the `WinSxS` `$$_*.cdf-ms` filemaps, or a user file literally named `$foo` —
+/// is an ordinary file that file managers and tools like Everything display.
+/// Classifying those as metafiles is exactly the bug `--hide-system` had.
+///
+/// Matched case-insensitively: NTFS itself is case-insensitive, and these
+/// canonical names are occasionally surfaced with varied casing.
+pub(crate) const NTFS_METAFILE_NAMES: &[&str] = &[
+    // Reserved FRS 0–11 (volume root metafiles)
+    "$MFT",
+    "$MFTMirr",
+    "$LogFile",
+    "$Volume",
+    "$AttrDef",
+    "$Bitmap",
+    "$Boot",
+    "$BadClus",
+    "$Secure",
+    "$UpCase",
+    "$Extend",
+    // `$Extend` directory children
+    "$ObjId",
+    "$Quota",
+    "$Reparse",
+    "$UsnJrnl",
+    "$RmMetadata",
+    "$Deleted",
+    // `$Extend\$RmMetadata` children
+    "$Repair",
+    "$Tops",
+    "$TxfLog",
+    "$Txf",
+];
+
+/// Returns whether `name` is one of the reserved [`NTFS_METAFILE_NAMES`].
+///
+/// Real metafiles are already excluded from the compact index at build time
+/// (`build_compact_index` drops them via `PathResolver` FRS-validity, not by
+/// name).  This exact-name check is the *authoritative* classifier for the
+/// `--hide-system` filter, so it can never misclassify an ordinary
+/// `$`-prefixed file as a metafile.
+#[must_use]
+#[inline]
+pub fn is_ntfs_metafile_name(name: &str) -> bool {
+    NTFS_METAFILE_NAMES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
 }
 
 impl CompactRecord {
@@ -101,14 +155,22 @@ impl CompactRecord {
         self.flags & Self::DIRECTORY_BIT != 0
     }
 
-    /// Returns `true` if the filename starts with `$` (NTFS system metafile).
+    /// Returns `true` if this record is one of the reserved NTFS metafiles
+    /// (`$MFT`, `$LogFile`, `$Bitmap`, `$Secure`, the `$Extend` family, …).
     ///
-    /// Uses the cached [`name_first_byte`](Self::name_first_byte) field so the
-    /// check is a single byte comparison — no names-arena access required.
+    /// The cached [`name_first_byte`](Self::name_first_byte) field is a cheap
+    /// gate: every metafile name starts with `$`, and `$`-prefixed records are
+    /// a vanishing fraction of an index, so this rejects virtually every record
+    /// with a single byte comparison and only touches the names arena for the
+    /// handful of `$`-prefixed candidates.  The arena lookup is *required* for
+    /// correctness, because an ordinary file may also start with `$`
+    /// (`$Recycle.Bin`, `$PatchCache`, the `WinSxS` `$$_*.cdf-ms` filemaps) —
+    /// those are NOT metafiles and must not be hidden by `--hide-system`.
+    /// See [`is_ntfs_metafile_name`].
     #[inline]
     #[must_use]
-    pub const fn is_system_metafile(self) -> bool {
-        self.name_first_byte == b'$'
+    pub fn is_system_metafile(&self, names: &[u8]) -> bool {
+        self.name_first_byte == b'$' && is_ntfs_metafile_name(self.name(names))
     }
 
     /// Get the name from a names blob as a **lossy `&str` view**.

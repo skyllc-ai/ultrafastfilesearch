@@ -546,7 +546,7 @@ fn collect_path_only_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 if matches!(filter_mode, FilterMode::FilesOnly) && rec.is_directory() {
                     continue;
                 }
-                if hide_system && rec.is_system_metafile() {
+                if hide_system && rec.is_system_metafile(&drive.names) {
                     continue;
                 }
                 if hide_ads {
