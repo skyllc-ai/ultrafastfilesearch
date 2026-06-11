@@ -6,59 +6,30 @@ version:
     @printf "\033[0;34m📋 Current version:\033[0m\n"
     @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "uffs-cli") | .version'
 
-# ── Manual on-demand binary release (Path B) ────────────────────────
+# ── Binary release (Path B) — `just ship` cuts it ───────────────────
 #
 # UFFS ships its BINARY on your command, not automatically.  release-plz
 # only versions the 2 publishable leaf libs (uffs-time / uffs-text) — it
-# physically cannot see changes to uffs-cli/core/daemon/… (their
-# `cargo package` can't resolve unpublished internal deps), so it never
-# drives binary releases.  To cut a binary release that captures ANY
-# change anywhere in the workspace:
+# physically cannot see changes to uffs-cli/core/daemon/…, so it never
+# drives binary releases.  The release lives in your normal flow:
 #
-#   1.  just release-pr [patch|minor|major]   # opens the version-bump PR
-#   2.  (review + squash-merge that PR on GitHub)
-#   3.  just release-tag                       # tags main → builds binaries
+#   1.  just ship            # validate (Phase 1) → bump → commit →
+#                            #   open auto-merging release/vX.Y.Z PR (Phase 2)
+#   2.  (PR auto-merges once its CI is green)
+#   3.  just release-tag     # tag main → release.yml builds the binaries
 #
-# Step 1 bumps the lockstep `[workspace.package].version`, refreshes the
-# lockfile, and opens a `release/vX.Y.Z` PR (main requires PRs).  Step 3
-# creates the signed `vX.Y.Z` tag on main, which fires release.yml's
-# 15-platform binary build.  Nothing happens on a normal merge — that is
-# the manual-on-demand design, not a bug.
-#
-# (`ship` / `phase2-ship` are the DEV validate+push lanes — unrelated to
-# cutting a release.)
+# `just ship` Phase 2 bumps the lockstep `[workspace.package].version`
+# (patch) ONLY after Phase 1 validation passes — code is verified clean
+# before the version moves.  `release-tag` then cuts the signed `vX.Y.Z`
+# tag, which fires release.yml's 15-platform build.  A normal merge to
+# `main` triggers no release — that is the manual-on-demand design.
 
-# Retained alias — the retired R5 stub now points at the real flow.
+# Retired R5 stub — version bumps now happen inside `just ship` Phase 2.
 version-bump:
-    @printf "\033[0;36m💡 'version-bump' is now 'just release-pr [patch|minor|major]'.\033[0m\n"
-    @printf "\033[0;36m   Then merge the PR and run 'just release-tag'.\033[0m\n"
+    @printf "\033[0;36m💡 Version bumps are part of 'just ship' now (Phase 2, patch).\033[0m\n"
+    @printf "\033[0;36m   After the release PR merges, run 'just release-tag' to build binaries.\033[0m\n"
 
-# Open a version-bump release PR (default bump: patch).
-release-pr level="patch":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    printf "\033[0;34m🚢 Cutting release PR (%s bump)…\033[0m\n" "{{ level }}"
-    # ── Preflight: clean tree on an up-to-date main ──
-    branch=$(git branch --show-current)
-    [ "$branch" = "main" ] || { printf "\033[0;31m❌ run from main (you are on %s)\033[0m\n" "$branch"; exit 1; }
-    [ -z "$(git status --porcelain)" ] || { printf "\033[0;31m❌ working tree not clean\033[0m\n"; exit 1; }
-    git fetch origin main --quiet
-    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { printf "\033[0;31m❌ local main is behind origin/main — pull first\033[0m\n"; exit 1; }
-    # ── Bump the lockstep workspace version + refresh the lockfile ──
-    cargo set-version --bump "{{ level }}"
-    new=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="uffs-cli") | .version')
-    cargo update --workspace --quiet
-    # ── Commit on a release branch + open the PR (main requires PRs) ──
-    rel="release/v${new}"
-    git switch -c "$rel"
-    git commit -aqm "chore(release): v${new}"
-    git push -u origin "$rel" --quiet
-    body="Cut binary release v${new} (Path B manual trigger). Bumps the lockstep workspace version; after squash-merge run 'just release-tag' to tag main and build the 15-platform binaries. No crate code changed — release-cut commit only."
-    gh pr create --base main --head "$rel" --title "chore(release): v${new}" --body "$body"
-    printf "\n\033[0;32m✅ Release PR opened for v%s.\033[0m\n" "$new"
-    printf "\033[0;36m   Next: review + squash-merge, then run: just release-tag\033[0m\n"
-
-# After the release PR is merged: tag main → build binaries.
+# After the `just ship` release PR is merged: tag main → build binaries.
 release-tag:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -30,6 +30,46 @@ pub(crate) fn get_current_version() -> Result<String> {
     bail!("Could not find version in Cargo.toml")
 }
 
+/// Bump the lockstep `[workspace.package].version` (plus the internal
+/// `[workspace.dependencies]` version requirements and the lockfile) by
+/// `level` — `"patch"`, `"minor"`, or `"major"` — via `cargo set-version`.
+///
+/// This restores the Phase-2 version-increment step retired in R5.  It shells
+/// out to `cargo-edit`'s `set-version` rather than re-implementing semver math
+/// (the ~1430 LOC R5 deleted): `set-version` already handles workspace
+/// inheritance and the internal dep-requirement updates correctly.  `just ship`
+/// is a maintainer-only release command, so requiring `cargo-edit` on the
+/// release machine is acceptable.
+///
+/// # Errors
+///
+/// Returns an error if `cargo set-version` is not installed or the bump fails.
+pub(crate) fn bump_workspace_version(level: &str) -> Result<()> {
+    let available = std::process::Command::new("cargo")
+        .args(["set-version", "--help"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !available {
+        bail!(
+            "`cargo set-version` not found — install it with `cargo install cargo-edit` \
+             (required by `just ship` to bump the release version)."
+        );
+    }
+    let status = std::process::Command::new("cargo")
+        .args(["set-version", "--bump", level])
+        .status()
+        .context("running `cargo set-version`")?;
+    if !status.success() {
+        bail!("`cargo set-version --bump {level}` failed");
+    }
+    // Refresh the lockfile so the release commit is byte-reproducible.
+    std::process::Command::new("cargo")
+        .args(["update", "--workspace", "--quiet"])
+        .status()
+        .context("refreshing Cargo.lock after version bump")?;
+    Ok(())
+}
+
 /// Parse `content` (the text of a workspace root `Cargo.toml`) and
 /// extract the `version = "..."` entry from the `[workspace.package]`
 /// table specifically — ignores any unrelated `version = ...` lines in

@@ -39,7 +39,7 @@ use crate::exec::{
     execute_step_with_tracking,
 };
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
-use crate::version::get_current_version;
+use crate::version::{bump_workspace_version, get_current_version};
 use crate::workflow::{
     ALL_STEPS, STEP_CLEAN_ARTIFACTS, STEP_COVERAGE_TESTS, STEP_FORMAT_CHECK, STEP_FORMAT_CODE,
     STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC, WorkflowPhase,
@@ -458,17 +458,21 @@ pub(crate) async fn run_enhanced_phase2(
 ) -> Result<()> {
     println!(
         "{}",
-        "📦 PHASE 2: Release PR (version bump handled by release-plz)"
+        "📦 PHASE 2: version bump → commit → release PR"
             .blue()
             .bold()
     );
 
-    // Note: Version increment (step 07) was retired in Phase R5.
-    // release-plz now handles version bumps automatically on `main`.
-
+    // Version increment (Path B, 2026-06-10): restored after R5 retired it.
+    // release-plz only versions the 2 publishable leaf libs — it cannot drive
+    // binary releases — so the lockstep workspace bump happens HERE, at the end
+    // of `just ship`, gated behind the resumable `version_incremented` flag so a
+    // re-run after a mid-ship failure never double-bumps.  Default level: patch.
     if !state.version_incremented {
+        bump_workspace_version("patch").context("Failed to bump workspace version")?;
         state.version_incremented = true;
-        let new_version = get_current_version().context("Failed to get updated version")?;
+        let new_version = get_current_version().context("Failed to read bumped version")?;
+        println!("🔖 Bumped workspace version → v{new_version}");
         state.current_version = new_version;
         state.save()?;
     }
@@ -540,10 +544,22 @@ fn load_or_reset_ship_state(ctx: &PipelineContext) -> Result<WorkflowState> {
             .context("Failed to save fresh workflow state")?;
         Ok(new_state)
     } else {
-        Ok(WorkflowState::load().unwrap_or_else(|_| {
-            let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_owned());
-            WorkflowState::new_workflow(current_version)
-        }))
+        let loaded = WorkflowState::load().ok();
+        // A COMPLETED cycle must not be "resumed": its steps are all marked
+        // done and `version_incremented` is set, so resuming would skip both
+        // Phase 1 validation AND the Phase 2 version bump — the next release
+        // would commit nothing.  `is_resumable()` already excludes Completed,
+        // so a finished state starts a fresh cycle.  (`--fresh` is still the
+        // explicit reset; this just stops a stale terminal state from wedging
+        // the next `just ship`.)
+        match loaded {
+            Some(state) if state.phase != WorkflowPhase::Completed => Ok(state),
+            _ => {
+                let current_version =
+                    get_current_version().unwrap_or_else(|_| "unknown".to_owned());
+                Ok(WorkflowState::new_workflow(current_version))
+            }
+        }
     }
 }
 
