@@ -459,9 +459,42 @@ fn count_and_validate(path: &str, needle: &str) -> (u64, u64) {
 fn cleanup_bench_file() { let p = bench_out_path(); let _ = std::fs::remove_file(&p); }
 fn cleanup_file(p: &str) { let _ = std::fs::remove_file(p); }
 
-/// Read a tool's output file, strip headers/footers, normalise each path
-/// (lowercase, trim quotes, first CSV field), and return a **sorted** vec.
-/// Handles both UTF-8 and UTF-16 LE (BOM) output.
+/// Extract the first CSV field from `line`, honouring double-quote quoting so a
+/// path that itself contains a comma (`"c:\a,b\c",123`) stays one field instead
+/// of being split.  Unquoted lines fall back to a plain comma split.
+fn first_csv_field(line: &str) -> &str {
+    let line = line.trim();
+    match line.strip_prefix('"') {
+        Some(rest) => rest
+            .find('"')
+            .map_or(rest, |end| rest.get(..end).unwrap_or(rest)),
+        None => line.split(',').next().unwrap_or(line),
+    }
+}
+
+/// Canonicalise a path so the same filesystem entry compares equal across
+/// tools.  The tools disagree on directory formatting: `uffs.com` (C++) emits a
+/// trailing `\` on directories (`c:\config.msi\`) while Everything and
+/// UFFS-Rust do not (`c:\config.msi`).  Left unnormalised, every directory hit
+/// becomes a spurious "only in cpp" / "only in es" pair (this was the bulk of
+/// the reported 11226 / 3736 diff).  Canonical form: `/`→`\`, lowercase, and a
+/// single stripped trailing separator.  The bare drive root keeps its slash
+/// (`c:` / `c:\` / `c:\\` all collapse to `c:\`) so it never degrades to `c:`.
+fn canon_path(raw: &str) -> String {
+    let lower = raw.replace('/', "\\").to_lowercase();
+    let stripped = lower.trim_end_matches('\\');
+    if stripped.len() == 2 && stripped.as_bytes().get(1) == Some(&b':') {
+        format!("{stripped}\\") // bare drive root → `c:\`
+    } else {
+        stripped.to_owned()
+    }
+}
+
+/// Read a tool's output file, strip headers/footers, canonicalise each path
+/// (first CSV field, `/`→`\`, lowercase, no trailing dir separator), and return
+/// a **sorted, de-duplicated** vec.  Handles both UTF-8 and UTF-16 LE (BOM)
+/// output.  The canonicalisation is what lets a C++ `c:\dir\` line match an
+/// Everything `c:\dir` line — see [`canon_path`].
 fn normalise_paths(path: &str) -> Vec<String> {
     let content = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -477,10 +510,7 @@ fn normalise_paths(path: &str) -> Vec<String> {
     };
     let mut v: Vec<String> = content.lines()
         .filter(|l| !is_header_or_footer(l))
-        .map(|l| {
-            let trimmed = l.trim().trim_matches('"');
-            trimmed.split(',').next().unwrap_or(trimmed).trim().to_lowercase()
-        })
+        .map(|l| canon_path(first_csv_field(l)))
         .filter(|s| !s.is_empty())
         .collect();
     v.sort_unstable();
@@ -1762,4 +1792,57 @@ fn write_summary_csv(_cfg: &Cfg, rows: &[Row], path: &Path) -> std::io::Result<(
         )?;
     }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::{canon_path, diff_paths, first_csv_field, normalise_paths};
+
+    #[test]
+    fn canon_strips_trailing_dir_slash() {
+        // The exact cpp-vs-es mismatch from the field report: a directory hit
+        // emitted with vs without a trailing separator must compare equal.
+        assert_eq!(canon_path("c:\\config.msi\\"), canon_path("c:\\config.msi"));
+        assert_eq!(canon_path("C:\\Config.MSI\\"), "c:\\config.msi");
+        assert_eq!(canon_path("c:\\found.000\\dir0524.chk\\config\\"), "c:\\found.000\\dir0524.chk\\config");
+    }
+
+    #[test]
+    fn canon_keeps_drive_root_slash() {
+        // `c:`, `c:\`, and `c:\\` are the same root and must not collapse to `c:`.
+        assert_eq!(canon_path("c:\\"), "c:\\");
+        assert_eq!(canon_path("c:"), "c:\\");
+        assert_eq!(canon_path("C:\\\\"), "c:\\");
+    }
+
+    #[test]
+    fn canon_normalises_forward_slashes_and_case() {
+        assert_eq!(canon_path("C:/Foo/Bar/"), "c:\\foo\\bar");
+    }
+
+    #[test]
+    fn first_field_handles_quoting() {
+        // A path containing a comma stays one field when quoted.
+        assert_eq!(first_csv_field("\"c:\\a,b\\c\",123,x"), "c:\\a,b\\c");
+        assert_eq!(first_csv_field("c:\\plain\\path,42"), "c:\\plain\\path");
+        assert_eq!(first_csv_field("c:\\nocomma"), "c:\\nocomma");
+    }
+
+    #[test]
+    fn trailing_slash_difference_no_longer_creates_false_diffs() {
+        // Two "files" written into temp CSVs: identical entries, one tool with
+        // trailing dir slashes (cpp style), one without (es style).  After
+        // canonicalisation the diff must be EMPTY — the bug this fix closes.
+        let dir = std::env::temp_dir();
+        let cpp = dir.join("uffs_xtool_test_cpp.csv");
+        let es = dir.join("uffs_xtool_test_es.csv");
+        std::fs::write(&cpp, "Path\nc:\\config.msi\\\nc:\\exiftool\\config_files\\\nc:\\windows\\notepad.exe\n").unwrap();
+        std::fs::write(&es, "Path\nc:\\config.msi\nc:\\exiftool\\config_files\nc:\\windows\\notepad.exe\n").unwrap();
+        let a = normalise_paths(cpp.to_str().unwrap());
+        let b = normalise_paths(es.to_str().unwrap());
+        let d = diff_paths(&a, &b);
+        assert!(d.only_in_a.is_empty(), "trailing-slash dirs must not be cpp-only: {:?}", d.only_in_a);
+        assert!(d.only_in_b.is_empty(), "trailing-slash dirs must not be es-only: {:?}", d.only_in_b);
+        std::fs::remove_file(&cpp).ok();
+        std::fs::remove_file(&es).ok();
+    }
 }
