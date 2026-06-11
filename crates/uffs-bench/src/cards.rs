@@ -105,19 +105,22 @@ pub(crate) fn assembly_card(bundle_dir: &Path) -> Card {
     }
 }
 
-/// Coverage-scope label for the report draft name (participating drives, or
-/// `"full"` when none were narrowed).
+/// Human-readable coverage-scope label for the report header — the requested
+/// drives as `"C:, D:, …"`, or `"full"` when none were narrowed.
+///
+/// The promotion *filename* slugifies this back to a compact `cd…` form (see
+/// `report::promotion_name`), so the readable display and the filename stay in
+/// sync from one source.
 pub(crate) fn report_scope(cli: &Cli) -> String {
-    let scope: String = cli
-        .drives_or_default()
-        .iter()
-        .map(char::to_ascii_lowercase)
-        .collect();
-    if scope.is_empty() {
-        "full".to_owned()
-    } else {
-        scope
+    let drives = cli.drives_or_default();
+    if drives.is_empty() {
+        return "full".to_owned();
     }
+    drives
+        .iter()
+        .map(|letter| format!("{}:", letter.to_ascii_uppercase()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Map a probe id to a human-readable product name.

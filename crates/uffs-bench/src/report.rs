@@ -76,8 +76,20 @@ pub struct ReportInputs {
 
 /// Suggested canonical `YYYY-MM-vX.Y.Z-<scope>.md` promotion name.
 fn promotion_name(generated_at: DateTime<Utc>, version: &str, scope: &str) -> String {
+    // The header `scope` is human-readable ("C:, D:, …"); slugify it back to a
+    // filename-safe compact form ("cd…").
+    let collected: String = scope
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect();
+    let slug = if collected.is_empty() {
+        "full"
+    } else {
+        &collected
+    };
     format!(
-        "{year:04}-{month:02}-v{version}-{scope}.md",
+        "{year:04}-{month:02}-v{version}-{slug}.md",
         year = generated_at.year(),
         month = generated_at.month(),
     )
