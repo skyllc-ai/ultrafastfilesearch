@@ -25,7 +25,7 @@ use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::matrix::{self, Matrix};
 use crate::preflight::{self, PreflightResult};
-use crate::storage;
+use crate::{storage, summary};
 
 /// Bundle-relative name of the assembled report draft (plan §11).
 pub const REPORT_DRAFT: &str = "REPORT-DRAFT.md";
@@ -55,6 +55,8 @@ pub struct ReportInputs {
     pub scope: String,
     /// When the draft was assembled.
     pub generated_at: DateTime<Utc>,
+    /// Rendered `## At a glance` header (`summary.md`), if present.
+    pub summary_md: Option<String>,
     /// Rendered Stage 0a environment markdown (`env.md`), if present.
     pub env_md: Option<String>,
     /// Rendered Stage 0d matrix markdown (from `matrix.json`), if present.
@@ -133,6 +135,7 @@ pub fn render(inputs: &ReportInputs) -> String {
             inputs.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
             inputs.scope,
         ),
+        embedded("## At a glance", inputs.summary_md.as_ref()),
         embedded("## Test environment", inputs.env_md.as_ref()),
         embedded("## Storage devices", inputs.storage_md.as_ref()),
         embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
@@ -222,6 +225,7 @@ pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) 
         version: version.to_owned(),
         scope: scope.to_owned(),
         generated_at: host.now(),
+        summary_md: load(host, bundle_dir, summary::SUMMARY_MD),
         env_md: load(host, bundle_dir, ENV_MD),
         matrix_md: load_matrix_md(host, bundle_dir),
         storage_md: load_storage_md(host, bundle_dir),
@@ -257,6 +261,7 @@ mod tests {
             version: "9.9.9".to_owned(),
             scope: "cd".to_owned(),
             generated_at: fixed_now(),
+            summary_md: Some("## At a glance\n\n<SUMMARY>".to_owned()),
             env_md: Some("## Test environment\n\n<ENV>".to_owned()),
             matrix_md: Some("## Negotiated matrix\n\n<MATRIX>".to_owned()),
             storage_md: Some("## Storage devices\n\n<STORAGE>".to_owned()),
@@ -273,6 +278,7 @@ mod tests {
 
         assert!(md.starts_with("# UFFS Benchmark Report — DRAFT (v9.9.9)"));
         assert!(md.contains("Suggested canonical name: `2023-11-v9.9.9-cd.md`"));
+        assert!(md.contains("## At a glance\n\n<SUMMARY>"));
         assert!(md.contains("## Test environment\n\n<ENV>"));
         assert!(md.contains("## Storage devices\n\n<STORAGE>"));
         assert!(md.contains("## Negotiated matrix\n\n<MATRIX>"));
@@ -286,6 +292,7 @@ mod tests {
     #[test]
     fn render_marks_absent_sections() {
         let inputs = ReportInputs {
+            summary_md: None,
             env_md: None,
             matrix_md: None,
             storage_md: None,
@@ -297,6 +304,7 @@ mod tests {
         };
         let md = render(&inputs);
 
+        assert!(md.contains("## At a glance\n\n_Not produced this run._"));
         assert!(md.contains("## Test environment\n\n_Not produced this run._"));
         assert!(md.contains("## Storage devices\n\n_Not produced this run._"));
         assert!(md.contains("## Negotiated matrix\n\n_Not produced this run._"));

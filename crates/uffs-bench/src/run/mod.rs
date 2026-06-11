@@ -46,7 +46,7 @@ use crate::preflight::{self, PreflightResult};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{State, Status};
-use crate::{report, resolve, run_state, storage, teardown};
+use crate::{report, resolve, run_state, storage, summary, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -232,7 +232,15 @@ impl Orchestrator<'_> {
         matrix::write(self.host, matrix, &self.bundle_dir)?;
         // Capture the full storage-device inventory (`uffs-mft drives`) for the
         // report's `## Storage devices` section. Best-effort — never fails the run.
-        storage::capture_and_write(self.host, &self.bundle_dir);
+        let drives = storage::capture_and_write(self.host, &self.bundle_dir);
+        // Synthesize the at-a-glance header from the live structured data (env
+        // fingerprint with the backfilled Everything GUI version, drive
+        // inventory, and the benched set).
+        let summary_md = summary::render_md(fp, &drives, &matrix.capable_drives);
+        let summary_path = self.bundle_dir.join(summary::SUMMARY_MD);
+        self.host
+            .write_file(&summary_path, summary_md.as_bytes())
+            .map_err(|err| BenchError::io(&summary_path, err))?;
         Ok(())
     }
 

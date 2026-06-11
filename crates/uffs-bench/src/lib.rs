@@ -71,6 +71,7 @@ pub mod run_state;
 pub mod stages;
 pub mod state;
 pub mod storage;
+pub mod summary;
 pub mod teardown;
 pub mod tooling;
 

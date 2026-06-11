@@ -47,11 +47,13 @@ pub struct DriveRecord {
     pub mft_records: u64,
 }
 
-/// Capture `uffs-mft drives --format json` and persist it into the bundle.
+/// Capture `uffs-mft drives --format json`, persist it into the bundle, and
+/// return the parsed records (for the at-a-glance summary).
 ///
 /// Best-effort: a missing `uffs-mft` binary or a probe that yields no JSON is
-/// logged and skipped — the report simply omits the storage section.
-pub fn capture_and_write(host: &dyn Host, bundle_dir: &Path) {
+/// logged and yields an empty vec — the report simply omits the storage
+/// section and the summary's drive lines.
+pub fn capture_and_write(host: &dyn Host, bundle_dir: &Path) -> Vec<DriveRecord> {
     let exe = resolve::uffs_mft_exe(host);
     match host.run(&exe, &["drives", "--format", "json"]) {
         Ok(out) if out.success() && out.stdout.trim_start().starts_with('[') => {
@@ -59,11 +61,18 @@ pub fn capture_and_write(host: &dyn Host, bundle_dir: &Path) {
             if let Err(err) = host.write_file(&path, out.stdout.as_bytes()) {
                 host.out(&format!("[storage] could not write {DRIVES_JSON}: {err}"));
             }
+            parse(&out.stdout)
         }
-        Ok(_) => host.out("[storage] uffs-mft produced no drive JSON — storage section skipped"),
-        Err(err) => host.out(&format!(
-            "[storage] uffs-mft not available ({err}) — storage section skipped"
-        )),
+        Ok(_) => {
+            host.out("[storage] uffs-mft produced no drive JSON — storage section skipped");
+            Vec::new()
+        }
+        Err(err) => {
+            host.out(&format!(
+                "[storage] uffs-mft not available ({err}) — storage section skipped"
+            ));
+            Vec::new()
+        }
     }
 }
 
@@ -75,7 +84,7 @@ pub fn parse(json: &str) -> Vec<DriveRecord> {
 
 /// Format a byte count as a one-decimal `TB`/`GB`/`MB` string using
 /// integer-only math (the crate avoids floating-point arithmetic).
-fn fmt_bytes(bytes: u64) -> String {
+pub(crate) fn fmt_bytes(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
     const GIB: u64 = 1024 * MIB;
     const TIB: u64 = 1024 * GIB;
@@ -90,7 +99,7 @@ fn fmt_bytes(bytes: u64) -> String {
 
 /// Insert ASCII thousands separators into a `u64` (e.g. `4656384` →
 /// `"4,656,384"`).
-fn commas(value: u64) -> String {
+pub(crate) fn commas(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     let len = digits.len();
