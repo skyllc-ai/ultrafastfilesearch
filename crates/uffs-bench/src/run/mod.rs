@@ -456,6 +456,17 @@ impl Orchestrator<'_> {
             );
         }
         cap.es_ini_path = ini;
+        // Now the private instance is up, backfill its real version over IPC —
+        // the Stage 0a env capture ran before launch and could only record
+        // "ipc unavailable" for everything_gui.
+        if cap.es_ini_path.is_some() {
+            env::backfill_everything_gui_version(
+                self.host,
+                &mut cap.fp,
+                &resolve::es_exe(self.host),
+                es_instance::INSTANCE_NAME,
+            );
+        }
         // Second-pass preflight: re-probe ES now the instance is loaded.
         // Restrict candidate_drives to drives that survived the first pass
         // (UFFS-known) so H/I and other unknown drives are not re-warned.

@@ -437,6 +437,35 @@ pub(crate) fn render_tool_table(fp: &EnvFingerprint) -> String {
     format!("{header}\n{sep}\n{}", rows.join("\n"))
 }
 
+/// Backfill the `everything_gui` tool version once the private Everything
+/// instance is up.
+///
+/// The Stage 0a env capture runs *before* the bench launches its private
+/// `-instance` Everything, so `es.exe -get-everything-version` could only
+/// report `"ipc unavailable"`. Once the instance is loaded, this re-probes it
+/// over IPC and overwrites the `everything_gui` row with the real running
+/// version — the actual indexer the bench measures against. No-op if the row is
+/// absent or the probe fails / returns a non-version string.
+pub fn backfill_everything_gui_version(
+    host: &dyn Host,
+    fp: &mut EnvFingerprint,
+    es_exe: &str,
+    instance: &str,
+) {
+    let Some(tool) = fp.tools.iter_mut().find(|tv| tv.name == "everything_gui") else {
+        return;
+    };
+    let Ok(out) = host.run(es_exe, &["-instance", instance, "-get-everything-version"]) else {
+        return;
+    };
+    let version = out.stdout.lines().next().unwrap_or_default().trim();
+    // Accept only a real version string (starts with a digit) — never an IPC
+    // error banner like "Error 8: Everything IPC window not found".
+    if version.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        version.clone_into(&mut tool.version);
+    }
+}
+
 /// Render a captured fingerprint as the report's "Test environment" markdown.
 ///
 /// A pure function of its input (no host access), so it is covered by a golden
@@ -504,8 +533,9 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::{
-        EnvFingerprint, EnvSpec, StateProbe, ToolProbe, ToolVersion, bytes_to_gib, capture,
-        clean_value, first_nonempty, probe_tool, render_md, write,
+        EnvFingerprint, EnvSpec, StateProbe, ToolProbe, ToolVersion,
+        backfill_everything_gui_version, bytes_to_gib, capture, clean_value, first_nonempty,
+        probe_tool, render_md, write,
     };
     use crate::host::{Call, MockHost, ProcOutput};
 
@@ -690,6 +720,43 @@ mod tests {
         let mut fp = sample_fp();
         fp.tools.clear();
         assert!(render_md(&fp).contains("_None probed._"));
+    }
+
+    /// A fingerprint whose `everything_gui` row carries the pre-launch
+    /// `"ipc unavailable"` placeholder.
+    fn fp_with_gui_placeholder() -> EnvFingerprint {
+        let mut fp = sample_fp();
+        fp.tools.push(ToolVersion {
+            name: "everything_gui".to_owned(),
+            exe: "Everything.exe".to_owned(),
+            version: "ipc unavailable".to_owned(),
+            state: "running".to_owned(),
+        });
+        fp
+    }
+
+    fn gui_version(fp: &EnvFingerprint) -> &str {
+        fp.tools
+            .iter()
+            .find(|tv| tv.name == "everything_gui")
+            .map(|tv| tv.version.as_str())
+            .expect("everything_gui row")
+    }
+
+    #[test]
+    fn backfill_overwrites_gui_version_when_instance_up() {
+        let mut fp = fp_with_gui_placeholder();
+        let host = MockHost::new().with_run_result(stdout_of("1.4.1.1024\n"));
+        backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        assert_eq!(gui_version(&fp), "1.4.1.1024");
+    }
+
+    #[test]
+    fn backfill_keeps_placeholder_on_ipc_error() {
+        let mut fp = fp_with_gui_placeholder();
+        let host = MockHost::new().with_run_result(ipc_error_output());
+        backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        assert_eq!(gui_version(&fp), "ipc unavailable");
     }
 
     fn ipc_error_output() -> ProcOutput {
