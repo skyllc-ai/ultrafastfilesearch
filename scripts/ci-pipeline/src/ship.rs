@@ -407,6 +407,33 @@ pub(crate) async fn run_enhanced_phase1(
         "🚀 Using safe parallel optimization: format → compile → parallel(doc tests + linting)"
     );
 
+    // ── Tree-hash invalidation ──
+    // A resumed `just ship` skips a validation step only when the code it
+    // validated is byte-identical.  If the working tree changed since Phase 1
+    // last passed (you edited a tracked file or committed between runs), the
+    // cached "completed" flags for the code-dependent steps are invalidated so
+    // they re-run on the new code.  An unchanged tree (e.g. resuming after a
+    // Phase-2 push failure) keeps the fast skip.  The authoritative gate is
+    // still the uncacheable PR CI; this closes the local "passed step skipped
+    // after a code edit" gap.
+    let fingerprint = working_tree_fingerprint();
+    if state.validated_fingerprint != fingerprint {
+        if !state.validated_fingerprint.is_empty() {
+            println!(
+                "{}",
+                "↻ Working tree changed since last validation — re-running Phase 1 checks".yellow()
+            );
+        }
+        for step in [
+            STEP_FORMAT_CODE,
+            STEP_COVERAGE_TESTS,
+            STEP_PARALLEL_VALIDATION,
+            STEP_FORMAT_CHECK,
+        ] {
+            state.invalidate_step(step)?;
+        }
+    }
+
     tracked_toolchain_step(state, ctx).await?;
 
     println!("{}", "📋 Stage 1: Sequential Prerequisites".yellow().bold());
@@ -432,6 +459,13 @@ pub(crate) async fn run_enhanced_phase1(
     tracked_parallel_validation_step(state, ctx).await?;
     tracked_format_check_step(state, ctx).await?;
 
+    // Record the (post-`cargo fmt`) tree this Phase-1 run validated, so a
+    // resume on an unchanged tree skips the checks and any later edit re-runs
+    // them.  Recomputed here (not reused from the top) because `03-format-code`
+    // may have rewritten files.
+    state.validated_fingerprint = working_tree_fingerprint();
+    state.save()?;
+
     println!(
         "{}",
         "✅ PHASE 1 COMPLETE - All testing and validation passed!"
@@ -439,6 +473,32 @@ pub(crate) async fn run_enhanced_phase1(
             .bold()
     );
     Ok(())
+}
+
+/// Fingerprint of the working tree that validation actually sees: the `HEAD`
+/// commit plus the full diff of tracked changes against it.  A new commit or
+/// any edit to a tracked file changes the hash; a brand-new *untracked* file
+/// is the one gap, and the uncacheable PR CI still covers it.
+///
+/// Uses `DefaultHasher` (fixed-key `SipHash` — deterministic across processes,
+/// unlike `HashMap`'s randomized state); non-cryptographic but ample for
+/// change detection.  On any `git` error the components default to empty, which
+/// simply makes the fingerprint conservative (more likely to differ → re-run).
+fn working_tree_fingerprint() -> String {
+    use core::hash::{Hash as _, Hasher as _};
+
+    fn git(args: &[&str]) -> Vec<u8> {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .map(|out| out.stdout)
+            .unwrap_or_default()
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    git(&["rev-parse", "HEAD"]).hash(&mut hasher);
+    git(&["diff", "HEAD"]).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Phase 2 of the ship pipeline: version bump + commit + push + open
@@ -715,7 +775,22 @@ pub(crate) async fn run_ship_pipeline(ctx: &PipelineContext) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CleanDecision, CleanMode, decide_clean};
+    use super::{CleanDecision, CleanMode, decide_clean, working_tree_fingerprint};
+
+    #[test]
+    fn tree_fingerprint_is_deterministic_and_nonempty() {
+        // Two back-to-back calls observe the same working tree, so they MUST
+        // agree — if the fingerprint were unstable, every `just ship` would
+        // needlessly re-run all of Phase 1.  16 hex chars (u64) is the shape.
+        let first = working_tree_fingerprint();
+        let second = working_tree_fingerprint();
+        assert_eq!(
+            first, second,
+            "fingerprint must be stable for an unchanged tree"
+        );
+        assert_eq!(first.len(), 16, "fingerprint is the 16-hex-char u64 hash");
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
 
     #[test]
     fn force_mode_always_cleans() {

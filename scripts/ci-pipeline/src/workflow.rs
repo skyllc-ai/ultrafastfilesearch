@@ -151,6 +151,14 @@ pub(crate) struct WorkflowState {
     /// previous run.
     pub version_incremented: bool,
 
+    /// Working-tree fingerprint that Phase 1 last validated against (HEAD +
+    /// tracked diff, see `ship::working_tree_fingerprint`).  Empty until the
+    /// first validation passes.  On a re-run, if the current fingerprint
+    /// differs, the code-dependent validation steps are invalidated so they
+    /// re-run on the changed code; an unchanged tree keeps the resume speedup.
+    #[serde(default)]
+    pub validated_fingerprint: String,
+
     /// Per-step duration metrics (seconds), keyed by the step id (e.g.
     /// `03-coverage-tests`). Stored in the workflow-state file so you
     /// can compare runs over time.
@@ -256,6 +264,7 @@ impl WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            validated_fingerprint: String::new(),
             step_durations_secs: BTreeMap::new(),
         }
     }
@@ -378,6 +387,7 @@ impl Default for WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            validated_fingerprint: String::new(),
             step_durations_secs: BTreeMap::new(),
         }
     }
