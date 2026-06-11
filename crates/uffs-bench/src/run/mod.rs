@@ -46,7 +46,7 @@ use crate::preflight::{self, PreflightResult};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{State, Status};
-use crate::{report, resolve, teardown};
+use crate::{report, resolve, run_state, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -619,7 +619,22 @@ impl Orchestrator<'_> {
         let measure_live = (1..=MEASUREMENT_STAGES).any(|stage| {
             stage_selected(self.cli, stage) && !state.should_skip(&stage_step_id(stage), hash)
         });
-        let mut capture = ((stage0_selected && !stage0_skip) || measure_live)
+        let will_capture = (stage0_selected && !stage0_skip) || measure_live;
+        // Snapshot the host's as-found UFFS run-state (which drives the daemon
+        // had loaded, MCP up/down) and register its restore on the guard BEFORE
+        // `capture()` kills and restarts the daemon — otherwise the original
+        // state is already gone by the time stages run. Drains last (LIFO) at
+        // teardown, so the host is left exactly as found. Gated on the same
+        // `!cli.drives.is_empty()` condition under which `capture()` actually
+        // touches the daemon.
+        if will_capture && !self.cli.drives.is_empty() {
+            let uffs_exe = resolve::uffs_exe(self.host);
+            let as_found = run_state::capture(self.host, &uffs_exe);
+            self.host
+                .out(&format!("[run-state] as-found: {}", as_found.describe()));
+            run_state::register_restore(guard, &uffs_exe, as_found);
+        }
+        let mut capture = will_capture
             .then(|| self.capture(session))
             .transpose()?;
         // Show UFFS restart gate (kill + start with only capable drives), then

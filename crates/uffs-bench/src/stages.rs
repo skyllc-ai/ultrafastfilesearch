@@ -164,8 +164,6 @@ const RUST_SCRIPT_EXE: &str = "rust-script";
 
 /// Card-facing label for the daemon run-state resource (R1).
 const DAEMON_RESOURCE: &str = "uffs daemon (run-state)";
-/// Restore-registry label for the daemon run-state undo (R1).
-const DAEMON_RESTORE: &str = "daemon run-state";
 
 /// Everything a measurement stage needs to plan and run.
 ///
@@ -354,39 +352,12 @@ fn parity_invocation(cfg: &StageCfg) -> Invocation {
     }
 }
 
-/// Whether a UFFS daemon is currently running (R1 snapshot probe).
-///
-/// Treats a clean `uffs daemon status` with non-empty output as "running"; an
-/// empty or error output (the `MockHost` default, and a stopped daemon) reads
-/// as "not running" so teardown only stops what a stage actually started.
-fn daemon_running(host: &dyn Host) -> bool {
-    match host.run("uffs", &["daemon", "status"]) {
-        Ok(out) => {
-            let text = out.stdout.to_lowercase();
-            out.success()
-                && !text.trim().is_empty()
-                && !text.contains("not running")
-                && !text.contains("no daemon")
-        }
-        Err(_) => false,
-    }
-}
-
-/// Snapshot the daemon run-state (R1) and register its restore *before* the
-/// stage starts or mutates the daemon.
-///
-/// Best-effort: the probe never fails, so this returns nothing; the restore it
-/// registers reports its own failure as a teardown crumb.
-fn snapshot_daemon(host: &dyn Host, guard: &mut RunGuard<'_>) {
-    let was_running = daemon_running(host);
-    guard.register(DAEMON_RESTORE, move |restore_host| {
-        let action = if was_running { "restart" } else { "stop" };
-        restore_host
-            .run("uffs", &["daemon", action])
-            .map(|_out| ())
-            .map_err(|err| BenchError::Command(format!("uffs daemon {action}: {err}")))
-    });
-}
+// The daemon run-state snapshot/restore (R1) moved to `crate::run_state`,
+// registered once in `crate::run` *before* the first daemon kill. Snapshotting
+// it per-stage here was too late — `capture()` already restarts the daemon
+// (scoped to the capable drives) before any stage runs, so the as-found drive
+// set was already gone. The old probe also captured only a *bool* and shelled
+// a bare `uffs` off `PATH`, so it never restored the operator's drive set.
 
 /// Snapshot the per-drive UFFS cache files (R2) into `bundle/backup` and
 /// register their restores *before* the stage purges them.
@@ -568,9 +539,12 @@ fn step_from_output(out: &ProcOutput, output_path: &Path, label: &str) -> StepRe
     }
 }
 
-/// Stage 1 — cross-tool head-to-head (snapshot R1, run the harness).
-fn run_cross_tool(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
-    snapshot_daemon(host, guard);
+/// Stage 1 — cross-tool head-to-head (run the harness).
+///
+/// The daemon run-state restore (R1) is registered once, up front, in
+/// [`crate::run`] — before the daemon is first killed — so it is not re-taken
+/// per stage here (by stage time the as-found state is already gone).
+fn run_cross_tool(host: &dyn Host, _guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
     let out = cross_tool_invocation(cfg)
         .run_streaming(host)
         .map_err(|err| BenchError::Command(format!("cross-tool harness: {err}")))?;
@@ -578,9 +552,11 @@ fn run_cross_tool(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> 
     Ok(step_from_output(&out, &out_path, "cross-tool"))
 }
 
-/// Stage 2 — per-drive parity (snapshot R1, +R2 when purging, run the script).
+/// Stage 2 — per-drive parity (+R2 cache backup when purging, run the script).
+///
+/// R1 daemon run-state is restored once via [`crate::run`] (see
+/// [`run_cross_tool`]); only the per-drive cache backup is stage-local.
 fn run_parity(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
-    snapshot_daemon(host, guard);
     if cfg.drop_cache {
         snapshot_cache(host, guard, cfg)?;
     }
@@ -593,8 +569,7 @@ fn run_parity(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Resu
 
 /// Stage 3 — native UFFS full-suite timing (snapshot R1, measure, emit
 /// CSV/TXT).
-fn run_native(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
-    snapshot_daemon(host, guard);
+fn run_native(host: &dyn Host, _guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
     let version = probe_version(host, &cfg.uffs_exe);
     let mut cells = Vec::new();
     let mut all_ok = true;
