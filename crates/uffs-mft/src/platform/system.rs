@@ -310,6 +310,9 @@ pub enum DriveType {
     /// Removable / external media — USB, SD, or MMC. The bus, not the media,
     /// is the bottleneck, so it takes the conservative (HDD-like) I/O profile.
     Removable,
+    /// Virtual disk — VHD/VHDX or a file/RAM-backed virtual volume. The backing
+    /// medium is opaque, so it takes the conservative (HDD-like) I/O profile.
+    Virtual,
     /// Unknown drive type (assume HDD for safety).
     Unknown,
 }
@@ -321,7 +324,7 @@ impl DriveType {
         match self {
             Self::Nvme => 4 * 1024 * 1024,
             Self::Ssd => 2 * 1024 * 1024,
-            Self::Hdd | Self::Removable | Self::Unknown => 1024 * 1024,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 1024 * 1024,
         }
     }
 
@@ -331,7 +334,7 @@ impl DriveType {
         match self {
             Self::Nvme => 8,
             Self::Ssd => 4,
-            Self::Hdd | Self::Removable | Self::Unknown => 2,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 2,
         }
     }
 
@@ -341,7 +344,7 @@ impl DriveType {
         match self {
             Self::Nvme => 32,
             Self::Ssd => 8,
-            Self::Hdd | Self::Removable | Self::Unknown => 4,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 4,
         }
     }
 
@@ -376,7 +379,8 @@ impl DriveType {
     }
 }
 
-/// Detects whether a drive is `NVMe`, SSD, HDD, or removable (USB / SD / MMC).
+/// Detects whether a drive is `NVMe`, SSD, HDD, removable (USB / SD / MMC), or
+/// virtual (VHD / file- or RAM-backed).
 #[cfg(windows)]
 #[must_use]
 #[expect(
@@ -403,6 +407,8 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     const BUS_TYPE_USB: u32 = 7;
     const BUS_TYPE_SD: u32 = 12;
     const BUS_TYPE_MMC: u32 = 13;
+    const BUS_TYPE_VIRTUAL: u32 = 14;
+    const BUS_TYPE_FILE_BACKED_VIRTUAL: u32 = 15;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET: usize = 28;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END: usize =
         STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET + size_of::<u32>();
@@ -500,6 +506,7 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
         match bus_type {
             Some(BUS_TYPE_NVME) => return DriveType::Nvme,
             Some(BUS_TYPE_USB | BUS_TYPE_SD | BUS_TYPE_MMC) => return DriveType::Removable,
+            Some(BUS_TYPE_VIRTUAL | BUS_TYPE_FILE_BACKED_VIRTUAL) => return DriveType::Virtual,
             _ => {}
         }
 

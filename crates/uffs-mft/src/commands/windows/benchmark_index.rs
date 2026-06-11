@@ -229,7 +229,7 @@ pub(crate) async fn cmd_benchmark_index_lean(
     // so we can't show the exact value until after opening the volume
     if let Some(c) = concurrency {
         println!("Concurrency: {c} I/O ops in flight");
-    } else if matches!(drive_type, uffs_mft::platform::DriveType::Hdd | uffs_mft::platform::DriveType::Removable) {
+    } else if matches!(drive_type, uffs_mft::platform::DriveType::Hdd | uffs_mft::platform::DriveType::Removable | uffs_mft::platform::DriveType::Virtual) {
         println!("Concurrency: auto (extent-aware, determined after MFT scan)");
     } else {
         println!(
