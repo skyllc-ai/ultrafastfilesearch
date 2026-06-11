@@ -21,15 +21,17 @@ charts/
 
 ## Design system
 
-- **White card background** with a subtle `#e2e8f0` 1 px border — readable on any IDE theme, any platform. No `currentColor` / theme-inheritance games; the chart looks identical on dark HN, light Twitter, any IDE preview.
-- **Dark-on-white typography** using a slate palette (`#0f172a` titles, `#475569` subtitles, `#334155` body labels, `#64748b` axes, `#94a3b8` footers).
+Charts follow the **UFFS brand kit** ([`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`](../../dev/architecture/brand-kit/STYLE_GUIDE.md)) — rust orange on charcoal, deliberately *not* the cool blue of every other file-search tool:
+
+- **Charcoal card background** `#0F0D0B` with a subtle `#1E1B18` 1 px border — explicit colors, no `currentColor` / theme-inheritance games; the chart looks identical on dark HN, light Twitter, any IDE preview.
+- **Light-on-charcoal typography**: Cream `#F2EDE8` titles and body labels, Sand `#9A8D82` subtitles, axes, and footers.
 - **Accent colors** are fixed per concept across every chart:
-  - UFFS Rust v0.5.66: `#2563eb` (blue-600)
-  - Everything: `#94a3b8` (slate-400)
-  - UFFS C++ reference: `#ea580c` (orange-600)
-  - Winning ratio callouts: `#059669` (emerald-600)
-  - Architectural ceiling warnings: `#dc2626` / `#991b1b` (red-600/800)
-- **Font:** system stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, ...`) — renders cleanly on macOS, Windows, Linux, and in browsers.
+  - UFFS Rust: `#CE422B` (Rust Orange — the brand anchor)
+  - Everything: `#9A8D82` (Sand, muted)
+  - UFFS C++ reference: `#DEA584` (Paper Tan)
+  - Winning ratio callouts: `#F7B26B` (Ember)
+  - Architectural ceiling warnings: `#B03618` (Crimson) borders with Ember text
+- **Font:** Inter, falling back to the system stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, ...`) — renders cleanly on macOS, Windows, Linux, and in browsers.
 - **ViewBox-based responsive sizing** so GitHub / Markdown renderers can scale them to any container width without pixelating.
 
 ## When to update
@@ -51,6 +53,6 @@ When a new canonical benchmark report is cut (e.g. v0.5.70 supersedes v0.5.66):
 
 All are styled per the **UFFS brand kit** (`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`): Charcoal card, Cream/Sand typography, Rust Orange `#CE422B` UFFS bars, Sand competitor bars, Ember win callouts. Promotion = copy the charts out of the bundle into a new dated directory here.
 
-The 2026-04 set predates generation and was hand-written on a white-card/blue design (kept as-is — prior charts live forever). The remaining two charts of that era (cold-parity, memory-scaling) came from **internal engineering tools** — production-diff parity checks and memory-footprint work — not competition benchmarks, so the suite intentionally does not regenerate them.
+The 2026-04 set predates generation and was hand-written; its **numbers are frozen** (same data, same raw-log citations) but the look was restyled in-place to the brand palette — the original white-card/blue design predated the brand kit. Two charts of that era (cold-parity, memory-scaling) came from **internal engineering tools** — production-diff parity checks and memory-footprint work — not competition benchmarks, so the suite intentionally does not regenerate them.
 
 No external dependencies, no renderer to install, no chart-library version drift. The text of the SVG **is** the source of truth; there's no `.png` fallback to keep in sync.

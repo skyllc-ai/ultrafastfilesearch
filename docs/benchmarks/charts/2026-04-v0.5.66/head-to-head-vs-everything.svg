@@ -1,153 +1,153 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Horizontal bar chart: UFFS v0.5.66 wins 12 of 12 head-to-head cells against Everything at p50 median latency">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Horizontal bar chart: UFFS v0.5.66 wins 12 of 12 head-to-head cells against Everything at p50 median latency">
   <title>UFFS v0.5.66 vs Everything — 12 of 12 cells faster at p50</title>
-  <desc>Horizontal grouped bar chart comparing UFFS and Everything p50 latency across 12 pattern-by-drive cells (6 patterns on drives C: and D:). UFFS bars are blue, Everything bars are slate gray. Every UFFS bar is shorter than or tied with its paired Everything bar. Data from docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt.</desc>
+  <desc>Horizontal grouped bar chart comparing UFFS and Everything p50 latency across 12 pattern-by-drive cells (6 patterns on drives C: and D:). UFFS bars are brand Rust Orange, Everything bars are muted Sand. Every UFFS bar is shorter than or tied with its paired Everything bar. Data from docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt.</desc>
 
-  <!-- Card background: white with soft border -->
-  <rect x="0" y="0" width="960" height="680" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="959" height="679" fill="none" stroke="#e2e8f0" stroke-width="1"/>
+  <!-- Card background: brand Charcoal with soft border -->
+  <rect x="0" y="0" width="960" height="680" fill="#0F0D0B"/>
+  <rect x="0.5" y="0.5" width="959" height="679" fill="none" stroke="#1E1B18" stroke-width="1"/>
 
   <!-- Title + subtitle -->
-  <text x="480" y="36" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">UFFS v0.5.66 vs Everything — 12 / 12 cells faster at p50</text>
-  <text x="480" y="58" text-anchor="middle" font-size="13" fill="#475569">26.1 M records, drives C: + D:, 30 rounds per cell, file sink, p50 ms — lower is better</text>
+  <text x="480" y="36" text-anchor="middle" font-size="19" font-weight="700" fill="#F2EDE8">UFFS v0.5.66 vs Everything — 12 / 12 cells faster at p50</text>
+  <text x="480" y="58" text-anchor="middle" font-size="13" fill="#9A8D82">26.1 M records, drives C: + D:, 30 rounds per cell, file sink, p50 ms — lower is better</text>
 
   <!-- Legend -->
-  <g transform="translate(300, 78)" font-size="12" fill="#334155">
-    <rect x="0" y="2" width="14" height="12" fill="#2563eb"/>
+  <g transform="translate(300, 78)" font-size="12" fill="#F2EDE8">
+    <rect x="0" y="2" width="14" height="12" fill="#CE422B"/>
     <text x="20" y="12">UFFS v0.5.66</text>
-    <rect x="150" y="2" width="14" height="12" fill="#94a3b8"/>
+    <rect x="150" y="2" width="14" height="12" fill="#9A8D82"/>
     <text x="170" y="12">Everything 1.5.3.1a</text>
   </g>
 
   <!-- Axis: 0 to 250 ms, plot area x=160 to x=840 = 680 px (1 ms = 2.72 px) -->
-  <g font-size="11" fill="#64748b">
+  <g font-size="11" fill="#9A8D82">
     <!-- axis lines -->
-    <line x1="160" y1="110" x2="160" y2="610" stroke="#cbd5e1" stroke-width="1"/>
-    <line x1="160" y1="610" x2="840" y2="610" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="160" y1="110" x2="160" y2="610" stroke="#9A8D82" stroke-width="1"/>
+    <line x1="160" y1="610" x2="840" y2="610" stroke="#9A8D82" stroke-width="1"/>
     <!-- vertical gridlines + tick labels -->
-    <line x1="296" y1="110" x2="296" y2="610" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="296" y1="110" x2="296" y2="610" stroke="#1E1B18" stroke-width="1"/>
     <text x="296" y="628" text-anchor="middle">50</text>
-    <line x1="432" y1="110" x2="432" y2="610" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="432" y1="110" x2="432" y2="610" stroke="#1E1B18" stroke-width="1"/>
     <text x="432" y="628" text-anchor="middle">100</text>
-    <line x1="568" y1="110" x2="568" y2="610" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="568" y1="110" x2="568" y2="610" stroke="#1E1B18" stroke-width="1"/>
     <text x="568" y="628" text-anchor="middle">150</text>
-    <line x1="704" y1="110" x2="704" y2="610" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="704" y1="110" x2="704" y2="610" stroke="#1E1B18" stroke-width="1"/>
     <text x="704" y="628" text-anchor="middle">200</text>
-    <line x1="840" y1="110" x2="840" y2="610" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="840" y1="110" x2="840" y2="610" stroke="#1E1B18" stroke-width="1"/>
     <text x="840" y="628" text-anchor="middle">250</text>
     <text x="160" y="628" text-anchor="middle">0</text>
-    <text x="500" y="650" text-anchor="middle" font-size="11" fill="#475569">p50 latency (milliseconds) — lower is better</text>
+    <text x="500" y="650" text-anchor="middle" font-size="11" fill="#9A8D82">p50 latency (milliseconds) — lower is better</text>
   </g>
 
   <!-- 12 rows. Each row: pattern label on left, two bars (UFFS on top, ES below), numeric labels, ratio at right. Row pitch 40 px -->
   <!-- Row 1: C: exact (UFFS 31 ms, ES 73 ms) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="132" text-anchor="end">C: exact</text>
-    <rect x="160" y="120" width="84.3" height="16" fill="#2563eb"/>
-    <rect x="160" y="138" width="198.6" height="16" fill="#94a3b8"/>
-    <text x="250" y="132" font-size="11" fill="#475569">31 ms</text>
-    <text x="365" y="150" font-size="11" fill="#475569">73 ms</text>
-    <text x="848" y="141" font-size="12" font-weight="700" fill="#059669">0.42×</text>
+    <rect x="160" y="120" width="84.3" height="16" fill="#CE422B"/>
+    <rect x="160" y="138" width="198.6" height="16" fill="#9A8D82"/>
+    <text x="250" y="132" font-size="11" fill="#9A8D82">31 ms</text>
+    <text x="365" y="150" font-size="11" fill="#9A8D82">73 ms</text>
+    <text x="848" y="141" font-size="12" font-weight="700" fill="#F7B26B">0.42×</text>
   </g>
   <!-- Row 2: C: prefix (UFFS 99, ES 97) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="172" text-anchor="end">C: prefix</text>
-    <rect x="160" y="160" width="269.3" height="16" fill="#2563eb"/>
-    <rect x="160" y="178" width="263.8" height="16" fill="#94a3b8"/>
-    <text x="435" y="172" font-size="11" fill="#475569">99 ms</text>
-    <text x="429" y="190" font-size="11" fill="#475569">97 ms</text>
-    <text x="848" y="181" font-size="12" font-weight="700" fill="#059669">0.99×*</text>
+    <rect x="160" y="160" width="269.3" height="16" fill="#CE422B"/>
+    <rect x="160" y="178" width="263.8" height="16" fill="#9A8D82"/>
+    <text x="435" y="172" font-size="11" fill="#9A8D82">99 ms</text>
+    <text x="429" y="190" font-size="11" fill="#9A8D82">97 ms</text>
+    <text x="848" y="181" font-size="12" font-weight="700" fill="#F7B26B">0.99×*</text>
   </g>
   <!-- Row 3: C: ext_rare (UFFS 29, ES 59) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="212" text-anchor="end">C: ext_rare</text>
-    <rect x="160" y="200" width="78.9" height="16" fill="#2563eb"/>
-    <rect x="160" y="218" width="160.5" height="16" fill="#94a3b8"/>
-    <text x="244" y="212" font-size="11" fill="#475569">29 ms</text>
-    <text x="326" y="230" font-size="11" fill="#475569">59 ms</text>
-    <text x="848" y="221" font-size="12" font-weight="700" fill="#059669">0.49×</text>
+    <rect x="160" y="200" width="78.9" height="16" fill="#CE422B"/>
+    <rect x="160" y="218" width="160.5" height="16" fill="#9A8D82"/>
+    <text x="244" y="212" font-size="11" fill="#9A8D82">29 ms</text>
+    <text x="326" y="230" font-size="11" fill="#9A8D82">59 ms</text>
+    <text x="848" y="221" font-size="12" font-weight="700" fill="#F7B26B">0.49×</text>
   </g>
   <!-- Row 4: C: ext_dll (UFFS 97, ES 229) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="252" text-anchor="end">C: ext_dll (167 K rows)</text>
-    <rect x="160" y="240" width="263.8" height="16" fill="#2563eb"/>
-    <rect x="160" y="258" width="622.9" height="16" fill="#94a3b8"/>
-    <text x="429" y="252" font-size="11" fill="#475569">97 ms</text>
-    <text x="788" y="270" font-size="11" fill="#475569">229 ms</text>
-    <text x="848" y="261" font-size="12" font-weight="700" fill="#059669">0.42×</text>
+    <rect x="160" y="240" width="263.8" height="16" fill="#CE422B"/>
+    <rect x="160" y="258" width="622.9" height="16" fill="#9A8D82"/>
+    <text x="429" y="252" font-size="11" fill="#9A8D82">97 ms</text>
+    <text x="788" y="270" font-size="11" fill="#9A8D82">229 ms</text>
+    <text x="848" y="261" font-size="12" font-weight="700" fill="#F7B26B">0.42×</text>
   </g>
   <!-- Row 5: C: ext_regex_alt (UFFS 40, ES 76) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="292" text-anchor="end">C: ext_regex_alt</text>
-    <rect x="160" y="280" width="108.8" height="16" fill="#2563eb"/>
-    <rect x="160" y="298" width="206.7" height="16" fill="#94a3b8"/>
-    <text x="274" y="292" font-size="11" fill="#475569">40 ms</text>
-    <text x="372" y="310" font-size="11" fill="#475569">76 ms</text>
-    <text x="848" y="301" font-size="12" font-weight="700" fill="#059669">0.53×</text>
+    <rect x="160" y="280" width="108.8" height="16" fill="#CE422B"/>
+    <rect x="160" y="298" width="206.7" height="16" fill="#9A8D82"/>
+    <text x="274" y="292" font-size="11" fill="#9A8D82">40 ms</text>
+    <text x="372" y="310" font-size="11" fill="#9A8D82">76 ms</text>
+    <text x="848" y="301" font-size="12" font-weight="700" fill="#F7B26B">0.53×</text>
   </g>
   <!-- Row 6: C: substring (UFFS 67, ES 105) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="332" text-anchor="end">C: substring</text>
-    <rect x="160" y="320" width="182.2" height="16" fill="#2563eb"/>
-    <rect x="160" y="338" width="285.6" height="16" fill="#94a3b8"/>
-    <text x="348" y="332" font-size="11" fill="#475569">67 ms</text>
-    <text x="451" y="350" font-size="11" fill="#475569">105 ms</text>
-    <text x="848" y="341" font-size="12" font-weight="700" fill="#059669">0.64×</text>
+    <rect x="160" y="320" width="182.2" height="16" fill="#CE422B"/>
+    <rect x="160" y="338" width="285.6" height="16" fill="#9A8D82"/>
+    <text x="348" y="332" font-size="11" fill="#9A8D82">67 ms</text>
+    <text x="451" y="350" font-size="11" fill="#9A8D82">105 ms</text>
+    <text x="848" y="341" font-size="12" font-weight="700" fill="#F7B26B">0.64×</text>
   </g>
   <!-- Row 7: D: exact (UFFS 30, ES 65) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="372" text-anchor="end">D: exact</text>
-    <rect x="160" y="360" width="81.6" height="16" fill="#2563eb"/>
-    <rect x="160" y="378" width="176.8" height="16" fill="#94a3b8"/>
-    <text x="247" y="372" font-size="11" fill="#475569">30 ms</text>
-    <text x="342" y="390" font-size="11" fill="#475569">65 ms</text>
-    <text x="848" y="381" font-size="12" font-weight="700" fill="#059669">0.46×</text>
+    <rect x="160" y="360" width="81.6" height="16" fill="#CE422B"/>
+    <rect x="160" y="378" width="176.8" height="16" fill="#9A8D82"/>
+    <text x="247" y="372" font-size="11" fill="#9A8D82">30 ms</text>
+    <text x="342" y="390" font-size="11" fill="#9A8D82">65 ms</text>
+    <text x="848" y="381" font-size="12" font-weight="700" fill="#F7B26B">0.46×</text>
   </g>
   <!-- Row 8: D: prefix (UFFS 52, ES 69) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="412" text-anchor="end">D: prefix</text>
-    <rect x="160" y="400" width="141.4" height="16" fill="#2563eb"/>
-    <rect x="160" y="418" width="187.7" height="16" fill="#94a3b8"/>
-    <text x="307" y="412" font-size="11" fill="#475569">52 ms</text>
-    <text x="353" y="430" font-size="11" fill="#475569">69 ms</text>
-    <text x="848" y="421" font-size="12" font-weight="700" fill="#059669">0.75×</text>
+    <rect x="160" y="400" width="141.4" height="16" fill="#CE422B"/>
+    <rect x="160" y="418" width="187.7" height="16" fill="#9A8D82"/>
+    <text x="307" y="412" font-size="11" fill="#9A8D82">52 ms</text>
+    <text x="353" y="430" font-size="11" fill="#9A8D82">69 ms</text>
+    <text x="848" y="421" font-size="12" font-weight="700" fill="#F7B26B">0.75×</text>
   </g>
   <!-- Row 9: D: ext_rare (UFFS 30, ES 60) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="452" text-anchor="end">D: ext_rare</text>
-    <rect x="160" y="440" width="81.6" height="16" fill="#2563eb"/>
-    <rect x="160" y="458" width="163.2" height="16" fill="#94a3b8"/>
-    <text x="247" y="452" font-size="11" fill="#475569">30 ms</text>
-    <text x="329" y="470" font-size="11" fill="#475569">60 ms</text>
-    <text x="848" y="461" font-size="12" font-weight="700" fill="#059669">0.50×</text>
+    <rect x="160" y="440" width="81.6" height="16" fill="#CE422B"/>
+    <rect x="160" y="458" width="163.2" height="16" fill="#9A8D82"/>
+    <text x="247" y="452" font-size="11" fill="#9A8D82">30 ms</text>
+    <text x="329" y="470" font-size="11" fill="#9A8D82">60 ms</text>
+    <text x="848" y="461" font-size="12" font-weight="700" fill="#F7B26B">0.50×</text>
   </g>
   <!-- Row 10: D: ext_dll (UFFS 48, ES 111) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="492" text-anchor="end">D: ext_dll (44 K rows)</text>
-    <rect x="160" y="480" width="130.6" height="16" fill="#2563eb"/>
-    <rect x="160" y="498" width="301.9" height="16" fill="#94a3b8"/>
-    <text x="296" y="492" font-size="11" fill="#475569">48 ms</text>
-    <text x="467" y="510" font-size="11" fill="#475569">111 ms</text>
-    <text x="848" y="501" font-size="12" font-weight="700" fill="#059669">0.43×</text>
+    <rect x="160" y="480" width="130.6" height="16" fill="#CE422B"/>
+    <rect x="160" y="498" width="301.9" height="16" fill="#9A8D82"/>
+    <text x="296" y="492" font-size="11" fill="#9A8D82">48 ms</text>
+    <text x="467" y="510" font-size="11" fill="#9A8D82">111 ms</text>
+    <text x="848" y="501" font-size="12" font-weight="700" fill="#F7B26B">0.43×</text>
   </g>
   <!-- Row 11: D: ext_regex_alt (UFFS 39, ES 75) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="532" text-anchor="end">D: ext_regex_alt</text>
-    <rect x="160" y="520" width="106.1" height="16" fill="#2563eb"/>
-    <rect x="160" y="538" width="204.0" height="16" fill="#94a3b8"/>
-    <text x="272" y="532" font-size="11" fill="#475569">39 ms</text>
-    <text x="370" y="550" font-size="11" fill="#475569">75 ms</text>
-    <text x="848" y="541" font-size="12" font-weight="700" fill="#059669">0.52×</text>
+    <rect x="160" y="520" width="106.1" height="16" fill="#CE422B"/>
+    <rect x="160" y="538" width="204.0" height="16" fill="#9A8D82"/>
+    <text x="272" y="532" font-size="11" fill="#9A8D82">39 ms</text>
+    <text x="370" y="550" font-size="11" fill="#9A8D82">75 ms</text>
+    <text x="848" y="541" font-size="12" font-weight="700" fill="#F7B26B">0.52×</text>
   </g>
   <!-- Row 12: D: substring (UFFS 55, ES 83) -->
-  <g font-size="12" fill="#334155">
+  <g font-size="12" fill="#F2EDE8">
     <text x="154" y="572" text-anchor="end">D: substring</text>
-    <rect x="160" y="560" width="149.6" height="16" fill="#2563eb"/>
-    <rect x="160" y="578" width="225.8" height="16" fill="#94a3b8"/>
-    <text x="315" y="572" font-size="11" fill="#475569">55 ms</text>
-    <text x="391" y="590" font-size="11" fill="#475569">83 ms</text>
-    <text x="848" y="581" font-size="12" font-weight="700" fill="#059669">0.66×</text>
+    <rect x="160" y="560" width="149.6" height="16" fill="#CE422B"/>
+    <rect x="160" y="578" width="225.8" height="16" fill="#9A8D82"/>
+    <text x="315" y="572" font-size="11" fill="#9A8D82">55 ms</text>
+    <text x="391" y="590" font-size="11" fill="#9A8D82">83 ms</text>
+    <text x="848" y="581" font-size="12" font-weight="700" fill="#F7B26B">0.66×</text>
   </g>
 
   <!-- Footer: median ratio callout -->
-  <text x="480" y="672" text-anchor="middle" font-size="11" fill="#94a3b8">* C:prefix 30-round pass hit an unlucky disk-busyness tick; 100-round interleaved re-bench is UFFS 94.5 ms vs ES 95.7 ms (0.99×). Median ratio across all 12 cells: 0.51× — UFFS ~1.96× faster.</text>
+  <text x="480" y="672" text-anchor="middle" font-size="11" fill="#9A8D82">* C:prefix 30-round pass hit an unlucky disk-busyness tick; 100-round interleaved re-bench is UFFS 94.5 ms vs ES 95.7 ms (0.99×). Median ratio across all 12 cells: 0.51× — UFFS ~1.96× faster.</text>
 </svg>

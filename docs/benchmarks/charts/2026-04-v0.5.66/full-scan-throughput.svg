@@ -1,62 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Stat card: UFFS v0.5.66 exports 23.4 million rows to CSV in 13.6 seconds at 1.72 million records per second, while Everything's single-command bulk export is architecturally bounded by the 2 GB WM_COPYDATA IPC cap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Stat card: UFFS v0.5.66 exports 23.4 million rows to CSV in 13.6 seconds at 1.72 million records per second, while Everything's single-command bulk export is architecturally bounded by the 2 GB WM_COPYDATA IPC cap">
   <title>Full-scan export — 26 M records → CSV in 13.6 seconds</title>
   <desc>Statistic card showing three UFFS v0.5.66 full-scan-export numbers: 13.6 s p50 wall-clock, 23.4 M rows written, 1.72 M records per second sustained throughput. A secondary panel explains that Everything's equivalent single-command export is architecturally bounded by the 2 GB WM_COPYDATA IPC cap. Data from docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt.</desc>
 
   <!-- Card background -->
-  <rect x="0" y="0" width="960" height="360" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="959" height="359" fill="none" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="0" y="0" width="960" height="360" fill="#0F0D0B"/>
+  <rect x="0.5" y="0.5" width="959" height="359" fill="none" stroke="#1E1B18" stroke-width="1"/>
 
   <!-- Title + subtitle -->
-  <text x="480" y="36" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">Full-scan export: 26 M records → CSV in 13.6 s</text>
-  <text x="480" y="58" text-anchor="middle" font-size="13" fill="#475569">`uffs * --out dump.csv` on 7 live NTFS drives, p50 of 10 runs, file sink end-to-end through the daemon pipe</text>
+  <text x="480" y="36" text-anchor="middle" font-size="19" font-weight="700" fill="#F2EDE8">Full-scan export: 26 M records → CSV in 13.6 s</text>
+  <text x="480" y="58" text-anchor="middle" font-size="13" fill="#9A8D82">`uffs * --out dump.csv` on 7 live NTFS drives, p50 of 10 runs, file sink end-to-end through the daemon pipe</text>
 
   <!-- Left panel: UFFS stat card -->
   <g>
-    <rect x="48" y="86" width="560" height="240" rx="10" fill="#f8fafc" stroke="#2563eb" stroke-width="2"/>
-    <text x="328" y="114" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb" letter-spacing="0.5">UFFS v0.5.66  ·  `*` → CSV</text>
+    <rect x="48" y="86" width="560" height="240" rx="10" fill="#1E1B18" stroke="#CE422B" stroke-width="2"/>
+    <text x="328" y="114" text-anchor="middle" font-size="13" font-weight="700" fill="#CE422B" letter-spacing="0.5">UFFS v0.5.66  ·  `*` → CSV</text>
 
     <!-- 13.6 s hero number -->
-    <text x="148" y="180" text-anchor="middle" font-size="54" font-weight="800" fill="#0f172a">13.6<tspan font-size="28" font-weight="500" fill="#475569">s</tspan></text>
-    <text x="148" y="204" text-anchor="middle" font-size="12" fill="#475569">p50 wall-clock</text>
+    <text x="148" y="180" text-anchor="middle" font-size="54" font-weight="800" fill="#F2EDE8">13.6<tspan font-size="28" font-weight="500" fill="#9A8D82">s</tspan></text>
+    <text x="148" y="204" text-anchor="middle" font-size="12" fill="#9A8D82">p50 wall-clock</text>
 
     <!-- Vertical divider 1 -->
-    <line x1="248" y1="150" x2="248" y2="208" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="248" y1="150" x2="248" y2="208" stroke="#1E1B18" stroke-width="1"/>
 
     <!-- 23.4 M rows -->
-    <text x="328" y="180" text-anchor="middle" font-size="40" font-weight="800" fill="#0f172a">23.4<tspan font-size="24" font-weight="500" fill="#475569">M</tspan></text>
-    <text x="328" y="204" text-anchor="middle" font-size="12" fill="#475569">rows written to disk</text>
+    <text x="328" y="180" text-anchor="middle" font-size="40" font-weight="800" fill="#F2EDE8">23.4<tspan font-size="24" font-weight="500" fill="#9A8D82">M</tspan></text>
+    <text x="328" y="204" text-anchor="middle" font-size="12" fill="#9A8D82">rows written to disk</text>
 
     <!-- Vertical divider 2 -->
-    <line x1="408" y1="150" x2="408" y2="208" stroke="#e2e8f0" stroke-width="1"/>
+    <line x1="408" y1="150" x2="408" y2="208" stroke="#1E1B18" stroke-width="1"/>
 
     <!-- 1.72 M/s throughput -->
-    <text x="508" y="180" text-anchor="middle" font-size="40" font-weight="800" fill="#2563eb">1.72<tspan font-size="18" font-weight="500" fill="#64748b">M/s</tspan></text>
-    <text x="508" y="204" text-anchor="middle" font-size="12" fill="#475569">sustained throughput</text>
+    <text x="508" y="180" text-anchor="middle" font-size="40" font-weight="800" fill="#CE422B">1.72<tspan font-size="18" font-weight="500" fill="#9A8D82">M/s</tspan></text>
+    <text x="508" y="204" text-anchor="middle" font-size="12" fill="#9A8D82">sustained throughput</text>
 
     <!-- Explainer -->
-    <text x="328" y="246" text-anchor="middle" font-size="12" fill="#334155">Daemon serialises the compact index → writes directly to the target file.</text>
-    <text x="328" y="264" text-anchor="middle" font-size="12" fill="#334155">No shell stdout buffering, no IPC round-trip per row.</text>
-    <text x="328" y="298" text-anchor="middle" font-size="11" fill="#94a3b8">Source: docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt  (line 1263-1278)</text>
+    <text x="328" y="246" text-anchor="middle" font-size="12" fill="#F2EDE8">Daemon serialises the compact index → writes directly to the target file.</text>
+    <text x="328" y="264" text-anchor="middle" font-size="12" fill="#F2EDE8">No shell stdout buffering, no IPC round-trip per row.</text>
+    <text x="328" y="298" text-anchor="middle" font-size="11" fill="#9A8D82">Source: docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt  (line 1263-1278)</text>
   </g>
 
   <!-- Right panel: Everything comparison -->
   <g>
-    <rect x="632" y="86" width="280" height="240" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="772" y="114" text-anchor="middle" font-size="12" font-weight="700" fill="#64748b" letter-spacing="0.5">FOR REFERENCE</text>
-    <text x="772" y="136" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">Everything `*` → CSV</text>
+    <rect x="632" y="86" width="280" height="240" rx="10" fill="#1E1B18" stroke="#9A8D82" stroke-width="1"/>
+    <text x="772" y="114" text-anchor="middle" font-size="12" font-weight="700" fill="#9A8D82" letter-spacing="0.5">FOR REFERENCE</text>
+    <text x="772" y="136" text-anchor="middle" font-size="13" font-weight="600" fill="#F2EDE8">Everything `*` → CSV</text>
 
     <!-- Ceiling box -->
-    <rect x="666" y="158" width="212" height="54" rx="6" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="3,2"/>
-    <text x="772" y="180" text-anchor="middle" font-size="14" font-weight="700" fill="#991b1b">fails at ~2 GB</text>
-    <text x="772" y="200" text-anchor="middle" font-size="12" fill="#991b1b">WM_COPYDATA IPC cap</text>
+    <rect x="666" y="158" width="212" height="54" rx="6" fill="#1E1B18" stroke="#B03618" stroke-width="1.5" stroke-dasharray="3,2"/>
+    <text x="772" y="180" text-anchor="middle" font-size="14" font-weight="700" fill="#F7B26B">fails at ~2 GB</text>
+    <text x="772" y="200" text-anchor="middle" font-size="12" fill="#F7B26B">WM_COPYDATA IPC cap</text>
 
-    <text x="772" y="238" text-anchor="middle" font-size="11" fill="#475569">Everything's IPC transport was</text>
-    <text x="772" y="253" text-anchor="middle" font-size="11" fill="#475569">designed for desktop-interactive</text>
-    <text x="772" y="268" text-anchor="middle" font-size="11" fill="#475569">result sets, not scripting-scale</text>
-    <text x="772" y="283" text-anchor="middle" font-size="11" fill="#475569">dumps. For 25 M+ rows,</text>
-    <text x="772" y="298" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">this comparison is not apples-to-apples.</text>
+    <text x="772" y="238" text-anchor="middle" font-size="11" fill="#9A8D82">Everything's IPC transport was</text>
+    <text x="772" y="253" text-anchor="middle" font-size="11" fill="#9A8D82">designed for desktop-interactive</text>
+    <text x="772" y="268" text-anchor="middle" font-size="11" fill="#9A8D82">result sets, not scripting-scale</text>
+    <text x="772" y="283" text-anchor="middle" font-size="11" fill="#9A8D82">dumps. For 25 M+ rows,</text>
+    <text x="772" y="298" text-anchor="middle" font-size="11" font-weight="600" fill="#F2EDE8">this comparison is not apples-to-apples.</text>
   </g>
 
   <!-- Footer -->
-  <text x="480" y="346" text-anchor="middle" font-size="11" fill="#94a3b8">UFFS output from `uffs * --out dump.csv --hide-system --hide-ads` strips ~2.7 M NTFS system / ADS rows from the 26.09 M raw total, matching Everything's default filters. 23.4 M is the user-visible row count.</text>
+  <text x="480" y="346" text-anchor="middle" font-size="11" fill="#9A8D82">UFFS output from `uffs * --out dump.csv --hide-system --hide-ads` strips ~2.7 M NTFS system / ADS rows from the 26.09 M raw total, matching Everything's default filters. 23.4 M is the user-visible row count.</text>
 </svg>
