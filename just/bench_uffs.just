@@ -2,6 +2,26 @@
 # Copyright (c) 2025-2026 SKY, LLC.
 
 
+# Resolve (and create) the consolidated bench-artifact directory.
+#
+# All bench output lives under ONE root, overridable with `UFFS_BENCH_DIR`.
+# Default is a PERSISTENT, gitignored cache dir (survives reboot AND
+# `cargo clean`), so the baseline never disappears:
+#   - Windows: %LOCALAPPDATA%\uffs-bench
+#   - Unix:    ${XDG_CACHE_HOME:-~/.cache}/uffs-bench
+# Layout:  <root>/runs/<commit>_<ts>.json   (per-run, throwaway)
+#          <root>/baseline.json             (promoted reference, persistent)
+# Prints the resolved root (and ensures it + runs/ exist).  Internal helper —
+# the `_` prefix keeps it out of `just --list`.
+_bench-dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${UFFS_BENCH_DIR:-}" ]]; then d="$UFFS_BENCH_DIR"
+    elif [[ -n "${LOCALAPPDATA:-}" ]]; then d="$LOCALAPPDATA/uffs-bench"
+    else d="${XDG_CACHE_HOME:-$HOME/.cache}/uffs-bench"; fi
+    mkdir -p "$d/runs"
+    printf '%s\n' "$d"
+
 # Cross-tool benchmark (UFFS vs Everything vs UFFS-C++).
 #
 # Thin wrapper around `scripts/windows/cross-tool-benchmark.rs` that
@@ -315,9 +335,30 @@ bench-vs-cpp drive="C":
     printf "\033[0;34m═══════════════════════════════════════════════════════════\033[0m\n"
     if (( $(echo "$SPEEDUP > 1" | bc -l) )); then printf "\033[0;32m✅ Rust is ${SPEEDUP}x faster than the reference binary\033[0m\n"; elif (( $(echo "$SPEEDUP < 1" | bc -l) )); then printf "\033[1;33m⚠️  Rust is ${RATIO}x slower than the reference binary\033[0m\n"; else printf "\033[0;34m   Rust and the reference binary are approximately equal\033[0m\n"; fi
     if [[ $COUNT_DIFF -ne 0 ]]; then printf "\033[1;33m⚠️  File count difference: $COUNT_DIFF (Rust - reference)\033[0m\n"; printf "\033[0;33m   This may indicate path resolution issues\033[0m\n"; else printf "\033[0;32m✅ File counts match!\033[0m\n"; fi
-    RESULTS_DIR="benchmarks"; mkdir -p "$RESULTS_DIR"; TIMESTAMP=$(date +%Y%m%d_%H%M%S); RESULTS_FILE="$RESULTS_DIR/bench_${TIMESTAMP}.json"
-    echo "{" > "$RESULTS_FILE"; echo "    \"timestamp\": \"$(date -Iseconds)\"," >> "$RESULTS_FILE"; echo "    \"drive\": \"{{drive}}\"," >> "$RESULTS_FILE"; echo "    \"pattern\": \"*.txt\"," >> "$RESULTS_FILE"; echo "    \"cpp\": {" >> "$RESULTS_FILE"; echo "        \"time_seconds\": $CPP_TIME," >> "$RESULTS_FILE"; echo "        \"file_count\": $CPP_COUNT" >> "$RESULTS_FILE"; echo "    }," >> "$RESULTS_FILE"; echo "    \"rust\": {" >> "$RESULTS_FILE"; echo "        \"time_seconds\": $RUST_TIME," >> "$RESULTS_FILE"; echo "        \"file_count\": $RUST_COUNT" >> "$RESULTS_FILE"; echo "    }," >> "$RESULTS_FILE"; echo "    \"speedup\": $SPEEDUP," >> "$RESULTS_FILE"; echo "    \"file_count_diff\": $COUNT_DIFF" >> "$RESULTS_FILE"; echo "}" >> "$RESULTS_FILE"
-    printf "\033[0;34m📁 Results saved to: $RESULTS_FILE\033[0m\n"
+    # ── Consolidated, provenance-stamped run artifact ──
+    BENCH_DIR=$(just _bench-dir)
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then DIRTY=true; else DIRTY=false; fi
+    ISO=$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    HOST=$(hostname 2>/dev/null || echo unknown)
+    CPP_VER=$("$CPP_UFFS" --version 2>/dev/null | head -1 | tr -d '"\r' || echo unknown)
+    RUST_VER=$(RUST_LOG=error "$RUST_UFFS" --version 2>/dev/null | head -1 | tr -d '"\r' || echo unknown)
+    RESULTS_FILE="$BENCH_DIR/runs/${COMMIT}_$(date +%Y%m%d_%H%M%S).json"
+    {
+      echo "{"
+      echo "  \"schema\": \"uffs-bench/1\","
+      echo "  \"provenance\": {"
+      echo "    \"commit\": \"$COMMIT\", \"dirty\": $DIRTY, \"timestamp\": \"$ISO\", \"host\": \"$HOST\","
+      echo "    \"tool_versions\": { \"cpp\": \"$CPP_VER\", \"rust\": \"$RUST_VER\" }"
+      echo "  },"
+      echo "  \"config\": { \"kind\": \"bench-vs-cpp\", \"drive\": \"{{drive}}\", \"pattern\": \"*.txt\" },"
+      echo "  \"cpp\":  { \"time_seconds\": $CPP_TIME, \"file_count\": $CPP_COUNT },"
+      echo "  \"rust\": { \"time_seconds\": $RUST_TIME, \"file_count\": $RUST_COUNT },"
+      echo "  \"speedup\": $SPEEDUP,"
+      echo "  \"file_count_diff\": $COUNT_DIFF"
+      echo "}"
+    } > "$RESULTS_FILE"
+    printf "\033[0;34m📁 Run saved to: %s\033[0m\n" "$RESULTS_FILE"
 
 # Run criterion micro-benchmarks.
 bench-micro:
@@ -353,37 +394,42 @@ bench-all-compare:
     set -euo pipefail
     printf "\033[0;34m📊 Running All Benchmarks with Baseline Comparison...\033[0m\n"
     echo ""
-    BASELINE_FILE="benchmarks/baseline.json"
+    BENCH_DIR=$(just _bench-dir); BASELINE_FILE="$BENCH_DIR/baseline.json"
     just bench-vs-cpp C
-    if [[ -f "$BASELINE_FILE" ]]; then
-        printf "\033[0;34m\n📈 Comparing to baseline...\033[0m\n"
-        BASELINE_TIME=$(jq -r '.rust.time_seconds' "$BASELINE_FILE")
-        LATEST_FILE=$(ls -t benchmarks/bench_*.json 2>/dev/null | head -1)
-        if [[ -n "$LATEST_FILE" ]]; then
-            CURRENT_TIME=$(jq -r '.rust.time_seconds' "$LATEST_FILE")
-            CHANGE=$(echo "scale=2; (($CURRENT_TIME - $BASELINE_TIME) / $BASELINE_TIME) * 100" | bc)
-            if (( $(echo "$CHANGE > 10" | bc -l) )); then printf "\033[1;31m⚠️  REGRESSION: ${CHANGE}%% slower than baseline!\033[0m\n"; elif (( $(echo "$CHANGE < -10" | bc -l) )); then printf "\033[0;32m🎉 IMPROVEMENT: ${CHANGE}%% faster than baseline!\033[0m\n"; else printf "\033[0;34m   Within 10%% of baseline (${CHANGE}%%)\033[0m\n"; fi
-        fi
-    else
-        printf "\033[1;33m⚠️  No baseline found. Run 'just bench-update-baseline' to create one.\033[0m\n"
+    LATEST_FILE=$(ls -t "$BENCH_DIR"/runs/*.json 2>/dev/null | head -1 || true)
+    if [[ ! -f "$BASELINE_FILE" ]]; then
+        printf "\033[1;33m⚠️  No baseline at %s — run 'just bench-update-baseline' to pin one.\033[0m\n" "$BASELINE_FILE"
+        exit 0
     fi
+    if [[ -z "$LATEST_FILE" ]]; then printf "\033[1;31m❌ No run found under %s/runs/\033[0m\n" "$BENCH_DIR"; exit 1; fi
+    printf "\033[0;34m\n📈 Comparing to baseline...\033[0m\n"
+    # ── Provenance + config verification (don't compare apples to oranges) ──
+    B_COMMIT=$(jq -r '.provenance.commit // "?"' "$BASELINE_FILE"); B_TS=$(jq -r '.provenance.timestamp // "?"' "$BASELINE_FILE")
+    B_DRIVE=$(jq -r '.config.drive // "?"' "$BASELINE_FILE"); B_PAT=$(jq -r '.config.pattern // "?"' "$BASELINE_FILE")
+    C_DRIVE=$(jq -r '.config.drive // "?"' "$LATEST_FILE"); C_PAT=$(jq -r '.config.pattern // "?"' "$LATEST_FILE")
+    printf "\033[0;36m   baseline: commit %s @ %s  (drive %s, pattern %s)\033[0m\n" "$B_COMMIT" "$B_TS" "$B_DRIVE" "$B_PAT"
+    if [[ "$B_DRIVE" != "$C_DRIVE" || "$B_PAT" != "$C_PAT" ]]; then
+        printf "\033[1;33m⚠️  CONFIG MISMATCH: baseline (drive %s, %s) vs current (drive %s, %s) — comparison not meaningful.\033[0m\n" "$B_DRIVE" "$B_PAT" "$C_DRIVE" "$C_PAT"
+    fi
+    BASELINE_TIME=$(jq -r '.rust.time_seconds' "$BASELINE_FILE"); CURRENT_TIME=$(jq -r '.rust.time_seconds' "$LATEST_FILE")
+    CHANGE=$(echo "scale=2; (($CURRENT_TIME - $BASELINE_TIME) / $BASELINE_TIME) * 100" | bc)
+    if (( $(echo "$CHANGE > 10" | bc -l) )); then printf "\033[1;31m⚠️  REGRESSION: %s%% slower than baseline!\033[0m\n" "$CHANGE"; elif (( $(echo "$CHANGE < -10" | bc -l) )); then printf "\033[0;32m🎉 IMPROVEMENT: %s%% faster than baseline!\033[0m\n" "$CHANGE"; else printf "\033[0;34m   Within 10%% of baseline (%s%%)\033[0m\n" "$CHANGE"; fi
     printf "\033[0;32m\n✅ All benchmarks complete!\033[0m\n"
 
-# Update baseline with current benchmark results.
+# Pin the baseline to the latest run (explicit promotion — the baseline is a
+# specific past run, with its provenance, not a silent "last run").
 bench-update-baseline:
     #!/usr/bin/env bash
     set -euo pipefail
-    printf "\033[0;34m📝 Updating Benchmark Baseline...\033[0m\n"
+    printf "\033[0;34m📝 Pinning benchmark baseline...\033[0m\n"
+    BENCH_DIR=$(just _bench-dir)
     just bench-vs-cpp C
-    LATEST_FILE=$(ls -t benchmarks/bench_*.json 2>/dev/null | head -1)
-    if [[ -n "$LATEST_FILE" ]]; then
-        cp "$LATEST_FILE" "benchmarks/baseline.json"
-        printf "\033[0;32m✅ Baseline updated from: $LATEST_FILE\033[0m\n"
-        printf "\033[0;34m   Baseline saved to: benchmarks/baseline.json\033[0m\n"
-    else
-        printf "\033[1;31m❌ No benchmark results found!\033[0m\n"
-        exit 1
-    fi
+    LATEST_FILE=$(ls -t "$BENCH_DIR"/runs/*.json 2>/dev/null | head -1 || true)
+    if [[ -z "$LATEST_FILE" ]]; then printf "\033[1;31m❌ No run found under %s/runs/\033[0m\n" "$BENCH_DIR"; exit 1; fi
+    cp "$LATEST_FILE" "$BENCH_DIR/baseline.json"
+    PC=$(jq -r '.provenance.commit // "?"' "$LATEST_FILE"); PT=$(jq -r '.provenance.timestamp // "?"' "$LATEST_FILE")
+    printf "\033[0;32m✅ Baseline pinned to commit %s @ %s\033[0m\n" "$PC" "$PT"
+    printf "\033[0;34m   Saved to: %s/baseline.json\033[0m\n" "$BENCH_DIR"
 
 # Quick benchmark help.
 bench-help:
