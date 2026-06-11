@@ -24,6 +24,7 @@ use chrono::{DateTime, Datelike as _, Utc};
 use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::matrix::{self, Matrix};
+use crate::preflight::{self, PreflightResult};
 use crate::storage;
 
 /// Bundle-relative name of the assembled report draft (plan §11).
@@ -33,6 +34,8 @@ pub const REPORT_DRAFT: &str = "REPORT-DRAFT.md";
 const ENV_MD: &str = "env.md";
 /// Bundle-relative name of the negotiated matrix (Stage 0d).
 const MATRIX_JSON: &str = "matrix.json";
+/// Bundle-relative name of the competitor preflight result (Stage 0b).
+const PREFLIGHT_JSON: &str = "competitor-preflight.json";
 /// Bundle-relative name of the Stage 1 cross-tool summary CSV.
 const CROSS_TOOL_CSV: &str = "cross-tool-summary.csv";
 /// Bundle-relative name of the Stage 2 parity transcript.
@@ -58,6 +61,9 @@ pub struct ReportInputs {
     pub matrix_md: Option<String>,
     /// Rendered `## Storage devices` markdown (from `drives.json`), if present.
     pub storage_md: Option<String>,
+    /// Rendered `## Everything RAM budget` markdown (from the preflight JSON) —
+    /// the per-drive rationale for which drives ran cross-tool, if present.
+    pub es_budget_md: Option<String>,
     /// Stage 1 cross-tool summary CSV contents, if present.
     pub cross_tool_csv: Option<String>,
     /// Stage 2 parity transcript contents, if present.
@@ -130,6 +136,7 @@ pub fn render(inputs: &ReportInputs) -> String {
         embedded("## Test environment", inputs.env_md.as_ref()),
         embedded("## Storage devices", inputs.storage_md.as_ref()),
         embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
+        embedded("## Everything RAM budget", inputs.es_budget_md.as_ref()),
         fenced(
             "## Cross-tool head-to-head (§1)",
             CROSS_TOOL_CSV,
@@ -185,6 +192,23 @@ fn load_storage_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
     storage::render_md(&drives, &benched)
 }
 
+/// Load the preflight JSON and re-render the per-drive Everything RAM-budget
+/// table — the rationale for which drives ran cross-tool. `None` if
+/// absent/invalid/empty.
+fn load_es_budget_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
+    let bytes = host.read_file(&bundle_dir.join(PREFLIGHT_JSON)).ok()?;
+    let result: PreflightResult = serde_json::from_slice(&bytes).ok()?;
+    let table = preflight::render_drive_table(&result, preflight::ES_RAM_BUDGET_BYTES);
+    if table.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "## Everything RAM budget\n\n_Everything's in-process index is RAM-bound; drives are \
+         admitted in candidate order until the budget is hit. Drives marked **✗ over budget** \
+         were measured UFFS-only (no cross-tool cell)._\n\n{table}"
+    ))
+}
+
 /// Assemble the bundle into `bundle_dir/REPORT-DRAFT.md` and return its path.
 ///
 /// Reads the Stage 0/1/2/3 artifacts already in the bundle through the [`Host`]
@@ -201,6 +225,7 @@ pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) 
         env_md: load(host, bundle_dir, ENV_MD),
         matrix_md: load_matrix_md(host, bundle_dir),
         storage_md: load_storage_md(host, bundle_dir),
+        es_budget_md: load_es_budget_md(host, bundle_dir),
         cross_tool_csv: load(host, bundle_dir, CROSS_TOOL_CSV),
         parity_txt: load(host, bundle_dir, PARITY_TXT),
         full_suite_txt: load(host, bundle_dir, FULL_SUITE_TXT),
@@ -235,6 +260,7 @@ mod tests {
             env_md: Some("## Test environment\n\n<ENV>".to_owned()),
             matrix_md: Some("## Negotiated matrix\n\n<MATRIX>".to_owned()),
             storage_md: Some("## Storage devices\n\n<STORAGE>".to_owned()),
+            es_budget_md: Some("## Everything RAM budget\n\n<ESBUDGET>".to_owned()),
             cross_tool_csv: Some("tool,rows\nuffs,5\n".to_owned()),
             parity_txt: Some("<PARITY>".to_owned()),
             full_suite_txt: Some("<FULL>".to_owned()),
@@ -250,6 +276,7 @@ mod tests {
         assert!(md.contains("## Test environment\n\n<ENV>"));
         assert!(md.contains("## Storage devices\n\n<STORAGE>"));
         assert!(md.contains("## Negotiated matrix\n\n<MATRIX>"));
+        assert!(md.contains("## Everything RAM budget\n\n<ESBUDGET>"));
         assert!(md.contains("```csv\ntool,rows\nuffs,5\n```"));
         assert!(md.contains("## Per-drive parity (§2)\n\n_Raw log: `parity.txt`._\n\n<PARITY>"));
         assert!(md.contains("## Full-suite (§3)\n\n_Raw log: `full-suite.txt`._\n\n<FULL>"));
@@ -262,6 +289,7 @@ mod tests {
             env_md: None,
             matrix_md: None,
             storage_md: None,
+            es_budget_md: None,
             cross_tool_csv: None,
             parity_txt: None,
             full_suite_txt: None,
@@ -272,6 +300,7 @@ mod tests {
         assert!(md.contains("## Test environment\n\n_Not produced this run._"));
         assert!(md.contains("## Storage devices\n\n_Not produced this run._"));
         assert!(md.contains("## Negotiated matrix\n\n_Not produced this run._"));
+        assert!(md.contains("## Everything RAM budget\n\n_Not produced this run._"));
         assert!(md.contains("`cross-tool-summary.csv` — not produced this run."));
         assert!(md.contains("`parity.txt` — not produced this run."));
         assert!(md.contains("`full-suite.txt` — not produced this run."));
