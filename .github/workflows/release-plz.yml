@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release-plz — DEFERRED (manual-only, 2026-05-08)
+# Release-plz — ACTIVE (registry-baseline mode, re-enabled 2026-06-10)
 #
-# Phase R4 of `docs/architecture/release-automation-plan.md`, currently
-# dormant pending an upstream-polars compat release.  See the DEFERRAL
-# NOTICE below for the full root-cause and re-enable trail.
+# Phase R4 of `docs/architecture/release-automation-plan.md`.  Runs on
+# every push to `main`.  The DEFERRAL NOTICE below (2026-05-08,
+# polars/chrono) is HISTORICAL: that root cause and its successor
+# (git-only worktree packaging, 2026-06-09) are both resolved — see the
+# trigger comment above the `on:` block for the resolution trail.
 #
 # ─── DEFERRAL NOTICE (2026-05-08) ───────────────────────────────────────
 #
-# The `push: branches: [main]` auto-trigger is commented out below.  The
-# workflow runs ONLY on `workflow_dispatch` (manual `gh workflow run`
-# from the maintainer).  Reason:
+# HISTORICAL — resolved 2026-06-10 (see "Re-enable checklist" below).
+# At the time, the push auto-trigger was commented out and the workflow
+# ran ONLY on `workflow_dispatch` (manual `gh workflow run` from the
+# maintainer).  Reason:
 #
 #   release-plz `git_only = true` mode hardcodes
 #       cargo package --allow-dirty --workspace
@@ -68,7 +71,15 @@
 #   4. once merged, the maintainer pushes a signed `vX.Y.Z` tag
 #      which fires `release.yml` to build + upload binaries.
 #
-# Re-enable when the chrono conflict goes away:
+# Re-enable checklist (SUPERSEDED 2026-06-10): the chrono conflict was
+# resolved by polars 0.54.4 on crates.io, but the 2026-06-09 re-activation
+# then failed one layer deeper — git-only mode's hardcoded worktree
+# `cargo package --workspace` (see the trigger comment above `on:`).
+# The terminal fix took a different route than the items below:
+# `git_only = false` in `release-plz.toml` (registry-baseline mode,
+# unlocked by the R8 bootstrap publish of uffs-time + uffs-text
+# v0.5.120) skips that packaging step entirely.  Items kept for
+# historical context:
 #
 #   1. Verify `cargo package -p uffs-polars --allow-dirty` succeeds
 #      locally (it should once polars upstream ships).
@@ -216,45 +227,37 @@
 #   • https://release-plz.ieni.dev/docs/usage/release
 #   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "🚀 Release-plz (manual-only — re-deferred pending crates.io bootstrap)"
+name: "🚀 Release-plz"
 
 on:
-  # ─── RE-DEFERRED 2026-06-09 (auto-trigger disabled) ──────────────────
-  # The 2026-06-09 activation (push: branches: [main]) was PREMATURE.
-  # Polars 0.54.4 on crates.io resolved the chrono conflict that was the
-  # FIRST blocker — but it was necessary, not sufficient.  release-plz's
-  # git_only mode hardcodes `cargo package --allow-dirty --workspace`
-  # (see the DEFERRAL NOTICE above), and that step still fails one layer
-  # later on the crates.io BOOTSTRAP problem:
+  # ─── RE-ENABLED 2026-06-10 (post-R8 registry-baseline flip) ──────────
+  # History of this trigger:
   #
-  #   cargo package failed: no matching package named `uffs-broker-protocol`
-  #   found, location searched: crates.io index, required by `uffs-broker`
+  #   • 2026-06-09: activated prematurely.  Polars 0.54.4 resolved the
+  #     chrono conflict (first blocker) but release-plz's git_only mode
+  #     hardcodes `cargo package --allow-dirty --workspace` in the
+  #     latest-tag worktree, which fails on the never-publish crates'
+  #     versioned internal deps (uffs-broker -> uffs-broker-protocol:
+  #     "no matching package found, location searched: crates.io
+  #     index").  NOT fixable by `release = false` / `publish = false`
+  #     config (both ignored by that hardcoded step, confirmed on CLI
+  #     0.3.158 run #79 AND re-confirmed locally on 0.3.157,
+  #     2026-06-10) — never-publish crates will NEVER resolve from the
+  #     registry, so git-only mode can never work here.  Trigger was
+  #     commented out after 4 consecutive failures.
   #
-  # `cargo package` verifies each crate's *versioned* internal deps
-  # against crates.io.  Nothing is published yet, so every member that
-  # carries an internal `uffs-*` dep fails (uffs-broker -> uffs-broker-
-  # protocol; uffs-diag -> uffs-mft + uffs-polars; the publishable
-  # uffs-mft/-client/-mcp/-cli -> uffs-polars/-security/-format; etc.).
-  # Only `uffs-time` + `uffs-text` (zero internal deps) package cleanly.
-  #
-  # This is NOT fixable by `release = false` / `publish = false` config
-  # (both are ignored by the hardcoded `cargo package --workspace` step,
-  # confirmed on release-plz CLI 0.3.158, run #79) nor by the nightly
-  # `-Zpackage-workspace` flag (which explicitly excludes `publish =
-  # false` crates — exactly our never-publish set).  The workspace has
-  # never-publish crates with versioned internal deps (uffs-broker ->
-  # uffs-broker-protocol) that will NEVER be on crates.io, so the
-  # hardcoded `--workspace` package step can never fully succeed.
-  #
-  # Re-enable the push trigger ONLY after the crates.io bootstrap is
-  # complete (the dependency graph's internal crates are published, so
-  # `cargo package --workspace` resolves every versioned dep).  Until
-  # then this workflow is workflow_dispatch-only and the first publish
-  # is driven per-crate (`cargo publish -p <crate>`), NOT via release-plz
-  # release-pr.  See issue #241 (publish-day umbrella).
-  #
-  # push:
-  #   branches: [main]
+  #   • 2026-06-10: R8 bootstrap published uffs-time + uffs-text
+  #     v0.5.120 to crates.io, unlocking the registry-baseline mode
+  #     that `release-plz.toml`'s git_only comment block always planned
+  #     to flip to post-R8.  `git_only = false` makes release-plz diff
+  #     local packages against the DOWNLOADED .crate files instead of
+  #     packaging the tag worktree — the broken `cargo package
+  #     --workspace` step is never invoked.  Verified locally:
+  #     `release-plz update` downloads uffs-text 0.5.120 as baseline,
+  #     exits 0, proposes bumps only when the published crates' files
+  #     change.  See issue #241 (publish-day umbrella).
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.

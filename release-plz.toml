@@ -76,22 +76,29 @@
 #   WARN Package `uffs-security@*.*.*` not found
 #   ... (12 crates, all "not found")
 #
-# `git_only = true` flips release-plz into a tag-based baseline mode: it
-# scans `git tag` output for tags matching `git_tag_name` (set below to
-# `v{{ version }}` to match the existing UFFS tag scheme), picks the
-# latest semver-ordered tag, checks out that tag's worktree, and uses its
-# Cargo.toml + file content as the baseline.  Required while crates.io is
-# empty.
+# HISTORY — `git_only = true` (R4, 2026-04-25 → 2026-06-10): tag-based
+# baseline mode.  release-plz scanned `git tag` for `v*`, checked out the
+# latest tag's worktree, and used its content as the baseline.  Required
+# while crates.io was empty — but it carried a fatal side effect found in
+# the 2026-06-09 active runs (run #79 + 3 retries): git-only mode
+# hardcodes `cargo package --allow-dirty --workspace` inside that
+# worktree, packaging ALL members regardless of the `release = false`
+# blocks below.  Never-publish crates with versioned internal deps
+# (`uffs-broker` → `uffs-broker-protocol`) can never resolve from the
+# crates.io index, so the step can never succeed — catch-22 confirmed
+# locally (versioned dep → "no matching package found"; versionless →
+# "all dependencies must have a version requirement").
 #
-# Forward-compat note for R8:
-#
-#   When R8 publishes the first crate to crates.io, `git_only = true` and
-#   `publish = true` cannot both be true on the same package — release-plz
-#   refuses that combination by design (see release-plz docs §git_only).
-#   The R8 PR will either (a) flip `git_only = false` workspace-wide once
-#   ≥1 crate is published, or (b) carry per-package `git_only` overrides
-#   for the remaining unpublished crates during the staggered rollout.
-git_only = true
+# CURRENT — `git_only = false` (post-R8, 2026-06-10): registry baseline.
+# The R8 bootstrap published `uffs-time` + `uffs-text` v0.5.120, so
+# release-plz now downloads the published .crate files and diffs local
+# packages against them — exactly the forward-compat flip the R4 note
+# here always planned.  The broken worktree `cargo package --workspace`
+# step is never invoked in this mode (verified locally on 0.3.157:
+# update downloads uffs-text 0.5.120, exits 0, proposes bumps only when
+# the published crates' files change).  The 15 non-published members
+# stay out of scope via their `release = false` blocks below.
+git_only = false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tag & GitHub Release naming (R4 — workspace style)
