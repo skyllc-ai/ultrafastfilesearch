@@ -208,8 +208,11 @@ impl Args {
         }
 
         let final_sinks = sinks.unwrap_or_else(Sink::defaults);
+        // Explicit --out-dir wins; otherwise land under the shared bench tree's
+        // `stream-stress/` namespace so artifacts sit beside the rest of the
+        // bench output instead of a lone $TMPDIR leaf.
         let final_out_dir =
-            out_dir.unwrap_or_else(|| std::env::temp_dir().join("uffs-stream-stress"));
+            out_dir.unwrap_or_else(|| shared_bench_root().join("stream-stress"));
         std::fs::create_dir_all(&final_out_dir).with_context(|| {
             format!("creating artifact dir {}", final_out_dir.display())
         })?;
@@ -228,6 +231,31 @@ impl Args {
             out_dir: final_out_dir,
         })
     }
+}
+
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and the other bench scripts so every tool
+/// writes under ONE tree.  Precedence: `$UFFS_BENCH_DIR` >
+/// `%LOCALAPPDATA%\uffs-bench` > `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.
+fn shared_bench_root() -> PathBuf {
+    if let Ok(v) = std::env::var("UFFS_BENCH_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(v) = std::env::var("LOCALAPPDATA") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("uffs-bench");
+        }
+    }
+    let base = std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cache")
+        });
+    base.join("uffs-bench")
 }
 
 /// Locate the `uffs` binary used for the stress matrix.
@@ -302,7 +330,9 @@ fn print_usage() {
            --timeout-secs N      per-run timeout (default {})\n\
            --stop-on-fail        abort the matrix on the first failing (tier, sink)\n\
            --keep-artifacts      retain per-run stdout files under --out-dir\n\
-           --out-dir PATH        artifact directory (default: $TMPDIR/uffs-stream-stress)\n",
+           --out-dir PATH        artifact directory.  Default: <bench-root>/stream-stress,\n\
+           \x20                    where bench-root = $UFFS_BENCH_DIR >\n\
+           \x20                    %LOCALAPPDATA%\\uffs-bench > ~/.cache/uffs-bench\n",
         DEFAULT_TIMEOUT_SECS
     );
 }
