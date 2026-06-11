@@ -143,6 +143,20 @@ metadata.json
 !/docs/benchmarks/**
 
 # =============================================================================
+# Local benchmark artifacts (never commit run output)
+# =============================================================================
+# Bench artifacts are consolidated under $UFFS_BENCH_DIR (default: a temp dir);
+# these root-anchored rules are a defensive guard against stray in-repo writes
+# from older bench runs / scripts.  Root-anchored (leading `/`) so they never
+# touch the tracked `/docs/benchmarks/` hub above.
+/benchmarks/
+/out/bench/
+/uffs_bench_out.csv
+/bench_uffs_*.csv
+/bench_cpp_*.csv
+/bench_es_*.csv
+
+# =============================================================================
 # Local-only spec/prompt files
 # =============================================================================
 /prompts/
