@@ -637,7 +637,10 @@ fn print_info_json(report: &InfoReport) -> Result<()> {
     Ok(())
 }
 
-/// Print the lightweight `info` summary as a compact aligned key/value table.
+/// Print the lightweight `info` summary as a complete aligned key/value table.
+///
+/// Carries the same metadata as the human report (volume geometry + MFT
+/// structure), just in a flat parseable layout — no section banners.
 #[cfg(windows)]
 fn print_info_table(report: &InfoReport) {
     let frag = if report.fragmented {
@@ -645,24 +648,30 @@ fn print_info_table(report: &InfoReport) {
     } else {
         format!("{} extent (contiguous)", report.extent_count)
     };
-    let rows: [(&str, String); 11] = [
+    let rows: [(&str, String); 17] = [
         ("Drive", format!("{}: ({})", report.drive, report.drive_type)),
+        ("Bytes per sector", format_number_commas(report.bytes_per_sector)),
+        ("Bytes per cluster", format_number_commas(report.bytes_per_cluster)),
+        ("Bytes per MFT record", format_number_commas(report.bytes_per_record)),
+        ("Total clusters", format_number_commas(report.total_clusters)),
         ("Volume size", format_bytes(report.volume_size_bytes)),
         ("Used", format_bytes(report.used_bytes)),
         (
             "Free",
             format!("{} ({:.1}%)", format_bytes(report.free_bytes), report.free_pct),
         ),
+        ("MFT start LCN", format_number_commas(report.mft_start_lcn)),
         ("MFT size", format_bytes(report.mft_size_bytes)),
         ("MFT % of volume", format!("{:.3}%", report.mft_pct_of_volume)),
         ("Total records", format_number_commas(report.total_records)),
         ("In-use records", format_number_commas(report.in_use_records)),
+        ("Free records", format_number_commas(report.free_records)),
         ("Utilization", format!("{:.1}%", report.utilization_pct)),
         ("Fragmentation", frag),
         ("Probe time", format!("{} ms", report.elapsed_ms)),
     ];
     for (key, value) in &rows {
-        println!("{key:<18} {value}");
+        println!("{key:<22} {value}");
     }
     for warning in &report.warnings {
         println!("⚠️  {warning}");
