@@ -5,7 +5,23 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Output format for the `info` and `drives` commands.
+///
+/// `Human` is the default rich view (unchanged behaviour). `Table` is a compact
+/// aligned table; `Json` is a machine-readable object for tooling (e.g. the
+/// benchmark report embeds `drives --format json`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OutputFormat {
+    /// Rich, human-readable view (the default).
+    #[default]
+    Human,
+    /// Compact aligned table.
+    Table,
+    /// Machine-readable JSON.
+    Json,
+}
 
 /// `uffs-mft`: Low-level NTFS MFT reading tool.
 #[derive(Parser)]
@@ -84,10 +100,18 @@ pub(crate) enum Commands {
         /// count unique files, not paths.
         #[arg(long)]
         unique: bool,
+
+        /// Output format: `human` (default), `table`, or `json`.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
     },
 
     /// List all available NTFS drives
-    Drives,
+    Drives {
+        /// Output format: `human`/`table` (default table) or `json`.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
 
     /// Benchmark MFT reading with detailed phase timing
     Bench {

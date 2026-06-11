@@ -39,6 +39,9 @@ use rustc_hash as _;
 // `serde` is a library-only dep (DriveLetter Serialize/Deserialize);
 // acknowledge it to keep `unused-crate-dependencies` quiet here too.
 use serde as _;
+// `serde_json` is a Windows-only bin dep (`info`/`drives --format json`).
+#[cfg(windows)]
+use serde_json as _;
 use sha2 as _;
 use smallvec as _;
 use tempfile as _;

@@ -167,6 +167,10 @@ use anyhow as _;
 use bitflags as _;
 use chrono as _;
 use clap as _;
+// `serde_json` powers `--format json` for the Windows-only `info` / `drives`
+// commands (src/commands/windows/info.rs); silence the library's view of it.
+#[cfg(windows)]
+use serde_json as _;
 // Dev-dependencies (used in benchmarks and tests only)
 #[cfg(test)]
 use criterion as _;

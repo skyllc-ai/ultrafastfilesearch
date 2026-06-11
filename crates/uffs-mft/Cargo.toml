@@ -110,6 +110,10 @@ bytemuck.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+# `--format json` output for the `info` / `drives` commands (consumed by the
+# benchmark report) — only the Windows-gated commands use it.
+serde_json.workspace = true
+
 # Unix privilege check (`is_elevated` → geteuid() == 0)
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
