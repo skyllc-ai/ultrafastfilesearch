@@ -19,7 +19,7 @@
 //! # Tool CLI references
 //!
 //!   UFFS (Rust): uffs.exe "<pattern>" --drive <X> --out=bench_out.csv \
-//!                --columns Path --hide-system --hide-ads
+//!                --columns Path --hide-ads
 //!     - Search is the default action (no "search" subcommand).
 //!     - No limit — all results written to file.  Path-only for fair I/O.
 //!     - Daemon model: COLD/WARM/HOT phases.
@@ -33,12 +33,16 @@
 //!       clock comparison.  `daemon_ms` remains parseable if a user
 //!       manually appends `--profile` to `UFFS_EXTRA_ARGS`, but the
 //!       summary tables rely on `wall_ms` only.
-//!     - `--hide-system` + `--hide-ads` are PARITY filters: Everything does
-//!       not index NTFS system files (`$MFT`, `$Bitmap`, …) or Alternate
-//!       Data Streams by default, while UFFS does. Without these flags, UFFS
-//!       returns 30–70% more rows than Everything for broad patterns
-//!       (`win*`, `config`, …), which makes timing comparisons apples-vs-
-//!       pears. With them, row counts align within a few rows across tools.
+//!     - `--hide-ads` is the ONE parity filter: Everything does not index
+//!       Alternate Data Streams by default, while UFFS does, so it removes a
+//!       genuine UFFS-only excess.
+//!     - `--hide-system` is deliberately NOT passed.  It hides every name
+//!       starting with `$`, but Everything only excludes *true* NTFS metafiles
+//!       ($MFT, $LogFile, $Bitmap, $Secure, $Extend, …) — which UFFS already
+//!       drops at index BUILD time (PathResolver FRS-validity, not by name).
+//!       Everything DOES show legit `$`-prefixed files ($Recycle.Bin,
+//!       $PatchCache, winsxs `$$_*.cdf-ms` filemaps).  Passing `--hide-system`
+//!       made UFFS under-count vs Everything on patterns hitting those files.
 //!     - Ref: internal — see `uffs.exe --help` and
 //!       `docs/user-manual/filters.md` §1 (Scope Filters).
 //!   UFFS (C++):  uffs.com <pattern> --drives=<X> --columns=path
@@ -752,10 +756,21 @@ fn run_uffs_to(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: Out
     cleanup_file(bpath);
     let bpath = bpath.to_owned();
     // Path-only output for fair comparison with es.exe (which only outputs Filename).
-    // --hide-system + --hide-ads bring UFFS result semantics in line with
-    // Everything (which does not index NTFS system files or Alternate Data
-    // Streams by default). Without these flags, UFFS returns 30-70% more
-    // rows for broad patterns and the timing comparison is meaningless.
+    //
+    // Parity filter = `--hide-ads` ONLY.  Everything does not index Alternate
+    // Data Streams by default, while UFFS does, so `--hide-ads` removes a
+    // genuine UFFS-only excess.
+    //
+    // We deliberately do NOT pass `--hide-system`.  That flag hides every name
+    // starting with `$` (`is_system_name` == `starts_with('$')`), but Everything
+    // only excludes the *true* NTFS metafiles ($MFT, $LogFile, $Bitmap, $Secure,
+    // $Extend, …) — which UFFS already drops at index BUILD time via
+    // PathResolver FRS-validity (see `build_compact_index`).  Everything DOES
+    // display legitimate `$`-prefixed files ($Recycle.Bin, $PatchCache, the
+    // winsxs `$$_*.cdf-ms` filemaps, …).  Passing `--hide-system` therefore made
+    // UFFS *under*-count vs Everything on patterns that hit those files (e.g.
+    // `config` on a Windows drive: UFFS 18 562 vs ES 18 756 — the 194-row gap
+    // was exactly the `$$_*.cdf-ms` filemaps).  Dropping it restores parity.
     let mut args: Vec<String> = vec![pattern.into()];
     if drive.contains(',') {
         args.push(format!("--drives={drive}"));
@@ -764,7 +779,7 @@ fn run_uffs_to(bin: &Path, drive: &str, pattern: &str, validate: &str, sink: Out
         args.push(drive.into());
     }
     args.push("--columns".into()); args.push("Path".into());
-    args.push("--hide-system".into()); args.push("--hide-ads".into());
+    args.push("--hide-ads".into());
     if matches!(sink, OutputSink::File) {
         args.push(format!("--out={bpath}"));
     }
