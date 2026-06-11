@@ -61,10 +61,13 @@ pub const UFFS_BYTES_PER_RECORD: u64 = 100;
 
 /// Maximum RAM Everything can use for its in-process index before it OOMs.
 ///
-/// Empirically determined: C (325 MiB) + D (673 MiB) = 998 MiB succeeds;
-/// adding E (279 MiB) → 1,277 MiB causes an out-of-memory crash.
-/// 1 GiB is used as a conservative safe ceiling.
-pub const ES_RAM_BUDGET_BYTES: u64 = 1_073_741_824; // 1 GiB
+/// Re-measured 2026-06-11: Everything indexes C+D+E+G together —
+/// 11,006,944 objects ≈ 1.025 GiB at [`UFFS_BYTES_PER_RECORD`] — without
+/// crashing.  The previous 1 GiB cap (set when C+D+E was the tested ceiling)
+/// excluded the fourth drive, so a head-to-head over the full C/D/E/G set fell
+/// back to UFFS-only.  Bumped to 1.25 GiB so all four fit with ~22% headroom
+/// for normal file-count growth, while still capping a runaway drive set.
+pub const ES_RAM_BUDGET_BYTES: u64 = 1_342_177_280; // 1.25 GiB
 
 /// A pattern whose per-drive result size is estimated via UFFS.
 ///
