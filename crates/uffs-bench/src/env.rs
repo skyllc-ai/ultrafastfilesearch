@@ -444,26 +444,33 @@ pub(crate) fn render_tool_table(fp: &EnvFingerprint) -> String {
 /// `-instance` Everything, so `es.exe -get-everything-version` could only
 /// report `"ipc unavailable"`. Once the instance is loaded, this re-probes it
 /// over IPC and overwrites the `everything_gui` row with the real running
-/// version — the actual indexer the bench measures against. No-op if the row is
-/// absent or the probe fails / returns a non-version string.
+/// version — the actual indexer the bench measures against.
+///
+/// Returns the discovered version on success (so the caller can announce it),
+/// or `None` if the row is absent or the probe fails / returns a non-version
+/// string.
+#[must_use]
 pub fn backfill_everything_gui_version(
     host: &dyn Host,
     fp: &mut EnvFingerprint,
     es_exe: &str,
     instance: &str,
-) {
-    let Some(tool) = fp.tools.iter_mut().find(|tv| tv.name == "everything_gui") else {
-        return;
-    };
-    let Ok(out) = host.run(es_exe, &["-instance", instance, "-get-everything-version"]) else {
-        return;
-    };
+) -> Option<String> {
+    let tool = fp.tools.iter_mut().find(|tv| tv.name == "everything_gui")?;
+    let out = host
+        .run(es_exe, &["-instance", instance, "-get-everything-version"])
+        .ok()?;
     let version = out.stdout.lines().next().unwrap_or_default().trim();
     // Accept only a real version string (starts with a digit) — never an IPC
     // error banner like "Error 8: Everything IPC window not found".
-    if version.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
-        version.clone_into(&mut tool.version);
-    }
+    version
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+        .then(|| {
+            version.clone_into(&mut tool.version);
+            version.to_owned()
+        })
 }
 
 /// Render a captured fingerprint as the report's "Test environment" markdown.
@@ -747,7 +754,8 @@ mod tests {
     fn backfill_overwrites_gui_version_when_instance_up() {
         let mut fp = fp_with_gui_placeholder();
         let host = MockHost::new().with_run_result(stdout_of("1.4.1.1024\n"));
-        backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        let returned = backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        assert_eq!(returned.as_deref(), Some("1.4.1.1024"));
         assert_eq!(gui_version(&fp), "1.4.1.1024");
     }
 
@@ -755,7 +763,8 @@ mod tests {
     fn backfill_keeps_placeholder_on_ipc_error() {
         let mut fp = fp_with_gui_placeholder();
         let host = MockHost::new().with_run_result(ipc_error_output());
-        backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        let returned = backfill_everything_gui_version(&host, &mut fp, "es.exe", "uffs-bench");
+        assert_eq!(returned, None);
         assert_eq!(gui_version(&fp), "ipc unavailable");
     }
 
