@@ -455,9 +455,12 @@ fn run_live_mode(args: &[String]) {
         .map(PathBuf::from)
         .or_else(|| find_es_exe());
 
+    // Explicit --out-dir wins; otherwise land under the shared bench tree's
+    // `parity/` namespace (NOT the cwd — keeps parity artifacts off scattered
+    // working dirs and beside the rest of the bench output).
     let out_dir = parse_live_arg(args, "--out-dir")
         .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        .unwrap_or_else(|| shared_bench_root().join("parity"));
 
     let pattern = parse_pattern(args);
     let pipeline = parse_pipeline(args);
@@ -1672,6 +1675,34 @@ fn parse_live_arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and `resolve_bench_dir` in
+/// `cross-tool-benchmark.rs` so every bench tool writes under ONE tree.
+///
+/// Precedence: `$UFFS_BENCH_DIR` > `%LOCALAPPDATA%\uffs-bench` >
+/// `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.  An explicit `--out-dir` flag
+/// still wins over this (handled at the call site).
+fn shared_bench_root() -> PathBuf {
+    if let Ok(v) = env::var("UFFS_BENCH_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(v) = env::var("LOCALAPPDATA") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("uffs-bench");
+        }
+    }
+    let base = env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cache")
+        });
+    base.join("uffs-bench")
+}
+
 /// Print live mode summary with timing table
 fn print_live_summary(results: &[LiveDriveResult]) {
     println!();
@@ -2395,7 +2426,9 @@ fn print_usage(prog: &str) {
     eprintln!("  --live             Run both C++ and Rust live, compare outputs");
     eprintln!("  --cpp-bin <path>   Path to uffs.com (C++ binary)");
     eprintln!("  --bin <path>       Path to uffs.exe (Rust binary)");
-    eprintln!("  --out-dir <path>   Output directory (default: current dir)");
+    eprintln!("  --out-dir <path>   Output directory.  Default: <bench-root>/parity,");
+    eprintln!("                     where bench-root = $UFFS_BENCH_DIR >");
+    eprintln!("                     %LOCALAPPDATA%\\uffs-bench > ~/.cache/uffs-bench.");
     eprintln!("  --keep             Keep output files after comparison");
     eprintln!("  --name-only        Pass --name-only to Rust binary");
     eprintln!("  --pattern <pat>    Search pattern (default: *)");
