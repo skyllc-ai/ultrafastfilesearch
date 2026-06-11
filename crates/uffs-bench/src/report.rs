@@ -25,7 +25,7 @@ use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::matrix::{self, Matrix};
 use crate::preflight::{self, PreflightResult};
-use crate::{baseline, storage, summary};
+use crate::{baseline, charts, env, storage, summary};
 
 /// Bundle-relative name of the assembled report draft (plan §11).
 pub const REPORT_DRAFT: &str = "REPORT-DRAFT.md";
@@ -80,6 +80,9 @@ pub struct ReportInputs {
     /// Rendered `## vs baseline` comparison (current run vs the last canonical
     /// report's numbers), if a baseline was found.
     pub baseline_md: Option<String>,
+    /// Rendered `## Charts` section embedding the generated brand-kit SVGs,
+    /// if any chart could be produced from this run's data.
+    pub charts_md: Option<String>,
 }
 
 /// Suggested canonical `YYYY-MM-vX.Y.Z-<scope>.md` promotion name.
@@ -251,6 +254,7 @@ pub fn render(inputs: &ReportInputs) -> String {
             inputs.cross_tool_csv.as_ref(),
         ),
         embedded("## vs baseline (last canonical report)", inputs.baseline_md.as_ref()),
+        embedded("## Charts", inputs.charts_md.as_ref()),
         inlined(
             "## Per-drive parity (§2)",
             PARITY_TXT,
@@ -345,6 +349,56 @@ fn load_baseline_md(host: &dyn Host, cross_tool_csv: Option<&String>) -> Option<
     baseline::render_md(&parsed, csv)
 }
 
+/// Legend label for Everything, read from the bundle's `env.json` (the
+/// backfilled GUI version); plain `"Everything"` when unavailable.
+fn es_chart_label(host: &dyn Host, bundle_dir: &Path) -> String {
+    host.read_file(&bundle_dir.join("env.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<env::EnvFingerprint>(&bytes).ok())
+        .and_then(|fp| {
+            fp.tools
+                .iter()
+                .find(|tool| tool.name == "everything_gui")
+                .map(|tool| tool.version.clone())
+        })
+        .filter(|version| {
+            version
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_digit())
+        })
+        .map_or_else(|| "Everything".to_owned(), |ver| format!("Everything {ver}"))
+}
+
+/// Generate the brand-kit head-to-head SVG into `bundle/charts/` and return
+/// the `## Charts` markdown embedding it. Best-effort: `None` (no section)
+/// when there are no paired cells or a write fails.
+fn generate_charts_md(
+    host: &dyn Host,
+    bundle_dir: &Path,
+    version: &str,
+    cross_tool_csv: Option<&String>,
+) -> Option<String> {
+    let cells = charts::head_to_head_cells(cross_tool_csv?);
+    let svg = charts::head_to_head_svg(
+        &cells,
+        &format!("UFFS v{version}"),
+        &es_chart_label(host, bundle_dir),
+        "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better",
+    )?;
+    let path = bundle_dir.join(charts::HEAD_TO_HEAD_SVG);
+    if let Some(parent) = path.parent() {
+        host.create_dir_all(parent).ok()?;
+    }
+    host.write_file(&path, svg.as_bytes()).ok()?;
+    Some(format!(
+        "![UFFS vs Everything head-to-head p50]({})\n\n\
+         _Brand-kit SVG generated from this run's `{CROSS_TOOL_CSV}` — drop-in for the \
+         canonical report, hub README, and social posts._",
+        charts::HEAD_TO_HEAD_SVG
+    ))
+}
+
 /// Assemble the bundle into `bundle_dir/REPORT-DRAFT.md` and return its path.
 ///
 /// Reads the Stage 0/1/2/3 artifacts already in the bundle through the [`Host`]
@@ -356,6 +410,7 @@ fn load_baseline_md(host: &dyn Host, cross_tool_csv: Option<&String>) -> Option<
 pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) -> Result<PathBuf> {
     let cross_tool_csv = load(host, bundle_dir, CROSS_TOOL_CSV);
     let baseline_md = load_baseline_md(host, cross_tool_csv.as_ref());
+    let charts_md = generate_charts_md(host, bundle_dir, version, cross_tool_csv.as_ref());
     let inputs = ReportInputs {
         version: version.to_owned(),
         scope: scope.to_owned(),
@@ -370,6 +425,7 @@ pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) 
         full_suite_txt: load(host, bundle_dir, FULL_SUITE_TXT),
         full_suite_csv: load(host, bundle_dir, FULL_SUITE_CSV),
         baseline_md,
+        charts_md,
     };
     let path = bundle_dir.join(REPORT_DRAFT);
     host.write_file(&path, render(&inputs).as_bytes())
@@ -408,6 +464,7 @@ mod tests {
             full_suite_txt: Some("<FULL>".to_owned()),
             full_suite_csv: None,
             baseline_md: Some("## vs baseline (last canonical report)\n\n<BASE>".to_owned()),
+            charts_md: Some("![chart](charts/head-to-head-vs-everything.svg)".to_owned()),
         }
     }
 
@@ -464,6 +521,7 @@ mod tests {
             full_suite_txt: None,
             full_suite_csv: None,
             baseline_md: None,
+            charts_md: None,
             ..sample_inputs()
         };
         let md = render(&inputs);

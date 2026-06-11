@@ -65,22 +65,22 @@ fn norm_drive(raw: &str) -> String {
 }
 
 /// One measured p50 from the new run's cross-tool summary.
-struct RunCell {
+pub(crate) struct RunCell {
     /// Tool label (`"UFFS"` / `"Everything"`).
-    tool: String,
+    pub(crate) tool: String,
     /// Normalized drive scope.
-    drive: String,
+    pub(crate) drive: String,
     /// Pattern label.
-    pattern: String,
+    pub(crate) pattern: String,
     /// Measured p50 in milliseconds.
-    p50_ms: u64,
+    pub(crate) p50_ms: u64,
 }
 
 /// Extract HOT/file-sink p50s from `cross-tool-summary.csv`.
 ///
 /// Columns: `tool,phase,sink,drive,pattern,p50_ms,…` — quote-free by
 /// construction (the harness writes plain labels).
-fn parse_run_csv(csv: &str) -> Vec<RunCell> {
+pub(crate) fn parse_run_csv(csv: &str) -> Vec<RunCell> {
     let mut cells = Vec::new();
     for line in csv.lines().skip(1) {
         let fields: Vec<&str> = line.split(',').collect();
@@ -119,7 +119,7 @@ fn parse_run_csv(csv: &str) -> Vec<RunCell> {
 }
 
 /// Find the run p50 for `(tool, drive, pattern)`.
-fn run_p50(cells: &[RunCell], tool: &str, drive: &str, pattern: &str) -> Option<u64> {
+pub(crate) fn run_p50(cells: &[RunCell], tool: &str, drive: &str, pattern: &str) -> Option<u64> {
     cells
         .iter()
         .find(|cell| cell.tool == tool && cell.drive == drive && cell.pattern == pattern)

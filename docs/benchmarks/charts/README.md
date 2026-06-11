@@ -43,6 +43,8 @@ When a new canonical benchmark report is cut (e.g. v0.5.70 supersedes v0.5.66):
 
 ## Regeneration
 
-These SVGs are hand-written (explicit `<rect>` / `<text>` / `<line>` / `<circle>` elements with pre-computed pixel positions from the raw data). For a new canonical report, the fastest path is usually: copy the previous directory, then find-and-replace the data values + axis bounds. ~20 minutes per full set.
+**Since v0.5.120+ the bench suite generates the head-to-head chart automatically.** Every `just bench-suite` run writes `bundle/charts/head-to-head-vs-everything.svg` straight from that run's `cross-tool-summary.csv` (see `crates/uffs-bench/src/charts.rs`), styled per the **UFFS brand kit** (`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`): Charcoal card, Cream/Sand typography, Rust Orange `#CE422B` UFFS bars, Sand competitor bars, Ember win callouts. Promotion = copy the chart out of the bundle into a new dated directory here.
+
+The 2026-04 set predates generation and was hand-written on a white-card/blue design (kept as-is — prior charts live forever). Charts the suite does not yet generate (cold-parity, daemon-HOT, memory-scaling, full-scan-throughput) still follow the manual path: explicit `<rect>` / `<text>` elements, pre-computed positions, copy + find-and-replace from the previous set.
 
 No external dependencies, no renderer to install, no chart-library version drift. The text of the SVG **is** the source of truth; there's no `.png` fallback to keep in sync.

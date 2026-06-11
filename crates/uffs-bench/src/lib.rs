@@ -55,6 +55,7 @@ extern crate alloc;
 pub mod baseline;
 pub mod bundle;
 pub mod cards;
+pub mod charts;
 pub mod cli;
 pub mod competitors;
 pub mod env;
