@@ -52,6 +52,7 @@
 // paths.
 extern crate alloc;
 
+pub mod baseline;
 pub mod bundle;
 pub mod cards;
 pub mod cli;

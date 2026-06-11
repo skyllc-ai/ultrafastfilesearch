@@ -25,7 +25,7 @@ use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::matrix::{self, Matrix};
 use crate::preflight::{self, PreflightResult};
-use crate::{storage, summary};
+use crate::{baseline, storage, summary};
 
 /// Bundle-relative name of the assembled report draft (plan §11).
 pub const REPORT_DRAFT: &str = "REPORT-DRAFT.md";
@@ -42,6 +42,8 @@ const CROSS_TOOL_CSV: &str = "cross-tool-summary.csv";
 const PARITY_TXT: &str = "parity.txt";
 /// Bundle-relative name of the Stage 3 full-suite transcript.
 const FULL_SUITE_TXT: &str = "full-suite.txt";
+/// Bundle-relative name of the Stage 3 full-suite machine CSV.
+const FULL_SUITE_CSV: &str = "full-suite.csv";
 
 /// The artifacts the draft renderer assembles into a report skeleton.
 ///
@@ -72,6 +74,12 @@ pub struct ReportInputs {
     pub parity_txt: Option<String>,
     /// Stage 3 full-suite transcript contents, if present.
     pub full_suite_txt: Option<String>,
+    /// Stage 3 full-suite machine CSV contents, if present (rendered as a
+    /// table; the transcript is the fallback).
+    pub full_suite_csv: Option<String>,
+    /// Rendered `## vs baseline` comparison (current run vs the last canonical
+    /// report's numbers), if a baseline was found.
+    pub baseline_md: Option<String>,
 }
 
 /// Suggested canonical `YYYY-MM-vX.Y.Z-<scope>.md` promotion name.
@@ -93,6 +101,85 @@ fn promotion_name(generated_at: DateTime<Utc>, version: &str, scope: &str) -> St
         year = generated_at.year(),
         month = generated_at.month(),
     )
+}
+
+/// Render the static "Patterns under test" matrix: which query shape runs on
+/// which tool, and why the exceptions exist.
+///
+/// Keep in sync with `PATTERNS` in `scripts/windows/cross-tool-benchmark.rs`
+/// (the cross-tool harness's single source of truth) and the Stage 3 native
+/// suite cells in `stages.rs`.
+fn patterns_md() -> String {
+    "## Patterns under test\n\n\
+     | Pattern | Query shape | UFFS | UFFS-C++ | Everything (es) |\n\
+     |---------|-------------|:----:|:--------:|:---------------:|\n\
+     | exact | `notepad.exe` | ✓ | ✓ | ✓ |\n\
+     | prefix | `win*` | ✓ | ✗ ¹ | ✓ |\n\
+     | ext_rare | `*.dbt` | ✓ | ✓ (`--ext=dbt`) | ✓ (`ext:dbt`) |\n\
+     | ext_dll | `*.dll` | ✓ | ✓ (`--ext=dll`) | ✓ (`ext:dll`) |\n\
+     | ext_regex_alt | `.*\\.(wav\\|idrc\\|cmake)$` | ✓ regex | ✓ multi-ext | ✓ OR-glob |\n\
+     | substring | `config` | ✓ | ✓ | ✓ |\n\
+     | full_scan | `*` (every record) | ✓ | ✓ | ✗ ² |\n\n\
+     ¹ `uffs.com` does not support trailing-wildcard prefix globs (`win*`), so the \
+     prefix cell is UFFS vs Everything only.\n\
+     ² `es.exe -export-csv` streams results over Everything's IPC channel, which tops \
+     out near ~2 GB (≈150 K rows in practice). An unbounded `*` export of millions of \
+     rows aborts the CLI, so the full-scan cell runs without Everything; UFFS streams \
+     the complete multi-million-row set to CSV directly from its daemon.\n\n\
+     _The Stage 3 native suite additionally times `all_dlls` (`*.dll --count`) and \
+     `full_scan` (`* --count`) per drive — UFFS-only, count sink (no row output)._\n\
+     \n\
+     <!-- keep in sync with PATTERNS in scripts/windows/cross-tool-benchmark.rs -->"
+        .to_owned()
+}
+
+/// Render `full-suite.csv` as a markdown table, or `None` when the CSV is
+/// absent or carries no data rows.
+///
+/// Columns (per `stages::render_csv`):
+/// `tool,version,phase,sink,drive,pattern,rows,p50_ms,p95_ms,stddev_ms,rounds,verdict,notes`.
+fn render_full_suite_table(csv: &str) -> Option<String> {
+    let mut rendered = Vec::new();
+    for line in csv.lines().skip(1) {
+        let fields: Vec<&str> = line.split(',').collect();
+        let (
+            Some(drive),
+            Some(pattern),
+            Some(rows),
+            Some(p50),
+            Some(p95),
+            Some(stddev),
+            Some(rounds),
+            Some(verdict),
+        ) = (
+            fields.get(4),
+            fields.get(5),
+            fields.get(6),
+            fields.get(7),
+            fields.get(8),
+            fields.get(9),
+            fields.get(10),
+            fields.get(11),
+        )
+        else {
+            continue;
+        };
+        let rows_cell = rows
+            .parse::<u64>()
+            .map_or_else(|_| (*rows).to_owned(), storage::commas);
+        rendered.push(format!(
+            "| {drive}: | {pattern} | {rows_cell} | {p50} ms | {p95} ms | {stddev} ms | {rounds} | {verdict} |"
+        ));
+    }
+    if rendered.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "| Drive | Pattern | Rows | p50 | p95 | stddev | Rounds | Verdict |\n\
+         |-------|---------|-----:|----:|----:|-------:|-------:|---------|\n\
+         {}",
+        rendered.join("\n")
+    ))
 }
 
 /// Render an already-markdown sub-document, or a "not produced" placeholder
@@ -156,22 +243,41 @@ pub fn render(inputs: &ReportInputs) -> String {
         embedded("## Storage devices", inputs.storage_md.as_ref()),
         embedded("## Everything RAM budget", inputs.es_budget_md.as_ref()),
         embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
+        patterns_md(),
         fenced(
             "## Cross-tool head-to-head (§1)",
             CROSS_TOOL_CSV,
             "csv",
             inputs.cross_tool_csv.as_ref(),
         ),
+        embedded("## vs baseline (last canonical report)", inputs.baseline_md.as_ref()),
         inlined(
             "## Per-drive parity (§2)",
             PARITY_TXT,
             inputs.parity_txt.as_ref(),
         ),
-        inlined(
-            "## Full-suite (§3)",
-            FULL_SUITE_TXT,
-            inputs.full_suite_txt.as_ref(),
-        ),
+        // §3 prefers the machine CSV rendered as a table; the plain-text
+        // transcript is the fallback when the CSV is absent.
+        inputs
+            .full_suite_csv
+            .as_deref()
+            .and_then(render_full_suite_table)
+            .map_or_else(
+                || {
+                    inlined(
+                        "## Full-suite (§3)",
+                        FULL_SUITE_TXT,
+                        inputs.full_suite_txt.as_ref(),
+                    )
+                },
+                |table| {
+                    format!(
+                        "## Full-suite (§3)\n\n\
+                         _UFFS native, count sink, hot tier. Raw: `{FULL_SUITE_CSV}` / \
+                         `{FULL_SUITE_TXT}`._\n\n{table}"
+                    )
+                },
+            ),
     ];
     format!("{}\n", sections.join("\n\n"))
 }
@@ -228,6 +334,17 @@ fn load_es_budget_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
     ))
 }
 
+/// Load `docs/benchmarks/baseline.json` (repo-relative — the bench runs from
+/// the repository root) and render the `## vs baseline` comparison against
+/// this run's cross-tool summary. `None` when the baseline file, the run CSV,
+/// or any matching cell is absent.
+fn load_baseline_md(host: &dyn Host, cross_tool_csv: Option<&String>) -> Option<String> {
+    let csv = cross_tool_csv?;
+    let bytes = host.read_file(Path::new(baseline::BASELINE_PATH)).ok()?;
+    let parsed = baseline::parse(&decode(&bytes))?;
+    baseline::render_md(&parsed, csv)
+}
+
 /// Assemble the bundle into `bundle_dir/REPORT-DRAFT.md` and return its path.
 ///
 /// Reads the Stage 0/1/2/3 artifacts already in the bundle through the [`Host`]
@@ -237,6 +354,8 @@ fn load_es_budget_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
 /// # Errors
 /// Returns an error if the draft cannot be written into the bundle.
 pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) -> Result<PathBuf> {
+    let cross_tool_csv = load(host, bundle_dir, CROSS_TOOL_CSV);
+    let baseline_md = load_baseline_md(host, cross_tool_csv.as_ref());
     let inputs = ReportInputs {
         version: version.to_owned(),
         scope: scope.to_owned(),
@@ -246,9 +365,11 @@ pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) 
         matrix_md: load_matrix_md(host, bundle_dir),
         storage_md: load_storage_md(host, bundle_dir),
         es_budget_md: load_es_budget_md(host, bundle_dir),
-        cross_tool_csv: load(host, bundle_dir, CROSS_TOOL_CSV),
+        cross_tool_csv,
         parity_txt: load(host, bundle_dir, PARITY_TXT),
         full_suite_txt: load(host, bundle_dir, FULL_SUITE_TXT),
+        full_suite_csv: load(host, bundle_dir, FULL_SUITE_CSV),
+        baseline_md,
     };
     let path = bundle_dir.join(REPORT_DRAFT);
     host.write_file(&path, render(&inputs).as_bytes())
@@ -285,6 +406,8 @@ mod tests {
             cross_tool_csv: Some("tool,rows\nuffs,5\n".to_owned()),
             parity_txt: Some("<PARITY>".to_owned()),
             full_suite_txt: Some("<FULL>".to_owned()),
+            full_suite_csv: None,
+            baseline_md: Some("## vs baseline (last canonical report)\n\n<BASE>".to_owned()),
         }
     }
 
@@ -302,7 +425,30 @@ mod tests {
         assert!(md.contains("```csv\ntool,rows\nuffs,5\n```"));
         assert!(md.contains("## Per-drive parity (§2)\n\n_Raw log: `parity.txt`._\n\n<PARITY>"));
         assert!(md.contains("## Full-suite (§3)\n\n_Raw log: `full-suite.txt`._\n\n<FULL>"));
+        // Static pattern matrix is always present, with the es full-scan note.
+        assert!(md.contains("## Patterns under test"));
+        assert!(md.contains("~2 GB"));
+        // Baseline comparison embeds when provided.
+        assert!(md.contains("## vs baseline (last canonical report)\n\n<BASE>"));
         assert!(md.ends_with('\n'));
+    }
+
+    #[test]
+    fn full_suite_csv_renders_as_table_over_raw_txt() {
+        let csv = "tool,version,phase,sink,drive,pattern,rows,p50_ms,p95_ms,stddev_ms,rounds,verdict,notes\n\
+                   uffs,uffs 0.5.120,hot,count,C,all_dlls,166684,24.0,48.0,7.3,10,ok,\n\
+                   uffs,uffs 0.5.120,hot,count,D,full_scan,7066038,65.0,197.0,39.8,10,ok,\n";
+        let inputs = ReportInputs {
+            full_suite_csv: Some(csv.to_owned()),
+            ..sample_inputs()
+        };
+        let md = render(&inputs);
+
+        // Proper table rows with thousands separators, not the raw [ok] lines.
+        assert!(md.contains("| C: | all_dlls | 166,684 | 24.0 ms | 48.0 ms | 7.3 ms | 10 | ok |"));
+        assert!(md.contains("| D: | full_scan | 7,066,038 | 65.0 ms | 197.0 ms | 39.8 ms | 10 | ok |"));
+        // The raw-txt fallback body must NOT be used when the CSV renders.
+        assert!(!md.contains("<FULL>"));
     }
 
     #[test]
@@ -316,6 +462,8 @@ mod tests {
             cross_tool_csv: None,
             parity_txt: None,
             full_suite_txt: None,
+            full_suite_csv: None,
+            baseline_md: None,
             ..sample_inputs()
         };
         let md = render(&inputs);

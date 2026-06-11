@@ -253,26 +253,28 @@ pub fn render_md(matrix: &Matrix) -> String {
             .join(", ")
     };
 
+    // The negotiation OUTCOME: capable drives, how many head-to-head cells were
+    // admitted (their timings live in the Cross-tool results section, so they
+    // are not re-listed here), and — only when present — the cells excluded to
+    // UFFS-only with their reasons. An empty exclusion list collapses to a
+    // single all-clear line instead of a dangling "_none_" subsection.
     let solo = if matrix.uffs_only.is_empty() {
-        "_none_".to_owned()
+        "_Every negotiated cell runs cross-tool — no UFFS-only exclusions._".to_owned()
     } else {
-        matrix
+        let cells: String = matrix
             .uffs_only
             .iter()
             .map(|cell| format!("- `{}:` {} — {}", cell.drive, cell.pattern, cell.reason))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        format!("**Excluded to UFFS-only (with reasons):**\n\n{cells}")
     };
 
-    // The negotiation OUTCOME: capable drives, how many head-to-head cells were
-    // admitted (their timings live in the Cross-tool results section, so they
-    // are not re-listed here), and the cells excluded to UFFS-only with reasons.
     format!(
         "## Negotiated matrix\n\n\
          - **Capable drives (all tools):** {capable}\n\
-         - **Cross-tool cells:** {} (each timed head-to-head in the Cross-tool section below)\n\
-         \n### UFFS-only cells (excluded from cross-tool)\n\n\
-         {solo}\n",
+         - **Cross-tool cells:** {} — timed head-to-head in the Cross-tool results (§1)\n\
+         \n{solo}\n",
         matrix.cross_cells.len()
     )
 }
@@ -499,6 +501,26 @@ mod tests {
         // not re-listed; UFFS-only exclusions keep their per-cell reason.
         assert!(md.contains("**Cross-tool cells:** 1"));
         assert!(md.contains("- `E:` all_dlls — E: es not loaded"));
+        assert!(!md.contains("no UFFS-only exclusions"));
+    }
+
+    #[test]
+    fn render_md_collapses_empty_exclusions_to_all_clear_line() {
+        let matrix = Matrix {
+            capable_drives: vec!['C'],
+            cross_cells: vec![super::CrossCell {
+                drive: 'C',
+                pattern: "all_dlls".to_owned(),
+            }],
+            uffs_only: Vec::new(),
+        };
+
+        let md = render_md(&matrix);
+
+        // No dangling "_none_" subsection — a single all-clear sentence.
+        assert!(md.contains("no UFFS-only exclusions"));
+        assert!(!md.contains("_none_"));
+        assert!(!md.contains("Excluded to UFFS-only"));
     }
 
     #[test]
