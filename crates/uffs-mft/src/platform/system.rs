@@ -307,6 +307,9 @@ pub enum DriveType {
     Ssd,
     /// Hard Disk Drive (rotational, seek time matters).
     Hdd,
+    /// Removable / external media — USB, SD, or MMC. The bus, not the media,
+    /// is the bottleneck, so it takes the conservative (HDD-like) I/O profile.
+    Removable,
     /// Unknown drive type (assume HDD for safety).
     Unknown,
 }
@@ -318,7 +321,7 @@ impl DriveType {
         match self {
             Self::Nvme => 4 * 1024 * 1024,
             Self::Ssd => 2 * 1024 * 1024,
-            Self::Hdd | Self::Unknown => 1024 * 1024,
+            Self::Hdd | Self::Removable | Self::Unknown => 1024 * 1024,
         }
     }
 
@@ -328,7 +331,7 @@ impl DriveType {
         match self {
             Self::Nvme => 8,
             Self::Ssd => 4,
-            Self::Hdd | Self::Unknown => 2,
+            Self::Hdd | Self::Removable | Self::Unknown => 2,
         }
     }
 
@@ -338,7 +341,7 @@ impl DriveType {
         match self {
             Self::Nvme => 32,
             Self::Ssd => 8,
-            Self::Hdd | Self::Unknown => 4,
+            Self::Hdd | Self::Removable | Self::Unknown => 4,
         }
     }
 
@@ -373,7 +376,7 @@ impl DriveType {
     }
 }
 
-/// Detects whether a drive is `NVMe`, SSD, or HDD.
+/// Detects whether a drive is `NVMe`, SSD, HDD, or removable (USB / SD / MMC).
 #[cfg(windows)]
 #[must_use]
 #[expect(
@@ -395,6 +398,11 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
     const PROPERTY_STANDARD_QUERY: u32 = 0;
     const BUS_TYPE_NVME: u32 = 17;
+    // Removable / external buses (STORAGE_BUS_TYPE): USB, SD, MMC. The bus is
+    // the bottleneck, so these all classify as `DriveType::Removable`.
+    const BUS_TYPE_USB: u32 = 7;
+    const BUS_TYPE_SD: u32 = 12;
+    const BUS_TYPE_MMC: u32 = 13;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET: usize = 28;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END: usize =
         STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET + size_of::<u32>();
@@ -440,7 +448,7 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     let drive_classification = {
         let _handle_guard = HandleGuard(drive_handle);
 
-        let is_nvme = {
+        let bus_type: Option<u32> = {
             let query = StoragePropertyQuery {
                 property_id: STORAGE_DEVICE_PROPERTY,
                 query_type: PROPERTY_STANDARD_QUERY,
@@ -482,14 +490,17 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
                     )
                     .and_then(|bytes| <[u8; size_of::<u32>()]>::try_from(bytes).ok())
                     .map(u32::from_le_bytes)
-                    == Some(BUS_TYPE_NVME)
             } else {
-                false
+                None
             }
         };
 
-        if is_nvme {
-            return DriveType::Nvme;
+        // Bus type settles NVMe and removable media directly; everything else
+        // (SATA/SAS/RAID/…) falls through to the seek-penalty SSD-vs-HDD probe.
+        match bus_type {
+            Some(BUS_TYPE_NVME) => return DriveType::Nvme,
+            Some(BUS_TYPE_USB | BUS_TYPE_SD | BUS_TYPE_MMC) => return DriveType::Removable,
+            _ => {}
         }
 
         let query = StoragePropertyQuery {
