@@ -512,13 +512,42 @@ fn count_lines(path: &PathBuf) -> Option<u64> {
 // ── Unique temp path ──────────────────────────────────────────────────────────
 
 fn tmp_path(prefix: &str, drive: &str) -> PathBuf {
-    env::temp_dir().join(format!(
+    // Transient comparison CSVs (written → line-counted → deleted) live under
+    // the shared bench tree's scratch dir, not scattered across $TMPDIR.
+    let scratch = shared_bench_root().join("scratch");
+    let _ = fs::create_dir_all(&scratch);
+    scratch.join(format!(
         "uffs_{prefix}_{drive}_{}.csv",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0)
     ))
+}
+
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and the other bench scripts so every tool
+/// writes under ONE tree.  Precedence: `$UFFS_BENCH_DIR` >
+/// `%LOCALAPPDATA%\uffs-bench` > `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.
+fn shared_bench_root() -> PathBuf {
+    if let Ok(v) = env::var("UFFS_BENCH_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(v) = env::var("LOCALAPPDATA") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("uffs-bench");
+        }
+    }
+    let base = env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cache")
+        });
+    base.join("uffs-bench")
 }
 
 // ── Round runners ─────────────────────────────────────────────────────────────
