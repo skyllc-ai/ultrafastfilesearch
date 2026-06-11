@@ -24,6 +24,7 @@ use chrono::{DateTime, Datelike as _, Utc};
 use crate::error::{BenchError, Result};
 use crate::host::Host;
 use crate::matrix::{self, Matrix};
+use crate::storage;
 
 /// Bundle-relative name of the assembled report draft (plan §11).
 pub const REPORT_DRAFT: &str = "REPORT-DRAFT.md";
@@ -55,6 +56,8 @@ pub struct ReportInputs {
     pub env_md: Option<String>,
     /// Rendered Stage 0d matrix markdown (from `matrix.json`), if present.
     pub matrix_md: Option<String>,
+    /// Rendered `## Storage devices` markdown (from `drives.json`), if present.
+    pub storage_md: Option<String>,
     /// Stage 1 cross-tool summary CSV contents, if present.
     pub cross_tool_csv: Option<String>,
     /// Stage 2 parity transcript contents, if present.
@@ -125,6 +128,7 @@ pub fn render(inputs: &ReportInputs) -> String {
             inputs.scope,
         ),
         embedded("## Test environment", inputs.env_md.as_ref()),
+        embedded("## Storage devices", inputs.storage_md.as_ref()),
         embedded("## Negotiated matrix", inputs.matrix_md.as_ref()),
         fenced(
             "## Cross-tool head-to-head (§1)",
@@ -166,6 +170,21 @@ fn load_matrix_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
     Some(matrix::render_md(&matrix))
 }
 
+/// Load `drives.json` and render the `## Storage devices` table, flagging the
+/// drives the matrix selected. `None` if the inventory was not captured.
+fn load_storage_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
+    let bytes = host.read_file(&bundle_dir.join(storage::DRIVES_JSON)).ok()?;
+    let drives = storage::parse(&decode(&bytes));
+    // Best-effort: an absent/invalid matrix just means nothing is flagged.
+    let benched = host
+        .read_file(&bundle_dir.join(MATRIX_JSON))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Matrix>(&raw).ok())
+        .map(|matrix| matrix.capable_drives)
+        .unwrap_or_default();
+    storage::render_md(&drives, &benched)
+}
+
 /// Assemble the bundle into `bundle_dir/REPORT-DRAFT.md` and return its path.
 ///
 /// Reads the Stage 0/1/2/3 artifacts already in the bundle through the [`Host`]
@@ -181,6 +200,7 @@ pub fn assemble(host: &dyn Host, bundle_dir: &Path, version: &str, scope: &str) 
         generated_at: host.now(),
         env_md: load(host, bundle_dir, ENV_MD),
         matrix_md: load_matrix_md(host, bundle_dir),
+        storage_md: load_storage_md(host, bundle_dir),
         cross_tool_csv: load(host, bundle_dir, CROSS_TOOL_CSV),
         parity_txt: load(host, bundle_dir, PARITY_TXT),
         full_suite_txt: load(host, bundle_dir, FULL_SUITE_TXT),
@@ -214,6 +234,7 @@ mod tests {
             generated_at: fixed_now(),
             env_md: Some("## Test environment\n\n<ENV>".to_owned()),
             matrix_md: Some("## Negotiated matrix\n\n<MATRIX>".to_owned()),
+            storage_md: Some("## Storage devices\n\n<STORAGE>".to_owned()),
             cross_tool_csv: Some("tool,rows\nuffs,5\n".to_owned()),
             parity_txt: Some("<PARITY>".to_owned()),
             full_suite_txt: Some("<FULL>".to_owned()),
@@ -227,6 +248,7 @@ mod tests {
         assert!(md.starts_with("# UFFS Benchmark Report — DRAFT (v9.9.9)"));
         assert!(md.contains("Suggested canonical name: `2023-11-v9.9.9-cd.md`"));
         assert!(md.contains("## Test environment\n\n<ENV>"));
+        assert!(md.contains("## Storage devices\n\n<STORAGE>"));
         assert!(md.contains("## Negotiated matrix\n\n<MATRIX>"));
         assert!(md.contains("```csv\ntool,rows\nuffs,5\n```"));
         assert!(md.contains("## Per-drive parity (§2)\n\n_Raw log: `parity.txt`._\n\n<PARITY>"));
@@ -239,6 +261,7 @@ mod tests {
         let inputs = ReportInputs {
             env_md: None,
             matrix_md: None,
+            storage_md: None,
             cross_tool_csv: None,
             parity_txt: None,
             full_suite_txt: None,
@@ -247,6 +270,7 @@ mod tests {
         let md = render(&inputs);
 
         assert!(md.contains("## Test environment\n\n_Not produced this run._"));
+        assert!(md.contains("## Storage devices\n\n_Not produced this run._"));
         assert!(md.contains("## Negotiated matrix\n\n_Not produced this run._"));
         assert!(md.contains("`cross-tool-summary.csv` — not produced this run."));
         assert!(md.contains("`parity.txt` — not produced this run."));
@@ -274,7 +298,14 @@ mod tests {
                 "tool,rows\nuffs,5\n",
             )
             .with_file(format!("{dir}/parity.txt"), "parity body\n")
-            .with_file(format!("{dir}/full-suite.txt"), "full body\n");
+            .with_file(format!("{dir}/full-suite.txt"), "full body\n")
+            .with_file(
+                format!("{dir}/drives.json"),
+                "[{\"drive\":\"C\",\"boot\":true,\"label\":\"OS\",\"drive_type\":\"NVMe\",\
+                 \"total_bytes\":1099511627776,\"used_pct\":50.0,\"mft_records\":1000},\
+                 {\"drive\":\"E\",\"boot\":false,\"label\":\"DATA\",\"drive_type\":\"HDD\",\
+                 \"total_bytes\":2199023255552,\"used_pct\":90.0,\"mft_records\":2000}]",
+            );
 
         let path = assemble(&host, Path::new(dir), "9.9.9", "cd").expect("assemble draft");
 
@@ -293,6 +324,11 @@ mod tests {
         assert!(md.contains("## Test environment\n\nbody"));
         assert!(md.contains("`C:` all_dlls"));
         assert!(md.contains("```csv\ntool,rows\nuffs,5\n```"));
+        // Storage devices: C is the matrix's only capable drive → flagged ✓;
+        // E is listed but not benched.
+        assert!(md.contains("## Storage devices"));
+        assert!(md.contains("| C: (boot) | NVMe | OS | 1.0 TB | 50.0% | 1,000 | ✓ |"));
+        assert!(md.contains("| E: | HDD | DATA | 2.0 TB | 90.0% | 2,000 |  |"));
     }
 
     #[test]

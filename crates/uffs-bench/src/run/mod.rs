@@ -46,7 +46,7 @@ use crate::preflight::{self, PreflightResult};
 use crate::restore::RunGuard;
 use crate::stages::{self, StageCfg};
 use crate::state::{State, Status};
-use crate::{report, resolve, run_state, teardown};
+use crate::{report, resolve, run_state, storage, teardown};
 
 /// Suite version stamped into bundle names and `state.json`.
 const SUITE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -230,6 +230,9 @@ impl Orchestrator<'_> {
         env::write(self.host, fp, &self.bundle_dir)?;
         preflight::write(self.host, preflight, &self.bundle_dir)?;
         matrix::write(self.host, matrix, &self.bundle_dir)?;
+        // Capture the full storage-device inventory (`uffs-mft drives`) for the
+        // report's `## Storage devices` section. Best-effort — never fails the run.
+        storage::capture_and_write(self.host, &self.bundle_dir);
         Ok(())
     }
 

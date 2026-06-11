@@ -35,6 +35,31 @@ pub(crate) fn uffs_exe(host: &dyn Host) -> String {
     bin_name.to_owned()
 }
 
+/// Resolve the `uffs-mft` diagnostic binary (sibling of `uffs`), used to capture
+/// the storage-device inventory (`drives --format json`) for the report.
+///
+/// Same cascade as [`uffs_exe`]: `~/bin/uffs-mft[.exe]` then
+/// `target/release/uffs-mft[.exe]`, falling back to the bare name.
+pub(crate) fn uffs_mft_exe(host: &dyn Host) -> String {
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let bin_name = if cfg!(windows) {
+        "uffs-mft.exe"
+    } else {
+        "uffs-mft"
+    };
+    let home = host.env(home_var).unwrap_or_default();
+    let candidates = [
+        PathBuf::from(&home).join("bin").join(bin_name),
+        PathBuf::from("target").join("release").join(bin_name),
+    ];
+    for candidate in &candidates {
+        if host.path_exists(candidate) {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    bin_name.to_owned()
+}
+
 /// Resolve the `uffs.com` (C++ reference) binary.
 ///
 /// Same cascade as `uffs.exe` minus the `target/release` Rust step — the C++
