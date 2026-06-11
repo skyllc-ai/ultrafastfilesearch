@@ -6,14 +6,75 @@ version:
     @printf "\033[0;34m📋 Current version:\033[0m\n"
     @cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "uffs-cli") | .version'
 
-# Version bump — retired in Phase R5.
+# ── Manual on-demand binary release (Path B) ────────────────────────
 #
-# Version increments now happen automatically via release-plz
-# when release-triggering commits (feat/fix/perf/security) land
-# on `main`.  See `docs/architecture/release-automation-plan.md`.
+# UFFS ships its BINARY on your command, not automatically.  release-plz
+# only versions the 2 publishable leaf libs (uffs-time / uffs-text) — it
+# physically cannot see changes to uffs-cli/core/daemon/… (their
+# `cargo package` can't resolve unpublished internal deps), so it never
+# drives binary releases.  To cut a binary release that captures ANY
+# change anywhere in the workspace:
+#
+#   1.  just release-pr [patch|minor|major]   # opens the version-bump PR
+#   2.  (review + squash-merge that PR on GitHub)
+#   3.  just release-tag                       # tags main → builds binaries
+#
+# Step 1 bumps the lockstep `[workspace.package].version`, refreshes the
+# lockfile, and opens a `release/vX.Y.Z` PR (main requires PRs).  Step 3
+# creates the signed `vX.Y.Z` tag on main, which fires release.yml's
+# 15-platform binary build.  Nothing happens on a normal merge — that is
+# the manual-on-demand design, not a bug.
+#
+# (`ship` / `phase2-ship` are the DEV validate+push lanes — unrelated to
+# cutting a release.)
+
+# Retained alias — the retired R5 stub now points at the real flow.
 version-bump:
-    @printf "\033[0;33m⚠️  version-bump retired — release-plz handles this automatically\033[0m\n"
-    @printf "\033[0;36m   See docs/architecture/release-automation-plan.md §Phase R5\033[0m\n"
+    @printf "\033[0;36m💡 'version-bump' is now 'just release-pr [patch|minor|major]'.\033[0m\n"
+    @printf "\033[0;36m   Then merge the PR and run 'just release-tag'.\033[0m\n"
+
+# Open a version-bump release PR (default bump: patch).
+release-pr level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf "\033[0;34m🚢 Cutting release PR (%s bump)…\033[0m\n" "{{ level }}"
+    # ── Preflight: clean tree on an up-to-date main ──
+    branch=$(git branch --show-current)
+    [ "$branch" = "main" ] || { printf "\033[0;31m❌ run from main (you are on %s)\033[0m\n" "$branch"; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { printf "\033[0;31m❌ working tree not clean\033[0m\n"; exit 1; }
+    git fetch origin main --quiet
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { printf "\033[0;31m❌ local main is behind origin/main — pull first\033[0m\n"; exit 1; }
+    # ── Bump the lockstep workspace version + refresh the lockfile ──
+    cargo set-version --bump "{{ level }}"
+    new=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="uffs-cli") | .version')
+    cargo update --workspace --quiet
+    # ── Commit on a release branch + open the PR (main requires PRs) ──
+    rel="release/v${new}"
+    git switch -c "$rel"
+    git commit -aqm "chore(release): v${new}"
+    git push -u origin "$rel" --quiet
+    body="Cut binary release v${new} (Path B manual trigger). Bumps the lockstep workspace version; after squash-merge run 'just release-tag' to tag main and build the 15-platform binaries. No crate code changed — release-cut commit only."
+    gh pr create --base main --head "$rel" --title "chore(release): v${new}" --body "$body"
+    printf "\n\033[0;32m✅ Release PR opened for v%s.\033[0m\n" "$new"
+    printf "\033[0;36m   Next: review + squash-merge, then run: just release-tag\033[0m\n"
+
+# After the release PR is merged: tag main → build binaries.
+release-tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    branch=$(git branch --show-current)
+    [ "$branch" = "main" ] || { printf "\033[0;31m❌ run from main (you are on %s)\033[0m\n" "$branch"; exit 1; }
+    git fetch origin main --quiet
+    git pull --ff-only origin main --quiet
+    ver=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="uffs-cli") | .version')
+    tag="v${ver}"
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        printf "\033[0;31m❌ tag %s already exists\033[0m\n" "$tag"; exit 1
+    fi
+    git tag -s "$tag" -m "Release $tag"
+    git push origin "$tag" --quiet
+    printf "\n\033[0;32m✅ Tagged %s and pushed — release.yml is building the binaries.\033[0m\n" "$tag"
+    printf "\033[0;36m   Watch: just release-watch   ·   Status: just release-status\033[0m\n"
 
 # Build dev binary.
 build:

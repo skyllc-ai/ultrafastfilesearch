@@ -256,8 +256,22 @@ on:
   #     `release-plz update` downloads uffs-text 0.5.120 as baseline,
   #     exits 0, proposes bumps only when the published crates' files
   #     change.  See issue #241 (publish-day umbrella).
-  push:
-    branches: [main]
+  #
+  #   • 2026-06-10 (Path B): push trigger DISABLED again — but this time
+  #     by design, not because of a bug.  release-plz "proposes bumps only
+  #     when the published crates' files change" (the line above) is
+  #     exactly the limitation that makes it the WRONG driver for binary
+  #     releases: a change to uffs-cli/core/daemon/… never bumps anything.
+  #     Under Path B, BINARY releases are cut manually and on-demand via
+  #     `just release-pr` + `just release-tag` (the sole owner of the
+  #     lockstep workspace version), and release-plz is demoted to a
+  #     manual, workflow_dispatch-only helper for the 2 leaf libs.  A
+  #     normal merge to `main` intentionally triggers no release.  See
+  #     `docs/architecture/release-automation-plan.md` §8 (Path B row) and
+  #     `just/build.just` `release-pr` / `release-tag`.
+  #
+  # push:                # ← Path B: disabled by design (manual releases)
+  #   branches: [main]
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
