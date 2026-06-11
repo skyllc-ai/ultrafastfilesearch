@@ -142,6 +142,120 @@ fn start_daemon(n: usize, log_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+// ── As-found run-state snapshot/restore ──────────────────────────────────────
+// The sweep hard-kills BOTH the MCP gateway and the daemon on every iteration
+// and restarts the daemon with a concurrency override — leaving MCP dead and
+// the daemon on a non-default state afterwards.  Snapshot the as-found state up
+// front (a `RunStateGuard` whose `Drop` restores it) so the host is returned to
+// exactly how we found it, even on an early `?` error return.
+
+/// The host's UFFS run-state captured before the sweep mutates anything.
+struct RunState {
+    /// Drive letters the daemon had loaded, or `None` if it was not running.
+    daemon_drives: Option<Vec<String>>,
+    /// Whether the MCP HTTP gateway was running.
+    mcp_running: bool,
+}
+
+/// Whether a `Status:` value reads as "running" (`"not running"` contains
+/// `"running"`, so it is excluded first).
+fn status_is_running(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    !lower.contains("not running") && !lower.contains("not responding") && lower.contains("running")
+}
+
+/// Extract a drive letter from a `uffs status` line like `"[W] G:  … records"`.
+fn status_drive_letter(line: &str) -> Option<String> {
+    let after = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
+    let mut chars = after.chars();
+    let letter = chars.next()?;
+    (letter.is_ascii_alphabetic() && chars.next() == Some(':'))
+        .then(|| letter.to_ascii_uppercase().to_string())
+}
+
+/// Parse `uffs status` stdout into a [`RunState`], scoping `Status:` and the
+/// `[T] L:` drive lines to their section.
+fn parse_run_state(stdout: &str) -> RunState {
+    let (mut section, mut daemon_running, mut daemon_seen, mut mcp_running) = (0_u8, false, false, false);
+    let mut drives: Vec<String> = Vec::new();
+    for raw in stdout.lines() {
+        let line = raw.trim();
+        if line.contains("── Daemon") { section = 1; daemon_seen = true; continue; }
+        if line.contains("MCP HTTP Gateway") { section = 2; continue; }
+        if line.contains("MCP Stdio") { section = 3; continue; }
+        match section {
+            1 => {
+                if let Some(rest) = line.strip_prefix("Status:") { daemon_running = status_is_running(rest); }
+                else if let Some(d) = status_drive_letter(line) { drives.push(d); }
+            }
+            2 => if let Some(rest) = line.strip_prefix("Status:") { mcp_running = status_is_running(rest); },
+            _ => {}
+        }
+    }
+    RunState {
+        daemon_drives: if daemon_seen && daemon_running { Some(drives) } else { None },
+        mcp_running,
+    }
+}
+
+/// Capture the as-found daemon + MCP state via `uffs status`.
+fn capture_run_state() -> RunState {
+    match Command::new(uffs_bin()).arg("status").output() {
+        Ok(out) => parse_run_state(&String::from_utf8_lossy(&out.stdout)),
+        Err(_) => RunState { daemon_drives: None, mcp_running: false },
+    }
+}
+
+/// Restore the daemon + MCP to the captured `state` with production defaults
+/// (no `UFFS_SEARCH_MAX_CONCURRENCY` / `UFFS_LOG_DIR` sweep overrides).
+fn restore_run_state(state: &RunState) {
+    println!("{}", "── Restoring UFFS run-state to as-found ──".bold().cyan());
+    kill("daemon"); // hard-kill whatever the sweep left running
+    match &state.daemon_drives {
+        None => println!("  daemon was stopped at start — leaving it stopped"),
+        Some(drives) => {
+            let scope = if drives.is_empty() { "(all)".to_string() } else { drives.join(",") };
+            println!("  restarting daemon on as-found drives: {scope}");
+            let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+            for d in drives { args.push("--drive".into()); args.push(d.clone()); }
+            let _ = Command::new(uffs_bin()).args(&args).status();
+        }
+    }
+    if state.mcp_running {
+        println!("  restarting MCP gateway (was up at start)");
+        let _ = Command::new(uffs_bin()).args(["mcp", "start"]).status();
+    }
+}
+
+/// RAII guard: captures the as-found run-state on construction and restores it
+/// on `Drop`, so the sweep leaves the host as it found it even on an early
+/// error return.
+struct RunStateGuard {
+    /// The as-found state to restore on teardown.
+    state: RunState,
+}
+
+impl RunStateGuard {
+    /// Capture the current run-state and announce it.
+    fn install() -> Self {
+        let state = capture_run_state();
+        match &state.daemon_drives {
+            None => println!("  As-found     : daemon stopped, mcp {}",
+                if state.mcp_running { "up" } else { "down" }),
+            Some(drives) => println!("  As-found     : daemon on {}, mcp {}",
+                if drives.is_empty() { "(all)".to_string() } else { drives.join(",") },
+                if state.mcp_running { "up" } else { "down" }),
+        }
+        Self { state }
+    }
+}
+
+impl Drop for RunStateGuard {
+    fn drop(&mut self) {
+        restore_run_state(&self.state);
+    }
+}
+
 /// Run the api-validation harness and capture its combined stdout + stderr.
 fn run_validation(repo_root: &PathBuf) -> Result<String> {
     let script = repo_root
@@ -380,6 +494,11 @@ fn main() -> Result<()> {
     println!("  Skip warm-up : {}", args.skip_warmup);
     println!("  Daemon log   : {}", log_path.display());
 
+    // Snapshot the as-found daemon + MCP state BEFORE the first kill; its Drop
+    // restores the host (daemon drives + MCP) when the sweep returns, including
+    // on an early `?` error.
+    let _restore_guard = RunStateGuard::install();
+
     let mut rows: Vec<(usize, RunMetrics, String, String)> = Vec::new();
 
     for (idx, &n) in args.values.iter().enumerate() {
@@ -511,4 +630,31 @@ fn main() -> Result<()> {
 
     print_summary(&rows);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_run_state;
+
+    #[test]
+    fn parses_drives_and_mcp_state() {
+        let out = "\
+── Daemon ──
+  Status:      running (PID 62036)
+    [W] G:     15,162 records
+    [H] D:  7,066,038 records
+
+── MCP HTTP Gateway ──
+  Status:      not running
+";
+        let state = parse_run_state(out);
+        assert_eq!(state.daemon_drives.as_deref(), Some(["G", "D"].map(str::to_owned).as_slice()));
+        assert!(!state.mcp_running);
+    }
+
+    #[test]
+    fn stopped_daemon_reads_as_none() {
+        let state = parse_run_state("── Daemon ──\n  Status:      not running\n");
+        assert!(state.daemon_drives.is_none());
+    }
 }
