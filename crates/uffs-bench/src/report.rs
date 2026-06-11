@@ -141,11 +141,13 @@ pub fn render(inputs: &ReportInputs) -> String {
              `docs/benchmarks/` is a manual, reviewed step. Suggested canonical \
              name: `{promotion}`."
         ),
+        // Lean provenance line; the title already carries the version, and the
+        // "## At a glance" table below states what was actually benchmarked
+        // (so the old smushed "Scope: cdefghims" bullet is dropped).
         format!(
-            "- **Suite version:** v{}\n- **Generated:** {}\n- **Scope:** {}",
-            inputs.version,
+            "_Generated {} · suite v{}._",
             inputs.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
-            inputs.scope,
+            inputs.version,
         ),
         embedded("## At a glance", inputs.summary_md.as_ref()),
         embedded("## Test environment", inputs.env_md.as_ref()),

@@ -47,7 +47,7 @@ pub fn render_md(fp: &EnvFingerprint, drives: &[DriveRecord], benched: &[char]) 
         "not elevated"
     };
     let system = format!(
-        "- **System:** {cpu} ({cpus} logical) · {ram} RAM · {os}/{arch} · {elevated}",
+        "{cpu} ({cpus} logical) · {ram} RAM · {os}/{arch} · {elevated}",
         cpu = fp.cpu,
         cpus = fp.logical_cpus,
         ram = fp.total_ram,
@@ -56,7 +56,7 @@ pub fn render_md(fp: &EnvFingerprint, drives: &[DriveRecord], benched: &[char]) 
     );
 
     let tools = format!(
-        "- **Tools:** UFFS {uffs} vs UFFS-C++ {cpp} vs Everything {gui} (GUI) / es {es} (CLI)",
+        "UFFS {uffs} vs UFFS-C++ {cpp} vs Everything {gui} (GUI) / es {es} (CLI)",
         uffs = tool_version(fp, "uffs"),
         cpp = tool_version(fp, "uffs_cpp"),
         gui = tool_version(fp, "everything_gui"),
@@ -75,8 +75,8 @@ pub fn render_md(fp: &EnvFingerprint, drives: &[DriveRecord], benched: &[char]) 
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let benched_line = format!(
-        "- **Benchmarked:** {n} of {total} drive(s) ({list}) — {records} MFT records under test",
+    let benched_cell = format!(
+        "{n} of {total} ({list}) — {records} MFT records under test",
         n = benched_drives.len(),
         total = drives.len(),
         list = benched_list,
@@ -86,18 +86,27 @@ pub fn render_md(fp: &EnvFingerprint, drives: &[DriveRecord], benched: &[char]) 
     let total_records: u64 = drives.iter().map(|rec| rec.mft_records).sum();
     let total_bytes: u64 = drives.iter().map(|rec| rec.total_bytes).sum();
     let inventory = format!(
-        "- **Inventory:** {n} NTFS volume(s) · {size} · {records} MFT records total",
+        "{n} NTFS volume(s) · {size} · {records} MFT records total",
         n = drives.len(),
         size = storage::fmt_bytes(total_bytes),
         records = storage::commas(total_records),
     );
 
-    let measured = "- **Measured:** cross-tool head-to-head on real output (file / stdout sinks) \
-                    + UFFS native full-suite (count latency, hot tier). Drive **kind** dominates \
-                    latency — NVMe ≫ SSD ≫ HDD — so the benched mix above frames every number \
-                    that follows.";
-
-    format!("## At a glance\n\n{system}\n{tools}\n{benched_line}\n{inventory}\n{measured}\n")
+    // Scannable facts in a 2-column table; the "what we measure" description
+    // (a sentence, not a metric) reads as an italic note below it.
+    format!(
+        "## At a glance\n\n\
+         | | |\n\
+         |:--|:--|\n\
+         | **System** | {system} |\n\
+         | **Tools** | {tools} |\n\
+         | **Benchmarked** | {benched_cell} |\n\
+         | **Inventory** | {inventory} |\n\
+         \n\
+         _Measured: cross-tool head-to-head on real output (file / stdout sinks) + UFFS native \
+         full-suite (count latency, hot tier). Drive **kind** dominates latency — NVMe ≫ SSD ≫ \
+         HDD — so the benched mix above frames every number that follows._\n"
+    )
 }
 
 #[cfg(test)]
@@ -154,18 +163,21 @@ mod tests {
     fn renders_system_tools_and_benched_split() {
         let md = render_md(&sample_fp(), &drives(), &['C', 'D']);
         assert!(md.starts_with("## At a glance"));
+        assert!(md.contains("|:--|:--|"));
         assert!(md.contains(
-            "- **System:** AMD Ryzen 9 3900XT (24 logical) · 63.9 GiB RAM · windows/x86_64 · elevated"
+            "| **System** | AMD Ryzen 9 3900XT (24 logical) · 63.9 GiB RAM · windows/x86_64 · elevated |"
         ));
         assert!(md.contains(
-            "- **Tools:** UFFS 0.5.120 vs UFFS-C++ 1.0.0 vs Everything 1.4.1.1024 (GUI) / es 1.1.0.30 (CLI)"
+            "| **Tools** | UFFS 0.5.120 vs UFFS-C++ 1.0.0 vs Everything 1.4.1.1024 (GUI) / es 1.1.0.30 (CLI) |"
         ));
         // 2 of 3 benched (C NVMe + D HDD), 11M records under test.
         assert!(md.contains(
-            "- **Benchmarked:** 2 of 3 drive(s) (C: NVMe, D: HDD) — 11,000,000 MFT records under test"
+            "| **Benchmarked** | 2 of 3 (C: NVMe, D: HDD) — 11,000,000 MFT records under test |"
         ));
         // Full inventory: 3 drives, 22,000,000 records.
-        assert!(md.contains("- **Inventory:** 3 NTFS volume(s) · 11.0 TB · 22,000,000 MFT records total"));
+        assert!(md.contains("| **Inventory** | 3 NTFS volume(s) · 11.0 TB · 22,000,000 MFT records total |"));
+        // "Measured" reads as a note, not a table row.
+        assert!(md.contains("_Measured: cross-tool head-to-head"));
     }
 
     #[test]
@@ -174,6 +186,6 @@ mod tests {
         fp.tools.retain(|tool| tool.name != "uffs_cpp");
         let md = render_md(&fp, &[], &[]);
         assert!(md.contains("UFFS-C++ ?"));
-        assert!(md.contains("0 of 0 drive(s) (none)"));
+        assert!(md.contains("0 of 0 (none)"));
     }
 }

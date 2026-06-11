@@ -483,12 +483,14 @@ pub fn render_md(fp: &EnvFingerprint) -> String {
     let tools = render_tool_table(fp);
     format!(
         "## Test environment\n\n\
-         - **Captured:** {}\n\
-         - **OS / arch:** {} / {}\n\
-         - **Host:** {}\n\
-         - **Elevated:** {elevated}\n\
-         - **CPU:** {} ({} logical)\n\
-         - **RAM:** {}\n\
+         | Field | Value |\n\
+         |-------|-------|\n\
+         | Captured | {} |\n\
+         | OS / arch | {} / {} |\n\
+         | Host | {} |\n\
+         | Elevated | {elevated} |\n\
+         | CPU | {} ({} logical) |\n\
+         | RAM | {} |\n\
          \n### Tool versions\n\n\
          {tools}\n",
         fp.captured_at.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -709,12 +711,14 @@ mod tests {
     #[test]
     fn render_md_matches_golden() {
         let expected = "## Test environment\n\n\
-- **Captured:** 2023-11-14 22:13:20 UTC\n\
-- **OS / arch:** windows / x86_64\n\
-- **Host:** box\n\
-- **Elevated:** yes\n\
-- **CPU:** Test CPU (8 logical)\n\
-- **RAM:** 16.0 GiB\n\
+| Field | Value |\n\
+|-------|-------|\n\
+| Captured | 2023-11-14 22:13:20 UTC |\n\
+| OS / arch | windows / x86_64 |\n\
+| Host | box |\n\
+| Elevated | yes |\n\
+| CPU | Test CPU (8 logical) |\n\
+| RAM | 16.0 GiB |\n\
 \n### Tool versions\n\n\
 | Tool | Version | Path       |\n\
 |------|---------|------------|\n\
