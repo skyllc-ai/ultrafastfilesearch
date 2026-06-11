@@ -533,7 +533,7 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     };
 
     let result = drive_classification.unwrap_or_else(|| detect_drive_type_via_trim(drive_letter));
-    tracing::info!(
+    tracing::debug!(
         drive = %drive_letter,
         detected = ?result,
         seek_penalty_query = ?drive_classification,
