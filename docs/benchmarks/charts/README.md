@@ -43,8 +43,14 @@ When a new canonical benchmark report is cut (e.g. v0.5.70 supersedes v0.5.66):
 
 ## Regeneration
 
-**Since v0.5.120+ the bench suite generates the head-to-head chart automatically.** Every `just bench-suite` run writes `bundle/charts/head-to-head-vs-everything.svg` straight from that run's `cross-tool-summary.csv` (see `crates/uffs-bench/src/charts.rs`), styled per the **UFFS brand kit** (`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`): Charcoal card, Cream/Sand typography, Rust Orange `#CE422B` UFFS bars, Sand competitor bars, Ember win callouts. Promotion = copy the chart out of the bundle into a new dated directory here.
+**Since v0.5.120+ the bench suite generates the competition charts automatically.** Every `just bench-suite` run writes three SVGs into `bundle/charts/` straight from that run's `cross-tool-summary.csv` (see `crates/uffs-bench/src/charts.rs`):
 
-The 2026-04 set predates generation and was hand-written on a white-card/blue design (kept as-is — prior charts live forever). Charts the suite does not yet generate (cold-parity, daemon-HOT, memory-scaling, full-scan-throughput) still follow the manual path: explicit `<rect>` / `<text>` elements, pre-computed positions, copy + find-and-replace from the previous set.
+- `head-to-head-vs-everything.svg` — UFFS vs Everything p50 per (drive, pattern) cell
+- `daemon-hot-vs-cpp.svg` — UFFS daemon HOT vs the C++ reference's per-invocation MFT re-read
+- `full-scan-throughput.svg` — UFFS-only `*` → CSV export (rows + sustained rec/s)
+
+All are styled per the **UFFS brand kit** (`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`): Charcoal card, Cream/Sand typography, Rust Orange `#CE422B` UFFS bars, Sand competitor bars, Ember win callouts. Promotion = copy the charts out of the bundle into a new dated directory here.
+
+The 2026-04 set predates generation and was hand-written on a white-card/blue design (kept as-is — prior charts live forever). The remaining two charts of that era (cold-parity, memory-scaling) came from **internal engineering tools** — production-diff parity checks and memory-footprint work — not competition benchmarks, so the suite intentionally does not regenerate them.
 
 No external dependencies, no renderer to install, no chart-library version drift. The text of the SVG **is** the source of truth; there's no `.png` fallback to keep in sync.

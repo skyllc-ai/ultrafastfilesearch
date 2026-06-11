@@ -19,8 +19,12 @@
 
 use crate::baseline::{parse_run_csv, run_p50};
 
-/// Bundle-relative path of the generated head-to-head chart.
+/// Bundle-relative path of the generated head-to-head chart (vs Everything).
 pub const HEAD_TO_HEAD_SVG: &str = "charts/head-to-head-vs-everything.svg";
+/// Bundle-relative path of the daemon-HOT vs C++ per-invocation chart.
+pub const DAEMON_HOT_SVG: &str = "charts/daemon-hot-vs-cpp.svg";
+/// Bundle-relative path of the full-scan throughput chart.
+pub const FULL_SCAN_SVG: &str = "charts/full-scan-throughput.svg";
 
 /// One paired head-to-head measurement (HOT phase, file sink).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,31 +35,58 @@ pub struct HeadToHeadCell {
     pub pattern: String,
     /// UFFS p50 in milliseconds.
     pub uffs_p50_ms: u64,
-    /// Everything p50 in milliseconds.
-    pub es_p50_ms: u64,
+    /// Rival tool's p50 in milliseconds.
+    pub rival_p50_ms: u64,
 }
 
-/// Pair UFFS and Everything HOT/file p50s per `(drive, pattern)`.
+/// Pair UFFS and `rival_tool` HOT/file p50s per `(drive, pattern)`.
 ///
+/// `rival_tool` is the harness CSV label — `"Everything"` or `"UFFS-C++"`.
 /// Reads the cross-tool summary CSV, preserving the CSV's UFFS row order.
-/// Cells without both tools (e.g. `full_scan`, which es.exe cannot export)
-/// are skipped.
+/// Cells the rival did not run (e.g. `full_scan` for es.exe, `prefix` for
+/// uffs.com) are skipped.
 #[must_use]
-pub fn head_to_head_cells(cross_tool_csv: &str) -> Vec<HeadToHeadCell> {
+pub fn rival_cells(cross_tool_csv: &str, rival_tool: &str) -> Vec<HeadToHeadCell> {
     let run = parse_run_csv(cross_tool_csv);
     let mut cells = Vec::new();
     for uffs in run.iter().filter(|cell| cell.tool == "UFFS") {
-        let Some(es_p50) = run_p50(&run, "Everything", &uffs.drive, &uffs.pattern) else {
+        let Some(rival_p50) = run_p50(&run, rival_tool, &uffs.drive, &uffs.pattern) else {
             continue;
         };
         cells.push(HeadToHeadCell {
             drive: uffs.drive.clone(),
             pattern: uffs.pattern.clone(),
             uffs_p50_ms: uffs.p50_ms,
-            es_p50_ms: es_p50,
+            rival_p50_ms: rival_p50,
         });
     }
     cells
+}
+
+/// One UFFS full-scan (`*` → CSV export) measurement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullScanCell {
+    /// Drive scope.
+    pub drive: String,
+    /// Rows exported.
+    pub rows: u64,
+    /// p50 wall time in milliseconds.
+    pub p50_ms: u64,
+}
+
+/// Extract UFFS HOT/file `full_scan` cells (the workload Everything cannot
+/// export) from the cross-tool summary CSV.
+#[must_use]
+pub fn full_scan_cells(cross_tool_csv: &str) -> Vec<FullScanCell> {
+    parse_run_csv(cross_tool_csv)
+        .into_iter()
+        .filter(|cell| cell.tool == "UFFS" && cell.pattern == "full_scan" && cell.p50_ms > 0)
+        .map(|cell| FullScanCell {
+            drive: cell.drive,
+            rows: cell.rows,
+            p50_ms: cell.p50_ms,
+        })
+        .collect()
 }
 
 /// Plot-area width in pixels (x = 160 → 840, per the design system).
@@ -79,8 +110,9 @@ fn px(tenths: u64) -> String {
 
 /// Render the head-to-head grouped-bar SVG, or `None` when `cells` is empty.
 ///
-/// `uffs_label` / `es_label` feed the legend (e.g. `"UFFS v0.5.120"`,
-/// `"Everything 1.4.1.1032"`); `subtitle` is the context line under the title.
+/// `uffs_label` / `rival_label` feed the legend and title (e.g.
+/// `"UFFS v0.5.120"`, `"Everything 1.4.1.1032"`); `subtitle` is the context
+/// line under the title.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -89,7 +121,7 @@ fn px(tenths: u64) -> String {
 pub fn head_to_head_svg(
     cells: &[HeadToHeadCell],
     uffs_label: &str,
-    es_label: &str,
+    rival_label: &str,
     subtitle: &str,
 ) -> Option<String> {
     if cells.is_empty() {
@@ -98,13 +130,13 @@ pub fn head_to_head_svg(
     let rows = u64::try_from(cells.len()).unwrap_or(0);
     let wins = cells
         .iter()
-        .filter(|cell| cell.uffs_p50_ms < cell.es_p50_ms)
+        .filter(|cell| cell.uffs_p50_ms < cell.rival_p50_ms)
         .count();
 
     // Axis ceiling: max p50 rounded up to the next multiple of 50 (≥ 50).
     let max_ms = cells
         .iter()
-        .map(|cell| cell.uffs_p50_ms.max(cell.es_p50_ms))
+        .map(|cell| cell.uffs_p50_ms.max(cell.rival_p50_ms))
         .max()
         .unwrap_or(0);
     let axis_max = ((max_ms / 50) + 1) * 50;
@@ -112,7 +144,7 @@ pub fn head_to_head_svg(
     let axis_bottom = BARS_TOP + rows * ROW_PITCH + 10;
     let height = axis_bottom + 70;
     let title = format!(
-        "{uffs_label} vs Everything — {wins} / {} cells faster at p50",
+        "{uffs_label} vs {rival_label} — {wins} / {} cells faster at p50",
         cells.len()
     );
 
@@ -121,8 +153,8 @@ pub fn head_to_head_svg(
          font-family=\"Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, \
          sans-serif\" role=\"img\" aria-label=\"Horizontal bar chart: {title}\">\n\
          <title>{title}</title>\n\
-         <desc>Horizontal grouped bar chart comparing UFFS and Everything p50 latency per \
-         pattern-by-drive cell. UFFS bars are brand Rust Orange, Everything bars are muted Sand. Generated \
+         <desc>Horizontal grouped bar chart comparing UFFS and {rival_label} p50 latency per \
+         pattern-by-drive cell. UFFS bars are brand Rust Orange, rival bars are muted Sand. Generated \
          by the uffs-bench suite from cross-tool-summary.csv.</desc>\n\
          <rect x=\"0\" y=\"0\" width=\"960\" height=\"{height}\" fill=\"#0F0D0B\"/>\n\
          <rect x=\"0.5\" y=\"0.5\" width=\"959\" height=\"{}\" fill=\"none\" stroke=\"#1E1B18\" \
@@ -136,7 +168,7 @@ pub fn head_to_head_svg(
          <rect x=\"0\" y=\"2\" width=\"14\" height=\"12\" fill=\"#CE422B\"/>\n\
          <text x=\"20\" y=\"12\">{uffs_label}</text>\n\
          <rect x=\"180\" y=\"2\" width=\"14\" height=\"12\" fill=\"#9A8D82\"/>\n\
-         <text x=\"200\" y=\"12\">{es_label}</text>\n\
+         <text x=\"200\" y=\"12\">{rival_label}</text>\n\
          </g>",
         height - 1,
     )];
@@ -174,11 +206,11 @@ pub fn head_to_head_svg(
         let y_uffs = BARS_TOP + row * ROW_PITCH;
         let y_es = y_uffs + 18;
         let uffs_w = bar_tenths(cell.uffs_p50_ms, axis_max);
-        let es_w = bar_tenths(cell.es_p50_ms, axis_max);
+        let es_w = bar_tenths(cell.rival_p50_ms, axis_max);
         let ratio_hundredths = (cell.uffs_p50_ms * 100)
-            .checked_div(cell.es_p50_ms)
+            .checked_div(cell.rival_p50_ms)
             .unwrap_or(100);
-        let ratio_color = if cell.uffs_p50_ms < cell.es_p50_ms {
+        let ratio_color = if cell.uffs_p50_ms < cell.rival_p50_ms {
             "#F7B26B"
         } else {
             "#9A8D82"
@@ -205,7 +237,7 @@ pub fn head_to_head_svg(
             uffs_ms = cell.uffs_p50_ms,
             es_label_x = PLOT_X + es_w / 10 + 6,
             es_label_y = y_es + 12,
-            es_ms = cell.es_p50_ms,
+            es_ms = cell.rival_p50_ms,
             ratio_y = y_uffs + 21,
             ratio_w = ratio_hundredths / 100,
             ratio_f = ratio_hundredths % 100,
@@ -215,7 +247,118 @@ pub fn head_to_head_svg(
     parts.push(format!(
         "<text x=\"480\" y=\"{}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#9A8D82\">\
          Generated by the uffs-bench suite from cross-tool-summary.csv (HOT phase, file sink). \
-         Lower is better; ratio = UFFS ÷ Everything.</text>\n</svg>",
+         Lower is better; ratio = UFFS ÷ rival.</text>\n</svg>",
+        height - 14,
+    ));
+    Some(parts.join("\n"))
+}
+
+/// Format `rows ÷ p50` as a human throughput string (`"2.1 M rec/s"` /
+/// `"850 K rec/s"`), integer math only.
+fn throughput_label(rows: u64, p50_ms: u64) -> String {
+    let rps = (rows * 1000).checked_div(p50_ms).unwrap_or(0);
+    if rps >= 1_000_000 {
+        let tenths = rps * 10 / 1_000_000;
+        format!("{}.{} M rec/s", tenths / 10, tenths % 10)
+    } else {
+        format!("{} K rec/s", rps / 1000)
+    }
+}
+
+/// Render the full-scan throughput SVG (UFFS-only `*` → CSV export — the
+/// workload Everything cannot run), or `None` when `cells` is empty.
+#[must_use]
+pub fn full_scan_svg(cells: &[FullScanCell], uffs_label: &str, subtitle: &str) -> Option<String> {
+    if cells.is_empty() {
+        return None;
+    }
+    let row_count = u64::try_from(cells.len()).unwrap_or(0);
+    // One bar per row (no pair), so a tighter pitch keeps the card compact.
+    let pitch = 34_u64;
+    let max_ms = cells.iter().map(|cell| cell.p50_ms).max().unwrap_or(0);
+    // Axis ceiling: next multiple of 1000 ms (≥ 1 s).
+    let axis_max = ((max_ms / 1000) + 1) * 1000;
+    let axis_bottom = BARS_TOP + row_count * pitch + 10;
+    let height = axis_bottom + 70;
+    let title = format!("{uffs_label} full-scan export — the workload Everything cannot run");
+
+    let mut parts = vec![format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 960 {height}\" \
+         font-family=\"Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, \
+         Arial, sans-serif\" role=\"img\" aria-label=\"Bar chart: {title}\">\n\
+         <title>{title}</title>\n\
+         <desc>Bar chart of UFFS full-scan CSV-export wall time per drive scope, with row counts \
+         and sustained records-per-second callouts. Generated by the uffs-bench suite from \
+         cross-tool-summary.csv.</desc>\n\
+         <rect x=\"0\" y=\"0\" width=\"960\" height=\"{height}\" fill=\"#0F0D0B\"/>\n\
+         <rect x=\"0.5\" y=\"0.5\" width=\"959\" height=\"{}\" fill=\"none\" stroke=\"#1E1B18\" \
+         stroke-width=\"1\"/>\n\
+         <text x=\"480\" y=\"36\" text-anchor=\"middle\" font-size=\"19\" font-weight=\"700\" \
+         fill=\"#F2EDE8\">{title}</text>\n\
+         <text x=\"480\" y=\"58\" text-anchor=\"middle\" font-size=\"13\" \
+         fill=\"#9A8D82\">{subtitle}</text>",
+        height - 1,
+    )];
+
+    // Axis: seconds, five segments.
+    let mut axis = vec![format!(
+        "<g font-size=\"11\" fill=\"#9A8D82\">\n\
+         <line x1=\"160\" y1=\"100\" x2=\"160\" y2=\"{axis_bottom}\" stroke=\"#9A8D82\" \
+         stroke-width=\"1\"/>\n\
+         <line x1=\"160\" y1=\"{axis_bottom}\" x2=\"840\" y2=\"{axis_bottom}\" \
+         stroke=\"#9A8D82\" stroke-width=\"1\"/>\n\
+         <text x=\"160\" y=\"{}\" text-anchor=\"middle\">0</text>",
+        axis_bottom + 18,
+    )];
+    for tick in 1..=5_u64 {
+        let x = PLOT_X + tick * PLOT_WIDTH_PX / 5;
+        let tick_ms = tick * axis_max / 5;
+        axis.push(format!(
+            "<line x1=\"{x}\" y1=\"100\" x2=\"{x}\" y2=\"{axis_bottom}\" stroke=\"#1E1B18\" \
+             stroke-width=\"1\"/>\n\
+             <text x=\"{x}\" y=\"{}\" text-anchor=\"middle\">{}.{}</text>",
+            axis_bottom + 18,
+            tick_ms / 1000,
+            (tick_ms % 1000) / 100,
+        ));
+    }
+    axis.push(format!(
+        "<text x=\"500\" y=\"{}\" text-anchor=\"middle\" font-size=\"11\" \
+         fill=\"#9A8D82\">`*` → CSV wall time (seconds, p50) — lower is better</text>\n</g>",
+        axis_bottom + 40,
+    ));
+    parts.push(axis.join("\n"));
+
+    for (idx, cell) in cells.iter().enumerate() {
+        let row = u64::try_from(idx).unwrap_or(0);
+        let y_bar = BARS_TOP + row * pitch;
+        let bar_w = bar_tenths(cell.p50_ms, axis_max);
+        let secs_tenths = cell.p50_ms / 100;
+        parts.push(format!(
+            "<g font-size=\"12\" fill=\"#F2EDE8\">\n\
+             <text x=\"154\" y=\"{label_y}\" text-anchor=\"end\">{drive}:</text>\n\
+             <rect x=\"160\" y=\"{y_bar}\" width=\"{bar_px}\" height=\"18\" fill=\"#CE422B\"/>\n\
+             <text x=\"{value_x}\" y=\"{label_y}\" font-size=\"11\" \
+             fill=\"#9A8D82\">{secs_w}.{secs_f} s · {rows} rows</text>\n\
+             <text x=\"848\" y=\"{label_y}\" font-size=\"12\" font-weight=\"700\" \
+             fill=\"#F7B26B\">{throughput}</text>\n\
+             </g>",
+            label_y = y_bar + 13,
+            drive = cell.drive,
+            bar_px = px(bar_w),
+            value_x = PLOT_X + bar_w / 10 + 6,
+            secs_w = secs_tenths / 10,
+            secs_f = secs_tenths % 10,
+            rows = crate::storage::commas(cell.rows),
+            throughput = throughput_label(cell.rows, cell.p50_ms),
+        ));
+    }
+
+    parts.push(format!(
+        "<text x=\"480\" y=\"{}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#9A8D82\">\
+         Generated by the uffs-bench suite from cross-tool-summary.csv (HOT phase, file sink). \
+         es.exe -export-csv aborts near ~2 GB over IPC, so this workload is UFFS-only.</text>\n\
+         </svg>",
         height - 14,
     ));
     Some(parts.join("\n"))
@@ -237,17 +380,17 @@ UFFS,COLD,file,C,exact,900,1000,30,0,PASS,3,3
 
     #[test]
     fn pairs_only_cells_with_both_tools_hot_file() {
-        let cells = head_to_head_cells(RUN_CSV);
+        let cells = rival_cells(RUN_CSV, "Everything");
         // full_scan (UFFS-only) and the COLD row must not pair.
         assert_eq!(cells.len(), 2);
         let first = cells.first().expect("first cell");
         assert_eq!(first.pattern, "exact");
-        assert_eq!((first.uffs_p50_ms, first.es_p50_ms), (20, 46));
+        assert_eq!((first.uffs_p50_ms, first.rival_p50_ms), (20, 46));
     }
 
     #[test]
     fn svg_carries_design_system_and_ratios() {
-        let cells = head_to_head_cells(RUN_CSV);
+        let cells = rival_cells(RUN_CSV, "Everything");
         let svg = head_to_head_svg(&cells, "UFFS v0.5.120", "Everything 1.4.1.1032", "subtitle")
             .expect("svg renders");
         // Design system anchors.
@@ -267,5 +410,37 @@ UFFS,COLD,file,C,exact,900,1000,30,0,PASS,3,3
     #[test]
     fn empty_cells_render_none() {
         assert!(head_to_head_svg(&[], "u", "e", "s").is_none());
+        assert!(full_scan_svg(&[], "u", "s").is_none());
+    }
+
+    const CPP_CSV: &str = "\
+tool,phase,sink,drive,pattern,p50_ms,p95_ms,rows,bad,verdict,rounds_ok,rounds_total
+UFFS,HOT,file,C,full_scan,1531,1600,3216011,0,PASS,10,10
+UFFS-C++,HOT,file,C,full_scan,8621,9000,3216011,0,PASS,10,10
+";
+
+    #[test]
+    fn rival_cells_pairs_cpp_too() {
+        let cells = rival_cells(CPP_CSV, "UFFS-C++");
+        assert_eq!(cells.len(), 1);
+        let first = cells.first().expect("cpp pair");
+        assert_eq!((first.uffs_p50_ms, first.rival_p50_ms), (1531, 8621));
+        // Title reflects the rival label.
+        let svg =
+            head_to_head_svg(&cells, "UFFS v1", "UFFS C++ (MFT re-read)", "s").expect("svg");
+        assert!(svg.contains("UFFS v1 vs UFFS C++ (MFT re-read) — 1 / 1 cells faster at p50"));
+    }
+
+    #[test]
+    fn full_scan_chart_carries_rows_and_throughput() {
+        let cells = full_scan_cells(RUN_CSV);
+        assert_eq!(cells.len(), 1);
+        let svg = full_scan_svg(&cells, "UFFS v0.5.120", "subtitle").expect("svg");
+        // 3,216,011 rows in 1500 ms → 2,144,007 rec/s → "2.1 M rec/s"; 1.5 s.
+        assert!(svg.contains("1.5 s · 3,216,011 rows"));
+        assert!(svg.contains(">2.1 M rec/s</text>"));
+        assert!(svg.contains("the workload Everything cannot run"));
+        // Brand bars.
+        assert!(svg.contains("fill=\"#CE422B\""));
     }
 }

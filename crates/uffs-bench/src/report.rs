@@ -349,16 +349,16 @@ fn load_baseline_md(host: &dyn Host, cross_tool_csv: Option<&String>) -> Option<
     baseline::render_md(&parsed, csv)
 }
 
-/// Legend label for Everything, read from the bundle's `env.json` (the
-/// backfilled GUI version); plain `"Everything"` when unavailable.
-fn es_chart_label(host: &dyn Host, bundle_dir: &Path) -> String {
+/// Legend label for `tool_name`, read from the bundle's `env.json`;
+/// `fallback` (e.g. `"Everything"`) when the version is unavailable.
+fn tool_chart_label(host: &dyn Host, bundle_dir: &Path, tool_name: &str, fallback: &str) -> String {
     host.read_file(&bundle_dir.join("env.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<env::EnvFingerprint>(&bytes).ok())
         .and_then(|fp| {
             fp.tools
                 .iter()
-                .find(|tool| tool.name == "everything_gui")
+                .find(|tool| tool.name == tool_name)
                 .map(|tool| tool.version.clone())
         })
         .filter(|version| {
@@ -367,35 +367,81 @@ fn es_chart_label(host: &dyn Host, bundle_dir: &Path) -> String {
                 .next()
                 .is_some_and(|ch| ch.is_ascii_digit())
         })
-        .map_or_else(|| "Everything".to_owned(), |ver| format!("Everything {ver}"))
+        .map_or_else(|| fallback.to_owned(), |ver| format!("{fallback} {ver}"))
 }
 
-/// Generate the brand-kit head-to-head SVG into `bundle/charts/` and return
-/// the `## Charts` markdown embedding it. Best-effort: `None` (no section)
-/// when there are no paired cells or a write fails.
+/// Write one chart SVG into the bundle; `true` on success.
+fn write_chart(host: &dyn Host, bundle_dir: &Path, rel: &str, svg: &str) -> bool {
+    let path = bundle_dir.join(rel);
+    if let Some(parent) = path.parent()
+        && host.create_dir_all(parent).is_err()
+    {
+        return false;
+    }
+    host.write_file(&path, svg.as_bytes()).is_ok()
+}
+
+/// Generate the brand-kit SVG charts into `bundle/charts/` and return the
+/// `## Charts` markdown embedding them — the head-to-head vs Everything, the
+/// daemon-HOT vs C++ comparison, and the UFFS-only full-scan throughput.
+/// Best-effort: charts whose cells are absent are skipped; `None` (no
+/// section) when nothing could be produced.
 fn generate_charts_md(
     host: &dyn Host,
     bundle_dir: &Path,
     version: &str,
     cross_tool_csv: Option<&String>,
 ) -> Option<String> {
-    let cells = charts::head_to_head_cells(cross_tool_csv?);
-    let svg = charts::head_to_head_svg(
-        &cells,
-        &format!("UFFS v{version}"),
-        &es_chart_label(host, bundle_dir),
-        "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better",
-    )?;
-    let path = bundle_dir.join(charts::HEAD_TO_HEAD_SVG);
-    if let Some(parent) = path.parent() {
-        host.create_dir_all(parent).ok()?;
+    let csv = cross_tool_csv?;
+    let uffs_label = format!("UFFS v{version}");
+    let subtitle = "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better";
+    let mut images: Vec<String> = Vec::new();
+
+    if let Some(svg) = charts::head_to_head_svg(
+        &charts::rival_cells(csv, "Everything"),
+        &uffs_label,
+        &tool_chart_label(host, bundle_dir, "everything_gui", "Everything"),
+        subtitle,
+    ) && write_chart(host, bundle_dir, charts::HEAD_TO_HEAD_SVG, &svg)
+    {
+        images.push(format!(
+            "![UFFS vs Everything head-to-head p50]({})",
+            charts::HEAD_TO_HEAD_SVG
+        ));
     }
-    host.write_file(&path, svg.as_bytes()).ok()?;
+
+    if let Some(svg) = charts::head_to_head_svg(
+        &charts::rival_cells(csv, "UFFS-C++"),
+        &uffs_label,
+        &tool_chart_label(host, bundle_dir, "uffs_cpp", "UFFS C++ (MFT re-read)"),
+        subtitle,
+    ) && write_chart(host, bundle_dir, charts::DAEMON_HOT_SVG, &svg)
+    {
+        images.push(format!(
+            "![UFFS daemon HOT vs C++ per-invocation MFT re-read]({})",
+            charts::DAEMON_HOT_SVG
+        ));
+    }
+
+    if let Some(svg) = charts::full_scan_svg(
+        &charts::full_scan_cells(csv),
+        &uffs_label,
+        "complete `*` result set streamed from the daemon to CSV",
+    ) && write_chart(host, bundle_dir, charts::FULL_SCAN_SVG, &svg)
+    {
+        images.push(format!(
+            "![UFFS full-scan export throughput]({})",
+            charts::FULL_SCAN_SVG
+        ));
+    }
+
+    if images.is_empty() {
+        return None;
+    }
     Some(format!(
-        "![UFFS vs Everything head-to-head p50]({})\n\n\
-         _Brand-kit SVG generated from this run's `{CROSS_TOOL_CSV}` — drop-in for the \
+        "{}\n\n_Brand-kit SVGs generated from this run's `{CROSS_TOOL_CSV}` — drop-in for the \
          canonical report, hub README, and social posts._",
-        charts::HEAD_TO_HEAD_SVG
+        images.join("\n\n")
     ))
 }
 

@@ -74,6 +74,8 @@ pub(crate) struct RunCell {
     pub(crate) pattern: String,
     /// Measured p50 in milliseconds.
     pub(crate) p50_ms: u64,
+    /// Result rows reported for the cell.
+    pub(crate) rows: u64,
 }
 
 /// Extract HOT/file-sink p50s from `cross-tool-summary.csv`.
@@ -108,11 +110,16 @@ pub(crate) fn parse_run_csv(csv: &str) -> Vec<RunCell> {
         let Ok(p50_ms) = p50_raw.trim().parse::<u64>() else {
             continue;
         };
+        let rows = fields
+            .get(tail_start + 3)
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .unwrap_or(0);
         cells.push(RunCell {
             tool: (*tool).to_owned(),
             drive: norm_drive(&drive_parts.join(",")),
             pattern: (*pattern).to_owned(),
             p50_ms,
+            rows,
         });
     }
     cells
