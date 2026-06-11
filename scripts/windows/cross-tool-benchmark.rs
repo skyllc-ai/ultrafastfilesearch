@@ -103,6 +103,7 @@ use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -113,10 +114,51 @@ const DEFAULT_DRIVES: &[&str] = &["C", "D"];
 /// fair against ES (always pre-indexed) and the C++ tool (re-reads every MFT).
 const PRIME_ROUNDS: usize = 3;
 
-/// Bench output file in current working directory.
-/// C++ UFFS cannot write to absolute paths — relative paths work fine.
+/// Resolved root for ALL benchmark artifacts, set once in `main` from the
+/// `--out-dir` flag / `$UFFS_BENCH_DIR` (see [`resolve_bench_dir`]).  Everything
+/// this script writes lands under here instead of scattering CSVs across the
+/// cwd.  Falls back to `.` only if `main` somehow never initialised it.
+static BENCH_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Resolve the consolidated bench-artifact root.  Precedence:
+///   1. `--out-dir <path>` (caller-supplied)
+///   2. `$UFFS_BENCH_DIR`
+///   3. `%LOCALAPPDATA%\uffs-bench` (Windows)
+///   4. `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`
+///
+/// This mirrors the `_bench-dir` helper in `just/bench_uffs.just` exactly, so
+/// the standalone script and the `just` flow write to the SAME tree (and share
+/// one `baseline.json`).
+fn resolve_bench_dir(flag: Option<&Path>) -> PathBuf {
+    if let Some(p) = flag {
+        return p.to_path_buf();
+    }
+    if let Ok(v) = env::var("UFFS_BENCH_DIR") {
+        if !v.is_empty() { return PathBuf::from(v); }
+    }
+    if let Ok(v) = env::var("LOCALAPPDATA") {
+        if !v.is_empty() { return PathBuf::from(v).join("uffs-bench"); }
+    }
+    let base = env::var("XDG_CACHE_HOME").ok().filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cache"));
+    base.join("uffs-bench")
+}
+
+/// Scratch subdir under the resolved root for transient per-query / per-tool
+/// CSVs that are overwritten every round and cleaned up after each diff.
+/// Created on demand; falls back to cwd before `main` initialises [`BENCH_DIR`].
+fn bench_scratch_dir() -> PathBuf {
+    let dir = BENCH_DIR.get().map_or_else(|| PathBuf::from("."), |d| d.join("scratch"));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Absolute path to the daemon's intermediate per-query dump under the scratch
+/// dir.  Both the C++ tool (`--out=`) and Everything (`-export-csv`) accept
+/// absolute paths, so no chdir / relative-path juggling is needed.
 fn bench_out_path() -> String {
-    "uffs_bench_out.csv".to_string()
+    bench_scratch_dir().join("uffs_bench_out.csv").to_string_lossy().into_owned()
 }
 /// (label, uffs_rust_pattern, es_search, cpp_pattern, cpp_ext, validate)
 /// cpp_ext: if non-empty, C++ UFFS uses `* --ext=<val>` instead of glob
@@ -236,9 +278,14 @@ struct Cfg { uffs: PathBuf, uffs_cpp: Option<PathBuf>, es: Option<PathBuf>,
              /// summary (one row per Tool × Phase × Sink × Drive × Pattern
              /// combination, with p50/p95/rows/bad/verdict) is written to
              /// this path after the stdout tables.  Distinct from the daemon's
-             /// own intermediate `uffs_bench_out.csv` in the cwd, which holds
-             /// the raw per-query row dumps and is overwritten every round.
-             out: Option<PathBuf> }
+             /// own intermediate `uffs_bench_out.csv` under the scratch dir,
+             /// which holds the raw per-query row dumps and is overwritten
+             /// every round.
+             out: Option<PathBuf>,
+             /// Resolved consolidated bench-artifact root (see
+             /// [`resolve_bench_dir`]).  All transient scratch CSVs land under
+             /// `<out_dir>/scratch/`.
+             out_dir: PathBuf }
 impl Cfg {
     fn skip_pattern(&self, label: &str) -> bool {
         self.patterns.as_ref().map_or(false, |ps| !ps.iter().any(|p| p == &label.to_lowercase()))
@@ -1169,6 +1216,7 @@ fn parse_args() -> Cfg {
     let mut uffs_bin: Option<PathBuf> = None;
     let mut patterns_filter: Option<Vec<String>> = None;
     let mut out: Option<PathBuf> = None;
+    let mut out_dir_flag: Option<PathBuf> = None;
     let mut es_instance: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -1181,6 +1229,7 @@ fn parse_args() -> Cfg {
             "--skip-cold" => { skip_cold = true; }
             "--uffs-bin" => { i += 1; uffs_bin = Some(PathBuf::from(&args[i])); }
             "--out" => { i += 1; out = Some(PathBuf::from(&args[i])); }
+            "--out-dir" | "--paths" => { i += 1; out_dir_flag = Some(PathBuf::from(&args[i])); }
             "--es-instance" => { i += 1; es_instance = Some(args[i].clone()); }
             "--help" | "-h" => { print_help(); std::process::exit(0); }
             other => {
@@ -1215,7 +1264,8 @@ fn parse_args() -> Cfg {
         .map(OutputSink::parse_list)
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| vec![OutputSink::File]);
-    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter, es_instance, out }
+    let out_dir = resolve_bench_dir(out_dir_flag.as_deref());
+    Cfg { uffs, uffs_cpp, es, drives, rounds, tools, sinks, skip_cold, patterns: patterns_filter, es_instance, out, out_dir }
 }
 
 fn print_help() {
@@ -1243,8 +1293,13 @@ fn print_help() {
     eprintln!("                        Columns: tool,phase,sink,drive,pattern,p50_ms,");
     eprintln!("                        p95_ms,rows,bad,verdict,rounds_ok,rounds_total.");
     eprintln!("                        Distinct from the daemon's intermediate");
-    eprintln!("                        uffs_bench_out.csv in the cwd (raw per-query rows,");
-    eprintln!("                        overwritten every round).");
+    eprintln!("                        uffs_bench_out.csv under <out-dir>/scratch/ (raw");
+    eprintln!("                        per-query rows, overwritten every round).");
+    eprintln!("  --out-dir <dir>       Consolidated root for ALL bench artifacts");
+    eprintln!("                        (alias: --paths).  Transient scratch CSVs land");
+    eprintln!("                        in <dir>/scratch/.  Precedence: this flag >");
+    eprintln!("                        $UFFS_BENCH_DIR > %LOCALAPPDATA%\\uffs-bench >");
+    eprintln!("                        ~/.cache/uffs-bench.  Matches `just _bench-dir`.");
     eprintln!("  --help                This message");
 }
 
@@ -1288,12 +1343,14 @@ fn run_hot_compare(cfg: &Cfg, drive: &str, all_rows: &mut Vec<Row>) {
             let mut es_runs:   Vec<Timing> = Vec::new();
             let mut es_aborted = false;
 
-            // Separate output file per tool per round — all relative paths
-            // (C++ cannot write to absolute paths).  Files are cleaned up
-            // immediately after the per-round diff so disk usage stays low.
-            let f_uffs = format!("bench_uffs_{label}.csv");
-            let f_cpp  = format!("bench_cpp_{label}.csv");
-            let f_es   = format!("bench_es_{label}.csv");
+            // Separate output file per tool per round, under the consolidated
+            // scratch dir (absolute paths — both the C++ tool's `--out=` and
+            // Everything's `-export-csv` accept absolute targets).  Files are
+            // cleaned up immediately after the per-round diff so disk stays low.
+            let scratch = bench_scratch_dir();
+            let f_uffs = scratch.join(format!("bench_uffs_{label}.csv")).to_string_lossy().into_owned();
+            let f_cpp  = scratch.join(format!("bench_cpp_{label}.csv")).to_string_lossy().into_owned();
+            let f_es   = scratch.join(format!("bench_es_{label}.csv")).to_string_lossy().into_owned();
 
             for round in 0..cfg.rounds {
                 // Fresh LCG seed every round so tool order varies.
@@ -1449,6 +1506,11 @@ fn run_hot_compare(cfg: &Cfg, drive: &str, all_rows: &mut Vec<Row>) {
 fn main() {
     let mut cfg = parse_args();
 
+    // Pin the consolidated artifact root for the whole run, then create it so
+    // the first scratch write never races a missing dir.
+    let _ = BENCH_DIR.set(cfg.out_dir.clone());
+    let _ = std::fs::create_dir_all(cfg.out_dir.join("scratch"));
+
     println!("╔══════════════════════════════════════════════════════════════════════════════╗");
     println!("║                     Cross-Tool Benchmark v1.0                               ║");
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
@@ -1466,6 +1528,7 @@ fn main() {
     println!("║  Rounds:       {} per pattern per tool", cfg.rounds);
     let sinks_str: Vec<&'static str> = cfg.sinks.iter().map(|s| s.label()).collect();
     println!("║  Sinks (HOT):  {}  (COLD/WARM are always file)", sinks_str.join(", "));
+    println!("║  Bench artifact dir: {}", cfg.out_dir.display());
     println!("║  Daemon bench file:  {}  (raw per-query rows, overwritten every round)", bench_out_path());
     if let Some(ref p) = cfg.out {
         println!("║  Summary CSV:        {}  (written post-run via --out)", p.display());
@@ -1604,8 +1667,8 @@ fn main() {
     //    Drive × Pattern combination).  Distinct from the daemon's intermediate
     //    `uffs_bench_out.csv`, which holds the raw per-query row dumps and is
     //    overwritten every round.  The two never collide: this file lives at
-    //    whatever path the operator passes via `--out`, the other is fixed at
-    //    `<cwd>/uffs_bench_out.csv`.
+    //    whatever path the operator passes via `--out`, the other is under
+    //    `<out-dir>/scratch/uffs_bench_out.csv`.
     if let Some(ref path) = cfg.out {
         match write_summary_csv(&cfg, &all_rows, path) {
             Ok(()) => {
@@ -1795,7 +1858,27 @@ fn write_summary_csv(_cfg: &Cfg, rows: &[Row], path: &Path) -> std::io::Result<(
 }
 #[cfg(test)]
 mod tests {
-    use super::{canon_path, diff_paths, first_csv_field, normalise_paths};
+    use super::{canon_path, diff_paths, first_csv_field, normalise_paths, resolve_bench_dir};
+
+    #[test]
+    fn out_dir_flag_takes_precedence_over_env() {
+        // An explicit --out-dir / --paths value short-circuits every env-based
+        // fallback, so it is deterministic regardless of the caller's shell.
+        let chosen = resolve_bench_dir(Some(std::path::Path::new("/tmp/uffs-bench-test")));
+        assert_eq!(chosen, std::path::PathBuf::from("/tmp/uffs-bench-test"));
+    }
+
+    #[test]
+    fn resolve_bench_dir_fallback_ends_with_uffs_bench() {
+        // With no flag, every fallback branch (UFFS_BENCH_DIR / LOCALAPPDATA /
+        // ~/.cache) terminates in a `uffs-bench` leaf — the shared tree the
+        // `just` flow also targets.  (Env may be set in the dev shell, so we
+        // assert the invariant leaf, not a fixed absolute path.)
+        let dir = resolve_bench_dir(None);
+        let leaf_ok = dir.file_name().is_some_and(|n| n == "uffs-bench")
+            || std::env::var("UFFS_BENCH_DIR").is_ok_and(|v| !v.is_empty());
+        assert!(leaf_ok, "fallback bench dir should live under a uffs-bench leaf: {dir:?}");
+    }
 
     #[test]
     fn canon_strips_trailing_dir_slash() {
