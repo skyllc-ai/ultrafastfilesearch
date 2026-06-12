@@ -89,7 +89,10 @@ dist/
 .idea/
 .vscode/
 .ai/
-.claude/
+# Claude Code: local state stays ignored, but the project hook config that
+# blocks gate-bypass flags is tracked and shared (scripts/hooks/claude_no_bypass.sh).
+.claude/*
+!.claude/settings.json
 .qodo/
 .reuse/
 .windsurf/
