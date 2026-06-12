@@ -15,21 +15,27 @@ version:
 #
 #   1.  just ship            # validate (Phase 1) → bump → commit →
 #                            #   open auto-merging release/vX.Y.Z PR (Phase 2)
-#   2.  (PR auto-merges once its CI is green)
-#   3.  just release-tag     # tag main → release.yml builds the binaries
+#   2.  (PR auto-merges once its CI is green; the merge fires
+#        release-auto-trigger.yml → release.yml builds the binaries)
 #
 # `just ship` Phase 2 bumps the lockstep `[workspace.package].version`
 # (patch) ONLY after Phase 1 validation passes — code is verified clean
-# before the version moves.  `release-tag` then cuts the signed `vX.Y.Z`
-# tag, which fires release.yml's 15-platform build.  A normal merge to
-# `main` triggers no release — that is the manual-on-demand design.
+# before the version moves.  Merging the release/vX.Y.Z PR dispatches
+# release.yml's 15-platform build automatically (added 2026-06-12 after
+# v0.5.121 merged with no binaries — the old manual `release-tag` step
+# was forgotten).  `release-tag` remains the manual fallback for
+# re-cuts or a failed dispatch.  A normal merge to `main` still
+# triggers no release — that is the manual-on-demand design.
 
 # Retired R5 stub — version bumps now happen inside `just ship` Phase 2.
 version-bump:
     @printf "\033[0;36m💡 Version bumps are part of 'just ship' now (Phase 2, patch).\033[0m\n"
-    @printf "\033[0;36m   After the release PR merges, run 'just release-tag' to build binaries.\033[0m\n"
+    @printf "\033[0;36m   Binaries build automatically once the release PR merges (release-auto-trigger.yml).\033[0m\n"
 
-# After the `just ship` release PR is merged: tag main → build binaries.
+# Manual FALLBACK after a `just ship` release PR merge — the normal
+# path is automatic (release-auto-trigger.yml dispatches release.yml on
+# merge).  Use for re-cuts or if the auto-dispatch failed:
+# tag main → build binaries.
 release-tag:
     #!/usr/bin/env bash
     set -euo pipefail
