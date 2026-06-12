@@ -409,8 +409,11 @@ scans.  On v0.5.4 targeted patterns (`*.dll`, `config`, `notepad.exe`)
 returned in **9–13 ms e2e** vs **161 ms** for `*` on all 7 drives; on
 v0.5.66 the same targeted patterns measure **29–69 ms e2e** (28 ms
 CLI spawn tax + 0–42 ms daemon) while `*` is now **1 112 ms** (see
-§Interactive Search above for the full v0.5.66 table).  At 100 M
-records (v0.5.4 only, not re-verified on v0.5.66) `*` took 808 ms
+§Interactive Search above for the full v0.5.66 table); on v0.5.120
+targeted patterns run **17–96 ms e2e per drive** with the spawn floor
+down to 17–18 ms (the `*` top-N shape was not re-measured — the
+v0.5.120 suite times full-scan *export* instead).  At 100 M
+records (v0.5.4 only, not re-verified since) `*` took 808 ms
 but targeted queries stayed at **11–13 ms** daemon-side.
 
 ---
