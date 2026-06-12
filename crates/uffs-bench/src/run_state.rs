@@ -40,10 +40,18 @@ impl RunState {
             Some(drives) if drives.is_empty() => "daemon running (no drives)".to_owned(),
             Some(drives) => format!(
                 "daemon on {}",
-                drives.iter().map(char::to_string).collect::<Vec<_>>().join(",")
+                drives
+                    .iter()
+                    .map(char::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
             ),
         };
-        let mcp = if self.mcp_running { "mcp up" } else { "mcp down" };
+        let mcp = if self.mcp_running {
+            "mcp up"
+        } else {
+            "mcp down"
+        };
         format!("{daemon}; {mcp}")
     }
 }
@@ -64,8 +72,7 @@ fn drive_letter_from_line(line: &str) -> Option<char> {
     let after_bracket = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
     let mut chars = after_bracket.chars();
     let letter = chars.next()?;
-    (letter.is_ascii_alphabetic() && chars.next() == Some(':'))
-        .then(|| letter.to_ascii_uppercase())
+    (letter.is_ascii_alphabetic() && chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())
 }
 
 /// Section of `uffs status` output currently being parsed.
@@ -191,9 +198,9 @@ fn restore(host: &dyn Host, uffs_exe: &str, state: &RunState) -> Result<()> {
                 "[run-state] restarting daemon on as-found drives: {}",
                 drive_strs.join(",")
             ));
-            host.run(uffs_exe, &args).map(|_out| ()).map_err(|err| {
-                BenchError::Command(format!("restore daemon drives: {err}"))
-            })?;
+            host.run(uffs_exe, &args)
+                .map(|_out| ())
+                .map_err(|err| BenchError::Command(format!("restore daemon drives: {err}")))?;
         }
     }
 
@@ -289,7 +296,10 @@ mod tests {
 
     #[test]
     fn drive_line_parser_rejects_non_drive_lines() {
-        assert_eq!(drive_letter_from_line("[W] G:     15,162 records"), Some('G'));
+        assert_eq!(
+            drive_letter_from_line("[W] G:     15,162 records"),
+            Some('G')
+        );
         assert_eq!(drive_letter_from_line("[H] c: 1 records"), Some('C'));
         assert_eq!(drive_letter_from_line("Drives:      7 loaded"), None);
         assert_eq!(drive_letter_from_line("Status:      running"), None);

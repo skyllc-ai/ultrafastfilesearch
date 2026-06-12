@@ -173,8 +173,14 @@ mod tests {
         // profile — small chunks, few buffers, low concurrency, and never
         // high-performance or parallel-parse-friendly.
         for drive_type in [DriveType::Removable, DriveType::Virtual] {
-            assert_eq!(drive_type.optimal_concurrency(), DriveType::Hdd.optimal_concurrency());
-            assert_eq!(drive_type.optimal_io_size(), DriveType::Hdd.optimal_io_size());
+            assert_eq!(
+                drive_type.optimal_concurrency(),
+                DriveType::Hdd.optimal_concurrency()
+            );
+            assert_eq!(
+                drive_type.optimal_io_size(),
+                DriveType::Hdd.optimal_io_size()
+            );
             assert_eq!(drive_type.optimal_chunk_size(), 1024 * 1024);
             assert_eq!(drive_type.prefetch_buffers(), 2);
             assert!(!drive_type.is_high_performance());

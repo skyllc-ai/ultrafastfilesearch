@@ -60,7 +60,13 @@ fn norm_drive(raw: &str) -> String {
     raw.trim()
         .chars()
         .filter(|ch| *ch != ':')
-        .map(|ch| if ch == ',' { '+' } else { ch.to_ascii_uppercase() })
+        .map(|ch| {
+            if ch == ',' {
+                '+'
+            } else {
+                ch.to_ascii_uppercase()
+            }
+        })
         .collect()
 }
 
@@ -91,8 +97,7 @@ pub(crate) fn parse_run_csv(csv: &str) -> Vec<RunCell> {
         if fields.len() < 12 {
             continue;
         }
-        let (Some(tool), Some(phase), Some(sink)) =
-            (fields.first(), fields.get(1), fields.get(2))
+        let (Some(tool), Some(phase), Some(sink)) = (fields.first(), fields.get(1), fields.get(2))
         else {
             continue;
         };
@@ -169,10 +174,8 @@ pub fn render_md(baseline: &Baseline, cross_tool_csv: &str) -> Option<String> {
         if uffs_now.is_none() && es_now.is_none() {
             continue;
         }
-        let uffs_cell = uffs_now.map_or_else(
-            || "—".to_owned(),
-            |now| delta_cell(cell.uffs_p50_ms, now),
-        );
+        let uffs_cell =
+            uffs_now.map_or_else(|| "—".to_owned(), |now| delta_cell(cell.uffs_p50_ms, now));
         let es_cell = match (cell.es_p50_ms, es_now) {
             (Some(base), Some(now)) => delta_cell(base, now),
             _ => "—".to_owned(),

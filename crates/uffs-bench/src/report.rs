@@ -140,7 +140,8 @@ fn patterns_md() -> String {
 /// absent or carries no data rows.
 ///
 /// Columns (per `stages::render_csv`):
-/// `tool,version,phase,sink,drive,pattern,rows,p50_ms,p95_ms,stddev_ms,rounds,verdict,notes`.
+/// `tool,version,phase,sink,drive,pattern,rows,p50_ms,p95_ms,stddev_ms,rounds,
+/// verdict,notes`.
 fn render_full_suite_table(csv: &str) -> Option<String> {
     let mut rendered = Vec::new();
     for line in csv.lines().skip(1) {
@@ -253,7 +254,10 @@ pub fn render(inputs: &ReportInputs) -> String {
             "csv",
             inputs.cross_tool_csv.as_ref(),
         ),
-        embedded("## vs baseline (last canonical report)", inputs.baseline_md.as_ref()),
+        embedded(
+            "## vs baseline (last canonical report)",
+            inputs.baseline_md.as_ref(),
+        ),
         embedded("## Charts", inputs.charts_md.as_ref()),
         inlined(
             "## Per-drive parity (§2)",
@@ -309,7 +313,9 @@ fn load_matrix_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
 /// Load `drives.json` and render the `## Storage devices` table, flagging the
 /// drives the matrix selected. `None` if the inventory was not captured.
 fn load_storage_md(host: &dyn Host, bundle_dir: &Path) -> Option<String> {
-    let bytes = host.read_file(&bundle_dir.join(storage::DRIVES_JSON)).ok()?;
+    let bytes = host
+        .read_file(&bundle_dir.join(storage::DRIVES_JSON))
+        .ok()?;
     let drives = storage::parse(&decode(&bytes));
     // Best-effort: an absent/invalid matrix just means nothing is flagged.
     let benched = host
@@ -361,12 +367,7 @@ fn tool_chart_label(host: &dyn Host, bundle_dir: &Path, tool_name: &str, fallbac
                 .find(|tool| tool.name == tool_name)
                 .map(|tool| tool.version.clone())
         })
-        .filter(|version| {
-            version
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_digit())
-        })
+        .filter(|version| version.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
         .map_or_else(|| fallback.to_owned(), |ver| format!("{fallback} {ver}"))
 }
 
@@ -508,7 +509,9 @@ mod tests {
 
         // Proper table rows with thousands separators, not the raw [ok] lines.
         assert!(md.contains("| C: | all_dlls | 166,684 | 24.0 ms | 48.0 ms | 7.3 ms | 10 | ok |"));
-        assert!(md.contains("| D: | full_scan | 7,066,038 | 65.0 ms | 197.0 ms | 39.8 ms | 10 | ok |"));
+        assert!(
+            md.contains("| D: | full_scan | 7,066,038 | 65.0 ms | 197.0 ms | 39.8 ms | 10 | ok |")
+        );
         // The raw-txt fallback body must NOT be used when the CSV renders.
         assert!(!md.contains("<FULL>"));
     }

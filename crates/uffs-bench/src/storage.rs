@@ -188,10 +188,7 @@ mod tests {
         assert_eq!(first.drive, "C");
         assert!(first.boot);
         assert_eq!(first.drive_type, "NVMe");
-        assert_eq!(
-            drives.get(1).expect("second record").mft_records,
-            4_917_248
-        );
+        assert_eq!(drives.get(1).expect("second record").mft_records, 4_917_248);
     }
 
     #[test]

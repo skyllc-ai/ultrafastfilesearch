@@ -204,10 +204,13 @@ fn hide_system() -> TestResult {
     // Mix of true metafiles, the root, an ordinary `$`-file, and a plain file.
     let df = DataFrame::new_infer_height(vec![
         Column::new("frs".into(), &[0_u64, 5, 16, 100, 101]),
-        Column::new(
-            "name".into(),
-            &["$MFT", ".", "$Extend", "normal.txt", "$Recycle.Bin"],
-        ),
+        Column::new("name".into(), &[
+            "$MFT",
+            ".",
+            "$Extend",
+            "normal.txt",
+            "$Recycle.Bin",
+        ]),
         Column::new("size".into(), &[100_u64, 0, 200, 300, 0]),
         Column::new("is_directory".into(), &[false, true, true, false, true]),
         Column::new("is_hidden".into(), &[false, false, false, false, false]),

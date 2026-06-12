@@ -95,10 +95,11 @@ pub struct CompactRecord {
 /// reserved FRS 0–15 and under the `$Extend` directory.  An NTFS volume can
 /// only ever contain *these* specific metafiles.
 ///
-/// Any *other* `$`-prefixed name — `$Recycle.Bin`, `$PatchCache`, `$WinREAgent`,
-/// the `WinSxS` `$$_*.cdf-ms` filemaps, or a user file literally named `$foo` —
-/// is an ordinary file that file managers and tools like Everything display.
-/// Classifying those as metafiles is exactly the bug `--hide-system` had.
+/// Any *other* `$`-prefixed name — `$Recycle.Bin`, `$PatchCache`,
+/// `$WinREAgent`, the `WinSxS` `$$_*.cdf-ms` filemaps, or a user file literally
+/// named `$foo` — is an ordinary file that file managers and tools like
+/// Everything display. Classifying those as metafiles is exactly the bug
+/// `--hide-system` had.
 ///
 /// Matched case-insensitively: NTFS itself is case-insensitive, and these
 /// canonical names are occasionally surfaced with varied casing.

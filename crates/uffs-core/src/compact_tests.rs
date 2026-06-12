@@ -726,9 +726,24 @@ fn clean_child_under_crooked_dir_is_path_malformed_not_leaf_malformed() {
 #[test]
 fn metafile_name_matches_reserved_set_case_insensitively() {
     for name in [
-        "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef", "$Bitmap",
-        "$Boot", "$BadClus", "$Secure", "$UpCase", "$Extend", "$ObjId",
-        "$Quota", "$Reparse", "$UsnJrnl", "$RmMetadata", "$Repair", "$Txf",
+        "$MFT",
+        "$MFTMirr",
+        "$LogFile",
+        "$Volume",
+        "$AttrDef",
+        "$Bitmap",
+        "$Boot",
+        "$BadClus",
+        "$Secure",
+        "$UpCase",
+        "$Extend",
+        "$ObjId",
+        "$Quota",
+        "$Reparse",
+        "$UsnJrnl",
+        "$RmMetadata",
+        "$Repair",
+        "$Txf",
     ] {
         assert!(
             is_ntfs_metafile_name(name),
@@ -749,7 +764,7 @@ fn metafile_name_rejects_ordinary_dollar_files() {
         "$secret.dbt",
         // WinSxS filemaps — the concrete files the old filter wrongly hid.
         "$$_diagnostics_system_windowsmediaplayerconfiguration_537e287f.cdf-ms",
-        "$MFTfoo",  // prefix of a metafile name, but not an exact match
+        "$MFTfoo", // prefix of a metafile name, but not an exact match
         "normal.txt",
         "config",
         "",

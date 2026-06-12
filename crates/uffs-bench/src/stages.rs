@@ -544,7 +544,11 @@ fn step_from_output(out: &ProcOutput, output_path: &Path, label: &str) -> StepRe
 /// The daemon run-state restore (R1) is registered once, up front, in
 /// [`crate::run`] — before the daemon is first killed — so it is not re-taken
 /// per stage here (by stage time the as-found state is already gone).
-fn run_cross_tool(host: &dyn Host, _guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
+fn run_cross_tool(
+    host: &dyn Host,
+    _guard: &mut RunGuard<'_>,
+    cfg: &StageCfg,
+) -> Result<StepResult> {
     let out = cross_tool_invocation(cfg)
         .run_streaming(host)
         .map_err(|err| BenchError::Command(format!("cross-tool harness: {err}")))?;

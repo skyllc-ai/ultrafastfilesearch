@@ -50,9 +50,9 @@ impl MftQuery {
     /// Only the fixed set of reserved names from
     /// [`crate::compact::is_ntfs_metafile_name`] is removed (matched
     /// case-insensitively).  Ordinary `$`-prefixed files — `$Recycle.Bin`,
-    /// `$PatchCache`, the `WinSxS` `$$_*.cdf-ms` filemaps — are real user-visible
-    /// files (Everything and Explorer show them) and are KEPT.  A plain
-    /// `name.starts_with('$')` filter wrongly hid all of those.
+    /// `$PatchCache`, the `WinSxS` `$$_*.cdf-ms` filemaps — are real
+    /// user-visible files (Everything and Explorer show them) and are KEPT.
+    /// A plain `name.starts_with('$')` filter wrongly hid all of those.
     #[must_use]
     pub fn hide_system_files(self) -> Self {
         let lower: Vec<String> = crate::compact::NTFS_METAFILE_NAMES

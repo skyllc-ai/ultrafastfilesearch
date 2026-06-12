@@ -63,8 +63,10 @@ pub fn render_md(fp: &EnvFingerprint, drives: &[DriveRecord], benched: &[char]) 
         es = tool_version(fp, "everything"),
     );
 
-    let benched_drives: Vec<&DriveRecord> =
-        drives.iter().filter(|rec| is_benched(rec, benched)).collect();
+    let benched_drives: Vec<&DriveRecord> = drives
+        .iter()
+        .filter(|rec| is_benched(rec, benched))
+        .collect();
     let benched_records: u64 = benched_drives.iter().map(|rec| rec.mft_records).sum();
     let benched_list = if benched_drives.is_empty() {
         "none".to_owned()
@@ -175,7 +177,9 @@ mod tests {
             "| **Benchmarked** | 2 of 3 (C: NVMe, D: HDD) — 11,000,000 MFT records under test |"
         ));
         // Full inventory: 3 drives, 22,000,000 records.
-        assert!(md.contains("| **Inventory** | 3 NTFS volume(s) · 11.0 TB · 22,000,000 MFT records total |"));
+        assert!(md.contains(
+            "| **Inventory** | 3 NTFS volume(s) · 11.0 TB · 22,000,000 MFT records total |"
+        ));
         // "Measured" reads as a note, not a table row.
         assert!(md.contains("_Measured: cross-tool head-to-head"));
     }

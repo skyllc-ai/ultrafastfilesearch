@@ -48,7 +48,8 @@ pub(crate) fn apply_filter(rows: &mut Vec<DisplayRow>, filter: FilterMode) {
 pub struct SearchFilters {
     /// Hide reserved NTFS metafiles (`$MFT`, `$LogFile`, the `$Extend` family,
     /// …) — see [`crate::compact::is_ntfs_metafile_name`].  Ordinary
-    /// `$`-prefixed files (`$Recycle.Bin`, `WinSxS` `$$_*.cdf-ms`) are NOT hidden.
+    /// `$`-prefixed files (`$Recycle.Bin`, `WinSxS` `$$_*.cdf-ms`) are NOT
+    /// hidden.
     pub hide_system: bool,
     /// Hide NTFS Alternate Data Streams (names containing `:`).
     pub hide_ads: bool,

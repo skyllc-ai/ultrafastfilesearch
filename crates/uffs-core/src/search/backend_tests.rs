@@ -1119,9 +1119,9 @@ fn search_index_hide_system_excludes_true_metafiles_only() {
     root.first_name.parent_frs = Into::into(ROOT_FRS);
 
     for (frs, name) in [
-        (300_u64, "$MFT"),        // true metafile      → hide_system excludes
-        (301, "$Recycle.Bin"),    // ordinary $-dir     → must survive
-        (302, "report.txt"),      // plain file         → must survive
+        (300_u64, "$MFT"),     // true metafile      → hide_system excludes
+        (301, "$Recycle.Bin"), // ordinary $-dir     → must survive
+        (302, "report.txt"),   // plain file         → must survive
     ] {
         let off = idx.add_name(name);
         let ext = idx.intern_extension(name);

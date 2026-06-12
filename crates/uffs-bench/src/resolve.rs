@@ -35,8 +35,9 @@ pub(crate) fn uffs_exe(host: &dyn Host) -> String {
     bin_name.to_owned()
 }
 
-/// Resolve the `uffs-mft` diagnostic binary (sibling of `uffs`), used to capture
-/// the storage-device inventory (`drives --format json`) for the report.
+/// Resolve the `uffs-mft` diagnostic binary (sibling of `uffs`), used to
+/// capture the storage-device inventory (`drives --format json`) for the
+/// report.
 ///
 /// Same cascade as [`uffs_exe`]: `~/bin/uffs-mft[.exe]` then
 /// `target/release/uffs-mft[.exe]`, falling back to the bare name.
