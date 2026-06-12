@@ -118,8 +118,13 @@ impl AggregateFilter {
         {
             return false;
         }
-        // Extension filter (fast path via pre-resolved IDs).
-        if !resolved_ext_ids.is_empty() && !resolved_ext_ids.contains(&record.extension_id) {
+        // Extension filter (fast path via pre-resolved IDs). A requested
+        // filter that resolved to no IDs on this drive matches NOTHING —
+        // never "no filter" (the drive loop also short-circuits that case;
+        // this guard keeps the predicate safe for any future caller).
+        if !self.extensions.is_empty()
+            && (resolved_ext_ids.is_empty() || !resolved_ext_ids.contains(&record.extension_id))
+        {
             return false;
         }
         // Size bounds.
@@ -478,6 +483,15 @@ pub fn run_aggregate_with_filters(
             let mut matched: u64 = 0;
             // Resolve extension names → per-drive u16 IDs (< 1µs).
             let resolved_ext_ids = drive.resolve_ext_ids(&filter.extensions);
+            // An extension filter that resolves to NO interned IDs on this
+            // drive can match nothing — `*.dll --count` on a drive with zero
+            // `.dll` files must contribute 0, not fall through to an
+            // unfiltered scan. (An empty resolution previously read as "no
+            // extension filter", counting every record on the drive — found
+            // live by the bench suite's count-vs-file-sink cross-check.)
+            if !filter.extensions.is_empty() && resolved_ext_ids.is_empty() {
+                return (local, 0, 0);
+            }
 
             for (idx, record) in drive.records.iter().enumerate() {
                 scanned += 1;
