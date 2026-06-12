@@ -11,7 +11,7 @@ use uffs_client::protocol::{AggregateSpecWire, SearchParams};
 
 use crate::error::BridgeError;
 use crate::roots::{self, RootsState};
-use crate::text::format_aggregate_summary;
+use crate::text::{format_aggregate_summary, format_scan_header};
 
 /// Input parameters for the `uffs_facet_values` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -118,7 +118,11 @@ pub(crate) async fn run(
         }
     }
 
-    let summary = format_aggregate_summary(&response.aggregations);
+    let summary = format!(
+        "{}\n{}",
+        format_scan_header(response.records_scanned, response.duration_ms),
+        format_aggregate_summary(&response.aggregations)
+    );
 
     // Extract the first non-None next_cursor from the aggregation results.
     let next_cursor = response
@@ -128,6 +132,8 @@ pub(crate) async fn run(
 
     let structured = crate::schemas::FacetValuesOutput {
         field: args.field,
+        records_scanned: response.records_scanned,
+        duration_ms: response.duration_ms,
         aggregations: serde_json::to_value(&response.aggregations)?,
         next_cursor,
     };

@@ -13,7 +13,7 @@ use uffs_client::protocol::{AggregateSpecWire, SearchParams};
 
 use crate::error::BridgeError;
 use crate::roots::{self, RootsState};
-use crate::text::format_aggregate_summary;
+use crate::text::{format_aggregate_summary, format_scan_header};
 
 /// Maximum character length for the text response before truncation.
 ///
@@ -151,7 +151,11 @@ pub(crate) async fn run(
         "uffs_aggregate: daemon response received"
     );
 
-    let summary = format_aggregate_summary(&response.aggregations);
+    let summary = format!(
+        "{}\n{}",
+        format_scan_header(response.records_scanned, response.duration_ms),
+        format_aggregate_summary(&response.aggregations)
+    );
 
     // Extract the first non-None next_cursor from the aggregation results.
     let next_cursor = response
