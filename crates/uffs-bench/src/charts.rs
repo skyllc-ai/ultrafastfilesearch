@@ -311,7 +311,8 @@ fn throughput_m_hundredths(rows: u64, p50_ms: u64) -> u64 {
     ((rows * 1000).checked_div(p50_ms).unwrap_or(0) * 100 + 500_000) / 1_000_000
 }
 
-/// Wall-clock seconds with one decimal, rounded to nearest (`11980` → `"12.0"`).
+/// Wall-clock seconds with one decimal, rounded to nearest (`11980` →
+/// `"12.0"`).
 fn secs_label(ms: u64) -> String {
     let tenths = (ms + 50) / 100;
     format!("{}.{}", tenths / 10, tenths % 10)
@@ -341,7 +342,7 @@ pub fn full_scan_svg(cells: &[FullScanCell], uffs_label: &str, subtitle: &str) -
     let hero = cells.iter().max_by_key(|cell| cell.rows)?;
     let secs = secs_label(hero.p50_ms);
     let rows = rows_label(hero.rows);
-    let thr = throughput_m_hundredths(hero.rows, hero.p50_ms);
+    let tput = throughput_m_hundredths(hero.rows, hero.p50_ms);
     let title = format!("Full-scan export: {rows} records → CSV in {secs} s");
 
     // Per-drive breakdown (everything except the hero scope), in CSV order.
@@ -391,7 +392,7 @@ pub fn full_scan_svg(cells: &[FullScanCell], uffs_label: &str, subtitle: &str) -
          written to disk</text>\n\
          <line x1=\"408\" y1=\"150\" x2=\"408\" y2=\"208\" stroke=\"#0F0D0B\" stroke-width=\"1\"/>\n\
          <text x=\"508\" y=\"180\" text-anchor=\"middle\" font-size=\"40\" font-weight=\"800\" \
-         fill=\"#CE422B\">{thr_w}.{thr_f:02}<tspan font-size=\"18\" font-weight=\"500\" \
+         fill=\"#CE422B\">{tput_whole}.{tput_frac:02}<tspan font-size=\"18\" font-weight=\"500\" \
          fill=\"#9A8D82\">M/s</tspan></text>\n\
          <text x=\"508\" y=\"204\" text-anchor=\"middle\" font-size=\"12\" \
          fill=\"#9A8D82\">sustained throughput</text>\n\
@@ -433,8 +434,8 @@ pub fn full_scan_svg(cells: &[FullScanCell], uffs_label: &str, subtitle: &str) -
          </svg>",
         rows_n = rows.split(' ').next().unwrap_or("0"),
         rows_unit = rows.split(' ').nth(1).unwrap_or("M"),
-        thr_w = thr / 100,
-        thr_f = thr % 100,
+        tput_whole = tput / 100,
+        tput_frac = tput % 100,
     ))
 }
 
@@ -463,8 +464,12 @@ pub fn render_all(
     let subtitle = "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better";
     let mut written = Vec::new();
 
-    if let Some(svg) = head_to_head_svg(&rival_cells(csv, "Everything"), uffs_label, es_label, subtitle)
-        && let Some(name) = write_svg(host, out_dir, HEAD_TO_HEAD_SVG, &svg)
+    if let Some(svg) = head_to_head_svg(
+        &rival_cells(csv, "Everything"),
+        uffs_label,
+        es_label,
+        subtitle,
+    ) && let Some(name) = write_svg(host, out_dir, HEAD_TO_HEAD_SVG, &svg)
     {
         written.push((name, "UFFS vs Everything head-to-head p50"));
     }
@@ -542,7 +547,10 @@ pub fn render_charts_cli(
         ));
     }
     for (name, alt) in &written {
-        host.out(&format!("[charts] wrote {} — {alt}", out_dir.join(name).display()));
+        host.out(&format!(
+            "[charts] wrote {} — {alt}",
+            out_dir.join(name).display()
+        ));
     }
     Ok(())
 }
@@ -609,8 +617,7 @@ UFFS-C++,HOT,file,C,full_scan,8621,9000,3216011,0,PASS,10,10
         let first = cells.first().expect("cpp pair");
         assert_eq!((first.uffs_p50_ms, first.rival_p50_ms), (1531, 8621));
         // Title reflects the rival label.
-        let svg =
-            head_to_head_svg(&cells, "UFFS v1", "UFFS C++ (MFT re-read)", "s").expect("svg");
+        let svg = head_to_head_svg(&cells, "UFFS v1", "UFFS C++ (MFT re-read)", "s").expect("svg");
         assert!(svg.contains("UFFS v1 vs UFFS C++ (MFT re-read) — 1 / 1 cells faster at p50"));
     }
 
