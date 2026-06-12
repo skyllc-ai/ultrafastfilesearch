@@ -18,12 +18,13 @@
 //! is unit-testable under the `MockHost` on any OS.
 
 use alloc::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod bootstrap;
 mod daemon;
 mod es_instance;
 mod specs;
+mod stage_meta;
 
 use bootstrap::{load_or_new_state, resolve_bundle_dir, run_fetch_competitors};
 pub(crate) use specs::everything_ini_path;
@@ -32,6 +33,8 @@ use specs::{
     preflight_spec_from_cli,
 };
 
+pub(crate) use self::stage_meta::{stage_banner, stage_step_id};
+use self::stage_meta::{stage_selected, stage0_outputs};
 use crate::cards::{
     assembly_card, dry_run_result, es_launch_card, measurement_card, plan_card, report_scope,
     stage0_result, tool_selection_card, uffs_restart_card,
@@ -107,47 +110,6 @@ const fn act_of(decision: Decision) -> Act {
         Decision::Skip => Act::Skip,
         Decision::Back | Decision::Abort => Act::Stop,
     }
-}
-
-/// Whether `stage` is selected by the `--only-stage` / `--from-stage` /
-/// `--skip-stages` filters.
-fn stage_selected(cli: &Cli, stage: u32) -> bool {
-    if cli.skip_stages.contains(&stage) {
-        return false;
-    }
-    match (cli.only_stage, cli.from_stage) {
-        (Some(only), _) => stage == only,
-        (None, Some(from)) => stage >= from,
-        (None, None) => true,
-    }
-}
-
-/// Resume-engine step id for a measurement stage.
-pub(crate) fn stage_step_id(stage: u32) -> String {
-    format!("stage{stage}/measure")
-}
-
-/// Operator-facing banner for a measurement stage.
-pub(crate) fn stage_banner(stage: u32) -> String {
-    let label = match stage {
-        1 => "CROSS-TOOL",
-        2 => "PARITY",
-        _ => "FULL SUITE",
-    };
-    format!("STAGE {stage}: {label}")
-}
-
-/// Artifact paths Stage 0 writes into the bundle (for the state record).
-fn stage0_outputs(bundle_dir: &Path) -> Vec<String> {
-    [
-        "env.json",
-        "env.md",
-        "competitor-preflight.json",
-        "matrix.json",
-    ]
-    .iter()
-    .map(|name| bundle_dir.join(name).display().to_string())
-    .collect()
 }
 
 /// Report any restore failures collected at teardown ("crumbs left behind").
@@ -475,8 +437,9 @@ impl Orchestrator<'_> {
                 es_instance::INSTANCE_NAME,
             )
         {
-            self.host
-                .out(&format!("[es-instance] Everything {version} (version captured via IPC)"));
+            self.host.out(&format!(
+                "[es-instance] Everything {version} (version captured via IPC)"
+            ));
         }
         // Second-pass preflight: re-probe ES now the instance is loaded.
         // Restrict candidate_drives to drives that survived the first pass
@@ -659,9 +622,7 @@ impl Orchestrator<'_> {
                 .out(&format!("[run-state] as-found: {}", as_found.describe()));
             run_state::register_restore(guard, &uffs_exe, as_found);
         }
-        let mut capture = will_capture
-            .then(|| self.capture(session))
-            .transpose()?;
+        let mut capture = will_capture.then(|| self.capture(session)).transpose()?;
         // Show UFFS restart gate (kill + start with only capable drives), then
         // ES-instance gate, in that order — both before the plan card so the
         // final matrix is what gets locked into stage0.
@@ -770,7 +731,9 @@ pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
             es_label,
             cpp_label,
         }) => {
-            return crate::charts::render_charts_cli(host, csv, out, uffs_label, es_label, cpp_label);
+            return crate::charts::render_charts_cli(
+                host, csv, out, uffs_label, es_label, cpp_label,
+            );
         }
         None => {}
     }

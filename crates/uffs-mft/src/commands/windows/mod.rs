@@ -7,6 +7,7 @@ mod bench;
 mod benchmark_index;
 mod benchmark_mft;
 mod bitmap_diag;
+mod drives;
 mod incremental;
 mod info;
 mod read;
@@ -21,11 +22,12 @@ pub(crate) use self::benchmark_index::{
 };
 pub(crate) use self::benchmark_mft::cmd_benchmark_mft;
 pub(crate) use self::bitmap_diag::cmd_bitmap_diag;
+pub(crate) use self::drives::cmd_drives;
 pub(crate) use self::incremental::{
     cmd_cache_clear, cmd_cache_get, cmd_cache_status, cmd_index_all, cmd_index_load,
     cmd_index_save, cmd_index_update,
 };
-pub(crate) use self::info::{cmd_drives, cmd_info};
+pub(crate) use self::info::cmd_info;
 pub(crate) use self::read::cmd_read;
 pub(crate) use self::save::cmd_save;
 pub(crate) use self::usn::{cmd_usn_info, cmd_usn_read};
