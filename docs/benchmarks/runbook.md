@@ -230,12 +230,22 @@ pre-filled report scaffold. To promote it to a canonical benchmark report:
    §Known regressions section, and verify every table number against
    `full-suite.csv` and `cross-tool-summary.csv`.
 
-2. **Copy raw artifacts** into the tree:
+2. **Copy raw artifacts** into the tree — the measurements *and* the Stage-0
+   provenance set (storage inventory, env fingerprint, negotiated matrix,
+   ES RAM-budget data) that back the report's environment sections:
    ```powershell
-   copy LOG\bench\<timestamp>\full-suite.csv         docs\benchmarks\raw\<date>-vX.Y.Z_full-suite.csv
-   copy LOG\bench\<timestamp>\cross-tool-summary.csv docs\benchmarks\raw\<date>-vX.Y.Z_cross-tool.csv
-   copy LOG\bench\<timestamp>\parity.txt             docs\benchmarks\raw\<date>-vX.Y.Z_parity.txt
+   copy LOG\bench\<timestamp>\cross-tool-summary.csv     docs\benchmarks\raw\<date>-vX.Y.Z_cross-tool-summary.csv
+   copy LOG\bench\<timestamp>\full-suite.csv             docs\benchmarks\raw\<date>-vX.Y.Z_full-suite.csv
+   copy LOG\bench\<timestamp>\parity.txt                 docs\benchmarks\raw\<date>-vX.Y.Z_parity.txt
+   copy LOG\bench\<timestamp>\drives.json                docs\benchmarks\raw\<date>-vX.Y.Z_drives.json
+   copy LOG\bench\<timestamp>\env.json                   docs\benchmarks\raw\<date>-vX.Y.Z_env.json
+   copy LOG\bench\<timestamp>\matrix.json                docs\benchmarks\raw\<date>-vX.Y.Z_matrix.json
+   copy LOG\bench\<timestamp>\competitor-preflight.json  docs\benchmarks\raw\<date>-vX.Y.Z_competitor-preflight.json
    ```
+   Add an index row for each in `docs/benchmarks/raw/README.md`. Orchestrator
+   internals (`state.json`, `fingerprint-*.json`, `restore-manifest.json`) and
+   rendered views (`REPORT-DRAFT.md`, `env.md`, `summary.md`) stay in the
+   bundle — they are not raw captures.
 
 3. **Promote the charts** — the suite already generated the brand-kit SVGs;
    copy them out of the bundle:

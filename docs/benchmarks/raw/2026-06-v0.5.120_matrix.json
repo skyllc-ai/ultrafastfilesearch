@@ -1,0 +1,43 @@
+{
+  "capable_drives": [
+    "C",
+    "D",
+    "F",
+    "G"
+  ],
+  "cross_cells": [
+    {
+      "drive": "C",
+      "pattern": "all_dlls"
+    },
+    {
+      "drive": "C",
+      "pattern": "full_scan"
+    },
+    {
+      "drive": "D",
+      "pattern": "all_dlls"
+    },
+    {
+      "drive": "D",
+      "pattern": "full_scan"
+    },
+    {
+      "drive": "F",
+      "pattern": "all_dlls"
+    },
+    {
+      "drive": "F",
+      "pattern": "full_scan"
+    },
+    {
+      "drive": "G",
+      "pattern": "all_dlls"
+    },
+    {
+      "drive": "G",
+      "pattern": "full_scan"
+    }
+  ],
+  "uffs_only": []
+}

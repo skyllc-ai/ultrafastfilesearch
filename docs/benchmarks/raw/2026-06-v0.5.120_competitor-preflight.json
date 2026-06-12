@@ -1,0 +1,90 @@
+{
+  "drives": [
+    {
+      "drive": "C",
+      "configured": true,
+      "loaded": true,
+      "hot": true,
+      "record_count": 3295556,
+      "uffs_record_count": 3510215,
+      "es_status": "loaded"
+    },
+    {
+      "drive": "D",
+      "configured": true,
+      "loaded": true,
+      "hot": true,
+      "record_count": 4772520,
+      "uffs_record_count": 7066038,
+      "es_status": "loaded"
+    },
+    {
+      "drive": "F",
+      "configured": true,
+      "loaded": true,
+      "hot": true,
+      "record_count": 2124007,
+      "uffs_record_count": 2221343,
+      "es_status": "loaded"
+    },
+    {
+      "drive": "G",
+      "configured": true,
+      "loaded": true,
+      "hot": true,
+      "record_count": 15126,
+      "uffs_record_count": 15162,
+      "es_status": "loaded"
+    }
+  ],
+  "cells": [
+    {
+      "drive": "C",
+      "pattern": "all_dlls",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "C",
+      "pattern": "full_scan",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "D",
+      "pattern": "all_dlls",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "D",
+      "pattern": "full_scan",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "F",
+      "pattern": "all_dlls",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "F",
+      "pattern": "full_scan",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "G",
+      "pattern": "all_dlls",
+      "est_rows": 0,
+      "es_feasible": true
+    },
+    {
+      "drive": "G",
+      "pattern": "full_scan",
+      "est_rows": 0,
+      "es_feasible": true
+    }
+  ]
+}
