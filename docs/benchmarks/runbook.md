@@ -237,18 +237,29 @@ pre-filled report scaffold. To promote it to a canonical benchmark report:
    copy LOG\bench\<timestamp>\parity.txt             docs\benchmarks\raw\<date>-vX.Y.Z_parity.txt
    ```
 
-3. **Generate charts** from the CSV (see existing chart scripts in
-   `scripts/windows/`) and commit them under
-   `docs/benchmarks/charts/<date>-vX.Y.Z/`.
+3. **Promote the charts** — the suite already generated the brand-kit SVGs;
+   copy them out of the bundle:
+   ```powershell
+   copy LOG\bench\<timestamp>\charts\*.svg docs\benchmarks\charts\<date>-vX.Y.Z\
+   ```
 
 4. **Move the current canonical report** to `docs/benchmarks/archive/`
-   (verbatim — no edits).
+   (verbatim — no edits beyond fixing relative link paths).
 
 5. **Commit the new report** as `docs/benchmarks/<date>-vX.Y.Z-<scope>.md`
    and update `docs/benchmarks/README.md` to point at it.
 
-6. **Update `competitors.toml`** if the competitor version changed:
+6. **Refresh `docs/benchmarks/baseline.json`** from the new report's cells —
+   the suite's `## vs baseline` section compares every future run against
+   this file, so it must always mirror the current canonical numbers.
+
+7. **Update `competitors.toml`** if the competitor version changed:
    `scripts/windows/competitors.toml`.
+
+8. **Cross-check evergreen surfaces** — the root `README.md` proof strip and
+   snapshot section, `docs/user-manual/performance.md` §5a, and the engine
+   docs (`01-overview`, `09-performance`, `11-performance-deep-dive`) cite
+   the canonical headline numbers and must be refreshed when they move.
 
 ---
 

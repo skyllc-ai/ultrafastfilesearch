@@ -11,7 +11,11 @@ Version-dated, shareable SVG charts generated from the canonical benchmark repor
 ```
 charts/
 ├── README.md                  <- this file
-└── 2026-04-v0.5.66/           <- one directory per canonical report snapshot
+├── 2026-06-v0.5.120/          <- current canonical snapshot (suite-generated)
+│   ├── head-to-head-vs-everything.svg     (30/30 vs Everything, median 0.36×)
+│   ├── daemon-hot-vs-cpp.svg              (daemon HOT vs per-invocation MFT re-read)
+│   └── full-scan-throughput.svg           (4.8 s / 10.2 M rows / 2.11 M rec/s)
+└── 2026-04-v0.5.66/           <- prior snapshot (hand-written era, brand-restyled)
     ├── head-to-head-vs-everything.svg     (§Head-to-head 1: 12/12 vs Everything)
     ├── cold-parity-vs-cpp.svg             (§Head-to-head 2: cold-start parity)
     ├── daemon-hot-vs-cpp.svg              (§Head-to-head 2: daemon HOT steady-state)

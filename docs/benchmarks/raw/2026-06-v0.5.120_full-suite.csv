@@ -1,0 +1,9 @@
+tool,version,phase,sink,drive,pattern,rows,p50_ms,p95_ms,stddev_ms,rounds,verdict,notes
+uffs,uffs 0.5.120,hot,count,C,all_dlls,166684,26.0,70.0,13.3,10,ok,
+uffs,uffs 0.5.120,hot,count,C,full_scan,3513083,46.0,108.0,21.2,10,ok,
+uffs,uffs 0.5.120,hot,count,D,all_dlls,44529,24.0,61.0,11.0,10,ok,
+uffs,uffs 0.5.120,hot,count,D,full_scan,7066038,71.0,165.0,28.4,10,ok,
+uffs,uffs 0.5.120,hot,count,F,all_dlls,152584,23.0,104.0,24.4,10,ok,
+uffs,uffs 0.5.120,hot,count,F,full_scan,2221343,35.0,68.0,10.0,10,ok,
+uffs,uffs 0.5.120,hot,count,G,all_dlls,15162,17.0,19.0,0.7,10,ok,
+uffs,uffs 0.5.120,hot,count,G,full_scan,15162,18.0,21.0,1.2,10,ok,

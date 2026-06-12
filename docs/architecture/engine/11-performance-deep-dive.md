@@ -5,7 +5,7 @@
 This document explains why UFFS is a high-performance MFT search engine, the engineering decisions behind it, and real-world benchmark data from a 7-drive, 25.9-million-record production system tested up to **100M records**.
 
 > **See also:**
-> - [`docs/benchmarks/`](../../benchmarks/) — publication-grade competitive-benchmark hub (UFFS vs Everything vs UFFS C++); current canonical report: [`2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md).
+> - [`docs/benchmarks/`](../../benchmarks/) — publication-grade competitive-benchmark hub (UFFS vs Everything vs UFFS C++); current canonical report: [`2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md).
 > - [User-manual performance page](../../user-manual/performance.md) — full benchmark reference with per-drive tables and validation throughput.
 > - [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) — engineering-detail source (internal).
 
@@ -102,10 +102,12 @@ now dominates.  The `*` fullscan at 1.1 s is a separate regression
 from the v0.5.4 163 ms number and is tracked as Phase 5 target #2 in
 `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/research/cross-tool-benchmark-analysis.md` §7 (bounded-heap top-N).
 
-Full scans still sustain ~1.72 M records/second end-to-end (not
-167 M/sec — that was an in-memory scan rate without output
-materialisation; see § Full-scan at scale in the cross-tool doc for
-the disk-write-inclusive number).
+Full scans sustain **~2.11 M records/second** end-to-end on v0.5.120
+(10.2 M rows → CSV in 4.8 s; see the
+[current canonical report](../../benchmarks/2026-06-v0.5.120-vs-everything.md) —
+v0.5.66 measured 1.72 M rec/s). Not 167 M/sec — that was an in-memory
+scan rate without output materialisation; the end-to-end figure is the
+disk-write-inclusive number.
 
 ### Bulk Retrieval (CSV, `--out-dir`, per-drive)
 

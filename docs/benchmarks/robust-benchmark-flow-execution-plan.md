@@ -10,7 +10,7 @@ on each stage before it runs.
 
 **Companion docs:** [`methodology.md`](methodology.md) (the fairness doctrine —
 *what* we measure and *why*), [`README.md`](README.md) (the hub), and the
-canonical report [`2026-04-v0.5.66-vs-everything-and-cpp.md`](2026-04-v0.5.66-vs-everything-and-cpp.md).
+current canonical report [`2026-06-v0.5.120-vs-everything.md`](2026-06-v0.5.120-vs-everything.md).
 This document is the *how we run it without wrecking the machine* layer.
 
 ---

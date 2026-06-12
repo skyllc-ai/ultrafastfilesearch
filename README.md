@@ -19,12 +19,12 @@
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
 
-> Proven on a real 7-drive, 25.9M-record Windows system; scale-ceiling tested to **100.4M records** with offline MFT clones (v0.5.4 baseline; v0.5.71 current):
+> Proven on a real 7-drive, 25.9M-record Windows system; scale-ceiling tested to **100.4M records** with offline MFT clones (v0.5.4 baseline; v0.5.120 current):
 > - **68.5 s COLD** — raw MFT read + compact index build (v0.5.71, flat ± 4 % vs v0.5.4)
 > - **5.7 s WARM CACHE** — restart from serialized cache (v0.5.62/v0.5.71, **−17 %** vs v0.5.4)
 > - **0–3 ms daemon-side** for targeted queries — exact/prefix/ext/substring, unchanged from v0.5.4
-> - **29–32 ms CLI end-to-end** for targeted queries on v0.5.71 (v0.5.4 measured 9–13 ms e2e before the post-Phase-1 thin-client spawn floor settled at ~28 ms)
-> - **vs Everything on v0.5.71**: UFFS wins **12/12 head-to-head cells** at p50 on C+D, median ratio **0.51× (~1.96× faster)** — see the [**benchmark hub**](docs/benchmarks/) and the [full v0.5.71 report](docs/benchmarks/2026-04-v0.5.71-vs-everything-and-cpp.md)
+> - **17–39 ms CLI end-to-end** for targeted single-drive queries on v0.5.120 (Windows process spawn + query; v0.5.71 measured 29–32 ms)
+> - **vs Everything on v0.5.120**: UFFS wins **30/30 head-to-head cells** at p50 across four drives + the combined index, median ratio **0.36× (~2.8× faster)** — see the [**benchmark hub**](docs/benchmarks/) and the [full v0.5.120 report](docs/benchmarks/2026-06-v0.5.120-vs-everything.md)
 
 UFFS is built for **exact filename, path, and metadata search** at scales where directory walking, shell search, and some automation surfaces become the bottleneck. It is open source, written in Rust, and designed first for deterministic local search; CLI, TUI, API, and MCP are all interfaces on top of the same engine.
 
@@ -69,9 +69,9 @@ Every clip runs the **real binary** against real NTFS data with unedited timings
 
 ---
 
-## Benchmark snapshot (v0.5.71)
+## Benchmark snapshot (v0.5.120)
 
-Measured on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, 7 NTFS volumes totaling 26.1 M records; scaled to 100.4 M with offline MFT clones (v0.5.4 era). Full captures in [`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt`](docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt) + [`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
+Cross-tool numbers measured 2026-06-11 on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, four NTFS volumes (C/D/F/G, 12.8 M records); phase table below from the v0.5.71/v0.5.4 captures (7 volumes, 26.1 M records; scaled to 100.4 M with offline MFT clones). Raw data: [`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) + the [April captures](docs/benchmarks/raw/). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
 
 | Phase | What happens | ALL 7 drives (v0.5.71) | Single NVMe (v0.5.4) |
 |-------|--------------|-----------------------:|---------------------:|
@@ -80,16 +80,15 @@ Measured on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, 7 NTFS volumes t
 | **HOT (`*` top-100)** | Full-scan across all drives with `--limit 100` | **1 112 ms** e2e¹ | 27 ms (v0.5.4) |
 | **HOT (targeted)** | `notepad.exe` / `win*` / `*.dll` / `config` etc. | **29–32 ms** CLI e2e | 9–10 ms (v0.5.4) |
 
-¹ The `*` top-100 path regressed from the v0.5.4 163 ms figure after the Phase 2 sort rewrite ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:657`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt), n=30, StdDev 21 ms). Daemon-side is 1 081 ms — CLI tax is negligible here. Bounded-heap top-N fix is Phase 5 target #2 in the [cross-tool analysis](docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions) doc.
+¹ The `*` top-100 path regressed from the v0.5.4 163 ms figure after the Phase 2 sort rewrite ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:657`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt), n=30, StdDev 21 ms). Daemon-side is 1 081 ms — CLI tax is negligible here. Bounded-heap top-N fix is Phase 5 target #2 in the [cross-tool analysis](docs/benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions) doc.
 
-Hot-path context (v0.5.71, 30 rounds, p50):
+Hot-path context (v0.5.120, 10 rounds per cell, p50):
 - **0–3 ms daemon-side** for targeted queries (exact, prefix, ext, substring, combined) — unchanged since v0.5.4
-- **29–32 ms CLI end-to-end** for targeted queries across all 7 drives (~28 ms post-Phase-1 cold-spawn floor + 0–3 ms daemon)
-- **UFFS wins 12/12 cells vs Everything** at p50 on C+D, median ratio **0.51×** — see the [benchmark hub](docs/benchmarks/)
-- **Direct stdout redirect crossover**: UFFS **0.27×–0.53×** vs ES across 4 size classes (34 K → 167 K rows)
-- **323 k rows/sec** bulk export throughput (CSV, `--out-dir`)
-- **Full-scan export** `*` → CSV at 26 M records: **13.6 s p50** (1.72 M rec/s through the full pipeline)
-- **100.4 M records** tested (v0.5.4 synthetic-clone data; not re-verified on v0.5.71): targeted queries stayed at 11–13 ms e2e
+- **17–39 ms CLI end-to-end** for targeted single-drive queries (Windows process spawn + query); 21–108 ms across the combined four-drive index
+- **UFFS wins 30/30 cells vs Everything** at p50 across C/D/F/G + combined, median ratio **0.36× (~2.8× faster)** — every cell from the April snapshot improved (median −33%); see the [benchmark hub](docs/benchmarks/)
+- **Full-scan export** `*` → CSV at 10.2 M rows (combined): **4.8 s p50 ≈ 2.11 M rec/s** through the daemon → CSV pipeline (+23% vs April) — a workload Everything's CLI export cannot run
+- **180×–3 400× vs the C++ reference** on targeted queries (daemon HOT vs per-invocation MFT re-read); 6.6× on combined full-scan
+- **100.4 M records** tested (v0.5.4 synthetic-clone data; not re-verified since): targeted queries stayed at 11–13 ms e2e
 
 > 📖 **[Benchmark hub](docs/benchmarks/)** — dated competitive-benchmark reports, fairness methodology, archive of prior versions, reproduction scripts.
 > 📖 **[Full benchmark data](docs/user-manual/performance.md)** — methodology, per-drive tables, interactive search percentiles, bulk retrieval, scale ceiling, and caveats.

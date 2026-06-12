@@ -12,17 +12,18 @@ This document describes the performance characteristics of UFFS, the optimizatio
 
 ## Benchmark Results (current: v0.5.66)
 
-> **Publication-grade competitive benchmark report:** [`docs/benchmarks/`](../../benchmarks/) — dated snapshots, fairness methodology, archive policy, reproduction scripts. The current canonical report is [`2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md).
+> **Publication-grade competitive benchmark report:** [`docs/benchmarks/`](../../benchmarks/) — dated snapshots, fairness methodology, archive policy, reproduction scripts. The current canonical report is [`2026-06-v0.5.120-vs-everything.md`](../../benchmarks/2026-06-v0.5.120-vs-everything.md).
 >
 > This engineering-reference doc holds the *raw* cross-drive measurements and per-phase diagnostics used internally. For the story-shaped version with fairness rules, competitor positioning, and TL;DR headline numbers, start at the benchmark hub.
 
-Headline cross-tool result on v0.5.66 (from
-[`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt:580-625`](../../benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt), n=30, HOT,
-apples-to-apples C+D scope):
+Headline cross-tool result on v0.5.120 (from
+[`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](../../benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv), n=10, HOT,
+C/D/F/G + combined scope):
 
-**UFFS beats Everything 12/12 at p50**, median ratio **0.51×
-(UFFS ~1.96× faster)**.  Full table and analysis in
-[`docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md) §Head-to-head 1, with the engineering-detail source at [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §Current State (internal).
+**UFFS beats Everything 30/30 at p50**, median ratio **0.36×
+(UFFS ~2.8× faster)** — every cell published in the v0.5.66 snapshot
+improved, median −33%.  Full table and analysis in
+[`docs/benchmarks/2026-06-v0.5.120-vs-everything.md`](../../benchmarks/2026-06-v0.5.120-vs-everything.md) §Head-to-head; the prior v0.5.66 series lives in the [archived April report](../../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md) §Head-to-head 1, with the engineering-detail source at [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §Current State (internal).
 
 7-drive aggregate numbers on v0.5.62 (from
 [`docs/benchmarks/raw/2026-04-v0.5.62_aggregate-baseline.txt:113-479`](../../benchmarks/raw/2026-04-v0.5.62_aggregate-baseline.txt)):

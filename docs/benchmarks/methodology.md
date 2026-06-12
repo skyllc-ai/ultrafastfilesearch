@@ -4,7 +4,7 @@
 
 **Purpose:** the fairness-doctrine rules that govern every benchmark UFFS publishes. Any single number in any canonical report is traceable to the discipline described here. If the discipline fails, the report fails — and we'd rather not publish the report at all than fudge the discipline.
 
-**Primary reference:** [`2026-04-v0.5.66-vs-everything-and-cpp.md`](2026-04-v0.5.66-vs-everything-and-cpp.md) is the current canonical competitive report. This methodology page is the companion — the "here are the rules we played by" document that readers can cite without reading the full 320-line report.
+**Primary reference:** [`2026-06-v0.5.120-vs-everything.md`](2026-06-v0.5.120-vs-everything.md) is the current canonical competitive report (prior snapshots live in [`archive/`](archive/)). This methodology page is the companion — the "here are the rules we played by" document that readers can cite without reading the full report.
 
 ---
 
@@ -177,8 +177,8 @@ These are not excuses; they're the backlog. Every canonical report re-evaluates 
 
 ## Where to go next
 
-- **The current numbers:** [`2026-04-v0.5.66-vs-everything-and-cpp.md`](2026-04-v0.5.66-vs-everything-and-cpp.md).
-- **The shareable charts:** [`charts/2026-04-v0.5.66/`](charts/2026-04-v0.5.66/).
+- **The current numbers:** [`2026-06-v0.5.120-vs-everything.md`](2026-06-v0.5.120-vs-everything.md).
+- **The shareable charts:** [`charts/2026-06-v0.5.120/`](charts/2026-06-v0.5.120/).
 - **The raw logs that back every number:** [`raw/`](raw/).
 - **The hub overview:** [`README.md`](README.md).
 - **Internal engineering-detail source:** [`docs/research/cross-tool-benchmark-analysis.md`](../research/cross-tool-benchmark-analysis.md) — the forensic version of this document, currently kept internal. If you're reviewing a specific cell and suspect a methodology bug, contact the project and we'll share the relevant engineering-internal context for that cell.
