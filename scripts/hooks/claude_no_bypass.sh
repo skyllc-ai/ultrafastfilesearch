@@ -28,7 +28,10 @@ import json, sys
 print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
 ')"
 
-if printf '%s' "$command" | grep -qE -- '--no-verify|-c[[:space:]]*core\.hooksPath'; then
+# Match only actual invocations: `git ... --no-verify` / `git -c core.hooksPath`
+# on one line, or a continuation line starting with the flag.  Plain prose
+# mentions of the flag (PR bodies, docs) must not trip the guard.
+if printf '%s' "$command" | grep -qE -- 'git[^|;&]*--no-verify|git[^|;&]*-c[[:space:]]*core\.hooksPath|^[[:space:]]*--no-verify'; then
   {
     echo "BLOCKED: gate-bypass flag detected (--no-verify or core.hooksPath override)."
     echo "The quality gates in scripts/hooks/ must run on every commit and push."
