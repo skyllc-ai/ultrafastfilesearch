@@ -63,7 +63,7 @@ A benchmark is only useful if readers can see both the fastest successful run an
 | SATA HDD | WD 8 TB × 2 (WDC WD82PURZ, M: and S:) |
 | USB storage | SanDisk Extreme 58 GB USB stick (G:) |
 | Power profile | AMD Ryzen High Performance |
-| UFFS version | 0.5.62 / 0.5.64 (documented tables pinned to v0.5.4 until a re-bench refreshes them — see §5a for current cross-tool numbers) |
+| UFFS version | 0.5.120 (latest cross-tool + full-scan-export captures; older per-phase tables carry their version tags — see §5a for current cross-tool numbers) |
 
 ### Drives Under Test
 
@@ -98,7 +98,7 @@ Delete cache files            Cache files stay on disk      Index in memory
 Read raw MFT from disk        Deserialize .iocp cache       Query directly
 Parse → build index           → build index                 ↓
 Write .iocp cache             ↓                             Results
-↓                             Results                       (29 ms–1.1 s CLI e2e)
+↓                             Results                       (17 ms–1.1 s CLI e2e)
 Results
 (seconds to minutes)          (~0.6–6.9 s)
 ```
@@ -187,7 +187,8 @@ yet — they are expected to scale proportionally.
 > latency is unchanged (0–3 ms), but CLI end-to-end now has a ~28 ms
 > Windows process-creation floor that v0.5.4 did not report (the
 > Phase 1 thin-client shaved the cold-spawn from ~50 ms to ~28 ms;
-> per-process startup now dominates sub-30 ms queries).  The
+> per-process startup now dominates sub-30 ms queries).  On v0.5.120
+> that floor has dropped further to **17–18 ms** (see §5a).  The
 > `*` top-100 path has separately regressed from 163 ms to 1 112 ms
 > and is tracked as Phase 5 target #2 (bounded-heap top-N) — see
 > [cross-tool benchmark analysis](../research/cross-tool-benchmark-analysis.md) §7.
@@ -254,9 +255,11 @@ Every one of these 12 cells improved over the
 numbers held roughly flat. Historical v0.5.66 table and analysis in
 [cross-tool benchmark analysis](../research/cross-tool-benchmark-analysis.md).
 
-> **Note:** The ~28 ms UFFS floor on every small-result cell is the
-> Windows CLI process-creation tax measured in
-> `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/research/perf-phase2-measurement-plan.md` (Null-binary matrix
+> **Note:** The 17–20 ms UFFS floor on every small-result cell is the
+> Windows CLI process-creation + pipe tax — exposed directly by the
+> G-drive empty-result cells in the same v0.5.120 capture (17–18 ms
+> p50 for zero rows).  It was ~28 ms on v0.5.66 (measured in
+> `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/research/perf-phase2-measurement-plan.md`, Null-binary matrix
 > refresh).  The daemon itself responds in 0–3 ms on targeted queries.
 
 ---
@@ -352,7 +355,8 @@ The `--profile` flag breaks down where time is spent inside the daemon.
 > `*system32*`) skip the full scan and return in **0–3 ms daemon-side**
 > on v0.5.66 — **unchanged from v0.5.4**.  The `*` in-memory scan rate
 > is still ~167 M rec/s when not materialising; end-to-end CSV export
-> at 26 M rows is **1.72 M rec/s** (see §7).
+> of the full estate is **≈ 1.95 M rec/s on v0.5.120** (23.3 M rows in
+> 12.0 s; was 1.72 M rec/s on v0.5.66 — see §7).
 
 ### Per-Drive Profile (Cold Start)
 
@@ -374,9 +378,31 @@ The `--profile` flag breaks down where time is spent inside the daemon.
 ## 7  Bulk Retrieval Throughput
 
 Bulk retrieval measures how fast UFFS can export large result sets.
-Two output modes are tested: shell pipe (stdout) and direct file write (`--out-dir`).
 
-### CSV Export — Live Drives (7 drives, 25.9M records, `--out-dir`)
+### Full-Scan CSV Export — v0.5.120 current (all 7 drives, `*` → file, HOT, p50, n=10)
+
+Source: [`docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv`](../benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv)
+(`--hide-system --hide-ads`, end-to-end through the daemon pipe):
+
+| Drive | Wall (p50) | Rows written | Throughput |
+|-------|-----------:|-------------:|-----------:|
+| C: | 1.59 s | 3,295,508 | 2.08 M rows/s |
+| D: | 2.26 s | 4,772,519 | 2.11 M rows/s |
+| E: | 1.44 s | 2,928,074 | 2.03 M rows/s |
+| F: | 0.93 s | 2,124,007 | 2.29 M rows/s |
+| G: | 0.03 s | 15,126 | — (floor-bound) |
+| M: | 0.84 s | 1,908,750 | 2.28 M rows/s |
+| S: | 3.83 s | 8,278,062 | 2.16 M rows/s |
+| **All 7** | **11.98 s** | **23,322,046** | **≈ 1.95 M rows/s** |
+
+The complete estate streams to CSV in **12.0 s** — the largest single
+drive (S:, 8.3 M rows) exports in **3.83 s**, where the v0.5.4 harness
+below measured 25.6 s for the same drive (~6× improvement).
+
+### CSV Export Tiers — v0.5.4 historical (7 drives, 25.9M records, `--out-dir`)
+
+Kept for the tier-scaling shape; absolute rates are superseded by the
+v0.5.120 table above.
 
 | Tier | Rows | Avg Time | Rows/sec |
 |------|-----:|---------:|---------:|
@@ -387,15 +413,17 @@ Two output modes are tested: shell pipe (stdout) and direct file write (`--out-d
 | 1M | 1,000,001 | 3.4 s | 292k/s |
 | ALL (per-drive) | 8.3M | 25.6 s | **326k/s** |
 
-### Pipe vs Direct File Write
+### Pipe vs Direct File Write (v0.5.4 historical)
 
 | Mode | 8.3M rows | Rows/sec | Relative |
 |------|----------:|---------:|---------:|
 | Pipe (stdout) | 68 s | 122k/s | 1.0× |
 | `--out-dir` | 25.6 s | 323k/s | **2.6×** |
 
-> **Recommendation:** For exports exceeding ~100k rows, use `--out-dir`
-> to bypass the shell pipe bottleneck.
+> **Recommendation:** For exports exceeding ~100k rows, write to a file
+> (`--out` / `--out-dir`) to bypass the shell pipe bottleneck.  The
+> direct-write advantage still holds on the current pipeline; absolute
+> rates are the v0.5.120 table above.
 
 ### CSV vs JSON
 
