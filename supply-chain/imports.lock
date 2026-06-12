@@ -71,8 +71,8 @@ when = "2026-05-22"
 trusted-publisher = "github:wasm-bindgen/wasm-bindgen"
 
 [[publisher.memchr]]
-version = "2.8.1"
-when = "2026-05-27"
+version = "2.8.2"
+when = "2026-06-12"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"

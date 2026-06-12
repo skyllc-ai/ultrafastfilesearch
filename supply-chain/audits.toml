@@ -283,6 +283,18 @@ criteria = "safe-to-deploy"
 delta = "0.39.2 -> 0.39.4"
 notes = "Delta audit (cargo vet diff 0.39.2 -> 0.39.4, 3 files +35/-10). Cargo.toml/Cargo.toml.orig: version bump only. src/parser/dtd.rs is the only source change — three robustness fixes to the DTD internal-subset parser, all panic-prevention: (a) when 9+ bytes already accumulated in UndecidedMarkup state without matching one of <!--, <![CDATA[, <!ELEMENT, <!ATTLIST, <!ENTITY, <!NOTATION, fall through to 'skip until >' instead of staging more bytes than the 9-byte work buffer can hold (which would have panicked on the slice copy in UndecidedMarkup); (b) symmetric fix in the keyword-scan branch when the full 9-byte window has been consumed; (c) removes the 'markup.len() < 9 => None' bail-out and changes the no-> fallback from 'Some(markup.len())' to 'None' so the caller correctly waits for more input rather than treating partial markup as complete. Plus two comment-typo fixes. No new unsafe, no new I/O / FFI / process surfaces, no API additions, no feature-gate changes. Pure parser bounds-hardening."
 
+[[audits.regex]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.12.3 -> 1.12.4"
+notes = "Reviewed full diff (3 files): changelog + version metadata + regex-syntax dependency requirement 0.8.5 -> 0.8.11 and a benches/ include glob. No source code changes in the regex crate itself; the substantive change ships in regex-syntax 0.8.11 (audited separately)."
+
+[[audits.regex-syntax]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.10 -> 0.8.11"
+notes = "Reviewed full diff (3 files): version metadata + one substantive change in src/hir/interval.rs — IntervalSet::push rewritten from push+full-canonicalize to binary_search + local union + splice (upstream PR rust-lang/regex#1308, perf for large char classes). All safe Rust, no unsafe, no new deps/capabilities; index arithmetic bounds-checked (checked_sub guard, loop bounded by len, splice range start<=end always holds); sorted non-overlapping invariant preserved via union; conservative case-fold reset retained."
+
 [[audits.rmcp]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -348,6 +360,12 @@ who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
 delta = "1.23.1 -> 1.23.2"
 notes = "Delta audit (cargo vet diff 1.23.1 -> 1.23.2). Files: Cargo.toml(.orig) version bump, README, src/{error,fmt,parser,lib,external/serde_support}.rs. Patch release by KodrAus (uuid maintainer): formatting/parser refinements + serde tweak. The single unsafe is std::str::from_utf8_unchecked(self.0) on the crate's own fixed-size format buffer, which uuid populates exclusively with ASCII hex digits + hyphens before formatting — sound zero-copy formatting (same pattern as the vetted 1.23.1). No new I/O / FFI / process / network / ambient capability."
+
+[[audits.which]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.2 -> 8.0.3"
+notes = "Reviewed full diff (4 files). Only code change: cfg-gated fallback is_valid_executable returning Ok(false) on targets that are not unix/windows/wasi/redox, enabling compilation there; conservative default, no unsafe, no new I/O or capabilities. Rest is changelog + version metadata."
 
 [[audits.yoke]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"

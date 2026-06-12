@@ -20,73 +20,107 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
 [policy.polars]
-audit-as-crates-io = true
 
 [policy.polars-arrow]
-audit-as-crates-io = true
 
 [policy.polars-buffer]
-audit-as-crates-io = true
 
 [policy.polars-compute]
-audit-as-crates-io = true
 
 [policy.polars-config]
-audit-as-crates-io = true
 
 [policy.polars-core]
-audit-as-crates-io = true
 
 [policy.polars-dtype]
-audit-as-crates-io = true
 
 [policy.polars-error]
-audit-as-crates-io = true
 
 [policy.polars-expr]
-audit-as-crates-io = true
 
 [policy.polars-io]
-audit-as-crates-io = true
 
 [policy.polars-json]
-audit-as-crates-io = true
 
 [policy.polars-lazy]
-audit-as-crates-io = true
 
 [policy.polars-mem-engine]
-audit-as-crates-io = true
 
 [policy.polars-ooc]
-audit-as-crates-io = true
 
 [policy.polars-ops]
-audit-as-crates-io = true
 
 [policy.polars-parquet]
-audit-as-crates-io = true
 
 [policy.polars-plan]
-audit-as-crates-io = true
 
 [policy.polars-row]
-audit-as-crates-io = true
 
 [policy.polars-schema]
-audit-as-crates-io = true
 
 [policy.polars-sql]
-audit-as-crates-io = true
 
 [policy.polars-stream]
-audit-as-crates-io = true
 
 [policy.polars-time]
-audit-as-crates-io = true
 
 [policy.polars-utils]
-audit-as-crates-io = true
+
+[policy.uffs-bench]
+audit-as-crates-io = false
+
+[policy.uffs-broker]
+audit-as-crates-io = false
+
+[policy.uffs-broker-protocol]
+audit-as-crates-io = false
+
+[policy.uffs-ci-pipeline]
+audit-as-crates-io = false
+
+[policy.uffs-cli]
+audit-as-crates-io = false
+
+[policy.uffs-client]
+audit-as-crates-io = false
+
+[policy.uffs-core]
+audit-as-crates-io = false
+
+[policy.uffs-daemon]
+audit-as-crates-io = false
+
+[policy.uffs-diag]
+audit-as-crates-io = false
+
+[policy.uffs-format]
+audit-as-crates-io = false
+
+[policy.uffs-gen-hooks]
+audit-as-crates-io = false
+
+[policy.uffs-gen-workflow]
+audit-as-crates-io = false
+
+[policy.uffs-manifest-audit]
+audit-as-crates-io = false
+
+[policy.uffs-mcp]
+audit-as-crates-io = false
+
+[policy.uffs-mft]
+audit-as-crates-io = false
+
+[policy.uffs-polars]
+audit-as-crates-io = false
+
+[policy.uffs-security]
+audit-as-crates-io = false
+
+[policy.uffs-text]
+audit-as-crates-io = false
+
+[policy.uffs-time]
+audit-as-crates-io = false
 
 [[exemptions.aead]]
 version = "0.5.2"
