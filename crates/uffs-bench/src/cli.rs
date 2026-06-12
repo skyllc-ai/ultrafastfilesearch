@@ -58,9 +58,12 @@ pub enum Command {
     /// and `--out` at the target charts directory.
     #[command(name = "render-charts")]
     RenderCharts {
-        /// Path to a `cross-tool-summary.csv` (bundle or `docs/benchmarks/raw/`).
-        #[arg(long)]
-        csv: PathBuf,
+        /// Path(s) to `cross-tool-summary.csv` files (bundle or
+        /// `docs/benchmarks/raw/`). Repeatable — rows are merged, so a
+        /// UFFS-only all-drives full-scan capture can extend the cross-tool
+        /// run's scope for the full-scan stat card.
+        #[arg(long, required = true)]
+        csv: Vec<PathBuf>,
         /// Output directory for the SVGs (created if absent).
         #[arg(long)]
         out: PathBuf,

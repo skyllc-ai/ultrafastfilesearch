@@ -488,23 +488,39 @@ pub fn render_all(
 /// chartable cells.
 pub fn render_charts_cli(
     host: &dyn Host,
-    csv_path: &Path,
+    csv_paths: &[std::path::PathBuf],
     out_dir: &Path,
     uffs_label: &str,
     es_label: &str,
     cpp_label: &str,
 ) -> Result<()> {
-    let bytes = host
-        .read_file(csv_path)
-        .map_err(|err| BenchError::Command(format!("read {}: {err}", csv_path.display())))?;
-    // AUDIT-OK(bytes): display/measurement CSV, lossy decode is fine.
-    let csv = String::from_utf8_lossy(&bytes);
-    let written = render_all(host, out_dir, &csv, uffs_label, es_label, cpp_label);
+    // Merge rows across all given CSVs (each carries its own header line —
+    // the parser skips the first line per chunk, so chunks are concatenated
+    // with their headers intact). Lets a UFFS-only all-drives full-scan
+    // capture extend a cross-tool run's scope.
+    let mut merged = String::new();
+    for csv_path in csv_paths {
+        let bytes = host
+            .read_file(csv_path)
+            .map_err(|err| BenchError::Command(format!("read {}: {err}", csv_path.display())))?;
+        // AUDIT-OK(bytes): display/measurement CSV, lossy decode is fine.
+        let csv = String::from_utf8_lossy(&bytes);
+        if merged.is_empty() {
+            merged.push_str(&csv);
+        } else {
+            // Drop the subsequent file's header line before appending.
+            let body = csv.split_once('\n').map_or("", |(_, rest)| rest);
+            if !merged.ends_with('\n') {
+                merged.push('\n');
+            }
+            merged.push_str(body);
+        }
+    }
+    let written = render_all(host, out_dir, &merged, uffs_label, es_label, cpp_label);
     if written.is_empty() {
-        return Err(BenchError::Command(format!(
-            "{} contains no chartable HOT/file PASS cells",
-            csv_path.display()
-        )));
+        return Err(BenchError::Command(
+            "the given CSV(s) contain no chartable HOT/file PASS cells".to_owned(),
+        ));
     }
     for (name, alt) in &written {
         host.out(&format!("[charts] wrote {} — {alt}", out_dir.join(name).display()));
