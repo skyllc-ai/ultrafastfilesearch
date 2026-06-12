@@ -130,7 +130,8 @@ pub(crate) const NTFS_METAFILE_NAMES: &[&str] = &[
     "$Txf",
 ];
 
-/// Returns whether `name` is one of the reserved [`NTFS_METAFILE_NAMES`].
+/// Returns whether `name` is one of the reserved `NTFS_METAFILE_NAMES`
+/// (a crate-private allowlist, so no intra-doc link from this public item).
 ///
 /// Real metafiles are already excluded from the compact index at build time
 /// (`build_compact_index` drops them via `PathResolver` FRS-validity, not by
