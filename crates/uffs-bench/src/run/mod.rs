@@ -759,10 +759,19 @@ impl Orchestrator<'_> {
 /// Returns an error if bundle creation, state load/save, or a Stage 0 artifact
 /// write fails. An operator abort/back is **not** an error (returns `Ok`).
 pub fn run(host: &dyn Host, cli: &Cli) -> Result<()> {
-    match cli.command {
+    match &cli.command {
         Some(Command::FetchCompetitors) => return run_fetch_competitors(host, cli),
         Some(Command::Restore) => return teardown::restore(host, cli),
         Some(Command::Verify) => return teardown::verify(host, cli),
+        Some(Command::RenderCharts {
+            csv,
+            out,
+            uffs_label,
+            es_label,
+            cpp_label,
+        }) => {
+            return crate::charts::render_charts_cli(host, csv, out, uffs_label, es_label, cpp_label);
+        }
         None => {}
     }
 

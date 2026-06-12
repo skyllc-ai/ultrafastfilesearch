@@ -11,10 +11,12 @@ Version-dated, shareable SVG charts generated from the canonical benchmark repor
 ```
 charts/
 ├── README.md                  <- this file
-├── 2026-06-v0.5.120/          <- current canonical snapshot (suite-generated)
-│   ├── head-to-head-vs-everything.svg     (30/30 vs Everything, median 0.36×)
-│   ├── daemon-hot-vs-cpp.svg              (daemon HOT vs per-invocation MFT re-read)
-│   └── full-scan-throughput.svg           (4.8 s / 10.2 M rows / 2.11 M rec/s)
+├── 2026-06-v0.5.120/          <- current canonical snapshot
+│   ├── head-to-head-vs-everything.svg     (suite-generated: 30/30 vs Everything, median 0.36×)
+│   ├── daemon-hot-vs-cpp.svg              (suite-generated: daemon HOT vs per-invocation MFT re-read)
+│   ├── full-scan-throughput.svg           (suite-generated: 4.8 s / 10.2 M rows / 2.11 M rec/s)
+│   ├── cold-parity-vs-cpp.svg             (v0.5.66 capture, carried forward — not re-measured)
+│   └── memory-scales-linearly.svg         (v0.5.66 capture, carried forward — not re-measured)
 └── 2026-04-v0.5.66/           <- prior snapshot (hand-written era, brand-restyled)
     ├── head-to-head-vs-everything.svg     (§Head-to-head 1: 12/12 vs Everything)
     ├── cold-parity-vs-cpp.svg             (§Head-to-head 2: cold-start parity)
@@ -57,6 +59,6 @@ When a new canonical benchmark report is cut (e.g. v0.5.70 supersedes v0.5.66):
 
 All are styled per the **UFFS brand kit** (`docs/dev/architecture/brand-kit/STYLE_GUIDE.md`): Charcoal card, Cream/Sand typography, Rust Orange `#CE422B` UFFS bars, Sand competitor bars, Ember win callouts. Promotion = copy the charts out of the bundle into a new dated directory here.
 
-The 2026-04 set predates generation and was hand-written; its **numbers are frozen** (same data, same raw-log citations) but the look was restyled in-place to the brand palette — the original white-card/blue design predated the brand kit. Two charts of that era (cold-parity, memory-scaling) came from **internal engineering tools** — production-diff parity checks and memory-footprint work — not competition benchmarks, so the suite intentionally does not regenerate them.
+The 2026-04 set predates generation and was hand-written; its **numbers are frozen** (same data, same raw-log citations) but the look was restyled in-place to the brand palette — the original white-card/blue design predated the brand kit. Two charts of that era (cold-parity, memory-scaling) came from **internal engineering tools** — production-diff parity checks and memory-footprint work — not competition benchmarks, so the suite does not re-measure them. They served their purpose but remain interesting data points, so each new snapshot directory **carries them forward verbatim** (the chart itself states the version it was captured on).
 
 No external dependencies, no renderer to install, no chart-library version drift. The text of the SVG **is** the source of truth; there's no `.png` fallback to keep in sync.

@@ -370,22 +370,11 @@ fn tool_chart_label(host: &dyn Host, bundle_dir: &Path, tool_name: &str, fallbac
         .map_or_else(|| fallback.to_owned(), |ver| format!("{fallback} {ver}"))
 }
 
-/// Write one chart SVG into the bundle; `true` on success.
-fn write_chart(host: &dyn Host, bundle_dir: &Path, rel: &str, svg: &str) -> bool {
-    let path = bundle_dir.join(rel);
-    if let Some(parent) = path.parent()
-        && host.create_dir_all(parent).is_err()
-    {
-        return false;
-    }
-    host.write_file(&path, svg.as_bytes()).is_ok()
-}
-
 /// Generate the brand-kit SVG charts into `bundle/charts/` and return the
 /// `## Charts` markdown embedding them — the head-to-head vs Everything, the
-/// daemon-HOT vs C++ comparison, and the UFFS-only full-scan throughput.
-/// Best-effort: charts whose cells are absent are skipped; `None` (no
-/// section) when nothing could be produced.
+/// daemon-HOT vs C++ full-scan comparison, and the UFFS-only full-scan
+/// throughput. Best-effort: charts whose cells are absent are skipped;
+/// `None` (no section) when nothing could be produced.
 fn generate_charts_md(
     host: &dyn Host,
     bundle_dir: &Path,
@@ -393,51 +382,21 @@ fn generate_charts_md(
     cross_tool_csv: Option<&String>,
 ) -> Option<String> {
     let csv = cross_tool_csv?;
-    let uffs_label = format!("UFFS v{version}");
-    let subtitle = "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better";
-    let mut images: Vec<String> = Vec::new();
-
-    if let Some(svg) = charts::head_to_head_svg(
-        &charts::rival_cells(csv, "Everything"),
-        &uffs_label,
+    let written = charts::render_all(
+        host,
+        &bundle_dir.join("charts"),
+        csv,
+        &format!("UFFS v{version}"),
         &tool_chart_label(host, bundle_dir, "everything_gui", "Everything"),
-        subtitle,
-    ) && write_chart(host, bundle_dir, charts::HEAD_TO_HEAD_SVG, &svg)
-    {
-        images.push(format!(
-            "![UFFS vs Everything head-to-head p50]({})",
-            charts::HEAD_TO_HEAD_SVG
-        ));
-    }
-
-    if let Some(svg) = charts::head_to_head_svg(
-        &charts::rival_cells(csv, "UFFS-C++"),
-        &uffs_label,
         &tool_chart_label(host, bundle_dir, "uffs_cpp", "UFFS C++ (MFT re-read)"),
-        subtitle,
-    ) && write_chart(host, bundle_dir, charts::DAEMON_HOT_SVG, &svg)
-    {
-        images.push(format!(
-            "![UFFS daemon HOT vs C++ per-invocation MFT re-read]({})",
-            charts::DAEMON_HOT_SVG
-        ));
-    }
-
-    if let Some(svg) = charts::full_scan_svg(
-        &charts::full_scan_cells(csv),
-        &uffs_label,
-        "complete `*` result set streamed from the daemon to CSV",
-    ) && write_chart(host, bundle_dir, charts::FULL_SCAN_SVG, &svg)
-    {
-        images.push(format!(
-            "![UFFS full-scan export throughput]({})",
-            charts::FULL_SCAN_SVG
-        ));
-    }
-
-    if images.is_empty() {
+    );
+    if written.is_empty() {
         return None;
     }
+    let images: Vec<String> = written
+        .iter()
+        .map(|(name, alt)| format!("![{alt}](charts/{name})"))
+        .collect();
     Some(format!(
         "{}\n\n_Brand-kit SVGs generated from this run's `{CROSS_TOOL_CSV}` — drop-in for the \
          canonical report, hub README, and social posts._",

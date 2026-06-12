@@ -242,6 +242,17 @@ pre-filled report scaffold. To promote it to a canonical benchmark report:
    ```powershell
    copy LOG\bench\<timestamp>\charts\*.svg docs\benchmarks\charts\<date>-vX.Y.Z\
    ```
+   To re-render promoted charts later (e.g. after chart-code improvements,
+   without re-measuring — works on any OS):
+   ```
+   cargo run --release -p uffs-bench -- render-charts `
+     --csv docs/benchmarks/raw/<date>-vX.Y.Z_cross-tool-summary.csv `
+     --out docs/benchmarks/charts/<date>-vX.Y.Z `
+     --uffs-label "UFFS vX.Y.Z" --es-label "Everything <ver>" --cpp-label "UFFS C++ (MFT re-read) <ver>"
+   ```
+   The carried-forward engineering charts (cold-parity, memory-scaling — see
+   `charts/README.md`) are copied verbatim from the previous snapshot
+   directory; they are not re-measured.
 
 4. **Move the current canonical report** to `docs/benchmarks/archive/`
    (verbatim — no edits beyond fixing relative link paths).

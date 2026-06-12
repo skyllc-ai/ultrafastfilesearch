@@ -107,6 +107,15 @@ pub(crate) fn parse_run_csv(csv: &str) -> Vec<RunCell> {
         else {
             continue;
         };
+        // Only PASS cells carry meaningful timings — a DNF row records the
+        // timeout cutoff (e.g. 131 s), which must not enter charts or
+        // baseline deltas as if it were a measurement.
+        if !fields
+            .get(tail_start + 5)
+            .is_some_and(|verdict| verdict.trim().eq_ignore_ascii_case("pass"))
+        {
+            continue;
+        }
         let Ok(p50_ms) = p50_raw.trim().parse::<u64>() else {
             continue;
         };

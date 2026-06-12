@@ -49,6 +49,31 @@ pub enum Command {
     /// detected; writes `fingerprint-after.json` for forensics. Requires
     /// `--bundle <dir>`.
     Verify,
+
+    /// Re-render the brand-kit SVG charts from a cross-tool summary CSV.
+    ///
+    /// Runs on any OS (pure CSV → SVG). Used at promotion time, or to refresh
+    /// already-promoted charts after chart-rendering improvements without
+    /// re-measuring: point `--csv` at the run's (or the promoted `raw/`) CSV
+    /// and `--out` at the target charts directory.
+    #[command(name = "render-charts")]
+    RenderCharts {
+        /// Path to a `cross-tool-summary.csv` (bundle or `docs/benchmarks/raw/`).
+        #[arg(long)]
+        csv: PathBuf,
+        /// Output directory for the SVGs (created if absent).
+        #[arg(long)]
+        out: PathBuf,
+        /// UFFS legend/title label (e.g. "UFFS v0.5.120").
+        #[arg(long, default_value = "UFFS")]
+        uffs_label: String,
+        /// Everything legend/title label.
+        #[arg(long, default_value = "Everything")]
+        es_label: String,
+        /// C++ reference legend/title label.
+        #[arg(long, default_value = "UFFS C++ (MFT re-read)")]
+        cpp_label: String,
+    },
 }
 
 /// Robust, reproducible benchmark-suite orchestrator for UFFS.

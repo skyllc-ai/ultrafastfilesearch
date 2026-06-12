@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="Line chart: UFFS daemon memory scales linearly at about 181 megabytes per million records, from 777 MB at 3.67M records up to 4722 MB at 26.09M records">
+  <title>UFFS daemon memory scales linearly — ≈ 181 MB per 1 M records</title>
+  <desc>Line chart with seven data points showing UFFS daemon resident-set-size (MB) as drives are accumulated from 1 to 7. X-axis is total records loaded (0 to 28 million); Y-axis is memory in MB (0 to 5500). The points form a near-straight line from (3.67M, 777 MB) to (26.09M, 4722 MB). Slope ≈ 181 MB per million records. Data from docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt.</desc>
+
+  <!-- Card background -->
+  <rect x="0" y="0" width="960" height="500" fill="#0F0D0B"/>
+  <rect x="0.5" y="0.5" width="959" height="499" fill="none" stroke="#1E1B18" stroke-width="1"/>
+
+  <!-- Title + subtitle -->
+  <text x="480" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#F2EDE8">Daemon memory scales linearly — ≈ 181 MB per 1 M records</text>
+  <text x="480" y="56" text-anchor="middle" font-size="13" fill="#9A8D82">Drives accumulated one at a time on the test machine. No surprises, no growth phase, no memory-curve knees.</text>
+
+  <!-- Plot area: x=120 to x=820 (700 px wide), y=110 to y=400 (290 px tall) -->
+  <!-- X-axis: 0 to 28 M records; Y-axis: 0 to 5500 MB -->
+
+  <!-- Y gridlines (MB) -->
+  <g font-size="11" fill="#9A8D82">
+    <line x1="120" y1="400" x2="820" y2="400" stroke="#9A8D82" stroke-width="1"/>
+    <line x1="120" y1="110" x2="120" y2="400" stroke="#9A8D82" stroke-width="1"/>
+    <!-- y=0 at 400, y=5500 at 110, so MB-to-y: y = 400 - mb * 290/5500 -->
+    <line x1="120" y1="347.3" x2="820" y2="347.3" stroke="#1E1B18" stroke-width="1"/>
+    <text x="112" y="351" text-anchor="end">1 000</text>
+    <line x1="120" y1="294.5" x2="820" y2="294.5" stroke="#1E1B18" stroke-width="1"/>
+    <text x="112" y="298" text-anchor="end">2 000</text>
+    <line x1="120" y1="241.8" x2="820" y2="241.8" stroke="#1E1B18" stroke-width="1"/>
+    <text x="112" y="245" text-anchor="end">3 000</text>
+    <line x1="120" y1="189.1" x2="820" y2="189.1" stroke="#1E1B18" stroke-width="1"/>
+    <text x="112" y="193" text-anchor="end">4 000</text>
+    <line x1="120" y1="136.4" x2="820" y2="136.4" stroke="#1E1B18" stroke-width="1"/>
+    <text x="112" y="140" text-anchor="end">5 000</text>
+    <text x="112" y="404" text-anchor="end">0</text>
+    <text x="60" y="258" text-anchor="middle" font-size="12" fill="#9A8D82" transform="rotate(-90 60 258)">Daemon working set (MB RSS)</text>
+  </g>
+
+  <!-- X ticks and labels (records in M) -->
+  <!-- x-to-records: x = 120 + records_M * 25 -->
+  <g font-size="11" fill="#9A8D82">
+    <line x1="245" y1="110" x2="245" y2="404" stroke="#1E1B18" stroke-width="1"/>
+    <text x="245" y="420" text-anchor="middle">5</text>
+    <line x1="370" y1="110" x2="370" y2="404" stroke="#1E1B18" stroke-width="1"/>
+    <text x="370" y="420" text-anchor="middle">10</text>
+    <line x1="495" y1="110" x2="495" y2="404" stroke="#1E1B18" stroke-width="1"/>
+    <text x="495" y="420" text-anchor="middle">15</text>
+    <line x1="620" y1="110" x2="620" y2="404" stroke="#1E1B18" stroke-width="1"/>
+    <text x="620" y="420" text-anchor="middle">20</text>
+    <line x1="745" y1="110" x2="745" y2="404" stroke="#1E1B18" stroke-width="1"/>
+    <text x="745" y="420" text-anchor="middle">25</text>
+    <text x="120" y="420" text-anchor="middle">0</text>
+    <text x="470" y="442" text-anchor="middle" font-size="12" fill="#9A8D82">Total records loaded (millions)</text>
+  </g>
+
+  <!-- Trend line (linear fit through origin): slope 181 MB/M records -->
+  <!-- y = 400 - (181 * records_M) * 290/5500; at records_M=26.09: y = 400 - 181*26.09*290/5500 = 400 - 249.0 = 151.0 -->
+  <!-- At records_M=0: y = 400 -->
+  <line x1="120" y1="400" x2="772.25" y2="151.0" stroke="#CE422B" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.45"/>
+  <text x="640" y="200" font-size="11" fill="#CE422B" opacity="0.75">trend: ≈ 181 MB / M records</text>
+
+  <!-- Data points + connecting polyline -->
+  <polyline points="211.75,379.01  388.5,308.6  461.75,283.5  517.25,258.7  565.25,243.3  772.25,171.0" fill="none" stroke="#CE422B" stroke-width="2"/>
+
+  <!-- Point 1: 3.67M, 777MB (1 drive: C) -->
+  <g>
+    <circle cx="211.75" cy="379.01" r="5" fill="#CE422B" stroke="#0F0D0B" stroke-width="1.5"/>
+    <text x="211.75" y="366" text-anchor="middle" font-size="10" fill="#F2EDE8">3.67M / 777 MB</text>
+    <text x="211.75" y="398" text-anchor="middle" font-size="9" fill="#9A8D82">C</text>
+  </g>
+  <!-- Point 2: 10.74M, 2112MB (2 drives: C,D) -->
+  <g>
+    <circle cx="388.5" cy="308.6" r="5" fill="#CE422B" stroke="#0F0D0B" stroke-width="1.5"/>
+    <text x="388.5" y="296" text-anchor="middle" font-size="10" fill="#F2EDE8">10.74M / 2 112 MB</text>
+    <text x="388.5" y="327" text-anchor="middle" font-size="9" fill="#9A8D82">C,D</text>
+  </g>
+  <!-- Point 3: 13.67M, 2587MB (3 drives: C,D,E) -->
+  <g>
+    <circle cx="461.75" cy="283.5" r="5" fill="#CE422B" stroke="#0F0D0B" stroke-width="1.5"/>
+    <text x="461.75" y="272" text-anchor="middle" font-size="10" fill="#F2EDE8">13.67M / 2 587 MB</text>
+    <text x="461.75" y="302" text-anchor="middle" font-size="9" fill="#9A8D82">C,D,E</text>
+  </g>
+  <!-- Point 4: 15.89M, 3059MB (4 drives) - overlaps with point 5, label above -->
+  <g>
+    <circle cx="517.25" cy="258.7" r="5" fill="#CE422B" stroke="#0F0D0B" stroke-width="1.5"/>
+    <text x="531" y="250" text-anchor="start" font-size="10" fill="#F2EDE8">15.89M / 3 059 MB</text>
+    <text x="531" y="264" text-anchor="start" font-size="9" fill="#9A8D82">C,D,E,F (+ USB G)</text>
+  </g>
+  <!-- Point 6: 17.81M, 3351MB (6 drives) -->
+  <g>
+    <circle cx="565.25" cy="243.3" r="5" fill="#CE422B" stroke="#0F0D0B" stroke-width="1.5"/>
+    <text x="565.25" y="231" text-anchor="middle" font-size="10" fill="#F2EDE8">17.81M / 3 351 MB</text>
+    <text x="565.25" y="262" text-anchor="middle" font-size="9" fill="#9A8D82">+M</text>
+  </g>
+  <!-- Point 7: 26.09M, 4722MB (7 drives, all) -->
+  <g>
+    <circle cx="772.25" cy="171.0" r="6" fill="#CE422B" stroke="#0F0D0B" stroke-width="2"/>
+    <text x="772.25" y="158" text-anchor="middle" font-size="11" font-weight="700" fill="#F2EDE8">26.09M / 4 722 MB</text>
+    <text x="772.25" y="190" text-anchor="middle" font-size="9" fill="#9A8D82">all 7 drives</text>
+  </g>
+
+  <!-- Key stat callout -->
+  <g transform="translate(150, 462)">
+    <text x="0" y="0" font-size="12" fill="#F2EDE8"><tspan font-weight="700">Key property:</tspan> RAM is predictable from drive size. Budgeting UFFS on a new machine is arithmetic, not guesswork.</text>
+  </g>
+  <!-- Footer -->
+  <text x="810" y="482" text-anchor="end" font-size="10" fill="#9A8D82">26 M records → ~4.7 GB RSS</text>
+</svg>

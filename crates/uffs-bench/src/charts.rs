@@ -17,7 +17,11 @@
 //! All geometry is computed in integer tenths of a pixel (the crate avoids
 //! float arithmetic).
 
+use std::path::Path;
+
 use crate::baseline::{parse_run_csv, run_p50};
+use crate::error::{BenchError, Result};
+use crate::host::Host;
 
 /// Bundle-relative path of the generated head-to-head chart (vs Everything).
 pub const HEAD_TO_HEAD_SVG: &str = "charts/head-to-head-vs-everything.svg";
@@ -108,6 +112,16 @@ fn px(tenths: u64) -> String {
     format!("{}.{}", tenths / 10, tenths % 10)
 }
 
+/// Bar value label: milliseconds on small charts, one-decimal seconds on
+/// seconds-scale charts (`"32.1 s"` instead of `"32120 ms"`).
+fn ms_value_label(ms: u64, seconds_scale: bool) -> String {
+    if seconds_scale {
+        format!("{}.{} s", ms / 1_000, (ms % 1_000) / 100)
+    } else {
+        format!("{ms} ms")
+    }
+}
+
 /// Render the head-to-head grouped-bar SVG, or `None` when `cells` is empty.
 ///
 /// `uffs_label` / `rival_label` feed the legend and title (e.g.
@@ -133,13 +147,20 @@ pub fn head_to_head_svg(
         .filter(|cell| cell.uffs_p50_ms < cell.rival_p50_ms)
         .count();
 
-    // Axis ceiling: max p50 rounded up to the next multiple of 50 (≥ 50).
+    // Axis ceiling: round the max p50 up to a clean tick step. Sub-5 s charts
+    // tick in milliseconds (multiples of 50); seconds-scale charts (e.g. the
+    // C++ full-scan comparison) tick in whole seconds so labels stay readable.
     let max_ms = cells
         .iter()
         .map(|cell| cell.uffs_p50_ms.max(cell.rival_p50_ms))
         .max()
         .unwrap_or(0);
-    let axis_max = ((max_ms / 50) + 1) * 50;
+    let seconds_scale = max_ms >= 5_000;
+    let axis_max = if seconds_scale {
+        ((max_ms / 5_000) + 1) * 5_000
+    } else {
+        ((max_ms / 50) + 1) * 50
+    };
 
     let axis_bottom = BARS_TOP + rows * ROW_PITCH + 10;
     let height = axis_bottom + 70;
@@ -185,7 +206,12 @@ pub fn head_to_head_svg(
     )];
     for tick in 1..=5_u64 {
         let x = PLOT_X + tick * PLOT_WIDTH_PX / 5;
-        let label = tick * axis_max / 5;
+        let tick_ms = tick * axis_max / 5;
+        let label = if seconds_scale {
+            format!("{}.{}", tick_ms / 1_000, (tick_ms % 1_000) / 100)
+        } else {
+            tick_ms.to_string()
+        };
         axis.push(format!(
             "<line x1=\"{x}\" y1=\"110\" x2=\"{x}\" y2=\"{axis_bottom}\" stroke=\"#1E1B18\" \
              stroke-width=\"1\"/>\n\
@@ -193,9 +219,14 @@ pub fn head_to_head_svg(
             axis_bottom + 18,
         ));
     }
+    let axis_unit = if seconds_scale {
+        "seconds"
+    } else {
+        "milliseconds"
+    };
     axis.push(format!(
         "<text x=\"500\" y=\"{}\" text-anchor=\"middle\" font-size=\"11\" \
-         fill=\"#9A8D82\">p50 latency (milliseconds) — lower is better</text>\n</g>",
+         fill=\"#9A8D82\">p50 latency ({axis_unit}) — lower is better</text>\n</g>",
         axis_bottom + 40,
     ));
     parts.push(axis.join("\n"));
@@ -210,6 +241,12 @@ pub fn head_to_head_svg(
         let ratio_hundredths = (cell.uffs_p50_ms * 100)
             .checked_div(cell.rival_p50_ms)
             .unwrap_or(100);
+        // A ratio that rounds to zero hundredths reads better as a bound.
+        let ratio_cell = if ratio_hundredths == 0 {
+            "&lt;0.01×".to_owned()
+        } else {
+            format!("{}.{:02}×", ratio_hundredths / 100, ratio_hundredths % 100)
+        };
         let ratio_color = if cell.uffs_p50_ms < cell.rival_p50_ms {
             "#F7B26B"
         } else {
@@ -222,11 +259,11 @@ pub fn head_to_head_svg(
              <rect x=\"160\" y=\"{y_uffs}\" width=\"{uffs_px}\" height=\"16\" fill=\"#CE422B\"/>\n\
              <rect x=\"160\" y=\"{y_es}\" width=\"{es_px}\" height=\"16\" fill=\"#9A8D82\"/>\n\
              <text x=\"{uffs_label_x}\" y=\"{label_y}\" font-size=\"11\" \
-             fill=\"#9A8D82\">{uffs_ms} ms</text>\n\
+             fill=\"#9A8D82\">{uffs_value}</text>\n\
              <text x=\"{es_label_x}\" y=\"{es_label_y}\" font-size=\"11\" \
-             fill=\"#9A8D82\">{es_ms} ms</text>\n\
+             fill=\"#9A8D82\">{es_value}</text>\n\
              <text x=\"848\" y=\"{ratio_y}\" font-size=\"12\" font-weight=\"700\" \
-             fill=\"{ratio_color}\">{ratio_w}.{ratio_f:02}×</text>\n\
+             fill=\"{ratio_color}\">{ratio_cell}</text>\n\
              </g>",
             label_y = y_uffs + 12,
             drive = cell.drive,
@@ -234,13 +271,11 @@ pub fn head_to_head_svg(
             uffs_px = px(uffs_w),
             es_px = px(es_w),
             uffs_label_x = PLOT_X + uffs_w / 10 + 6,
-            uffs_ms = cell.uffs_p50_ms,
+            uffs_value = ms_value_label(cell.uffs_p50_ms, seconds_scale),
             es_label_x = PLOT_X + es_w / 10 + 6,
             es_label_y = y_es + 12,
-            es_ms = cell.rival_p50_ms,
+            es_value = ms_value_label(cell.rival_p50_ms, seconds_scale),
             ratio_y = y_uffs + 21,
-            ratio_w = ratio_hundredths / 100,
-            ratio_f = ratio_hundredths % 100,
         ));
     }
 
@@ -362,6 +397,99 @@ pub fn full_scan_svg(cells: &[FullScanCell], uffs_label: &str, subtitle: &str) -
         height - 14,
     ));
     Some(parts.join("\n"))
+}
+
+/// Write one rendered SVG as `out_dir/<basename-of-rel>`; returns the basename.
+fn write_svg(host: &dyn Host, out_dir: &Path, rel: &str, svg: &str) -> Option<String> {
+    let name = Path::new(rel).file_name()?.to_string_lossy().into_owned();
+    host.create_dir_all(out_dir).ok()?;
+    let path = out_dir.join(&name);
+    host.write_file(&path, svg.as_bytes()).ok()?;
+    Some(name)
+}
+
+/// Render every competition chart the CSV supports into `out_dir` (flat
+/// basenames), returning `(basename, alt-text)` per chart written.
+///
+/// Shared by Stage 4 assembly (writing into `bundle/charts/`) and the
+/// `render-charts` subcommand (writing into a promoted charts directory).
+pub fn render_all(
+    host: &dyn Host,
+    out_dir: &Path,
+    csv: &str,
+    uffs_label: &str,
+    es_label: &str,
+    cpp_label: &str,
+) -> Vec<(String, &'static str)> {
+    let subtitle = "HOT phase · file sink · p50 per (drive, pattern) cell — lower is better";
+    let mut written = Vec::new();
+
+    if let Some(svg) = head_to_head_svg(&rival_cells(csv, "Everything"), uffs_label, es_label, subtitle)
+        && let Some(name) = write_svg(host, out_dir, HEAD_TO_HEAD_SVG, &svg)
+    {
+        written.push((name, "UFFS vs Everything head-to-head p50"));
+    }
+
+    // C++ chart is full-scan only: targeted cells differ by 2–3 orders of
+    // magnitude (20 ms vs 90 s), which a shared linear axis cannot show — the
+    // targeted carnage reads better as the report's ratio table. Full-scan
+    // magnitudes are comparable (seconds vs tens of seconds).
+    let cpp_full_scan: Vec<HeadToHeadCell> = rival_cells(csv, "UFFS-C++")
+        .into_iter()
+        .filter(|cell| cell.pattern == "full_scan")
+        .collect();
+    if let Some(svg) = head_to_head_svg(
+        &cpp_full_scan,
+        uffs_label,
+        cpp_label,
+        "HOT `*` full-scan → CSV per drive scope · UFFS daemon vs full MFT re-read — lower is better",
+    ) && let Some(name) = write_svg(host, out_dir, DAEMON_HOT_SVG, &svg)
+    {
+        written.push((name, "UFFS daemon HOT vs C++ per-invocation MFT re-read"));
+    }
+
+    if let Some(svg) = full_scan_svg(
+        &full_scan_cells(csv),
+        uffs_label,
+        "complete `*` result set streamed from the daemon to CSV",
+    ) && let Some(name) = write_svg(host, out_dir, FULL_SCAN_SVG, &svg)
+    {
+        written.push((name, "UFFS full-scan export throughput"));
+    }
+
+    written
+}
+
+/// `render-charts` subcommand: re-render the brand-kit charts from a
+/// cross-tool summary CSV into `out` — promotion-time tooling, any OS.
+///
+/// # Errors
+/// Returns [`BenchError::Command`] when the CSV cannot be read or yields no
+/// chartable cells.
+pub fn render_charts_cli(
+    host: &dyn Host,
+    csv_path: &Path,
+    out_dir: &Path,
+    uffs_label: &str,
+    es_label: &str,
+    cpp_label: &str,
+) -> Result<()> {
+    let bytes = host
+        .read_file(csv_path)
+        .map_err(|err| BenchError::Command(format!("read {}: {err}", csv_path.display())))?;
+    // AUDIT-OK(bytes): display/measurement CSV, lossy decode is fine.
+    let csv = String::from_utf8_lossy(&bytes);
+    let written = render_all(host, out_dir, &csv, uffs_label, es_label, cpp_label);
+    if written.is_empty() {
+        return Err(BenchError::Command(format!(
+            "{} contains no chartable HOT/file PASS cells",
+            csv_path.display()
+        )));
+    }
+    for (name, alt) in &written {
+        host.out(&format!("[charts] wrote {} — {alt}", out_dir.join(name).display()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
