@@ -1,16 +1,25 @@
 # UFFS demo capture kit
 
-Tooling and shot lists for the launch GIFs:
+VHS tapes and tooling for the demo clips embedded in the README, the docs, and the
+project site. Everything here is built so the clips are **reproducible**, **honest**,
+and **re-renderable** each release.
 
-1. **TUI quick-start** — the zero-friction "front door" (hero on README + site).
-2. **CLI speed** — raw query latency across a real NTFS estate (proof clip for HN / Reddit / Rust).
-3. **MCP + Claude** — deterministic local retrieval exposed as agent tools.
+Each clip has a full reel (`*-demo.tape`), a short loop (`*-demo-short.tape`, TUI/CLI),
+and a video cut (`*-demo-video.tape` → MP4). The video cuts are identical to the GIF
+tapes in shot list, commands, and keystrokes; only the static card holds (banner,
+intro, outro) are shorter. Command typing speed and all measured latencies are the
+same in every variant.
 
-Each clip has a full reel (`*-demo.tape`) and, for TUI/CLI, a short loop (`*-demo-short.tape`).
+Capture must run on a Windows box with live NTFS (the only place `uffs` reads the MFT
+directly); macOS/Linux can only show offline-MFT analysis.
 
-Everything here is built so the clips are **reproducible**, **honest**, and **re-renderable** each release. Capture must run on the Windows box with live NTFS (the only place `uffs` reads the MFT directly); macOS/Linux can only show offline-MFT analysis.
-
-> **Two binaries gotcha.** Releases ship both the Rust daemon client (`uffs.exe`) and the legacy C++ reference (`uffs.com`). On Windows, `PATHEXT` ranks `.COM` before `.EXE`, so a bare `uffs` runs the C++ tool — which has no `daemon` subcommand and uses `--drives=`/`--columns=` syntax. The prep tool (`scripts/windows/record-demo-prep.rs`) resolves `uffs.exe` **by name** (the standard `default_binary()` discovery shared by the validation scripts) and gates on a `>= 0.5.0` semver parsed from `uffs --version`, so the C++ tool or an old build is refused up front. Override with `--bin <path>`.
+> **Two binaries gotcha.** Releases ship both the Rust daemon client (`uffs.exe`) and
+> the legacy C++ reference (`uffs.com`). On Windows, `PATHEXT` ranks `.COM` before
+> `.EXE`, so a bare `uffs` runs the C++ tool — which has no `daemon` subcommand and
+> uses `--drives=`/`--columns=` syntax. The prep tool
+> (`scripts/windows/record-demo-prep.rs`) resolves `uffs.exe` **by name** and gates on
+> a `>= 0.5.0` semver parsed from `uffs --version`, so the C++ tool or an old build is
+> refused up front. Override with `--bin <path>`.
 
 ---
 
@@ -20,13 +29,12 @@ Everything here is built so the clips are **reproducible**, **honest**, and **re
 # 1. Put the machine in a known, honest recording state (Windows, elevated)
 rust-script scripts/windows/record-demo-prep.rs --mode hot --drives C,D,E,F,G,M,S
 
-# 2. Record BOTH clips on Windows with ScreenToGif (see "TUI capture" / shot lists).
+# 2. Record interactive clips on Windows with ScreenToGif.
 #    VHS is NOT available natively on Windows (it needs `ttyd`, Linux/macOS only).
 
-# 2-alt. Reproducible CLI GIF via VHS — only under WSL/Linux/macOS:
-vhs scripts/dev/demo/cli-demo.tape       # -> uffs-cli.gif   (needs ttyd + ffmpeg)
-
-# 3. Drop outputs into both repos and wire them in (see "Where the GIFs go")
+# 2-alt. Reproducible GIF/MP4 via VHS — only under WSL/Linux/macOS:
+vhs scripts/dev/demo/cli-demo.tape          # -> uffs-cli.gif        (needs ttyd + ffmpeg)
+vhs scripts/dev/demo/cli-demo-video.tape    # -> uffs-cli-video.mp4
 ```
 
 ---
@@ -36,80 +44,49 @@ vhs scripts/dev/demo/cli-demo.tape       # -> uffs-cli.gif   (needs ttyd + ffmpe
 | Tool | Use for | Why | Platform |
 |---|---|---|---|
 | **[ScreenToGif](https://www.screentogif.com/)** | TUI clip **and** CLI clip on Windows (primary) | Free, Windows-native, captures a real interactive session faithfully; built-in crop/trim/optimize + palette reduction. | Windows |
-| **[VHS](https://github.com/charmbracelet/vhs)** (`charmbracelet/vhs`) | Reproducible CLI clip (optional) | Scripted `.tape` files → deterministic, pixel-stable GIF/MP4/WebM you can re-render every release. Drives the **real** binary, so all timings are genuine. | Requires `ttyd`, which has **no native Windows build** — run the tape under **WSL/Linux/macOS** only. On the Windows NTFS box, record the CLI with ScreenToGif using the same shot list. |
+| **[VHS](https://github.com/charmbracelet/vhs)** (`charmbracelet/vhs`) | Reproducible clips from the `.tape` files | Scripted tapes → deterministic, pixel-stable GIF/MP4/WebM you can re-render every release. Drives the **real** binary, so all timings are genuine. | Requires `ttyd`, which has **no native Windows build** — run tapes under **WSL/Linux/macOS** only. |
 | `ffmpeg` | post-processing | Trim, scale, palette-optimize any capture (snippets below). | All |
 
-Install on Windows: `winget install NickeManarin.ScreenToGif`. VHS is Linux/macOS-only for our purposes (`brew install vhs ttyd` / `apt install ttyd` + `go install ...`); it will not drive a native Windows terminal.
+Install on Windows: `winget install NickeManarin.ScreenToGif`. VHS is Linux/macOS-only
+for our purposes (`brew install vhs ttyd` / `apt install ttyd` + `go install ...`).
 
 ---
 
 ## Honesty guardrails (non-negotiable)
 
-These clips are marketing for a **benchmark-honest** project. Do not undermine that.
+These clips demo a **benchmark-honest** project. Do not undermine that.
 
-- **Never fake or speed-edit latency.** VHS runs the real binary; with ScreenToGif, do not cut frames to make a query look faster than it is.
-- **State the daemon tier.** The "instant" story is a **hot/warm daemon**. `record-demo-prep.rs --mode hot` warms it first; the caption must say so (e.g. "hot daemon, 25.9M records"). If you want to show the cold build, use `--mode cold --confirm-destructive` and label it COLD.
-- **Show real counts.** Don't trim the result count or the "N results in X ms" line out of frame.
-- **Match the published numbers.** Latency on screen should be consistent with `docs/benchmarks/`. If it drifts, update the benchmark hub too — don't cherry-pick.
-- **No doctored prompt.** Use a clean but real shell; don't hand-edit the recorded text.
+- **Never fake or speed-edit latency.** VHS runs the real binary; with ScreenToGif, do
+  not cut frames to make a query look faster than it is.
+- **State the daemon tier.** The "instant" story is a **hot/warm daemon**.
+  `record-demo-prep.rs --mode hot` warms it first; the caption must say so. If you
+  want to show the cold build, use `--mode cold --confirm-destructive` and label it COLD.
+- **Show real counts.** Don't trim the result count or the "N results in X ms" line
+  out of frame.
+- **Match the published numbers.** Latency on screen should be consistent with
+  `docs/benchmarks/`. If it drifts, update the benchmark hub too — don't cherry-pick.
+- **No doctored prompt.** Use a clean but real shell; don't hand-edit recorded text.
 
----
-
-## CLI shot list (`cli-demo.tape`)
-
-Target ~18–22 s. Commands mirror the README Quick Start so the clip and docs agree.
-
-1. `uffs "*.rs"` — whole-machine search, all drives, returns immediately.
-2. `uffs "*.log" --min-size 100MB --newer 7d --files-only` — filtered hunt for big recent logs.
-3. `uffs "*.dll" --drive C` — single-drive scope.
-4. `uffs daemon status_drives` — show the per-drive tier/telemetry table (proves the hot-daemon architecture).
-
-Caption to burn in or use as alt text: **"UFFS — targeted NTFS queries in single-digit ms on a hot daemon (25.9M records, 7 drives)."**
+The bundled `uffs-tui` is the **free demo** edition (capped result counts, exports
+disabled — `DEMO-LICENSE.txt`). That's fine and honest for a clip; don't imply
+uncapped/export features.
 
 ---
 
-## TUI capture (`tui-demo.tape` / ScreenToGif)
+## Outputs
 
-Target ~15–20 s. The story is **"unzip → run → browsing your own drives in seconds."**
+Each `.tape` names its output file. GIF outputs live in `assets/demo/` (this repo) and
+are the only demo media committed to git. The `*-video.tape` MP4 outputs are upload
+artifacts (gitignored, never committed).
 
-Shot list:
-1. Terminal in an unzipped release folder. Type `uffs-tui` and Enter.
-2. Daemon auto-starts; the TUI comes up populated with the real drives.
-3. Type a query (e.g. `*.pdf`), show the results list filtering live.
-4. Arrow through a couple of results / toggle a filter.
-5. Quit cleanly.
+| Tape | Output |
+|---|---|
+| `tui-demo.tape` / `tui-demo-short.tape` / `tui-demo-video.tape` | `uffs-tui.gif` / `uffs-tui-short.gif` / `uffs-tui-video.mp4` |
+| `cli-demo.tape` / `cli-demo-short.tape` / `cli-demo-video.tape` | `uffs-cli.gif` / `uffs-cli-short.gif` / `uffs-cli-video.mp4` |
+| `mcp-demo.tape` / `mcp-demo-video.tape` | `uffs-mcp-claude.gif` / `uffs-mcp-claude-video.mp4` |
 
-> The bundled `uffs-tui` is the **free demo** (capped result counts, exports disabled — `DEMO-LICENSE.txt`). That's fine and honest for the front-door clip; don't imply uncapped/export features.
-
-**Why ScreenToGif for the TUI:** interactive navigation reads more authentically when a human drives it, and the demo TUI's keybindings live in the separate [`githubrobbi/uffs-demo`](https://github.com/githubrobbi/uffs-demo) repo (not vendored here), so the VHS tape ships as a **skeleton** — fill in the real keystrokes once, then it's reproducible too.
-
----
-
-## Where the GIFs go
-
-Keep the heavy binaries out of git history where possible; prefer the smallest optimized GIF (< ~3 MB) or an MP4/WebM.
-
-Each `.tape` renders one GIF into `assets/demo/` (this repo). Short variants are the snappy loops used on the README/site; full variants are the complete reels linked as "full reel".
-
-| Tape | Output (`assets/demo/`) | Wires into |
-|---|---|---|
-| `tui-demo.tape` | `uffs-tui.gif` | `docs/user-manual/tui-search-box.md`; README "full reel" link |
-| `tui-demo-short.tape` | `uffs-tui-short.gif` | README "See it in action" (TUI); site `#demo` |
-| `cli-demo.tape` | `uffs-cli.gif` | `docs/user-manual/cli-overview.md`; README "full reel" link |
-| `cli-demo-short.tape` | `uffs-cli-short.gif` | README "See it in action" (CLI); site `#demo` |
-| `mcp-demo.tape` | `uffs-mcp-claude.gif` | README "See it in action" (MCP); `docs/user-manual/mcp.md`; site `#demo` |
-
-Mirror the three site clips into the separate [`skyllc-ai.github.io`](https://github.com/skyllc-ai/skyllc-ai.github.io) repo under `assets/demo/` (`uffs-tui-short.gif`, `uffs-cli-short.gif`, `uffs-mcp-claude.gif`) — they are embedded in the `#demo` section of `index.html`.
-
-README wiring (per clip):
-
-```markdown
-<p align="center">
-  <img src="assets/demo/uffs-tui-short.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives in seconds (hot daemon, 25.9M records).">
-</p>
-```
-
-Site wiring: the `<section id="demo">` in `index.html` holds a `figure.demo` per clip, served from `assets/demo/`.
+Keep GIFs small: prefer the smallest optimized GIF (< ~3 MB). If a clip won't fit
+under ~5 MB as a GIF, ship an MP4/WebM and let GitHub/the site autoplay it.
 
 ---
 
@@ -124,4 +101,4 @@ ffmpeg -i trimmed.mp4 -vf "fps=15,scale=1200:-1:flags=lanczos,palettegen" palett
 ffmpeg -i trimmed.mp4 -i palette.png -vf "fps=15,scale=1200:-1:flags=lanczos,paletteuse" uffs-cli.gif
 ```
 
-Aim for: 1200px wide, 12–15 fps, < 3 MB. If a clip won't fit under ~5 MB as a GIF, ship an MP4/WebM and let GitHub/the site autoplay it.
+Aim for: 1200px wide, 12–15 fps.

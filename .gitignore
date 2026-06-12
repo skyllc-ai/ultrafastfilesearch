@@ -165,5 +165,18 @@ metadata.json
 /prompts/
 INTENT_PROMPT.md
 INTENT_PROMPT_V2.md
-INTENT_SPEC_FAANG_CORE_INFRA.mdconsole
+INTENT_SPEC_FAANG_CORE_INFRA.md
+
+# Stray cargo/script `console` artifacts (a 2025 append lost its newline and
+# merged this pattern into the .md line above, so it never matched; restored)
+console
 crates/uffs-cli/console
+
+# =============================================================================
+# Demo video cuts (scripts/dev/demo/*-video.tape outputs) are upload
+# artifacts for YouTube/LinkedIn/X — never committed.  GIF variants in
+# assets/demo/ remain the only tracked demo media.
+# =============================================================================
+uffs-cli-video.mp4
+uffs-tui-video.mp4
+uffs-mcp-claude-video.mp4
