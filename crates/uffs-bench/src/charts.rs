@@ -48,15 +48,22 @@ pub struct HeadToHeadCell {
 /// `rival_tool` is the harness CSV label — `"Everything"` or `"UFFS-C++"`.
 /// Reads the cross-tool summary CSV, preserving the CSV's UFFS row order.
 /// Cells the rival did not run (e.g. `full_scan` for es.exe, `prefix` for
-/// uffs.com) are skipped.
+/// uffs.com) are skipped, and `(drive, pattern)` pairs are deduplicated
+/// (first occurrence wins) — merged inputs overlap on shared drives.
 #[must_use]
 pub fn rival_cells(cross_tool_csv: &str, rival_tool: &str) -> Vec<HeadToHeadCell> {
     let run = parse_run_csv(cross_tool_csv);
-    let mut cells = Vec::new();
+    let mut cells: Vec<HeadToHeadCell> = Vec::new();
     for uffs in run.iter().filter(|cell| cell.tool == "UFFS") {
         let Some(rival_p50) = run_p50(&run, rival_tool, &uffs.drive, &uffs.pattern) else {
             continue;
         };
+        if cells
+            .iter()
+            .any(|existing| existing.drive == uffs.drive && existing.pattern == uffs.pattern)
+        {
+            continue;
+        }
         cells.push(HeadToHeadCell {
             drive: uffs.drive.clone(),
             pattern: uffs.pattern.clone(),
@@ -80,17 +87,27 @@ pub struct FullScanCell {
 
 /// Extract UFFS HOT/file `full_scan` cells (the workload Everything cannot
 /// export) from the cross-tool summary CSV.
+///
+/// Deduplicated by drive scope (first occurrence wins) — merged inputs (a
+/// cross-tool capture plus a dedicated all-drives full-scan capture) overlap
+/// on the shared drives.
 #[must_use]
 pub fn full_scan_cells(cross_tool_csv: &str) -> Vec<FullScanCell> {
-    parse_run_csv(cross_tool_csv)
-        .into_iter()
-        .filter(|cell| cell.tool == "UFFS" && cell.pattern == "full_scan" && cell.p50_ms > 0)
-        .map(|cell| FullScanCell {
+    let mut cells: Vec<FullScanCell> = Vec::new();
+    for cell in parse_run_csv(cross_tool_csv) {
+        if cell.tool != "UFFS" || cell.pattern != "full_scan" || cell.p50_ms == 0 {
+            continue;
+        }
+        if cells.iter().any(|existing| existing.drive == cell.drive) {
+            continue;
+        }
+        cells.push(FullScanCell {
             drive: cell.drive,
             rows: cell.rows,
             p50_ms: cell.p50_ms,
-        })
-        .collect()
+        });
+    }
+    cells
 }
 
 /// Plot-area width in pixels (x = 160 → 840, per the design system).
@@ -288,14 +305,16 @@ pub fn head_to_head_svg(
     Some(parts.join("\n"))
 }
 
-/// Hero throughput in hundredths of a million records/second (`211` → "2.11").
+/// Hero throughput in hundredths of a million records/second (`211` → "2.11"),
+/// rounded to nearest.
 fn throughput_m_hundredths(rows: u64, p50_ms: u64) -> u64 {
-    (rows * 1000).checked_div(p50_ms).unwrap_or(0) * 100 / 1_000_000
+    ((rows * 1000).checked_div(p50_ms).unwrap_or(0) * 100 + 500_000) / 1_000_000
 }
 
-/// Wall-clock seconds with one decimal, integer math (`4833` → `"4.8"`).
+/// Wall-clock seconds with one decimal, rounded to nearest (`11980` → `"12.0"`).
 fn secs_label(ms: u64) -> String {
-    format!("{}.{}", ms / 1_000, (ms % 1_000) / 100)
+    let tenths = (ms + 50) / 100;
+    format!("{}.{}", tenths / 10, tenths % 10)
 }
 
 /// Row count as a compact magnitude (`10 207 863` → `"10.2 M"`).
@@ -634,6 +653,6 @@ UFFS-C++,HOT,file,C,full_scan,8621,9000,3216011,0,PASS,10,10
         assert!(svg.contains("<title>Full-scan export: 10.2 M records → CSV in 4.8 s</title>"));
         assert!(svg.contains(">2.11<tspan"));
         // Per-drive breakdown lists the non-hero scopes.
-        assert!(svg.contains("Per drive: C: 1.5 s"));
+        assert!(svg.contains("Per drive: C: 1.6 s"));
     }
 }

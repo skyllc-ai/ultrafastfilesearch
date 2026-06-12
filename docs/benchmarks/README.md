@@ -12,13 +12,13 @@
 
 ![UFFS daemon HOT vs C++ per-invocation MFT re-read](charts/2026-06-v0.5.120/daemon-hot-vs-cpp.svg)
 
-![Full-scan export: 10.2 M records to CSV in 4.8 s at 2.11 M records per second](charts/2026-06-v0.5.120/full-scan-throughput.svg)
+![Full-scan export: 23.3 M records to CSV in 12.0 s at 1.95 M records per second](charts/2026-06-v0.5.120/full-scan-throughput.svg)
 
-Four numbers the report establishes, against 12.8 million live NTFS records (drives C/D/F/G) on a Ryzen 9 3900XT:
+Four numbers the report establishes on a Ryzen 9 3900XT (cross-tool: 12.8 M records on C/D/F/G; full-scan: all 7 volumes, 25.9 M records):
 
 1. **30 / 30 head-to-head cells faster than Everything** at p50 across six pattern classes (exact, prefix, rare-ext, common-ext, regex-alternation, substring) on four drives plus the combined index. Median ratio **0.36× — UFFS is ~2.8× faster**. The historical `C: prefix` statistical tie is gone (80 ms vs 102 ms, 0.78×).
 2. **Every cell published in the previous (v0.5.66) snapshot got faster — median −33%** — while Everything's own numbers held roughly flat. The gap widened, not narrowed.
-3. **Full-scan export is a workload Everything cannot run** (`es.exe` ~2 GB IPC export ceiling): UFFS streams the complete 10.21 M-row `*` → CSV from the daemon in **4.8 s ≈ 2.11 M records/sec** (+23% vs the April snapshot).
+3. **Full-scan export is a workload Everything cannot run** (`es.exe` ~2 GB IPC export ceiling): UFFS streams the complete **23.3 M-row** estate (all 7 volumes) to CSV in **12.0 s ≈ 1.95 M records/sec** — the April snapshot scale, 12% faster, +13% throughput.
 4. **180×–3 400× faster than the C++ reference on targeted queries** (daemon HOT vs per-invocation MFT re-read); **6.6×** on combined full-scan — and the combined-drive regex cell DNF'd the C++ tool entirely (> 120 s vs UFFS 43 ms).
 
 The report publishes **everything these numbers don't cover too** — the zero-match G-drive caveat, the C++ row-count divergences, and what this benchmark explicitly does *not* claim. The two v0.5.66-era known regressions (`*` top-100 and `--sort path` vs the v0.5.4 baseline) remain tracked in the [archived April report](archive/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions); they were not re-measured in this snapshot.

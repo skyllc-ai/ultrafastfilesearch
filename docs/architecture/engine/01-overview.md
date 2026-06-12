@@ -372,8 +372,9 @@ in [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-
 
 HOT in-memory scan throughput: **167 million records/second** when
 not materialising rows.  End-to-end throughput with disk write-out is
-**2.11 M records/second** on v0.5.120 (10.2 M rows → CSV in 4.8 s;
-v0.5.66 measured 1.72 M rec/s at 26 M records).
+**1.95 M records/second** on v0.5.120 (23.3 M rows → CSV in 12.0 s across
+all 7 volumes; 2.11 M rec/s on the 4-drive subset; v0.5.66 measured
+1.72 M rec/s at 26 M records).
 Targeted queries: **0–3 ms daemon-side** even at 100 M records
 (v0.5.4 synthetic-clone data; not re-verified since).
 

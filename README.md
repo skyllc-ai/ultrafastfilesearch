@@ -71,7 +71,7 @@ Every clip runs the **real binary** against real NTFS data with unedited timings
 
 ## Benchmark snapshot (v0.5.120)
 
-Cross-tool numbers measured 2026-06-11 on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, four NTFS volumes (C/D/F/G, 12.8 M records); phase table below from the v0.5.71/v0.5.4 captures (7 volumes, 26.1 M records; scaled to 100.4 M with offline MFT clones). Raw data: [`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) + the [April captures](docs/benchmarks/raw/). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
+Cross-tool numbers measured 2026-06-11 on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, four NTFS volumes (C/D/F/G, 12.8 M records); phase table below from the v0.5.71/v0.5.4 captures (7 volumes, 26.1 M records; scaled to 100.4 M with offline MFT clones). Raw data: [`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) + [`…_full-scan-all-drives.csv`](docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv) (7-volume full-scan) + the [April captures](docs/benchmarks/raw/). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
 
 | Phase | What happens | ALL 7 drives (v0.5.71) | Single NVMe (v0.5.4) |
 |-------|--------------|-----------------------:|---------------------:|
@@ -86,7 +86,7 @@ Hot-path context (v0.5.120, 10 rounds per cell, p50):
 - **0–3 ms daemon-side** for targeted queries (exact, prefix, ext, substring, combined) — unchanged since v0.5.4
 - **17–39 ms CLI end-to-end** for targeted single-drive queries (Windows process spawn + query); 21–108 ms across the combined four-drive index
 - **UFFS wins 30/30 cells vs Everything** at p50 across C/D/F/G + combined, median ratio **0.36× (~2.8× faster)** — every cell from the April snapshot improved (median −33%); see the [benchmark hub](docs/benchmarks/)
-- **Full-scan export** `*` → CSV at 10.2 M rows (combined): **4.8 s p50 ≈ 2.11 M rec/s** through the daemon → CSV pipeline (+23% vs April) — a workload Everything's CLI export cannot run
+- **Full-scan export** `*` → CSV across **all 7 drives (23.3 M rows): 12.0 s p50 ≈ 1.95 M rec/s** through the daemon → CSV pipeline (+13% throughput vs April at the same scale) — a workload Everything's CLI export cannot run
 - **180×–3 400× vs the C++ reference** on targeted queries (daemon HOT vs per-invocation MFT re-read); 6.6× on combined full-scan
 - **100.4 M records** tested (v0.5.4 synthetic-clone data; not re-verified since): targeted queries stayed at 11–13 ms e2e
 
