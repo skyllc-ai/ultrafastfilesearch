@@ -20,10 +20,6 @@
     clippy::min_ident_chars,
     reason = "short closure identifiers aid readability in CLI driver code"
 )]
-#![expect(
-    clippy::too_many_lines,
-    reason = "cmd_drives runs a detect -> query -> format -> print pipeline that is most readable inline"
-)]
 
 use anyhow::{Context as _, Result};
 use uffs_mft::u64_to_f64;
@@ -62,7 +58,7 @@ struct DriveInfo {
 #[cfg(windows)]
 pub(crate) async fn cmd_drives(format: OutputFormat) -> Result<()> {
     use tracing::debug;
-    use uffs_mft::platform::{VolumeHandle, detect_drive_type, detect_ntfs_drives, is_boot_drive};
+    use uffs_mft::platform::detect_ntfs_drives;
 
     debug!("🔍 Detecting NTFS drives...");
 
@@ -75,142 +71,162 @@ pub(crate) async fn cmd_drives(format: OutputFormat) -> Result<()> {
         } else {
             println!("No NTFS drives found.");
         }
-    } else {
-        debug!(
-            count = drives.len(),
-            "✅ Found {} NTFS drive(s)",
-            drives.len()
-        );
-
-        let mut drive_infos: Vec<DriveInfo> = Vec::new();
-
-        for drive in &drives {
-            // Detect drive type
-            let drive_type = detect_drive_type(*drive);
-            let drive_type_str = drive_type_label(drive_type, "???");
-
-            // Get volume label
-            let label = get_volume_label(*drive).unwrap_or_default();
-
-            // Try to get volume info for each drive
-            if let Ok(handle) = VolumeHandle::open(*drive) {
-                let vol_data = handle.volume_data();
-                let total_size = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
-                let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
-                let used_space = total_size.saturating_sub(free_space);
-                let used_pct = if total_size > 0 {
-                    (u64_to_f64(used_space) / u64_to_f64(total_size)) * 100.0
-                } else {
-                    0.0
-                };
-                let mft_size = vol_data.mft_valid_data_length;
-                let mft_records = mft_size / u64::from(vol_data.bytes_per_file_record_segment);
-
-                debug!(
-                    drive = %drive,
-                    label = %label,
-                    drive_type = drive_type_str,
-                    total_size,
-                    free_space,
-                    mft_records,
-                    "📁 Drive details"
-                );
-
-                drive_infos.push(DriveInfo {
-                    letter: *drive,
-                    is_boot: is_boot_drive(*drive),
-                    label,
-                    drive_type: drive_type_str.to_owned(),
-                    total_size,
-                    free_space,
-                    used_space,
-                    used_pct,
-                    mft_size,
-                    mft_records,
-                });
-            }
-        }
-
-        // JSON consumers (e.g. the benchmark report) get the machine form and
-        // skip the human table entirely.
-        if matches!(format, OutputFormat::Json) {
-            return print_drives_json(&drive_infos);
-        }
-
-        // Print table header
-        println!();
-        println!(
-            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
-        );
-        println!("                                    NTFS DRIVES SUMMARY");
-        println!(
-            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
-        );
-        println!();
-        println!(
-            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>7} {:>10} {:>12}",
-            "Drive", "Label", "Type", "Size", "Used", "Free", "Used%", "MFT Size", "MFT Records"
-        );
-        println!(
-            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
-            "", "", "", "", "", "", "", "", ""
-        );
-
-        // Print each drive (* = boot/system drive)
-        for info in &drive_infos {
-            let drive_col = if info.is_boot {
-                format!("{}:*", info.letter)
-            } else {
-                format!("{}:", info.letter)
-            };
-            println!(
-                "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
-                drive_col,
-                truncate_string(&info.label, 16),
-                info.drive_type,
-                format_bytes(info.total_size),
-                format_bytes(info.used_space),
-                format_bytes(info.free_space),
-                info.used_pct,
-                format_bytes(info.mft_size),
-                format_number_commas(info.mft_records),
-            );
-        }
-
-        // Print totals
-        let total_size: u64 = drive_infos.iter().map(|d| d.total_size).sum();
-        let total_used: u64 = drive_infos.iter().map(|d| d.used_space).sum();
-        let total_free: u64 = drive_infos.iter().map(|d| d.free_space).sum();
-        let total_mft: u64 = drive_infos.iter().map(|d| d.mft_size).sum();
-        let total_records: u64 = drive_infos.iter().map(|d| d.mft_records).sum();
-        let total_used_pct = if total_size > 0 {
-            (u64_to_f64(total_used) / u64_to_f64(total_size)) * 100.0
-        } else {
-            0.0
-        };
-
-        println!(
-            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
-            "", "", "", "", "", "", "", "", ""
-        );
-        println!(
-            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
-            "TOTAL",
-            format!("({} drives)", drive_infos.len()),
-            "",
-            format_bytes(total_size),
-            format_bytes(total_used),
-            format_bytes(total_free),
-            total_used_pct,
-            format_bytes(total_mft),
-            format_number_commas(total_records),
-        );
-        println!();
-        println!("  * = boot/system drive");
-        println!();
+        return Ok(());
     }
 
+    debug!(
+        count = drives.len(),
+        "✅ Found {} NTFS drive(s)",
+        drives.len()
+    );
+
+    let drive_infos = collect_drive_infos(&drives);
+
+    // JSON consumers (e.g. the benchmark report) get the machine form and
+    // skip the human table entirely.
+    if matches!(format, OutputFormat::Json) {
+        return print_drives_json(&drive_infos);
+    }
+
+    print_drives_table(&drive_infos);
     Ok(())
+}
+
+/// Query type, label, capacity, and `$MFT` statistics for each drive.
+///
+/// Drives whose volume handle cannot be opened (insufficient privileges,
+/// dismounted volume) are silently skipped — the listing is best-effort.
+#[cfg(windows)]
+fn collect_drive_infos(drives: &[uffs_mft::platform::DriveLetter]) -> Vec<DriveInfo> {
+    use tracing::debug;
+    use uffs_mft::platform::{VolumeHandle, detect_drive_type, is_boot_drive};
+
+    let mut drive_infos: Vec<DriveInfo> = Vec::new();
+
+    for drive in drives {
+        // Detect drive type
+        let drive_type = detect_drive_type(*drive);
+        let drive_type_str = drive_type_label(drive_type, "???");
+
+        // Get volume label
+        let label = get_volume_label(*drive).unwrap_or_default();
+
+        // Try to get volume info for each drive
+        if let Ok(handle) = VolumeHandle::open(*drive) {
+            let vol_data = handle.volume_data();
+            let total_size = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
+            let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
+            let used_space = total_size.saturating_sub(free_space);
+            let used_pct = if total_size > 0 {
+                (u64_to_f64(used_space) / u64_to_f64(total_size)) * 100.0
+            } else {
+                0.0
+            };
+            let mft_size = vol_data.mft_valid_data_length;
+            let mft_records = mft_size / u64::from(vol_data.bytes_per_file_record_segment);
+
+            debug!(
+                drive = %drive,
+                label = %label,
+                drive_type = drive_type_str,
+                total_size,
+                free_space,
+                mft_records,
+                "📁 Drive details"
+            );
+
+            drive_infos.push(DriveInfo {
+                letter: *drive,
+                is_boot: is_boot_drive(*drive),
+                label,
+                drive_type: drive_type_str.to_owned(),
+                total_size,
+                free_space,
+                used_space,
+                used_pct,
+                mft_size,
+                mft_records,
+            });
+        }
+    }
+
+    drive_infos
+}
+
+/// Print the human-readable drives summary table with a totals row.
+#[cfg(windows)]
+fn print_drives_table(drive_infos: &[DriveInfo]) {
+    // Print table header
+    println!();
+    println!(
+        "═══════════════════════════════════════════════════════════════════════════════════════════════════"
+    );
+    println!("                                    NTFS DRIVES SUMMARY");
+    println!(
+        "═══════════════════════════════════════════════════════════════════════════════════════════════════"
+    );
+    println!();
+    println!(
+        "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>7} {:>10} {:>12}",
+        "Drive", "Label", "Type", "Size", "Used", "Free", "Used%", "MFT Size", "MFT Records"
+    );
+    println!(
+        "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
+        "", "", "", "", "", "", "", "", ""
+    );
+
+    // Print each drive (* = boot/system drive)
+    for info in drive_infos {
+        let drive_col = if info.is_boot {
+            format!("{}:*", info.letter)
+        } else {
+            format!("{}:", info.letter)
+        };
+        println!(
+            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
+            drive_col,
+            truncate_string(&info.label, 16),
+            info.drive_type,
+            format_bytes(info.total_size),
+            format_bytes(info.used_space),
+            format_bytes(info.free_space),
+            info.used_pct,
+            format_bytes(info.mft_size),
+            format_number_commas(info.mft_records),
+        );
+    }
+
+    // Print totals
+    let total_size: u64 = drive_infos.iter().map(|d| d.total_size).sum();
+    let total_used: u64 = drive_infos.iter().map(|d| d.used_space).sum();
+    let total_free: u64 = drive_infos.iter().map(|d| d.free_space).sum();
+    let total_mft: u64 = drive_infos.iter().map(|d| d.mft_size).sum();
+    let total_records: u64 = drive_infos.iter().map(|d| d.mft_records).sum();
+    let total_used_pct = if total_size > 0 {
+        (u64_to_f64(total_used) / u64_to_f64(total_size)) * 100.0
+    } else {
+        0.0
+    };
+
+    println!(
+        "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
+        "", "", "", "", "", "", "", "", ""
+    );
+    println!(
+        "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
+        "TOTAL",
+        format!("({} drives)", drive_infos.len()),
+        "",
+        format_bytes(total_size),
+        format_bytes(total_used),
+        format_bytes(total_free),
+        total_used_pct,
+        format_bytes(total_mft),
+        format_number_commas(total_records),
+    );
+    println!();
+    println!("  * = boot/system drive");
+    println!();
 }
 
 /// Machine-readable per-drive record for `drives --format json`.
