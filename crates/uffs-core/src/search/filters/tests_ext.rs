@@ -8,7 +8,6 @@
 
 use uffs_text::case_fold::CaseFold;
 
-use super::super::*;
 use super::*;
 
 #[test]
