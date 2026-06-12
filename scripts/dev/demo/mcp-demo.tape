@@ -130,29 +130,14 @@ Type "Clear-Host"
 Enter
 
 # 5) Ask Claude for a small, concrete filesystem answer via MCP
-#
-# Notes on the claude invocations:
-#   - `-p` (print mode): answer + exit, deterministic for recording.
-#   - `--model haiku`: fast model; the clip is about the MCP wiring,
-#     not model depth.  Visible in the typed command on purpose.
-#   - `--allowedTools 'mcp__uffs__*'`: pre-approves the read-only UFFS
-#     tools so no hidden permission prompt stalls the recording.
-#   - The trailing `; 'ANSWER_' + 'COMPLETE'` echoes a sentinel AFTER
-#     claude exits; the concatenation keeps the sentinel out of the
-#     typed line so Wait+Screen only matches the real completion.
-#   - Wait+Screen needs VHS >= 0.8; if unavailable, replace each Wait
-#     with `Sleep 30s`.
-#   - Warm claude once off-camera before recording (auth + MCP
-#     handshake are first-call costs):  claude -p --model haiku 'ok'
 
 Type "# Ask Claude to use UFFS instead of crawling the disk"
 Enter
 Set TypingSpeed 45ms
 Sleep 2s
-Type "claude -p --model haiku --allowedTools 'mcp__uffs__*' 'Using the uffs MCP server, list the indexed drives and then find 5 invoice files. Keep the answer compact and include counts/timings if the tool returns them.' ; 'ANSWER_' + 'COMPLETE'"
+Type "claude 'Using the uffs MCP server, list the indexed drives and then find 5 invoice files. Keep the answer compact and include counts/timings if the tool returns them.'"
 Enter
 Set TypingSpeed 1ms
-Wait+Screen@90s /ANSWER_COMPLETE/
 Sleep 3s
 Type "Clear-Host"
 Enter
@@ -163,11 +148,12 @@ Type "# Ask for a server-side storage summary"
 Enter
 Set TypingSpeed 45ms
 Sleep 2s
-Type "claude -p --model haiku --allowedTools 'mcp__uffs__*' 'Using the uffs MCP server, summarize storage by file type. Return only the top 8 rows.' ; 'ANSWER_' + 'COMPLETE'"
+Type "claude 'Using the uffs MCP server, summarize storage by file type. Return only the top 8 rows.'"
 Enter
 Set TypingSpeed 1ms
-Wait+Screen@90s /ANSWER_COMPLETE/
 Sleep 3s
+Type "exit"
+Enter
 Type "Clear-Host"
 Enter
 
