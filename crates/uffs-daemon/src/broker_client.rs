@@ -126,19 +126,10 @@ fn interpret_handle_response(
 }
 
 /// Non-Windows: broker is never available.
+///
+/// `request_volume_handle` has no non-Windows stub: its only caller,
+/// `warm_up_broker_handles`, is itself `#[cfg(windows)]`.
 #[cfg(not(windows))]
 pub(crate) const fn broker_available() -> bool {
     false
-}
-
-/// Non-Windows: broker request always fails.
-#[cfg(not(windows))]
-#[expect(
-    clippy::single_call_fn,
-    reason = "platform stub — mirrors Windows variant"
-)]
-pub(crate) fn request_volume_handle(
-    _drive_letter: uffs_mft::platform::DriveLetter,
-) -> anyhow::Result<u64> {
-    anyhow::bail!("Access Broker is a Windows-only feature")
 }

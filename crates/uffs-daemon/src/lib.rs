@@ -247,7 +247,6 @@ fn spawn_load_task(
     no_cache: bool,
     load_lifecycle: lifecycle::LifecycleHandle,
 ) -> tokio::task::JoinHandle<()> {
-    let broker_is_available = broker_client::broker_available();
     tokio::spawn(async move {
         tracing::info!(mft_files = mft_files.len(), drives = ?drives, "Load task starting");
         if !mft_files.is_empty() {
@@ -258,18 +257,7 @@ fn spawn_load_task(
         // Live-MFT scanning is Windows-only; on every other platform the
         // load task is fully covered by `load_from_data_dir` above.
         #[cfg(windows)]
-        load_live_drives_if_windows(
-            &load_index,
-            &drives,
-            no_cache,
-            &load_lifecycle,
-            broker_is_available,
-        )
-        .await;
-        if broker_is_available {
-            let _handle_result =
-                broker_client::request_volume_handle(uffs_mft::platform::DriveLetter::C);
-        }
+        load_live_drives_if_windows(&load_index, &drives, no_cache, &load_lifecycle).await;
         tracing::info!("Load task completed");
 
         // Latch the load phase as complete: from this point on, a daemon
@@ -303,14 +291,22 @@ async fn load_live_drives_if_windows(
     drives: &[uffs_mft::platform::DriveLetter],
     no_cache: bool,
     load_lifecycle: &lifecycle::LifecycleHandle,
-    broker_is_available: bool,
 ) {
     if drives.is_empty() {
         return;
     }
-    if broker_is_available {
-        warm_up_broker_handles(drives);
-    }
+    // Always attempt the broker warm-up.  Gating on a separate
+    // `broker_available()` check is unreliable: that probe connects to and
+    // consumes the broker's single pipe instance, so a second probe races to
+    // `false` and the warm-up is wrongly skipped (2026-06-13 VM finding).  The
+    // handle request below is the only authoritative test — it succeeds when a
+    // broker is serving and fails fast (WARN + direct-open fallback) when not.
+    tracing::info!(
+        pid = std::process::id(),
+        drive_count = drives.len(),
+        "load_live_drives_if_windows: attempting broker warm-up unconditionally"
+    );
+    warm_up_broker_handles(drives);
     tracing::info!(drives = ?drives, "Loading live drives...");
     load_index
         .load_live_drives(drives, no_cache, load_lifecycle)
@@ -325,6 +321,7 @@ async fn load_live_drives_if_windows(
 #[cfg(windows)]
 fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
     tracing::info!(
+        daemon_pid = std::process::id(),
         drives = ?drives,
         "warm_up_broker_handles: requesting volume handles from the Access Broker"
     );
