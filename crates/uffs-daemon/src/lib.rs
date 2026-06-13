@@ -324,6 +324,10 @@ async fn load_live_drives_if_windows(
 /// ignored — the direct-open path takes over transparently.
 #[cfg(windows)]
 fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
+    tracing::info!(
+        drives = ?drives,
+        "warm_up_broker_handles: requesting volume handles from the Access Broker"
+    );
     for &drive_letter in drives {
         match broker_client::request_volume_handle(drive_letter) {
             Ok(handle) => {
@@ -338,10 +342,10 @@ fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
                 tracing::info!(drive = %drive_letter, handle, "Registered broker volume handle");
             }
             Err(broker_err) => {
-                tracing::debug!(
+                tracing::warn!(
                     drive = %drive_letter,
                     error = %broker_err,
-                    "Broker unavailable, using direct access"
+                    "Access Broker handle request FAILED — falling back to direct (elevated) open"
                 );
             }
         }

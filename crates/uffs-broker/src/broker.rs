@@ -336,6 +336,7 @@ fn audit_log(action: &str, pid: u32, exe: Option<&str>, drive: Option<char>, det
 fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     use std::os::windows::ffi::OsStrExt as _;
 
+    use windows::Win32::Security::SECURITY_ATTRIBUTES;
     use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
     use windows::Win32::System::Pipes::{
         CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
@@ -347,8 +348,23 @@ fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
         .chain(Some(0))
         .collect();
 
-    // SAFETY: `pipe_name` is a NUL-terminated UTF-16 buffer owned for the
-    // duration of this call; all other arguments are plain integers or None.
+    // The whole point of the broker is to serve a NON-elevated daemon.  With
+    // `None` security, an elevated/SYSTEM creator gets an owner-only DACL AND
+    // a high mandatory-integrity label, so the medium-integrity daemon can't
+    // even open the pipe.  Build an explicit descriptor that lets the daemon
+    // connect; the broker still verifies the client is uffsd + Authenticode
+    // before granting any handle (`check_client_identity`), so a permissive
+    // *connect* ACL is not a privilege leak.
+    let security = PipeSecurity::build()?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(0),
+        lpSecurityDescriptor: security.descriptor_ptr(),
+        bInheritHandle: false.into(),
+    };
+
+    // SAFETY: `pipe_name` is a NUL-terminated UTF-16 buffer and `sa` (with its
+    // security descriptor) both live until after this call returns; the pipe
+    // copies the descriptor, so `security` may be dropped afterwards.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(pipe_name.as_ptr()),
@@ -358,9 +374,10 @@ fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
             1024, // out buffer
             1024, // in buffer
             0,    // default timeout
-            None, // default security (owner-only for elevated process)
+            Some(&raw const sa),
         )
     };
+    drop(security);
 
     if handle.is_invalid() {
         anyhow::bail!(
@@ -370,6 +387,81 @@ fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     }
 
     Ok(handle)
+}
+
+/// Owns a self-relative security descriptor built from SDDL, for the broker
+/// pipe.  Frees the descriptor (`LocalFree`) on drop.
+///
+/// SDDL: `D:(A;;GRGW;;;AU)S:(ML;;NW;;;LW)`
+/// - DACL grants Authenticated Users generic read+write (enough to open and
+///   talk to the pipe — identity is checked at the app layer per request).
+/// - SACL sets a **low** mandatory-integrity label so the medium-integrity
+///   (non-elevated) daemon is not blocked by the high label an elevated/SYSTEM
+///   creator would otherwise stamp on the object.
+#[cfg(windows)]
+struct PipeSecurity {
+    /// `LocalAlloc`-ed self-relative security descriptor; freed on drop.
+    descriptor: windows::Win32::Security::PSECURITY_DESCRIPTOR,
+}
+
+#[cfg(windows)]
+impl PipeSecurity {
+    /// Build the broker-pipe security descriptor from SDDL (see the type docs).
+    #[expect(
+        unsafe_code,
+        reason = "FFI: ConvertStringSecurityDescriptorToSecurityDescriptorW"
+    )]
+    fn build() -> anyhow::Result<Self> {
+        use windows::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows::Win32::Security::PSECURITY_DESCRIPTOR;
+        use windows::core::PCWSTR;
+
+        let sddl: Vec<u16> = "D:(A;;GRGW;;;AU)S:(ML;;NW;;;LW)"
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `sddl` is a NUL-terminated UTF-16 string valid for the call;
+        // `descriptor` is a valid out-pointer that receives a `LocalAlloc`-ed
+        // descriptor we free in `Drop`.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl.as_ptr()),
+                SDDL_REVISION_1,
+                &raw mut descriptor,
+                None,
+            )
+        }
+        .map_err(|err| anyhow::anyhow!("failed to build pipe security descriptor: {err}"))?;
+        Ok(Self { descriptor })
+    }
+
+    /// Raw pointer to the descriptor, for `SECURITY_ATTRIBUTES`.
+    const fn descriptor_ptr(&self) -> *mut core::ffi::c_void {
+        self.descriptor.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PipeSecurity {
+    #[expect(
+        unsafe_code,
+        reason = "FFI: LocalFree of the SDDL-allocated descriptor"
+    )]
+    fn drop(&mut self) {
+        if !self.descriptor.0.is_null() {
+            // SAFETY: `descriptor.0` was allocated by
+            // `ConvertStringSecurityDescriptorToSecurityDescriptorW` via
+            // `LocalAlloc`; freeing it once on drop is the documented contract.
+            _ = unsafe {
+                windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                    self.descriptor.0,
+                )))
+            };
+        }
+    }
 }
 
 /// Wait for a client to connect to the pipe.
