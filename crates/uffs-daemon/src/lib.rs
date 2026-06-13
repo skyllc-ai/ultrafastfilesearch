@@ -327,7 +327,15 @@ fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
     for &drive_letter in drives {
         match broker_client::request_volume_handle(drive_letter) {
             Ok(handle) => {
-                tracing::info!(drive = %drive_letter, handle, "Got broker handle");
+                // Deposit the broker's (elevated, overlapped) volume handle in
+                // the uffs-mft registry; the subsequent `VolumeHandle::open`
+                // for this drive adopts it instead of calling `CreateFileW`
+                // (which a non-elevated daemon can't do).  This is what makes
+                // the broker path actually load the MFT — previously the
+                // handle was fetched and dropped, so the reader fell back to a
+                // direct open and failed with access-denied.
+                uffs_mft::register_broker_handle(drive_letter, handle);
+                tracing::info!(drive = %drive_letter, handle, "Registered broker volume handle");
             }
             Err(broker_err) => {
                 tracing::debug!(

@@ -438,8 +438,8 @@ fn get_pipe_client_pid(pipe: windows::Win32::Foundation::HANDLE) -> Option<u32> 
 #[expect(unsafe_code, reason = "CreateFileW is an FFI call")]
 fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
+        FILE_GENERIC_READ, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
     let volume_path = format!("\\\\.\\{drive_letter}:");
@@ -447,6 +447,12 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
 
     // SAFETY: `wide_path` is a NUL-terminated UTF-16 buffer owned for the
     // duration of this call; all other arguments are plain integers or None.
+    //
+    // The handle is duplicated into the (non-elevated) daemon, which reads
+    // the MFT through it via overlapped/IOCP I/O — so it must be opened
+    // `FILE_FLAG_OVERLAPPED` (and `SEQUENTIAL_SCAN`, matching the reader's
+    // direct-open flags in `uffs-mft::VolumeHandle`).  Without OVERLAPPED the
+    // daemon's IOCP reads on the vended handle fail.
     let create_file_result = unsafe {
         CreateFileW(
             windows::core::PCWSTR(wide_path.as_ptr()),
@@ -454,7 +460,7 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
             None,
         )
     };

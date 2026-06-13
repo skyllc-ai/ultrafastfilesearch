@@ -4448,6 +4448,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uffs-broker-protocol",
  "uffs-format",
  "uffs-mft",
  "uffs-security",

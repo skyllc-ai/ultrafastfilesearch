@@ -41,21 +41,20 @@ default-target = "x86_64-pc-windows-msvc"
 name = "uffs-broker"
 path = "src/main.rs"
 
-[dependencies]
-# `tracing` macros are used cross-platform: the bin's non-Windows path
-# in `main.rs` emits `tracing::error!` before exiting.  The Windows-only
-# broker logic uses `tracing` heavily in `broker.rs`.
-tracing.workspace = true
-
 # Windows-only deps: the elevated handle-broker logic in `broker.rs` is
 # fully `#[cfg(windows)]`, so its supporting crates compile only on the
 # Windows target.  Scoped to `[target.'cfg(windows)'.dependencies]` so
 # the bin's non-Windows compilation (a tiny error-message stub in
-# `main.rs`) doesn't pull in `anyhow`, `tracing-subscriber`, `windows`,
-# or the broker protocol — each would otherwise be visible-but-unused
-# on Linux/macOS and need a `use X as _;` marker.  F5 / issue #205.
+# `main.rs` that uses only `eprintln!`) doesn't pull in `anyhow`,
+# `tracing`, `tracing-subscriber`, `windows`, or the broker protocol —
+# each would otherwise be visible-but-unused on Linux/macOS and need a
+# `use X as _;` marker.  F5 / issue #205.
 [target.'cfg(windows)'.dependencies]
 anyhow.workspace = true
+# `tracing` macros are used heavily in the Windows-only `broker.rs`; the
+# non-Windows `main.rs` stub uses `eprintln!`, so tracing is not needed
+# off Windows.
+tracing.workspace = true
 tracing-subscriber.workspace = true
 windows.workspace = true
 # Wire-protocol types shared with `uffs-daemon::broker_client`.  Lives

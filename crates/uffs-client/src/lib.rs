@@ -185,4 +185,9 @@ pub(crate) mod verify;
 #[cfg(windows)]
 pub(crate) mod windows_deadline;
 
+/// Access Broker detection (Windows-only): probe the broker named pipe so
+/// daemon-spawn can skip the elevation gate when a broker is running.
+#[cfg(windows)]
+pub(crate) mod broker_probe;
+
 pub mod schema;

@@ -29,18 +29,26 @@
 #[cfg(windows)]
 mod broker;
 
+#[expect(
+    clippy::print_stderr,
+    reason = "the --install/--uninstall paths run before any tracing subscriber \
+              exists, so tracing::error! is silently dropped (a non-elevated \
+              `--install` failed with NO output). stderr always reaches the operator."
+)]
 fn main() {
     #[cfg(windows)]
     {
         if let Err(run_err) = broker::run() {
-            tracing::error!(%run_err, "uffs-broker fatal error");
+            // `{:#}` prints the full anyhow cause chain (e.g. the `sc`
+            // stderr or the elevation-required message).
+            eprintln!("uffs-broker: {run_err:#}");
             std::process::exit(1);
         }
     }
 
     #[cfg(not(windows))]
     {
-        tracing::error!("uffs-broker is a Windows-only component");
+        eprintln!("uffs-broker is a Windows-only component.");
         std::process::exit(1);
     }
 }

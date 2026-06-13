@@ -42,6 +42,48 @@ pub(crate) const WAIT_TIMEOUT_ERROR_CODE: u32 = 258;
 /// Win32 error code reported when an overlapped operation is aborted.
 const ERROR_OPERATION_ABORTED_CODE: u32 = 995;
 
+// ── Access Broker handle registry ──────────────────────────────────────────
+//
+// On Windows, opening `\\.\X:` for raw MFT reads needs Administrator.  When a
+// non-elevated daemon runs with the UFFS Access Broker service available, the
+// broker (elevated) opens the volume and hands the daemon a duplicated handle
+// over a named pipe.  The daemon deposits that handle here keyed by drive
+// letter; `VolumeHandle::open` checks the registry FIRST and adopts the
+// pre-opened handle instead of calling `CreateFileW` (which would fail with
+// access-denied).  This keeps the broker plumbing out of the deep
+// load-live-drives call chain — one deposit, one lookup.
+//
+// Handles are stored as the raw `u64` value the broker sends over the wire
+// (`HANDLE` itself is not `Send`/`Sync`); the value is a process-local
+// capability already duplicated into this process by the broker.
+
+/// Process-wide map of drive letter → broker-supplied raw volume handle.
+#[cfg(windows)]
+static BROKER_HANDLES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<char, u64>>> =
+    std::sync::OnceLock::new();
+
+/// Deposit a broker-supplied volume handle for `drive`.
+///
+/// `raw_handle` is the duplicated `HANDLE` value `uffs-broker` returned over
+/// its pipe.  The next [`VolumeHandle::open`] for this drive adopts it (and
+/// removes it from the registry, so each handle is consumed once).
+#[cfg(windows)]
+pub fn register_broker_handle(drive: super::DriveLetter, raw_handle: u64) {
+    let map =
+        BROKER_HANDLES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        guard.insert(drive.as_char(), raw_handle);
+    }
+}
+
+/// Remove and return a previously-registered broker handle for `drive`, if any.
+#[cfg(windows)]
+fn take_broker_handle(drive: super::DriveLetter) -> Option<u64> {
+    let map = BROKER_HANDLES.get()?;
+    let mut guard = map.lock().ok()?;
+    guard.remove(&drive.as_char())
+}
+
 /// Convert a `windows::core::Error` into the equivalent `std::io::Error`,
 /// **unwrapping** the `HRESULT_FROM_WIN32` envelope so std's
 /// `decode_error_kind` table (keyed on bare Win32 codes like
@@ -140,6 +182,11 @@ pub struct VolumeHandle {
     volume: super::DriveLetter,
     /// NTFS volume data from `FSCTL_GET_NTFS_VOLUME_DATA`.
     volume_data: NtfsVolumeData,
+    /// `true` when `handle` was supplied by the Access Broker rather than
+    /// opened here via `CreateFileW`.  A broker handle is already an
+    /// elevated, overlapped volume handle, so [`Self::open_overlapped_handle`]
+    /// duplicates it instead of re-opening `\\.\X:` (which would need admin).
+    broker_backed: bool,
 }
 
 #[expect(
@@ -226,6 +273,14 @@ impl VolumeHandle {
     /// descriptor for the opened handle.
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: super::DriveLetter) -> Result<Self> {
+        // Access Broker fast-path: if the (elevated) broker has deposited a
+        // pre-opened, duplicated volume handle for this drive, adopt it
+        // instead of calling `CreateFileW` — which would fail with
+        // access-denied in a non-elevated daemon.  See the registry above.
+        if let Some(raw_handle) = take_broker_handle(volume) {
+            return Self::from_broker_handle(volume, raw_handle);
+        }
+
         // `DriveLetter` is already validated (`A..=Z`), so no fallible
         // pre-check is needed here.  The wire path uses the
         // canonical uppercase ASCII byte directly.
@@ -273,6 +328,37 @@ impl VolumeHandle {
             handle,
             volume,
             volume_data,
+            broker_backed: false,
+        })
+    }
+
+    /// Adopt a pre-opened, duplicated volume handle supplied by the Access
+    /// Broker (Windows-only, see the broker handle registry above).
+    ///
+    /// `raw_handle` is the raw `HANDLE` value the broker duplicated into this
+    /// process; ownership transfers to the returned `VolumeHandle` (its `Drop`
+    /// closes it).  The broker opens the volume with
+    /// `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED |
+    /// FILE_FLAG_SEQUENTIAL_SCAN`, matching the direct-open flags, so the
+    /// handle is usable for both the volume-data query here and the
+    /// overlapped MFT read via [`Self::open_overlapped_handle`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MftError`] if the volume descriptor cannot be read from the
+    /// adopted handle.
+    #[cfg(windows)]
+    pub fn from_broker_handle(volume: super::DriveLetter, raw_handle: u64) -> Result<Self> {
+        let handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
+            usize::try_from(raw_handle).unwrap_or(0),
+        ));
+        let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
+        tracing::info!(drive = %volume, "Adopted Access Broker volume handle for MFT read");
+        Ok(Self {
+            handle,
+            volume,
+            volume_data,
+            broker_backed: true,
         })
     }
 
@@ -367,6 +453,14 @@ impl VolumeHandle {
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open_overlapped_handle(&self) -> Result<HANDLE> {
         let volume = self.volume;
+
+        // Broker-backed: `\\.\X:` can't be re-opened here (non-elevated →
+        // access-denied).  The broker handle is already overlapped, so hand
+        // back an independent duplicate the caller can close on its own.
+        if self.broker_backed {
+            return self.duplicate_broker_handle();
+        }
+
         let volume_path: Vec<u16> = format!("\\\\.\\{volume}:")
             .encode_utf16()
             .chain(core::iter::once(0))
@@ -391,6 +485,45 @@ impl VolumeHandle {
             volume,
             source: hresult_to_io_error(&err),
         })
+    }
+
+    /// Duplicate the adopted broker handle into a fresh, independently-owned
+    /// overlapped handle for the bulk MFT read path.
+    ///
+    /// Same-process `DuplicateHandle` with `DUPLICATE_SAME_ACCESS` clones the
+    /// access rights and the `FILE_FLAG_OVERLAPPED` mode of the broker handle;
+    /// the caller closes the returned handle, leaving `self.handle` intact for
+    /// the volume-data queries and for `Drop`.
+    #[cfg(windows)]
+    #[expect(unsafe_code, reason = "FFI: DuplicateHandle / GetCurrentProcess")]
+    fn duplicate_broker_handle(&self) -> Result<HANDLE> {
+        use windows::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        let mut duplicated = HANDLE::default();
+        // SAFETY: `GetCurrentProcess` takes no arguments and returns the
+        // current-process pseudo-handle; there are no preconditions.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: `process` is a valid (pseudo) process handle; `self.handle`
+        // is a valid open volume handle owned by this `VolumeHandle`;
+        // `&raw mut duplicated` is a valid out-pointer.  On success ownership
+        // of `duplicated` transfers to the caller.
+        let result = unsafe {
+            DuplicateHandle(
+                process,
+                self.handle,
+                process,
+                &raw mut duplicated,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        result.map_err(|err| MftError::VolumeOpen {
+            volume: self.volume,
+            source: hresult_to_io_error(&err),
+        })?;
+        Ok(duplicated)
     }
 
     /// Opens a read handle to `X:\$MFT` for direct file-based MFT reading.

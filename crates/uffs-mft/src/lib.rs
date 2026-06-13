@@ -315,7 +315,7 @@ pub use platform::{DriveType, MftBitmap, MftExtent, SystemMemory, query_system_m
 // is_volume_read_only) are pub(crate) and consumed only via
 // `crate::platform::*` paths, so no crate-root re-export is needed.
 #[cfg(windows)]
-pub use platform::{VolumeHandle, detect_ntfs_drives};
+pub use platform::{VolumeHandle, detect_ntfs_drives, register_broker_handle};
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,

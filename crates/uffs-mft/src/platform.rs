@@ -76,7 +76,7 @@ pub(crate) use volume::{
 // `VolumeHandle::volume_data()` returns `&NtfsVolumeData` so the latter
 // must be at least as public as the former.
 #[cfg(windows)]
-pub use volume::{NtfsVolumeData, VolumeHandle};
+pub use volume::{NtfsVolumeData, VolumeHandle, register_broker_handle};
 
 #[cfg(test)]
 #[cfg(windows)]

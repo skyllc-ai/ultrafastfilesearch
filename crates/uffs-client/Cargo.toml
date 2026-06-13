@@ -114,6 +114,9 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+# Broker pipe-name constant + protocol, so daemon-spawn can detect a
+# running Access Broker and skip the elevation gate when one is present.
+uffs-broker-protocol.workspace = true
 
 [dev-dependencies]
 # Temporary PID-file fixtures for verify_strict / deep_health_check tests.

@@ -204,13 +204,40 @@ fn spawn_daemon_windows(
 
     match policy {
         ElevationPolicy::AllowUacPrompt => spawn_via_uac_prompt(exe, args),
-        ElevationPolicy::RequireExistingElevation => {
-            tracing::info!("Not elevated and policy forbids UAC — returning DaemonNeedsElevation");
-            Err(crate::error::ClientError::DaemonNeedsElevation {
-                daemon_path: exe.display().to_string(),
-            })
-        }
+        ElevationPolicy::RequireExistingElevation => spawn_unelevated_or_refuse(exe, args),
     }
+}
+
+/// `RequireExistingElevation` arm of [`spawn_daemon_windows`]: the shell
+/// is not elevated and UAC is forbidden.
+///
+/// Before refusing, check for a running Access Broker: if its named pipe
+/// is present the daemon can start as the current (non-elevated) user and
+/// obtain volume handles from the broker instead of needing admin itself
+/// (the whole point of `uffs-broker --install`; the daemon-side consumer
+/// is `uffs-daemon::broker_client`).  With no broker, return
+/// [`DaemonNeedsElevation`](crate::error::ClientError::DaemonNeedsElevation)
+/// so the CLI renders its recovery help.
+#[cfg(windows)]
+#[expect(
+    clippy::single_call_fn,
+    reason = "extracted from spawn_daemon_windows to stay under the cognitive-complexity ceiling"
+)]
+fn spawn_unelevated_or_refuse(
+    exe: &std::path::Path,
+    args: &[std::ffi::OsString],
+) -> Result<DaemonChildHandle, crate::error::ClientError> {
+    if crate::broker_probe::broker_pipe_present() {
+        tracing::info!(
+            "Not elevated, but the Access Broker pipe is present — spawning the \
+             daemon non-elevated; it will obtain volume handles via the broker."
+        );
+        return spawn_detached_no_inherit(exe, args);
+    }
+    tracing::info!("Not elevated and policy forbids UAC — returning DaemonNeedsElevation");
+    Err(crate::error::ClientError::DaemonNeedsElevation {
+        daemon_path: exe.display().to_string(),
+    })
 }
 
 /// UAC-prompt arm of [`spawn_daemon_windows`].
