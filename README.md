@@ -19,6 +19,10 @@
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
 
+```powershell
+winget install SkyLLC.UFFS    # Windows · then open a new terminal · full install options ↓
+```
+
 > Proven on a real 7-drive, 25.9M-record Windows system; scale-ceiling tested to **100.4M records** with offline MFT clones (v0.5.4 baseline; v0.5.120 current):
 > - **68.5 s COLD** — raw MFT read + compact index build (v0.5.71, flat ± 4 % vs v0.5.4)
 > - **5.7 s WARM CACHE** — restart from serialized cache (v0.5.62/v0.5.71, **−17 %** vs v0.5.4)
@@ -33,6 +37,8 @@ UFFS is built for **exact filename, path, and metadata search** at scales where 
 📖 **[Full User Manual](docs/user-manual/index.md)** — installation, tutorials, filters, daemon, TUI, MCP integration, and more.
 
 > **Open source, forever.** The UFFS platform — engine, daemon, CLI, and MCP server — is licensed under the [Mozilla Public License 2.0](LICENSE). Code released as part of UFFS Core will never be made less open. Commercial products and enterprise offerings are built on top of the open platform, not by restricting it.
+>
+> 💛 No telemetry, no paywall. If UFFS earns a place in your workflow, sponsorship funds the next thing it needs — starting with a Windows code-signing certificate. **[Support UFFS ↓](#support-uffs)**
 
 ---
 
@@ -121,12 +127,18 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 **Windows quick-install (one command) — via [WinGet](https://learn.microsoft.com/windows/package-manager/):**
 ```powershell
 winget install SkyLLC.UFFS
+# If the msstore source errors on your machine, pin the source:
+#   winget install -e --id SkyLLC.UFFS --source winget
 ```
 
-Or grab the ZIP above, extract it anywhere, add the folder to PATH, then:
+> ⚠️ **Open a new terminal after installing** — WinGet updates `PATH`, but an already-open shell won't see `uffs` until you start a fresh one.
+
+Or grab the ZIP above, extract it anywhere, add the folder to PATH, then (in a new terminal):
 ```powershell
 uffs --version
 ```
+
+> 🔓 **Binaries aren't code-signed yet.** Windows SmartScreen and the UAC prompt will show **"Publisher: Unknown"** — that's expected, not a compromise. A code-signing certificate is the **first line item sponsorships fund** ([Support UFFS ↓](#support-uffs)). Until then, the published `CHECKSUMS.txt` and SLSA provenance below are how you verify a download is genuine.
 
 **Verify the download:**
 ```bash
@@ -151,8 +163,10 @@ cargo build --release
 
 ## Quick Start
 
+> On Windows, reading the live MFT needs Administrator. Run from an **elevated** terminal, or the first search prints a one-time prompt offering `uffs daemon start --elevate` (a single UAC prompt) or the broker service for no future prompts. macOS/Linux offline analysis needs no elevation.
+
 ```bash
-# Search all drives (daemon starts automatically on first query)
+# Search all drives (daemon auto-starts on first query in an elevated shell)
 uffs "*.rs"
 
 # Search a specific drive
@@ -191,6 +205,24 @@ The daemon keeps each drive's compact index in one of four tiers, demoted automa
 Operator commands let you tune this manually for known workload shapes — `preload` pins a search-heavy drive against demote, `hibernate` frees RAM during long idle stretches, `forget` permanently evicts a drive plus its on-disk caches, and `status_drives` surfaces the live tier + pin + query-rate snapshot.
 
 > 📖 **[Memory-tiering Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)** — what to run on a multi-drive Windows box to validate the operator surface.
+
+---
+
+## Support UFFS
+
+UFFS is free, MPL-2.0, and stays that way — **no telemetry, no accounts, no paywalled core, no outbound network calls.** If it earns a place in your workflow, sponsorship funds the work that keeps it improving:
+
+- 🔏 **A Windows code-signing certificate** — the top priority. It removes the SmartScreen and UAC **"Publisher: Unknown"** warning that every user sees on install today, the single biggest trust hurdle for a Windows tool.
+- 📊 **Benchmark hardware** — the multi-drive, multi-TB rig behind the published numbers.
+- 📦 **Release engineering & packaging** — signed builds, WinGet/Scoop, docs, and onboarding.
+
+| Supporter | Where | Best for |
+|---|---|---|
+| 💛 **One-time tip** | [Ko-fi](https://ko-fi.com/ufffssearch) | "this saved me an afternoon" |
+| 🏢 **Companies** (invoice / receipt via Sky, LLC) | [Open Collective](https://opencollective.com/uffs-search) | expensing it as a tool |
+| 🔁 **Recurring (individuals)** | GitHub Sponsors — *enrolling* | following the roadmap |
+
+The **"Sponsor"** button at the top of this repo lists every live channel. For custom arrangements, enterprise pilots, or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net).
 
 ---
 
@@ -304,7 +336,7 @@ UFFS is developed and maintained by **[Sky, LLC](https://github.com/skyllc-ai)**
 
 - **Commercial UFFS frontends** (polished GUI / premium TUI) are in development on top of this open-source engine. For waitlist or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net) or open a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
 - **Hiring / collaboration.** This repository is also the public engineering portfolio of its maintainer; see the [Sky, LLC org page](https://github.com/skyllc-ai) for the full pitch and contact details.
-- **Sponsorship.** UFFS is free and MPL-2.0 forever; sponsorships fund Windows code-signing, benchmark hardware, and release engineering. **Companies** (invoice / receipt via Sky, LLC): [Open Collective](https://opencollective.com/uffs-search). **One-time tip:** [Ko-fi](https://ko-fi.com/ufffssearch). Individual recurring tiers via **GitHub Sponsors** are being enrolled — the repo "Sponsor" button already lists the live channels above.
+- **Sponsorship.** UFFS is free and MPL-2.0 forever; sponsorships fund Windows code-signing, benchmark hardware, and release engineering — see [**Support UFFS**](#support-uffs) for the channels and what they fund.
 
 ## Acknowledgments
 
