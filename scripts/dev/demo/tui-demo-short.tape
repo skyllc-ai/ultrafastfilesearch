@@ -1,4 +1,7 @@
-Set Shell "powershell"
+# Intentionally no: Set Shell "pwsh"
+# VHS on Windows starts cmd.exe by default.
+# We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
+
 Set FontSize 20
 Set Width 1280
 Set Height 720
@@ -8,6 +11,14 @@ Set TypingSpeed 45ms
 Set PlaybackSpeed 1.0
 
 Output uffs-tui-short.gif
+
+Hide
+Type "pwsh -NoLogo -NoProfile"
+Enter
+Sleep 1500ms
+Type "function global:prompt { '>' }"
+Enter
+Show
 
 # UltraFastFileSearch (UFFS)
 # Benchmark-honest demo.

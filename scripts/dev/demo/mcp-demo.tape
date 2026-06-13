@@ -1,4 +1,7 @@
-Set Shell "powershell"
+# Intentionally no: Set Shell "pwsh"
+# VHS on Windows starts cmd.exe by default.
+# We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
+
 Set FontSize 20
 Set Width 1280
 Set Height 720
@@ -8,6 +11,14 @@ Set TypingSpeed 45ms
 Set PlaybackSpeed 1.0
 
 Output uffs-mcp-claude.gif
+
+Hide
+Type "pwsh -NoLogo -NoProfile"
+Enter
+Sleep 1500ms
+Type "function global:prompt { '>' }"
+Enter
+Show
 
 # UltraFastFileSearch (UFFS)
 # Benchmark-honest MCP + Claude demo.
@@ -135,23 +146,10 @@ Type "# Ask Claude to use UFFS instead of crawling the disk"
 Enter
 Set TypingSpeed 45ms
 Sleep 2s
-Type "claude 'Using the uffs MCP server, list the indexed drives and then find 5 invoice files. Keep the answer compact and include counts/timings if the tool returns them.'"
+Type "claude 'Using the uffs tools, find the 4 largest files on my machine that I have not modified in over a year. Keep it compact, and cite counts/query time the tool reports.'"
 Enter
 Set TypingSpeed 1ms
-Sleep 3s
-Type "Clear-Host"
-Enter
-
-# 6) Ask for a storage summary via aggregation
-
-Type "# Ask for a server-side storage summary"
-Enter
-Set TypingSpeed 45ms
-Sleep 2s
-Type "claude 'Using the uffs MCP server, summarize storage by file type. Return only the top 8 rows.'"
-Enter
-Set TypingSpeed 1ms
-Sleep 3s
+Sleep 35s
 Type "exit"
 Enter
 Type "Clear-Host"

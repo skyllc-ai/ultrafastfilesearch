@@ -1,13 +1,24 @@
-Set Shell "powershell"
+# Intentionally no: Set Shell "pwsh"
+# VHS on Windows starts cmd.exe by default.
+# We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
+
 Set FontSize 20
-Set Width 1280
-Set Height 720
+Set Width 1920
+Set Height 1080
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 Set PlaybackSpeed 1.0
 
 Output uffs-tui-video.mp4
+
+Hide
+Type "pwsh -NoLogo -NoProfile"
+Enter
+Sleep 1500ms
+Type "function global:prompt { '>' }"
+Enter
+Show
 
 # UltraFastFileSearch (UFFS)
 # Benchmark-honest demo — VIDEO cut.
@@ -74,7 +85,7 @@ Enter
 Type "# Real result counts and measured latency remain visible"
 Enter
 
-Sleep 2s
+Sleep 1200ms
 
 Set TypingSpeed 45ms
 Type "uffs_tui.exe --keys windows --reset-history"
@@ -87,12 +98,12 @@ Sleep 3500ms
 
 Set TypingSpeed 300ms
 Type "Invoice"
-Sleep 1500ms
+Sleep 2s
 Tab
-Sleep 1500ms
+Sleep 2s
 Tab
 
-Set TypingSpeed 500ms
+Set TypingSpeed 1s
 Escape
 PageDown 2
 Down 2
@@ -101,9 +112,10 @@ Escape
 
 # Browse previously executed searches
 
-Set TypingSpeed 1s
+Set TypingSpeed 2s
 Down 5
 
 # Exit the application
 
 Ctrl+Q
+Sleep 2s

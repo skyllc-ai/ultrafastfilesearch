@@ -3,8 +3,8 @@
 # We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
 
 Set FontSize 20
-Set Width 1280
-Set Height 720
+Set Width 1920
+Set Height 1080
 Set Padding 24
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
