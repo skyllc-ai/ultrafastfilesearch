@@ -14,7 +14,7 @@
 use alloc::sync::Arc;
 use std::path::PathBuf;
 
-use crate::{DaemonConfig, broker_client, config, events, lifecycle};
+use crate::{DaemonConfig, config, events, lifecycle};
 
 /// Bail if the daemon has nothing to serve.
 pub(crate) fn validate_data_sources(
@@ -54,10 +54,15 @@ pub(crate) fn validate_data_sources(
 /// the operator might want to grep for.  Extracted so the orchestrator
 /// stays under clippy's `cognitive_complexity` budget.
 pub(crate) fn log_daemon_starting(config: &DaemonConfig) {
+    // NOTE: do NOT probe the Access Broker here.  The previous
+    // `broker_available()` call used `GetFileAttributesW`, which *connects to*
+    // the broker's single pipe instance and leaves it busy — so the real
+    // `warm_up_broker_handles` request milliseconds later failed with
+    // ERROR_PIPE_BUSY (2026-06-13 VM finding).  Broker presence is now
+    // established only by attempting the handle request itself.
     tracing::info!(
         pid = std::process::id(),
         version = env!("CARGO_PKG_VERSION"),
-        broker_available = broker_client::broker_available(),
         mft_files = ?config.mft_files,
         drives = ?config.drives,
         data_dir = ?config.data_dir,

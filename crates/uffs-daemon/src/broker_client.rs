@@ -26,29 +26,11 @@
 //! an extern crate at all on non-Windows targets — no `use … as _;`
 //! marker is needed.
 
-/// Check if the Access Broker is available (pipe exists).
-#[cfg(windows)]
-pub(crate) fn broker_available() -> bool {
-    use std::os::windows::ffi::OsStrExt as _;
-
-    use uffs_broker_protocol::PIPE_NAME;
-    use windows::Win32::Storage::FileSystem::GetFileAttributesW;
-    use windows::core::PCWSTR;
-
-    let wide: Vec<u16> = std::ffi::OsStr::new(PIPE_NAME)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    #[expect(unsafe_code, reason = "GetFileAttributesW to check pipe existence")]
-    // SAFETY: `wide` is a null-terminated UTF-16 buffer that lives for
-    // the duration of the call; `GetFileAttributesW` only reads from
-    // the pointer.
-    let attrs = unsafe { GetFileAttributesW(PCWSTR(wide.as_ptr())) };
-
-    // If not INVALID_FILE_ATTRIBUTES, the pipe exists
-    attrs != u32::MAX
-}
+// NOTE: there is intentionally no `broker_available()` probe.  A
+// `GetFileAttributesW` existence check on the pipe *connects to* the broker's
+// single instance and leaves it busy, starving the real handle request with
+// ERROR_PIPE_BUSY (2026-06-13 VM finding).  Broker presence is established
+// solely by `request_volume_handle` attempting the connection.
 
 /// Request a volume handle from the broker for a drive letter.
 ///
@@ -123,13 +105,4 @@ fn interpret_handle_response(
             anyhow::bail!("Broker returned Status::Error for drive {drive_letter}")
         }
     }
-}
-
-/// Non-Windows: broker is never available.
-///
-/// `request_volume_handle` has no non-Windows stub: its only caller,
-/// `warm_up_broker_handles`, is itself `#[cfg(windows)]`.
-#[cfg(not(windows))]
-pub(crate) const fn broker_available() -> bool {
-    false
 }
