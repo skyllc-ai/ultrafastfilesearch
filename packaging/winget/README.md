@@ -31,6 +31,12 @@ reads it and **idempotently** inserts any entry missing from a manifest. Adding
 a future binary (e.g. `uffs-gui`) is a one-line edit to that yaml, never a code
 change, and never a new script.
 
+The seeder also strips the no-op top-level `Scope:` field (carried over from the
+founding template) — a zip/portable installer has no install scope, so winget's
+validator warns "Scope is not supported for InstallerType portable" on every
+version. Removing it clears the warning; komac preserves the absence going
+forward.
+
 ## Hard precondition
 
 Only seed an alias whose binary is **actually in** `uffs-windows-x64.zip` for the

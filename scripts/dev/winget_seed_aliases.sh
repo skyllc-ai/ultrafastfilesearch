@@ -115,8 +115,23 @@ while IFS= read -r line; do
   esac
 done < "$ALIASES_FILE"
 
+# Strip the no-op top-level `Scope:` field. It carried over from the
+# founding manifest template, but a zip/portable installer has no
+# per-user/per-machine scope — winget's validator emits "Scope is not
+# supported for InstallerType portable" on every version. Removing it
+# clears the warning, and komac preserves the absence on the next
+# version bump. Idempotent: a no-op once it's gone.
+scope_removed=0
+if grep -qE '^Scope:' "$MANIFEST"; then
+  tmp="$(mktemp)"
+  grep -vE '^Scope:' "$MANIFEST" > "$tmp"
+  mv "$tmp" "$MANIFEST"
+  echo "➖ Removed unsupported 'Scope' field (portable installer)"
+  scope_removed=1
+fi
+
 echo
-echo "Done: ${added} added, ${skipped} already present in $MANIFEST"
-if (( added > 0 )); then
+echo "Done: ${added} added, ${skipped} already present, ${scope_removed} scope removed in $MANIFEST"
+if (( added > 0 || scope_removed > 0 )); then
   echo "Review the diff, commit, and push to the winget-pkgs PR branch."
 fi
