@@ -63,8 +63,8 @@ Every clip runs the **real binary** against real NTFS data with unedited timings
 </p>
 
 <p align="center">
-  <img src="assets/demo/uffs-mcp-claude.gif" alt="Claude using the UFFS MCP server to find the largest video files and summarize storage by file type." width="900"><br>
-  <sub><b>MCP</b> — Claude querying your filesystem through the UFFS MCP server. Deterministic search underneath, MCP on top.</sub>
+  <img src="assets/demo/uffs-mcp-claude.gif" alt="Claude using the UFFS MCP server to find the largest files untouched in over a year — 26M+ records scanned in under 200 ms on a hot daemon, one tool call." width="900"><br>
+  <sub><b>MCP</b> — one question to Claude, one UFFS tool call: 26M+ records scanned in under 200 ms (hot daemon), and the reply cites the measured query time. Deterministic search underneath, MCP on top.</sub>
 </p>
 
 ---
