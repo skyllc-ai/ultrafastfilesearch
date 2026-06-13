@@ -393,7 +393,12 @@ impl IndexManager {
             Ok((letter, Err(err))) => {
                 *loaded += 1;
                 eprintln!("[diag] load_live_drives: FAILED drive={letter}  error={err:#}");
-                tracing::error!(drive = %letter, error = %err, "Failed to load live drive");
+                // Log the FULL anyhow cause chain to the file sink (the
+                // detached daemon's stderr above is discarded).  `%err`
+                // alone shows only the outer context, hiding the real
+                // failure deep in the broker-handle read path.
+                let err_chain = format!("{err:#}");
+                tracing::error!(drive = %letter, error = %err_chain, "Failed to load live drive");
             }
             Err(err) => {
                 *loaded += 1;
