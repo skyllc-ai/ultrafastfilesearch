@@ -210,6 +210,12 @@ Operator commands let you tune this manually for known workload shapes — `prel
 
 ## Support UFFS
 
+<p align="center">
+  <a href="https://ko-fi.com/ufffssearch"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Tip on Ko-fi" height="38"></a>
+  &nbsp;&nbsp;
+  <a href="https://opencollective.com/uffs-search"><img src="https://opencollective.com/uffs-search/donate/button@2x.png?color=blue" alt="Donate on Open Collective" height="38"></a>
+</p>
+
 UFFS is free, MPL-2.0, and stays that way — **no telemetry, no accounts, no paywalled core, no outbound network calls.** If it earns a place in your workflow, sponsorship funds the work that keeps it improving:
 
 - 🔏 **A Windows code-signing certificate** — the top priority. It removes the SmartScreen and UAC **"Publisher: Unknown"** warning that every user sees on install today, the single biggest trust hurdle for a Windows tool.
