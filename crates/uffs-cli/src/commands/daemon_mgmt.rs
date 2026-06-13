@@ -122,7 +122,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 #[expect(
     clippy::use_debug,
-    reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
+    reason = "[diag] spawn-chain dump — gated behind --log-level debug/trace"
 )]
 fn daemon_start(
     mft_files: &[std::path::PathBuf],
@@ -138,11 +138,6 @@ fn daemon_start(
         println!("Daemon is already running. Use `uffs daemon restart` to reload.");
         return Ok(());
     }
-
-    // [diag] Show what the CLI received before building spawn args.
-    println!(
-        "[diag] daemon_start: drives={drives:?}  log_level={log_level:?}  log_file={log_file:?}"
-    );
 
     // Build spawn args — forward raw, let daemon handle discovery.
     // Use `OsString` so non-UTF-8 / WTF-8 paths survive losslessly to the
@@ -216,13 +211,22 @@ fn daemon_start(
         spawn_args.push(path.as_os_str().to_os_string());
     }
 
-    // [diag] Print every diagnostic variable so we can trace the full chain.
-    println!("[diag] env  RUST_LOG    = {env_rust_log:?}");
-    println!("[diag] env  UFFS_LOG    = {env_uffs_log:?}");
-    println!("[diag] env  UFFS_LOG_DIR= {env_uffs_log_dir:?}");
-    println!("[diag] eff  log_level   = {effective_log_level:?}");
-    println!("[diag] eff  log_file    = {effective_log_file:?}");
-    println!("[diag] full spawn_args  = {spawn_args:?}");
+    // [diag] Spawn-chain dump for tracing elevation/env-forwarding issues.
+    // Gated behind an explicit debug/trace log level: on the default
+    // `daemon start` happy path users see clean output, not internals
+    // (2026-06-12 fresh-VM dry run flagged the unconditional version as
+    // looking like leftover debug logging).
+    if matches!(effective_log_level.as_str(), "debug" | "trace") {
+        println!(
+            "[diag] daemon_start: drives={drives:?}  log_level={log_level:?}  log_file={log_file:?}"
+        );
+        println!("[diag] env  RUST_LOG    = {env_rust_log:?}");
+        println!("[diag] env  UFFS_LOG    = {env_uffs_log:?}");
+        println!("[diag] env  UFFS_LOG_DIR= {env_uffs_log_dir:?}");
+        println!("[diag] eff  log_level   = {effective_log_level:?}");
+        println!("[diag] eff  log_file    = {effective_log_file:?}");
+        println!("[diag] full spawn_args  = {spawn_args:?}");
+    }
 
     if !cfg!(windows) && spawn_args.is_empty() {
         anyhow::bail!(

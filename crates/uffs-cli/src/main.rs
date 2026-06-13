@@ -116,8 +116,8 @@ struct ClientProfile<'a> {
     /// and to pick the cheapest authoritative row-count source.
     payload: &'a uffs_client::protocol::response::SearchPayload,
     /// Total row count reported by the daemon, independent of which
-    /// transport carries the payload.  Used to display the "Rows
-    /// returned:" line when the transport is a shmem blob — counting
+    /// transport carries the payload.  Used to display the "Total
+    /// matches:" line when the transport is a shmem blob — counting
     /// newlines in the mmap would consume the file before the stdout
     /// write and double the syscall cost.
     total_count: u64,
@@ -216,7 +216,21 @@ fn print_client_profile(prof: &ClientProfile<'_>) {
             prof.payload.row_count_hint().unwrap_or(0)
         }
     };
-    eprintln!("  Rows returned:   {row_count:>6}");
+    // Label the count by what it actually measures per transport: blob
+    // variants carry rendered text (newline count includes header/footer
+    // lines) or the daemon's pre-limit total, NOT the post-`--limit` page
+    // (2026-06-12 dry run: `--limit 5` printed "Rows returned: 7").
+    match prof.payload {
+        SearchPayload::ShmemBlob(_) => {
+            eprintln!("  Total matches:   {row_count:>6}");
+        }
+        SearchPayload::InlineBlob(_) => {
+            eprintln!("  Output lines:    {row_count:>6}");
+        }
+        SearchPayload::InlineRows(_) | SearchPayload::ShmemRows { .. } | SearchPayload::Empty => {
+            eprintln!("  Rows returned:   {row_count:>6}");
+        }
+    }
     match prof.payload {
         SearchPayload::ShmemBlob(_) => {
             eprintln!("  Transport:       shmem_blob (mmap + write_all, binary)");

@@ -67,6 +67,16 @@ unzip -l /tmp/uffs.zip | grep -F 'uffs-windows-x64/uffs-tui.exe'   # must print 
 
 From then on, every release auto-keeps all five aliases — no manual step.
 
+## Pending seed: `uffs-broker`
+
+The 2026-06-12 fresh-VM dry run found that the CLI's elevation help advertises
+`uffs-broker --install` ("one-time setup, no future UAC prompts") but the
+binary was missing from the winget zip. `release.yml` now bundles
+`uffs-broker.exe` into the Windows normal/full tiers — so the **first release
+after that change** needs the same one-time seed as `uffs-tui` above, with a
+`uffs-windows-x64/uffs-broker.exe` → `uffs-broker` entry. Same hard
+precondition: verify the zip actually contains the exe before seeding.
+
 ## Future: `uffs-gui`
 
 When the GUI demo is bundled into the zip, repeat the same one-time seed with a
