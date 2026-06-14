@@ -37,6 +37,13 @@ mod process_handle;
 #[cfg(windows)]
 use process_handle::{OwnedProcessHandle, query_process_image_name, verify_client_handle};
 
+// S5.2 Authenticode verification (WinVerifyTrust + per-image cache), split out
+// to keep this file under the 800-LOC ceiling. See `broker/authenticode.rs`.
+#[path = "broker/authenticode.rs"]
+mod authenticode;
+#[cfg(windows)]
+use authenticode::verify_authenticode;
+
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
@@ -87,7 +94,7 @@ fn print_usage() {
 /// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
 /// when the broker follow-ups land — this is NOT a real version.
 #[cfg(windows)]
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #5 (+ FU-8 $UpCase overlapped)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #7 (+ FU-4 WinVerifyTrust)";
 
 /// Run the broker in foreground mode.
 #[cfg(windows)]
@@ -286,41 +293,6 @@ fn handle_pipe_request_with_rate_limit(
     // Delegate to actual handle brokering (drive letter already read)
     handle_pipe_request_inner(pipe, client_process, client_pid, drive_letter)?;
     Ok(drive_letter)
-}
-
-/// S5.2: Verify Authenticode signature of client executable.
-#[cfg(windows)]
-fn verify_authenticode(exe_path: &str) -> bool {
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &format!(
-                "(Get-AuthenticodeSignature '{}').Status",
-                exe_path.replace('\'', "''")
-            ),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
-
-    match output {
-        Ok(out) => {
-            // Strict decode: this status drives a trust decision (reject
-            // tampered binaries). Invalid UTF-8 must fail CLOSED (treat as
-            // HashMismatch → reject) rather than slip through the
-            // `!= "HashMismatch"` accept path via a U+FFFD-mangled string.
-            // (WI-4.3)
-            let Ok(status_raw) = core::str::from_utf8(&out.stdout) else {
-                return false;
-            };
-            // Accept Valid and NotSigned (dev builds)
-            // Reject HashMismatch (tampered)
-            status_raw.trim() != "HashMismatch"
-        }
-        Err(_) => true, // PowerShell not available — allow (graceful degradation)
-    }
 }
 
 /// S5.3: Audit log entry to tracing (and Windows Event Log if available).

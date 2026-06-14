@@ -122,12 +122,12 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟩 | claude | #407 | — |
 | FU-2b | USN journal read through broker | HIGH | M | 🟩 | claude | #408 | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | claude | #409 | SBB-1 |
-| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟦 | claude | — | FU-3 |
+| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | claude | #410 | FU-3 |
 | FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
 | FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
 | FU-5 | Async multi-instance broker + `OwnedHandle` | MEDIUM | L | ⬜ | — | — | SBB-2 |
-| FU-6 | Non-connecting client pipe probe | LOW | S | ⬜ | — | — | — |
-| FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ⬜ | — | — | — |
+| FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | claude | — | — |
+| FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ✅ moot | claude | — | — |
 
 **Shared building blocks** (land these as their own PRs first; several items
 depend on them — see [§3](#3-shared-building-blocks)):
@@ -946,7 +946,17 @@ logging the probe as a rejection."
 
 ### FU-7 — Volume-data FSCTL on the overlapped handle
 
-**Priority: LOW–MEDIUM · Effort: S.**
+**Priority: LOW–MEDIUM · Effort: S · ✅ RESOLVED — moot (no fix needed).**
+
+> **Resolution (2026-06-14):** this was an "if it breaks, fix it" verify item.
+> It does **not** break. `get_ntfs_volume_data` (`FSCTL_GET_NTFS_VOLUME_DATA`
+> with a NULL `OVERLAPPED`) succeeded on the broker's `FILE_FLAG_OVERLAPPED`
+> handle in **every** VM run — the daemon read valid `NtfsVolumeData`
+> (`bytes_per_cluster`, `mft_start_lcn`, …) on the broker path each time, and
+> the same is true of the USN FSCTLs (FU-2b). This FSCTL completes
+> synchronously, so the NULL-overlapped call is fine in practice. No code
+> change; closing the item. (The synchronous-completion dependence is noted
+> below should a future Windows build ever regress it.)
 
 #### Why
 `get_ntfs_volume_data` issues `FSCTL_GET_NTFS_VOLUME_DATA` with a **NULL**
