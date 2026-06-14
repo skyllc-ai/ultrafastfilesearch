@@ -13,9 +13,18 @@
 use uffs_broker_protocol::PIPE_NAME;
 
 /// Create a broker named-pipe instance reachable by the non-elevated daemon.
+///
+/// `first_instance` sets `FILE_FLAG_FIRST_PIPE_INSTANCE`, which fails the call
+/// (`ERROR_ACCESS_DENIED`) if an instance of the name already exists.  The
+/// **first** instance the accept loop creates passes `true` (anti-squatting:
+/// fail loudly if another process already owns `\\.\pipe\uffs-broker`); every
+/// subsequent instance passes `false`, or it would fail against the instance we
+/// just made.
 #[cfg(windows)]
 #[expect(unsafe_code, reason = "CreateNamedPipeW is an FFI call")]
-pub(super) fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
+pub(super) fn create_broker_pipe(
+    first_instance: bool,
+) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     use std::os::windows::ffi::OsStrExt as _;
 
     use windows::Win32::Security::SECURITY_ATTRIBUTES;
@@ -44,13 +53,20 @@ pub(super) fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation:
         bInheritHandle: false.into(),
     };
 
+    // FIRST_PIPE_INSTANCE only on the first instance — see the fn doc.
+    let open_mode = if first_instance {
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+    } else {
+        PIPE_ACCESS_DUPLEX
+    };
+
     // SAFETY: `pipe_name` is a NUL-terminated UTF-16 buffer and `sa` (with its
     // security descriptor) both live until after this call returns; the pipe
     // copies the descriptor, so `security` may be dropped afterwards.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(pipe_name.as_ptr()),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            open_mode,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             super::MAX_PIPE_INSTANCES, // max instances (FU-5)
             1024,                      // out buffer

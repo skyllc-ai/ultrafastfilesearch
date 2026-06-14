@@ -124,7 +124,7 @@ fn print_usage() {
 /// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
 /// when the broker follow-ups land — this is NOT a real version.
 #[cfg(windows)]
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #9 (+ FU-1 service dispatcher)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #10 (+ FU-5 first-instance fix)";
 
 /// Run the broker in foreground mode.
 #[cfg(windows)]
@@ -188,6 +188,9 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
     // S5.4: rate-limit state, shared across per-connection workers.
     let rate_limit: Arc<RateLimit> =
         Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    // Only the very first instance gets FILE_FLAG_FIRST_PIPE_INSTANCE; the rest
+    // must omit it or CreateNamedPipeW fails ERROR_ACCESS_DENIED against it.
+    let mut first_instance = true;
 
     loop {
         // FU-1: exit cleanly when the service control handler requests a stop.
@@ -197,8 +200,11 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
 
         // Create the next listening instance.  If all instances are busy this
         // fails transiently — back off briefly and retry rather than exit.
-        let pipe = match create_broker_pipe() {
-            Ok(pipe) => pipe,
+        let pipe = match create_broker_pipe(first_instance) {
+            Ok(pipe) => {
+                first_instance = false;
+                pipe
+            }
             Err(err) => {
                 tracing::warn!(error = %err, "pipe instance unavailable; retrying shortly");
                 std::thread::sleep(Duration::from_millis(100));
