@@ -118,7 +118,7 @@ pick an item up. `Depends on` must be `🟩` before you start.
 
 | ID | Title | Priority | Effort | Status | Owner | PR | Depends on |
 |----|-------|----------|--------|--------|-------|----|-----------|
-| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟦 | claude | — | — |
+| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | claude | #404 | — |
 | FU-2 | USN journal through broker + backoff | HIGH | M | ⬜ | — | — | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | MEDIUM | M | ⬜ | — | — | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | M | ⬜ | — | — | — |
@@ -133,7 +133,7 @@ depend on them — see [§3](#3-shared-building-blocks)):
 
 | ID | Title | Status | PR |
 |----|-------|--------|----|
-| SBB-1 | `adopt_or_open_volume(drive, access)` helper in `uffs-mft` | ⬜ | — |
+| SBB-1 | `try_adopt_broker_handle` shared peek+duplicate in `uffs-mft` | 🟦 | — |
 | SBB-2 | `OwnedHandle` Send-safe RAII wrapper | ⬜ | — |
 
 Effort key: `XS` <1h · `S` ~half-day · `M` ~1–2 days · `L` ~3–5 days (all
@@ -203,7 +203,33 @@ including tests + a VM validation round).
 Two pieces are needed by multiple follow-ups. Build each as its own small PR so
 the dependent items can just call into them.
 
-### SBB-1 — `adopt_or_open_volume(drive, access)` helper
+### SBB-1 — shared broker-handle adoption primitive
+
+> **Landed shape (differs from the original sketch below).** The first sketch
+> proposed `adopt_or_open_volume(drive, access: u32) -> ResolvedVolume` — one
+> function owning both the adopt and the direct-open. Reading the real code
+> showed the three call sites use **genuinely different** open flags (`open()`:
+> `FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE` + `BACKUP_SEMANTICS |
+> SEQUENTIAL_SCAN`; USN: `GENERIC_READ` + `BACKUP_SEMANTICS`; `$MFT`: `0`
+> access), so a single `access` param can't express them. Only the **adoption**
+> half is truly uniform. What landed (in `crates/uffs-mft/src/platform/volume.rs`):
+> - `duplicate_registered_handle(raw, drive) -> Result<HANDLE>` — the
+>   `DuplicateHandle` FFI, extracted once.
+> - `try_adopt_broker_handle(drive) -> Result<Option<HANDLE>>` — peek registry +
+>   duplicate; `Ok(None)` means "no broker handle, caller opens directly with its
+>   own flags". **This is the seam FU-2/FU-3 call.** Currently **private** (only
+>   `VolumeHandle::open` uses it); FU-2/FU-3 raise it to `pub(crate)` and
+>   re-export it from `platform.rs` when they wire the USN / `$MFT` paths.
+> - `VolumeHandle::from_adopted_handle(handle, volume)` — descriptor read +
+>   `broker_backed` construction, shared by `open()` and `from_broker_handle`.
+>
+> Pure refactor: no behavior change; the existing VM-validated path produces
+> identical logs. Validated by the exact `cargo xwin clippy --workspace
+> --all-features` gate + 219 host `uffs-mft` tests green. No host *unit* test —
+> the module is `#[cfg(windows)]` FFI; its validation is cross-compile + the VM
+> baseline.
+>
+> The original sketch is kept below for the design rationale.
 
 **Why:** today only `VolumeHandle::open` knows the "adopt a registered broker
 handle, else `CreateFileW` directly" dance. FU-2 (USN) and FU-3 (`$MFT`) need the
