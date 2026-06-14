@@ -168,21 +168,39 @@ in `warm_up_broker_handles`, so an N-drive estate pays ~N × that cost up front
 (e.g. 10 drives ≈ several seconds of signature checks before any load starts).
 
 ### Fix approach
-Cache the verification result keyed by **client PID + exe path** (and ideally
-the image's last-write time / a content hash, so PID reuse can't smuggle in a
-different binary): verify once per client process, reuse for that process's
-subsequent drive requests. Entry lifetime = the client process lifetime; the
-broker already opens the client process handle once (WI-8.1), so it can detect
-process identity reliably. Do **not** weaken the verification — only avoid
-re-running it for an already-verified `(pid, exe, mtime)`.
+There are **two** stacked fixes here; do both, the second first if forced to
+choose:
 
-Replacing the PowerShell spawn with a direct `WinVerifyTrust` FFI call is a
-separate, larger optimization (removes the subprocess entirely) and could
-fold in here.
+**(a) Move off the PowerShell subprocess to `WinVerifyTrust` (the bigger win).**
+Shelling out to `powershell.exe Get-AuthenticodeSignature` spins up an entire
+PowerShell runtime per request — hundreds of ms, plus the process-spawn tax and
+a dependency on PowerShell being present and on PATH. A world-class Windows
+implementation never does this for a service hot path. Replace it with a direct
+`WinVerifyTrust` FFI call (the `windows` crate already exposes
+`Win32::Security::WinTrust`): build a `WINTRUST_FILE_INFO` for the client image,
+call `WinVerifyTrust(INVALID_HANDLE_VALUE, &WINTRUST_ACTION_GENERIC_VERIFY_V2,
+&data)`, and map the `TRUST_E_*` / `CERT_E_*` HRESULTs to the same
+accept/reject policy the PowerShell path uses today (accept `NotSigned` for dev,
+reject `HashMismatch`). In-process, no subprocess, ~single-digit ms, no external
+dependency. This alone removes the dominant startup latency.
+
+**(b) Cache the result keyed by client PID + exe path** (and ideally the image's
+last-write time / a content hash, so PID reuse can't smuggle in a different
+binary): verify once per client process, reuse for that process's subsequent
+drive requests. Entry lifetime = the client process lifetime; the broker already
+opens the client process handle once (WI-8.1), so it can detect process identity
+reliably. Do **not** weaken the verification — only avoid re-running it for an
+already-verified `(pid, exe, mtime)`.
+
+With (a) in place each check is cheap enough that (b) is a smaller win, but
+together they take an N-drive estate from ~N × hundreds-of-ms down to a single
+fast verify per client process.
 
 ### Effort / risk
-Small (cache) to moderate (if also moving off PowerShell). Security-sensitive
-— the cache key must make a substituted binary a cache miss.
+Moderate. The `WinVerifyTrust` FFI is unsafe and Windows-only (untestable
+off-Windows; needs validation on a real box against signed *and* unsigned
+images). The cache is small but security-sensitive — the key must make a
+substituted binary a cache miss.
 
 ---
 
@@ -206,23 +224,52 @@ serializes — and combined with the per-request Authenticode spawn (Follow-up
 > about *concurrency capacity*, not that (resolved) starvation.
 
 ### Fix approach
-Restructure `serve_pipe_requests` so multiple instances listen at once:
-- `CreateNamedPipeW` with `PIPE_UNLIMITED_INSTANCES` (or a tuned cap).
-- After `ConnectNamedPipe` returns for one client, **immediately create the
-  next listening instance** before handling the current connection, and handle
-  each connection on its own thread (or async task).
-- Share the rate-limit map behind `Arc<Mutex<…>>`; `handle_one_connection`
-  takes a shared reference.
-- Mind `HANDLE` `Send`-ness when moving a connected pipe handle into a worker
-  thread (wrap in a `Send` newtype with a documented SAFETY note, or use an
-  IOCP/overlapped accept model).
+**Preferred — go async with tokio's named pipes.** The community-standard way to
+write a scalable Windows pipe server in Rust is
+[`tokio::net::windows::named_pipe`] (`ServerOptions` + `NamedPipeServer`), not a
+hand-rolled serial thread loop over raw `CreateNamedPipeW`. The idiomatic shape:
 
-Pair with Follow-up 4 so each concurrent connection isn't independently paying
-the Authenticode cost.
+1. `ServerOptions::new().max_instances(N).create(PIPE_NAME)` for the first
+   listener, applying the same SDDL/security attributes as today.
+2. `server.connect().await`; **immediately** build the *next* listening instance
+   (`ServerOptions…create`) before handling the current connection, so there's
+   always an instance waiting (this is the documented tokio accept-loop pattern
+   and removes the "between connections we're deaf" window).
+3. `tokio::spawn` the per-connection handler (read request, verify identity,
+   `DuplicateHandle`, write response). The connected `NamedPipeServer` is
+   `Send`, so it moves into the task cleanly — no raw-`HANDLE` `Send` newtype
+   needed on the connection itself.
+4. Share the rate-limit / audit state behind `Arc<Mutex<…>>` (or an actor task
+   owning it); the per-connection tasks take clones of the `Arc`.
+
+This makes multi-instance concurrency natural, keeps the I/O off the parsing,
+and aligns the broker with the daemon's existing async runtime. Raw-FFI
+multi-instance + a worker thread pool is the fallback if pulling tokio into the
+broker is unwanted, but it reintroduces the `HANDLE`-`Send` problem (below) that
+the async path avoids.
+
+**Wrap raw handles in a `Send`-safe RAII type.** Independent of the async move:
+the broker (and the daemon-side registry) pass volume/process handles around as
+bare `u64` / `HANDLE`, which are neither `Send` nor self-closing — every call
+site re-implements "reconstruct `HANDLE` from `u64`" and is responsible for not
+leaking it. Introduce a small newtype, e.g. `struct OwnedHandle(HANDLE)` with
+`unsafe impl Send` (documented SAFETY: a Win32 kernel handle is process-wide and
+safe to move between threads), `Drop` calling `CloseHandle`, and `as_raw()` /
+`into_raw()` accessors. Thread *that* through the registry and the broker
+instead of raw integers. This removes the scattered
+`with_exposed_provenance_mut` reconstructions, makes ownership/lifetime explicit,
+and is what a Rust master would reach for before adding concurrency.
+
+Pair the whole follow-up with Follow-up 4 so each concurrent connection isn't
+independently paying the Authenticode cost.
+
+[`tokio::net::windows::named_pipe`]: https://docs.rs/tokio/latest/tokio/net/windows/named_pipe/index.html
 
 ### Effort / risk
-Moderate. Concurrency + Windows handle `Send` semantics; the rate-limiter and
-audit paths must stay correct under parallelism.
+Moderate. Bringing tokio into the broker (or a worker-thread model) plus the
+handle-ownership refactor; the rate-limiter and audit paths must stay correct
+under parallelism. The `OwnedHandle` wrapper is a low-risk, high-clarity
+refactor that can land independently and first.
 
 ---
 
@@ -309,17 +356,68 @@ non-default `$UpCase` to fully validate the correctness angle.
 
 ---
 
+## Follow-up 9 — Gate broker warm-up on `!is_elevated()` (self-inflicted regression)
+
+**Priority: HIGH** (trivial fix; removes a regression introduced while fixing the
+probe-race).
+
+### Problem
+While solving the `ERROR_PIPE_BUSY` starvation, `warm_up_broker_handles` was
+changed to run **unconditionally** — for *any* daemon, elevated or not. That was
+correct for killing the racy `broker_available()` probe, but it means an
+**elevated** daemon with no broker now makes a futile broker pipe-open attempt
+**per drive**, each failing fast and logging a `WARN`. On a 7-drive elevated
+load that's 7 failed `OpenOptions::open` calls + 7 WARNs. Microseconds of cost,
+but real log noise and conceptually wrong: **an elevated daemon never needs the
+broker** — it can open volumes directly.
+
+### Evidence
+The MFT *read* path is unaffected when elevated (`VolumeHandle::open` finds the
+registry empty via a cheap mutex check and falls through to direct
+`CreateFileW`, full-speed IOCP as before). The regression is confined to the
+warm-up probe: an elevated daemon that previously did nothing broker-related now
+emits per-drive "opening broker pipe" → failure WARNs.
+
+### Fix approach
+Gate the warm-up on elevation, not on a pipe probe:
+
+```rust
+// in load_live_drives_if_windows, before warm_up_broker_handles(...)
+if uffs_mft::is_elevated() {
+    // Elevated daemons open volumes directly; the broker is only for the
+    // non-elevated path. Skip the futile probe entirely.
+} else {
+    warm_up_broker_handles(&drives);
+}
+```
+
+`is_elevated()` is cheap (a token query), involves **no pipe interaction**, and
+has **none** of the race that made the old `broker_available()` probe dangerous —
+it never touches the broker's single pipe instance. This restores the
+pre-broker behavior for elevated daemons while keeping the non-elevated path
+exactly as it works today.
+
+### Effort / risk
+Trivial (a few lines, one import). Validate that a non-elevated daemon still
+warms up (broker present) and an elevated daemon emits no broker WARNs.
+
+---
+
 ## Suggested sequencing
 
 1. **Land the basic read** (current branch) — confirm one drive loads and the
-   daemon stays resident.
-2. **Correctness tier:** Follow-up 2 (USN through broker) and Follow-up 3
+   daemon stays resident. ✅ (verified 2026-06-14)
+2. **Quick regression cleanup:** Follow-up 9 (`!is_elevated()` warm-up gate) —
+   tiny, removes log noise, do it first.
+3. **Correctness tier:** Follow-up 2 (USN through broker) and Follow-up 3
    (`get_mft_extents` / fragmented MFTs).
-3. **Productionization tier:** Follow-up 1 (service dispatcher) so it runs
+4. **Productionization tier:** Follow-up 1 (service dispatcher) so it runs
    without `--run`.
-4. **Performance / scale tier:** Follow-up 4 (Authenticode cache) + Follow-up 5
-   (concurrent broker), then Follow-up 6.
-5. **Verify:** Follow-up 7 only if the test surfaces it.
+5. **Performance / scale tier:** Follow-up 4 (`WinVerifyTrust` + Authenticode
+   cache) + Follow-up 5 (async multi-instance broker + `OwnedHandle` refactor),
+   then Follow-up 6.
+6. **Verify / opportunistic:** Follow-up 7 and Follow-up 8 if the tests surface
+   them.
 
 Each should be its own atomic commit with a `fix:`/`feat:` message naming the
 root cause, cross-compiled clean for `x86_64-pc-windows-msvc` and host, and
