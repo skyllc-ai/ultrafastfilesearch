@@ -65,8 +65,11 @@ static BROKER_HANDLES: std::sync::OnceLock<std::sync::Mutex<std::collections::Ha
 /// Deposit a broker-supplied volume handle for `drive`.
 ///
 /// `raw_handle` is the duplicated `HANDLE` value `uffs-broker` returned over
-/// its pipe.  The next [`VolumeHandle::open`] for this drive adopts it (and
-/// removes it from the registry, so each handle is consumed once).
+/// its pipe.  Every [`VolumeHandle::open`] for this drive **duplicates** it
+/// (the registry copy stays in place) — the live MFT read opens the volume
+/// more than once (read pass + cache-write pass), so a take-once handle would
+/// leave the second open to fall back to `CreateFileW` and fail with
+/// access-denied.  The registry entry is freed by [`release_broker_handle`].
 #[cfg(windows)]
 pub fn register_broker_handle(drive: super::DriveLetter, raw_handle: u64) {
     let map =
@@ -76,12 +79,18 @@ pub fn register_broker_handle(drive: super::DriveLetter, raw_handle: u64) {
     }
 }
 
-/// Remove and return a previously-registered broker handle for `drive`, if any.
+/// Read (without removing) the registered broker handle for `drive`, if any.
+///
+/// The entry is intentionally retained for the daemon's lifetime: every
+/// `VolumeHandle::open` duplicates it (so multiple opens in one load, and
+/// later re-reads, all succeed), and the OS closes the original on process
+/// exit.  Keeping it also means re-reads keep working even if the broker
+/// service later stops — the daemon holds its own independent handle.
 #[cfg(windows)]
-fn take_broker_handle(drive: super::DriveLetter) -> Option<u64> {
+fn peek_broker_handle(drive: super::DriveLetter) -> Option<u64> {
     let map = BROKER_HANDLES.get()?;
-    let mut guard = map.lock().ok()?;
-    guard.remove(&drive.as_char())
+    let guard = map.lock().ok()?;
+    guard.get(&drive.as_char()).copied()
 }
 
 /// Convert a `windows::core::Error` into the equivalent `std::io::Error`,
@@ -274,10 +283,11 @@ impl VolumeHandle {
     #[expect(unsafe_code, reason = "FFI: windows API (CreateFileW)")]
     pub fn open(volume: super::DriveLetter) -> Result<Self> {
         // Access Broker fast-path: if the (elevated) broker has deposited a
-        // pre-opened, duplicated volume handle for this drive, adopt it
-        // instead of calling `CreateFileW` — which would fail with
-        // access-denied in a non-elevated daemon.  See the registry above.
-        if let Some(raw_handle) = take_broker_handle(volume) {
+        // pre-opened, duplicated volume handle for this drive, adopt a
+        // duplicate of it instead of calling `CreateFileW` — which would fail
+        // with access-denied in a non-elevated daemon.  See the registry
+        // above; the entry stays so later opens in the same load succeed.
+        if let Some(raw_handle) = peek_broker_handle(volume) {
             return Self::from_broker_handle(volume, raw_handle);
         }
 
@@ -332,26 +342,54 @@ impl VolumeHandle {
         })
     }
 
-    /// Adopt a pre-opened, duplicated volume handle supplied by the Access
-    /// Broker (Windows-only, see the broker handle registry above).
+    /// Adopt a **duplicate** of the broker-supplied volume handle for `volume`.
     ///
-    /// `raw_handle` is the raw `HANDLE` value the broker duplicated into this
-    /// process; ownership transfers to the returned `VolumeHandle` (its `Drop`
-    /// closes it).  The broker opens the volume with
+    /// `raw_handle` is the registry's broker handle (the one `uffs-broker`
+    /// duplicated into this process).  This function `DuplicateHandle`s it so
+    /// the returned `VolumeHandle` owns an independent copy — its `Drop` closes
+    /// only the duplicate, leaving the registry entry valid for the next open
+    /// in the same load (the original is freed via `release_broker_handle`).
+    /// The broker opens the volume with
     /// `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED |
-    /// FILE_FLAG_SEQUENTIAL_SCAN`, matching the direct-open flags, so the
-    /// handle is usable for both the volume-data query here and the
-    /// overlapped MFT read via [`Self::open_overlapped_handle`].
+    /// FILE_FLAG_SEQUENTIAL_SCAN`, so the duplicate is usable for both the
+    /// volume-data query here and the overlapped MFT read via
+    /// [`Self::open_overlapped_handle`].
     ///
     /// # Errors
     ///
-    /// Returns [`MftError`] if the volume descriptor cannot be read from the
-    /// adopted handle.
+    /// Returns [`MftError`] if the handle cannot be duplicated or the volume
+    /// descriptor cannot be read from it.
     #[cfg(windows)]
+    #[expect(unsafe_code, reason = "FFI: DuplicateHandle / GetCurrentProcess")]
     pub fn from_broker_handle(volume: super::DriveLetter, raw_handle: u64) -> Result<Self> {
-        let handle = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
+        use windows::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+        use windows::Win32::System::Threading::GetCurrentProcess;
+
+        let registered = HANDLE(core::ptr::with_exposed_provenance_mut::<core::ffi::c_void>(
             usize::try_from(raw_handle).unwrap_or(0),
         ));
+        let mut handle = HANDLE::default();
+        // SAFETY: returns the current-process pseudo-handle; no preconditions.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: `process` is valid; `registered` is the broker handle owned
+        // by this process; `&raw mut handle` is a valid out-pointer.  On
+        // success the duplicate is owned by the returned `VolumeHandle`.
+        let dup = unsafe {
+            DuplicateHandle(
+                process,
+                registered,
+                process,
+                &raw mut handle,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        dup.map_err(|err| MftError::VolumeOpen {
+            volume,
+            source: hresult_to_io_error(&err),
+        })?;
+
         let volume_data = Self::get_ntfs_volume_data(handle, volume)?;
         tracing::info!(drive = %volume, "Adopted Access Broker volume handle for MFT read");
         Ok(Self {
