@@ -102,6 +102,14 @@ volume open through the same registry the MFT read uses:
 `VolumeHandle::open` and the USN path share it (DRY; today only `VolumeHandle`
 has it).
 
+**Also fix the retry storm (observed 2026-06-14):** once a drive loads, the
+per-shard journal loop polls the USN journal every ~500 ms and, when the open
+is access-denied, logs `Journal poll failed; retrying next tick` **forever** —
+flooding the log and burning cycles. Until the USN open is brokered, the loop
+should detect a persistent access-denied and **back off / disable** for that
+drive (e.g. exponential backoff to a long ceiling, or mark USN-unavailable and
+rely on periodic full rebuilds) instead of retrying at 500 ms indefinitely.
+
 ### Effort / risk
 Small–moderate. The handle-acquisition logic already exists; the work is
 sharing it and threading it into `usn/windows.rs`.
@@ -259,6 +267,45 @@ and note the dependence on the FSCTL's synchronous completion.
 
 ### Effort / risk
 Small (~15 lines) if needed.
+
+---
+
+## Follow-up 8 — `$UpCase` read on the overlapped broker handle
+
+**Priority: LOW–MEDIUM** (graceful fallback today; correctness on non-standard
+case tables).
+
+### Problem
+Reading `$UpCase` (the NTFS uppercase-mapping table, used for
+case-insensitive name comparison) does a **synchronous `SetFilePointerEx`
+seek** on the volume handle. The broker handle is opened `FILE_FLAG_OVERLAPPED`,
+and overlapped handles don't maintain a synchronous file pointer — so the seek
+fails. Observed 2026-06-14:
+
+```
+WARN $UpCase live read failed — falling back to compiled-in default table
+     error=$UpCase: seek to offset 3221235712 failed:
+           The parameter is incorrect. (0x80070057)
+```
+
+It falls back to the **compiled-in default Unicode case table**, which is
+correct for standard NTFS volumes, so search results are unaffected today. But
+a volume with a customised `$UpCase` would silently use the wrong table, and
+the warning is noise on every broker-backed load.
+
+### Fix approach
+Either (a) read `$UpCase` through a **non-overlapped** handle (the broker would
+need to vend one, or this specific read uses a synchronous duplicate with the
+overlapped flag cleared — not directly possible via `DuplicateHandle`, so more
+likely a second broker handle or a synchronous re-open), or (b) issue the
+`$UpCase` read using the **overlapped offset mechanism** (offset in the
+`OVERLAPPED` struct + `GetOverlappedResult`) instead of `SetFilePointerEx`,
+matching how the MFT bulk read already addresses the overlapped handle. Option
+(b) keeps the single-handle model and is preferred.
+
+### Effort / risk
+Small–moderate. Localised to the `$UpCase` read path; needs a volume with a
+non-default `$UpCase` to fully validate the correctness angle.
 
 ---
 
