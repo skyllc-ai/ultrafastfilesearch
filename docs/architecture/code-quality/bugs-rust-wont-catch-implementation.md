@@ -26,7 +26,7 @@ every WI you will find:
 - **Tests** — the test(s) you must add/update (we never reduce coverage).
 - **Verify** — the exact commands to run.
 
-### Working rules (non-negotiable — from `CLAUDE.md` + repo user rules)
+### Working rules (non-negotiable — from `Robert.md` + repo user rules)
 
 1. **One WI = one commit.** Commit message: `fix(security): <root cause>` /
    `refactor(mft): <root cause>` etc. Small, atomic commits.

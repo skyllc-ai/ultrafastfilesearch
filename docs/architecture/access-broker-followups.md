@@ -118,16 +118,16 @@ pick an item up. `Depends on` must be `🟩` before you start.
 
 | ID | Title | Priority | Effort | Status | Owner | PR | Depends on |
 |----|-------|----------|--------|--------|-------|----|-----------|
-| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | claude | #404 | — |
-| FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟩 | claude | #407 | — |
-| FU-2b | USN journal read through broker | HIGH | M | 🟩 | claude | #408 | SBB-1 |
-| FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | claude | #409 | SBB-1 |
-| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | claude | #410 | FU-3 |
-| FU-1 | Windows Service dispatcher | HIGH | M | 🟦 | claude | — | — |
+| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | Robert | #404 | — |
+| FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟩 | Robert | #407 | — |
+| FU-2b | USN journal read through broker | HIGH | M | 🟩 | Robert | #408 | SBB-1 |
+| FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | Robert | #409 | SBB-1 |
+| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | Robert | #410 | FU-3 |
+| FU-1 | Windows Service dispatcher | HIGH | M | 🟦 | Robert | — | — |
 | FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
-| FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟦 | claude | — | SBB-2 |
-| FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | claude | — | — |
-| FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ✅ moot | claude | — | — |
+| FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟦 | Robert | — | SBB-2 |
+| FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | Robert | — | — |
+| FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ✅ moot | Robert | — | — |
 
 **Shared building blocks** (land these as their own PRs first; several items
 depend on them — see [§3](#3-shared-building-blocks)):
