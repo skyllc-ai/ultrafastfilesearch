@@ -123,7 +123,7 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | FU-2b | USN journal read through broker | HIGH | M | 🟩 | claude | #408 | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | claude | #409 | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | claude | #410 | FU-3 |
-| FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
+| FU-1 | Windows Service dispatcher | HIGH | M | 🟦 | claude | — | — |
 | FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
 | FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟦 | claude | — | SBB-2 |
 | FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | claude | — | — |

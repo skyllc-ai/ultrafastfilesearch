@@ -95,8 +95,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
         return run_foreground();
     }
 
-    print_usage();
-    Ok(())
+    // No recognised flag: this is how the Service Control Manager launches the
+    // service at boot.  Hand control to the dispatcher; when run interactively
+    // (no SCM) it falls back to printing usage (FU-1).
+    service::run_as_service()
 }
 
 /// Print CLI usage help to stderr.
@@ -122,7 +124,7 @@ fn print_usage() {
 /// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
 /// when the broker follow-ups land — this is NOT a real version.
 #[cfg(windows)]
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #8 (+ FU-5 multi-instance broker)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #9 (+ FU-1 service dispatcher)";
 
 /// Run the broker in foreground mode.
 #[cfg(windows)]
@@ -173,10 +175,6 @@ fn warn_if_not_elevated() {
 /// - S5.4: Rate limiting (1 request per drive per 10s)
 /// - S5.5: Read-only handles only (enforced in `handle_pipe_request`)
 #[cfg(windows)]
-#[expect(
-    clippy::infinite_loop,
-    reason = "the broker serves connections until the process is stopped"
-)]
 fn serve_pipe_requests() -> anyhow::Result<()> {
     use alloc::sync::Arc;
     use core::time::Duration;
@@ -192,6 +190,11 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
         Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     loop {
+        // FU-1: exit cleanly when the service control handler requests a stop.
+        if service::stop_requested() {
+            return Ok(());
+        }
+
         // Create the next listening instance.  If all instances are busy this
         // fails transiently — back off briefly and retry rather than exit.
         let pipe = match create_broker_pipe() {
@@ -207,6 +210,14 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
             disconnect_pipe(pipe);
             close_pipe(pipe);
             continue;
+        }
+
+        // FU-1: a connection arriving after a stop was requested is the control
+        // handler's wake-up `CreateFile` — drop it and exit.
+        if service::stop_requested() {
+            disconnect_pipe(pipe);
+            close_pipe(pipe);
+            return Ok(());
         }
 
         // Hand the connected instance to a worker and immediately loop to
