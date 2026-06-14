@@ -87,7 +87,7 @@ fn print_usage() {
 /// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
 /// when the broker follow-ups land — this is NOT a real version.
 #[cfg(windows)]
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #5 (+ FU-8 $UpCase overlapped)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #6 (+ FU-6 non-connecting probe)";
 
 /// Run the broker in foreground mode.
 #[cfg(windows)]
