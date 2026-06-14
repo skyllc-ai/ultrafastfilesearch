@@ -795,10 +795,12 @@ impl VolumeHandle {
             .chain(core::iter::once(0))
             .collect();
 
-        // SAFETY: `mft_path` is UTF-16 and NUL-terminated for the duration of
-        // the call, optional pointers are `None`, and any returned handle is
-        // wrapped in `HandleGuard` before use.
-        let Ok(mft_handle) = (unsafe {
+        // Fast path (elevated): open $MFT and ask the kernel for its retrieval
+        // pointers.  A non-elevated daemon can't open $MFT at all, so this open
+        // fails and we bootstrap the real layout from FRS 0 below.
+        // SAFETY: `mft_path` is UTF-16 + NUL-terminated for the call; optional
+        // pointers are `None`; any returned handle is wrapped in `HandleGuard`.
+        if let Ok(mft_handle) = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(mft_path.as_ptr()),
                 0,
@@ -808,17 +810,140 @@ impl VolumeHandle {
                 FILE_FLAGS_AND_ATTRIBUTES(0),
                 None,
             )
-        }) else {
-            return Ok(vec![MftExtent {
-                vcn: 0,
-                cluster_count: self.volume_data.mft_valid_data_length
-                    / u64::from(self.volume_data.bytes_per_cluster),
-                lcn: super::Lcn::new(self.volume_data.mft_start_lcn.cast_signed()),
-            }]);
-        };
+        } {
+            let _guard = HandleGuard(mft_handle);
+            return get_retrieval_pointers(mft_handle);
+        }
 
-        let _guard = HandleGuard(mft_handle);
-        get_retrieval_pointers(mft_handle)
+        // Non-elevated (broker-backed) path: `$MFT` can't be opened directly.
+        // The old fallback was a SINGLE assumed-contiguous extent — silently
+        // wrong on a fragmented MFT (it reads the wrong physical region past the
+        // first fragment, producing a partial index).  Bootstrap the REAL
+        // extents from FRS 0's `$DATA` runlist, read through our volume handle.
+        Ok(self.mft_extents_from_frs0())
+    }
+
+    /// Bootstrap the MFT extent map from FRS 0 ($MFT's own record), read
+    /// through the volume handle — the non-elevated / broker path where
+    /// `$MFT` can't be opened for `FSCTL_GET_RETRIEVAL_POINTERS`.
+    ///
+    /// FRS 0 always lives at the start of the MFT ([`Self::mft_byte_offset`],
+    /// the first fragment), and its non-resident `$DATA` runlist *is* the
+    /// MFT's physical layout — so the extents it yields match what the
+    /// kernel would return, fragmented or not.  Degrades **loudly** to the
+    /// legacy single-contiguous assumption only if FRS 0 can't be read or
+    /// parsed, so a non-elevated load still produces an index rather than
+    /// failing outright.
+    #[cfg(windows)]
+    fn mft_extents_from_frs0(&self) -> Vec<MftExtent> {
+        use crate::ntfs::{AttributeIterator, AttributeType};
+
+        let record_size = self.volume_data.bytes_per_file_record_segment as usize;
+        let mut record = vec![0_u8; record_size];
+        if let Err(err) = self.read_volume_at(self.mft_byte_offset(), &mut record) {
+            tracing::warn!(
+                drive = %self.volume, error = %err,
+                "FRS 0 read failed; assuming single contiguous MFT extent (index may be partial on a fragmented MFT)"
+            );
+            return self.single_contiguous_extent();
+        }
+        crate::parse::apply_fixup(&mut record);
+
+        let runs = AttributeIterator::new(&record)
+            .and_then(|mut attrs| {
+                attrs.find(|attr| {
+                    attr.attribute_type() == Some(AttributeType::Data)
+                        && attr.is_non_resident()
+                        && attr.header.name_length == 0
+                })
+            })
+            .map(|attr| attr.data_runs())
+            .unwrap_or_default();
+        let extents = super::extents::data_runs_to_extents(&runs);
+
+        if extents.is_empty() {
+            tracing::warn!(
+                drive = %self.volume,
+                "FRS 0 $DATA parse yielded no extents; assuming single contiguous MFT extent"
+            );
+            return self.single_contiguous_extent();
+        }
+        tracing::info!(
+            drive = %self.volume, num_extents = extents.len(),
+            "MFT extents bootstrapped from FRS 0 $DATA runlist (broker path)"
+        );
+        extents
+    }
+
+    /// The legacy single-contiguous MFT extent derived from `NTFS_VOLUME_DATA`,
+    /// kept as the loud fallback for [`Self::mft_extents_from_frs0`].
+    #[cfg(windows)]
+    fn single_contiguous_extent(&self) -> Vec<MftExtent> {
+        vec![MftExtent {
+            vcn: 0,
+            cluster_count: self.volume_data.mft_valid_data_length
+                / u64::from(self.volume_data.bytes_per_cluster),
+            lcn: super::Lcn::new(self.volume_data.mft_start_lcn.cast_signed()),
+        }]
+    }
+
+    /// Read `buf.len()` bytes from the volume handle at byte `offset`, carrying
+    /// the offset in an `OVERLAPPED` so it works on the broker's
+    /// `FILE_FLAG_OVERLAPPED` handle — which has no synchronous file pointer,
+    /// the same reason `$UpCase`'s `SetFilePointerEx` fails on it.  This is
+    /// a single, non-concurrent bootstrap read (before the IOCP bulk read
+    /// starts), so completion is awaited via `GetOverlappedResult` on the
+    /// handle without a dedicated event.
+    ///
+    /// # Errors
+    ///
+    /// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
+    /// [`MftError::InvalidData`] on a short read.
+    #[cfg(windows)]
+    #[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
+    fn read_volume_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        use windows::Win32::Foundation::ERROR_IO_PENDING;
+        use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+
+        let mut overlapped = OVERLAPPED::default();
+        crate::io::readers::set_overlapped_offset(&mut overlapped, offset);
+
+        let mut bytes_read = 0_u32;
+        // SAFETY: `buf` is valid and writable for its length; `overlapped`
+        // outlives the call and the wait below; `self.handle` is a live volume
+        // handle.
+        let read = unsafe {
+            ReadFile(
+                self.handle,
+                Some(buf),
+                Some(&raw mut bytes_read),
+                Some(&raw mut overlapped),
+            )
+        };
+        if let Err(err) = read {
+            if err.code() != ERROR_IO_PENDING.to_hresult() {
+                return Err(MftError::Io(hresult_to_io_error(&err)));
+            }
+            // SAFETY: `overlapped` is the in-flight struct from the pending
+            // `ReadFile` and is still alive; `bWait = true` blocks to completion.
+            unsafe {
+                GetOverlappedResult(
+                    self.handle,
+                    &raw const overlapped,
+                    &raw mut bytes_read,
+                    true,
+                )
+            }
+            .map_err(|wait_err| MftError::Io(hresult_to_io_error(&wait_err)))?;
+        }
+        if (bytes_read as usize) < buf.len() {
+            return Err(MftError::InvalidData(format!(
+                "short FRS read: {bytes_read} of {} bytes",
+                buf.len()
+            )));
+        }
+        Ok(())
     }
 
     /// Gets the MFT bitmap which indicates which records are in use.

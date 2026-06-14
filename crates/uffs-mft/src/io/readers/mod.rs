@@ -65,7 +65,7 @@ pub mod parallel;
 #[cfg(windows)]
 pub(crate) use basic::MftRecordReader;
 #[cfg(windows)]
-pub(crate) use iocp::{IoCompletionPort, OverlappedRead};
+pub(crate) use iocp::{IoCompletionPort, OverlappedRead, set_overlapped_offset};
 #[cfg(windows)]
 pub use iocp::{
     IocpMftReader, MultiVolumeIoOp, MultiVolumeIocpReader, VolumeState, prepare_volume_state,
