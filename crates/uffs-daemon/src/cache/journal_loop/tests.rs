@@ -45,6 +45,7 @@ use super::{
     CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, PatchSink, SaveReason,
 };
 
+mod backoff;
 mod basics;
 mod integration;
 mod save_log_message;

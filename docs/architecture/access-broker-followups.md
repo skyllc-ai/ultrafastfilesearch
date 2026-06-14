@@ -119,7 +119,8 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | ID | Title | Priority | Effort | Status | Owner | PR | Depends on |
 |----|-------|----------|--------|--------|-------|----|-----------|
 | FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | claude | #404 | — |
-| FU-2 | USN journal through broker + backoff | HIGH | M | ⬜ | — | — | SBB-1 |
+| FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟦 | claude | — | — |
+| FU-2b | USN journal read through broker | HIGH | M | ⬜ | — | — | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | MEDIUM | M | ⬜ | — | — | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | M | ⬜ | — | — | — |
 | FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
@@ -133,7 +134,7 @@ depend on them — see [§3](#3-shared-building-blocks)):
 
 | ID | Title | Status | PR |
 |----|-------|--------|----|
-| SBB-1 | `try_adopt_broker_handle` shared peek+duplicate in `uffs-mft` | 🟦 | — |
+| SBB-1 | `try_adopt_broker_handle` shared peek+duplicate in `uffs-mft` | 🟩 | #405 |
 | SBB-2 | `OwnedHandle` Send-safe RAII wrapper | ⬜ | — |
 
 Effort key: `XS` <1h · `S` ~half-day · `M` ~1–2 days · `L` ~3–5 days (all
