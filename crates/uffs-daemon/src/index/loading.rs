@@ -260,13 +260,12 @@ impl IndexManager {
         };
     }
 
-    /// Spawn one blocking task per drive against the global blocking pool.
+    /// Spawn the per-drive load tasks, **bounded** to at most
+    /// [`max_concurrent_drive_loads`] running at once so a large estate (e.g.
+    /// 100 drives) doesn't read + build that many indexes simultaneously and
+    /// spike memory / IO / threads before the memory-pressure tiering reacts.
     /// Each task returns `(letter, Result<(DriveCompactIndex, LoadTiming)>)`.
     #[cfg(windows)]
-    #[expect(
-        clippy::print_stderr,
-        reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
-    )]
     fn spawn_drive_loaders(
         drives: &[uffs_mft::platform::DriveLetter],
         no_cache: bool,
@@ -277,16 +276,44 @@ impl IndexManager {
             uffs_core::compact::LoadTiming,
         )>,
     )> {
+        use alloc::sync::Arc;
+
+        let cpus = std::thread::available_parallelism().map_or(4, core::num::NonZeroUsize::get);
+        let permits = max_concurrent_drive_loads(drives.len(), cpus);
+        tracing::info!(
+            drives = drives.len(),
+            cpus,
+            max_concurrent = permits,
+            "Loading live drives (bounded parallel fan-out)"
+        );
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(permits));
+
         let mut join_set = tokio::task::JoinSet::new();
         for &letter in drives {
-            tracing::info!(drive = %letter, "Loading live drive (parallel)");
-            eprintln!("[diag] load_live_drives: spawning thread for drive={letter}");
-            join_set.spawn_blocking(move || {
-                // Guarded warm load: serve the on-disk compact cache fast
-                // when the background USN journal loop can converge the
-                // bounded delta, falling back to a synchronous rebuild
-                // only when it cannot (see `cache::guarded_load`).
-                let result = crate::cache::guarded_load::load_live_drive(letter, no_cache);
+            let task_semaphore = Arc::clone(&semaphore);
+            join_set.spawn(async move {
+                // Hold a permit for this drive's whole load, so at most
+                // `permits` drives read + build their index at once.  The
+                // remaining drives wait here cheaply (parked on the semaphore,
+                // no thread) until a permit frees.  `acquire_owned` only errors
+                // if the semaphore is closed (never here), so `.ok()` is fine —
+                // the worst case is an un-throttled load, not a wrong one.
+                let _permit = task_semaphore.acquire_owned().await.ok();
+                tracing::info!(drive = %letter, "Loading live drive");
+                // Guarded warm load: serve the on-disk compact cache fast when
+                // the background USN journal loop can converge the bounded
+                // delta, falling back to a synchronous rebuild only when it
+                // cannot (see `cache::guarded_load`).  The blocking MFT read +
+                // index build run on the blocking pool.
+                let joined = tokio::task::spawn_blocking(move || {
+                    crate::cache::guarded_load::load_live_drive(letter, no_cache)
+                })
+                .await;
+                let result = joined.unwrap_or_else(|join_err| {
+                    Err(anyhow::anyhow!(
+                        "drive {letter} load task failed: {join_err}"
+                    ))
+                });
                 (letter, result)
             });
         }
@@ -556,5 +583,59 @@ impl IndexManager {
         *guard = Arc::new(new_registry);
         drop(guard);
         self.bump_index_version();
+    }
+}
+
+/// Maximum number of drives to load concurrently (the live-load fan-out cap).
+///
+/// With `drives <= cpus` every drive loads in parallel — the historical
+/// behaviour, fine for a handful of drives.  Beyond that the fan-out is capped
+/// at `cpus` (floor 2), so a large estate (e.g. 100 drives) doesn't read +
+/// build that many indexes at once and spike memory / IO / threads before the
+/// memory-pressure tiering can react.  Always at least 1 (a zero-drive call
+/// must not produce a 0-permit semaphore).
+///
+/// `cfg(any(windows, test))`: only the Windows live-load path calls it, but the
+/// arithmetic is platform-agnostic and unit-tested below.
+#[cfg(any(windows, test))]
+fn max_concurrent_drive_loads(drives: usize, cpus: usize) -> usize {
+    drives.min(cpus.max(2)).max(1)
+}
+
+#[cfg(test)]
+mod load_concurrency_tests {
+    use super::max_concurrent_drive_loads;
+
+    #[test]
+    fn few_drives_load_fully_in_parallel() {
+        // drives <= cpus → no throttle (returns `drives`).
+        assert_eq!(max_concurrent_drive_loads(1, 12), 1);
+        assert_eq!(max_concurrent_drive_loads(4, 12), 4);
+        assert_eq!(max_concurrent_drive_loads(12, 12), 12);
+    }
+
+    #[test]
+    fn many_drives_cap_at_cpus() {
+        // drives > cpus → capped, so 100 drives don't fan out simultaneously.
+        assert_eq!(max_concurrent_drive_loads(100, 12), 12);
+        assert_eq!(max_concurrent_drive_loads(100, 8), 8);
+        assert_eq!(max_concurrent_drive_loads(13, 12), 12);
+    }
+
+    #[test]
+    fn low_core_count_keeps_a_floor_of_parallelism() {
+        // Single-core hosts still get a floor of 2 (when there are >= 2 drives),
+        // but never more permits than drives.
+        assert_eq!(max_concurrent_drive_loads(100, 1), 2);
+        assert_eq!(max_concurrent_drive_loads(2, 1), 2);
+        assert_eq!(max_concurrent_drive_loads(1, 1), 1);
+    }
+
+    #[test]
+    fn never_zero_permits() {
+        // No loads (0 drives) must still yield >= 1 — Semaphore::new(0) would
+        // park every task forever.
+        assert_eq!(max_concurrent_drive_loads(0, 0), 1);
+        assert_eq!(max_concurrent_drive_loads(0, 12), 1);
     }
 }
