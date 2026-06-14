@@ -56,7 +56,7 @@ pub(crate) fn validate_data_sources(
 /// every build you intend to validate**, and keep it identical to the broker's
 /// tag in `uffs-broker/src/broker.rs`.  Grep `TEMP-BROKER-FLOW` and delete
 /// every hit when the broker follow-ups land — this is NOT a real version.
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #2 (FU-9 + SBB-1 + FU-2a backoff)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #3 (+ FU-2b USN-through-broker)";
 
 /// Emit the startup `tracing::info!` line with every config field
 /// the operator might want to grep for.  Extracted so the orchestrator

@@ -67,6 +67,10 @@ pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
     volume_root_path,
 };
+// Crate-internal: the USN journal open (FU-2b) and `$MFT` extent read (FU-3)
+// adopt the same broker volume handle the MFT read uses.
+#[cfg(windows)]
+pub(crate) use volume::try_adopt_broker_handle;
 #[cfg(windows)]
 pub(crate) use volume::{
     IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,

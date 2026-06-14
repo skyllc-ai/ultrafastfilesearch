@@ -146,10 +146,11 @@ fn duplicate_registered_handle(raw: u64, drive: super::DriveLetter) -> Result<HA
 /// USN journal open, and the `$MFT` extent read: the *adoption* is uniform, but
 /// each caller's *direct-open* flags differ, so only this half is centralised.
 ///
-/// Currently private (only [`VolumeHandle::open`] calls it); FU-2 / FU-3 will
-/// raise its visibility and re-export it for the USN and `$MFT` paths.
+/// `pub(crate)` so the USN journal open (FU-2b) and, later, the `$MFT` extent
+/// read (FU-3) can adopt the same broker handle the MFT read uses — re-exported
+/// as `crate::platform::try_adopt_broker_handle`.
 #[cfg(windows)]
-fn try_adopt_broker_handle(drive: super::DriveLetter) -> Result<Option<HANDLE>> {
+pub(crate) fn try_adopt_broker_handle(drive: super::DriveLetter) -> Result<Option<HANDLE>> {
     match peek_broker_handle(drive) {
         Some(raw) => Ok(Some(duplicate_registered_handle(raw, drive)?)),
         None => Ok(None),

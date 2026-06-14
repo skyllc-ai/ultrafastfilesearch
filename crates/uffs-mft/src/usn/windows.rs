@@ -125,7 +125,28 @@ const USN_JOURNAL_DATA_V0_SIZE: u32 = u32_size_of::<UsnJournalDataV0>();
 const READ_USN_JOURNAL_DATA_V0_SIZE: u32 = u32_size_of::<ReadUsnJournalDataV0>();
 
 /// Open a `\\.\X:` volume handle with read access for USN-journal ioctls.
+///
+/// Adopts a broker-supplied volume handle when one is registered for `volume`
+/// (the non-elevated daemon path): `FSCTL_QUERY_USN_JOURNAL` /
+/// `FSCTL_READ_USN_JOURNAL` operate on a **volume** handle, which the Access
+/// Broker already vends, so a non-elevated daemon that can't `CreateFileW` the
+/// raw volume can still poll the journal through a duplicate of the broker
+/// handle.  Falls back to a direct `CreateFileW` when no broker handle is
+/// registered (the elevated path).
+///
+/// The returned handle is owned by the caller and closed via
+/// [`close_volume_handle`] after the ioctl — for a broker-backed handle that
+/// closes only the duplicate, leaving the registry entry intact for the next
+/// poll (mirrors the MFT read's per-open duplicate).
 fn open_volume_handle(volume: crate::platform::DriveLetter) -> Result<HANDLE, std::io::Error> {
+    // Broker fast-path: adopt a duplicate of the registered broker handle if
+    // present; otherwise open the volume directly below.
+    if let Some(handle) = crate::platform::try_adopt_broker_handle(volume)
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+    {
+        return Ok(handle);
+    }
+
     let path = format!("\\\\.\\{volume}:");
     let wide: Vec<u16> = OsStr::new(&path)
         .encode_wide()

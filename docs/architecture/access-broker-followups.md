@@ -120,7 +120,7 @@ pick an item up. `Depends on` must be `🟩` before you start.
 |----|-------|----------|--------|--------|-------|----|-----------|
 | FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | claude | #404 | — |
 | FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟦 | claude | — | — |
-| FU-2b | USN journal read through broker | HIGH | M | ⬜ | — | — | SBB-1 |
+| FU-2b | USN journal read through broker | HIGH | M | 🟦 | claude | — | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | MEDIUM | M | ⬜ | — | — | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | M | ⬜ | — | — | — |
 | FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
