@@ -118,7 +118,7 @@ pick an item up. `Depends on` must be `🟩` before you start.
 
 | ID | Title | Priority | Effort | Status | Owner | PR | Depends on |
 |----|-------|----------|--------|--------|-------|----|-----------|
-| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | ⬜ | — | — | — |
+| FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟦 | claude | — | — |
 | FU-2 | USN journal through broker + backoff | HIGH | M | ⬜ | — | — | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | MEDIUM | M | ⬜ | — | — | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | M | ⬜ | — | — | — |
@@ -369,6 +369,19 @@ That's the whole fix. `is_elevated()` is a token query — cheap, **no pipe
 interaction**, and free of the race that made the old `broker_available()` probe
 dangerous (it never touches the broker's single pipe instance).
 
+> **Implementation note (landed):** the gate lives in a `#[cfg(windows)]` helper
+> `warm_up_broker_handles_unless_elevated(drives)` that
+> `load_live_drives_if_windows` calls once. Two reasons it's a helper rather than
+> an inline `if/else` in the caller: (1) inlining the two-branch `tracing`
+> block pushed `load_live_drives_if_windows` over the `cognitive_complexity`
+> ceiling (32/25 under the `--workspace --all-features` Windows clippy gate —
+> the scoped `-p uffs-daemon` run did **not** surface it, so always run the full
+> workspace gate); extracting restores the caller below the limit. (2) The
+> helper is `#[cfg(windows)]` (it calls `is_elevated` + `warm_up_broker_handles`,
+> both Windows-only), so there's no `dead_code` on the host build. It is **not**
+> a `should_warm_up_broker(bool)` pure wrapper — testing `!is_elevated()` adds no
+> coverage; this item's real validation is the VM run (see Tests).
+
 #### Gotchas
 - `is_elevated` is Windows-only; this whole fn is already `#[cfg(windows)]`, so
   no extra gating needed.
@@ -382,13 +395,16 @@ dangerous (it never touches the broker's single pipe instance).
   register, MFT loads (the 2026-06-14 baseline).
 
 #### Tests
-- **Core (host unit):** factor the decision into a pure helper
-  `fn should_warm_up_broker(is_elevated: bool) -> bool { !is_elevated }` and unit-test
-  both arms. (Keeps the policy testable without a live token.)
+- **Core (host unit):** none meaningful — the logic is a single `!is_elevated()`
+  inlined into a `#[cfg(windows)]` fn; a wrapper to test the negation would only
+  add `dead_code` friction on the host (see the implementation note above).
 - **Edge:** N/A logic-wise; the elevation query itself isn't unit-testable
   cross-platform.
-- **Manual/VM:** elevated-shell run (expect no broker WARNs) **and**
-  non-elevated run (expect broker adoption) — capture both logs.
+- **Manual/VM (this item's real validation):** elevated-shell run — expect a
+  single `daemon is elevated — skipping broker warm-up` debug line and **no**
+  `Access Broker handle request` WARNs; drives still load. Non-elevated run —
+  expect `daemon not elevated — attempting broker warm-up`, handles register,
+  MFT loads (the 2026-06-14 baseline). Capture both logs.
 
 ---
 

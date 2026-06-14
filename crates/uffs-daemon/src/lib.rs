@@ -295,23 +295,43 @@ async fn load_live_drives_if_windows(
     if drives.is_empty() {
         return;
     }
-    // Always attempt the broker warm-up.  Gating on a separate
-    // `broker_available()` check is unreliable: that probe connects to and
-    // consumes the broker's single pipe instance, so a second probe races to
-    // `false` and the warm-up is wrongly skipped (2026-06-13 VM finding).  The
-    // handle request below is the only authoritative test — it succeeds when a
-    // broker is serving and fails fast (WARN + direct-open fallback) when not.
-    tracing::info!(
-        pid = std::process::id(),
-        drive_count = drives.len(),
-        "load_live_drives_if_windows: attempting broker warm-up unconditionally"
-    );
-    warm_up_broker_handles(drives);
+    warm_up_broker_handles_unless_elevated(drives);
     tracing::info!(drives = ?drives, "Loading live drives...");
     load_index
         .load_live_drives(drives, no_cache, load_lifecycle)
         .await;
     tracing::info!("Live drives loaded");
+}
+
+/// Run the broker warm-up only when the daemon is **not** already elevated.
+///
+/// Gate on the daemon's OWN elevation, not on a broker probe.  An elevated
+/// daemon opens volumes directly (`CreateFileW`), so a broker request would be
+/// a futile per-drive pipe-open + WARN.  Crucially, `is_elevated()` is a token
+/// query — it does NOT touch the broker pipe, so it has none of the race the
+/// removed `broker_available()` probe had (that probe connected to and consumed
+/// the broker's single pipe instance, starving the real request; 2026-06-13 VM
+/// finding).  When NOT elevated, the handle request itself is the authoritative
+/// broker-presence test: it succeeds when a broker is serving and fails fast
+/// (WARN + direct-open fallback) when not.
+///
+/// Extracted from `load_live_drives_if_windows` so that caller stays under the
+/// `cognitive_complexity` ceiling.
+#[cfg(windows)]
+fn warm_up_broker_handles_unless_elevated(drives: &[uffs_mft::platform::DriveLetter]) {
+    if uffs_mft::is_elevated() {
+        tracing::debug!(
+            pid = std::process::id(),
+            "Daemon is elevated — skipping broker warm-up (direct volume open)"
+        );
+        return;
+    }
+    tracing::info!(
+        pid = std::process::id(),
+        drive_count = drives.len(),
+        "Daemon not elevated — attempting broker warm-up"
+    );
+    warm_up_broker_handles(drives);
 }
 
 /// Best-effort broker pre-warm: ask the elevated broker for a volume
