@@ -157,6 +157,60 @@ pub(crate) fn try_adopt_broker_handle(drive: super::DriveLetter) -> Result<Optio
     }
 }
 
+/// Read `buf.len()` bytes from a raw volume `handle` at byte `offset`, carrying
+/// the offset in an `OVERLAPPED`.
+///
+/// Works on the broker's `FILE_FLAG_OVERLAPPED` handle — which has **no
+/// synchronous file pointer**, so a `SetFilePointerEx` seek fails on it (the
+/// `$UpCase` "parameter is incorrect" failure) — as well as on a plain
+/// synchronous handle (the offset in the `OVERLAPPED` is honoured either way).
+/// These are single, non-concurrent metadata reads, so completion is awaited
+/// via `GetOverlappedResult` on the handle without a dedicated event.  Shared
+/// by the MFT-extent bootstrap (FU-3) and the `$UpCase` read (FU-8).
+///
+/// # Errors
+///
+/// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
+/// [`MftError::InvalidData`] on a short read.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
+pub(crate) fn read_handle_at(handle: HANDLE, offset: u64, buf: &mut [u8]) -> Result<()> {
+    use windows::Win32::Foundation::ERROR_IO_PENDING;
+    use windows::Win32::Storage::FileSystem::ReadFile;
+    use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+
+    let mut overlapped = OVERLAPPED::default();
+    crate::io::readers::set_overlapped_offset(&mut overlapped, offset);
+
+    let mut bytes_read = 0_u32;
+    // SAFETY: `buf` is valid and writable for its length; `overlapped` outlives
+    // the call and the wait below; `handle` is a live volume handle.
+    let read = unsafe {
+        ReadFile(
+            handle,
+            Some(buf),
+            Some(&raw mut bytes_read),
+            Some(&raw mut overlapped),
+        )
+    };
+    if let Err(err) = read {
+        if err.code() != ERROR_IO_PENDING.to_hresult() {
+            return Err(MftError::Io(hresult_to_io_error(&err)));
+        }
+        // SAFETY: `overlapped` is the in-flight struct from the pending
+        // `ReadFile` and is still alive; `bWait = true` blocks to completion.
+        unsafe { GetOverlappedResult(handle, &raw const overlapped, &raw mut bytes_read, true) }
+            .map_err(|wait_err| MftError::Io(hresult_to_io_error(&wait_err)))?;
+    }
+    if (bytes_read as usize) < buf.len() {
+        return Err(MftError::InvalidData(format!(
+            "overlapped read short: {bytes_read} of {} bytes",
+            buf.len()
+        )));
+    }
+    Ok(())
+}
+
 /// Convert a `windows::core::Error` into the equivalent `std::io::Error`,
 /// **unwrapping** the `HRESULT_FROM_WIN32` envelope so std's
 /// `decode_error_kind` table (keyed on bare Win32 codes like
@@ -840,7 +894,7 @@ impl VolumeHandle {
 
         let record_size = self.volume_data.bytes_per_file_record_segment as usize;
         let mut record = vec![0_u8; record_size];
-        if let Err(err) = self.read_volume_at(self.mft_byte_offset(), &mut record) {
+        if let Err(err) = read_handle_at(self.handle, self.mft_byte_offset(), &mut record) {
             tracing::warn!(
                 drive = %self.volume, error = %err,
                 "FRS 0 read failed; assuming single contiguous MFT extent (index may be partial on a fragmented MFT)"
@@ -885,65 +939,6 @@ impl VolumeHandle {
                 / u64::from(self.volume_data.bytes_per_cluster),
             lcn: super::Lcn::new(self.volume_data.mft_start_lcn.cast_signed()),
         }]
-    }
-
-    /// Read `buf.len()` bytes from the volume handle at byte `offset`, carrying
-    /// the offset in an `OVERLAPPED` so it works on the broker's
-    /// `FILE_FLAG_OVERLAPPED` handle — which has no synchronous file pointer,
-    /// the same reason `$UpCase`'s `SetFilePointerEx` fails on it.  This is
-    /// a single, non-concurrent bootstrap read (before the IOCP bulk read
-    /// starts), so completion is awaited via `GetOverlappedResult` on the
-    /// handle without a dedicated event.
-    ///
-    /// # Errors
-    ///
-    /// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
-    /// [`MftError::InvalidData`] on a short read.
-    #[cfg(windows)]
-    #[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
-    fn read_volume_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        use windows::Win32::Foundation::ERROR_IO_PENDING;
-        use windows::Win32::Storage::FileSystem::ReadFile;
-        use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
-
-        let mut overlapped = OVERLAPPED::default();
-        crate::io::readers::set_overlapped_offset(&mut overlapped, offset);
-
-        let mut bytes_read = 0_u32;
-        // SAFETY: `buf` is valid and writable for its length; `overlapped`
-        // outlives the call and the wait below; `self.handle` is a live volume
-        // handle.
-        let read = unsafe {
-            ReadFile(
-                self.handle,
-                Some(buf),
-                Some(&raw mut bytes_read),
-                Some(&raw mut overlapped),
-            )
-        };
-        if let Err(err) = read {
-            if err.code() != ERROR_IO_PENDING.to_hresult() {
-                return Err(MftError::Io(hresult_to_io_error(&err)));
-            }
-            // SAFETY: `overlapped` is the in-flight struct from the pending
-            // `ReadFile` and is still alive; `bWait = true` blocks to completion.
-            unsafe {
-                GetOverlappedResult(
-                    self.handle,
-                    &raw const overlapped,
-                    &raw mut bytes_read,
-                    true,
-                )
-            }
-            .map_err(|wait_err| MftError::Io(hresult_to_io_error(&wait_err)))?;
-        }
-        if (bytes_read as usize) < buf.len() {
-            return Err(MftError::InvalidData(format!(
-                "short FRS read: {bytes_read} of {} bytes",
-                buf.len()
-            )));
-        }
-        Ok(())
     }
 
     /// Gets the MFT bitmap which indicates which records are in use.

@@ -343,9 +343,11 @@ pub fn read_upcase_table(drive: crate::platform::DriveLetter) -> Result<Box<[u16
     let mft_offset = handle.mft_byte_offset();
     let frs10_offset = mft_offset + UPCASE_FRS * rs as u64;
 
-    // Read FRS 10 from the MFT on disk.
+    // Read FRS 10 from the MFT on disk.  Uses the overlapped-aware read so the
+    // broker's `FILE_FLAG_OVERLAPPED` handle works (a `SetFilePointerEx` seek
+    // fails on it — the old "$UpCase: parameter is incorrect" failure).
     let mut record = vec![0_u8; rs];
-    volume_read_at(handle.raw_handle(), frs10_offset, &mut record)?;
+    super::volume::read_handle_at(handle.raw_handle(), frs10_offset, &mut record)?;
     apply_fixup(&mut record);
 
     // Parse data runs.
@@ -394,45 +396,6 @@ pub fn read_upcase_table(drive: crate::platform::DriveLetter) -> Result<Box<[u16
 
 // ── Windows I/O helpers ───────────────────────────────────────────────
 
-/// Seek + read from a raw volume handle.
-#[cfg(windows)]
-fn volume_read_at(
-    handle: windows::Win32::Foundation::HANDLE,
-    offset: u64,
-    buf: &mut [u8],
-) -> Result<()> {
-    use windows::Win32::Storage::FileSystem::{FILE_BEGIN, ReadFile, SetFilePointerEx};
-
-    let seek_pos = i64::try_from(offset).map_err(|err| {
-        MftError::InvalidData(format!("$UpCase: offset {offset} exceeds i64::MAX ({err})"))
-    })?;
-
-    // SAFETY: SetFilePointerEx is a well-defined Win32 API.
-    #[expect(unsafe_code, reason = "FFI: SetFilePointerEx")]
-    unsafe {
-        SetFilePointerEx(handle, seek_pos, None, FILE_BEGIN).map_err(|err| {
-            MftError::InvalidData(format!("$UpCase: seek to offset {offset} failed: {err}"))
-        })
-    }?;
-
-    let mut bytes_read = 0_u32;
-    // SAFETY: ReadFile writes into valid writable `buf`.
-    #[expect(unsafe_code, reason = "FFI: ReadFile")]
-    unsafe {
-        ReadFile(handle, Some(buf), Some(&raw mut bytes_read), None).map_err(|err| {
-            MftError::InvalidData(format!("$UpCase: read {} bytes failed: {err}", buf.len()))
-        })
-    }?;
-
-    if (bytes_read as usize) < buf.len() {
-        return Err(MftError::InvalidData(format!(
-            "$UpCase: short read: got {bytes_read}/{}",
-            buf.len()
-        )));
-    }
-    Ok(())
-}
-
 /// Read clusters from data runs into a contiguous buffer.
 #[cfg(windows)]
 fn read_clusters(
@@ -471,7 +434,7 @@ fn read_clusters(
                  {UPCASE_SIZE_BYTES}"
             )));
         };
-        volume_read_at(handle, disk_offset, read_window)?;
+        super::volume::read_handle_at(handle, disk_offset, read_window)?;
         offset += read_len;
     }
 

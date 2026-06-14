@@ -121,8 +121,8 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | FU-9 | Gate warm-up on `!is_elevated()` | HIGH | XS | 🟩 | claude | #404 | — |
 | FU-2a | Journal-poll backoff (stop the storm) | HIGH | S | 🟩 | claude | #407 | — |
 | FU-2b | USN journal read through broker | HIGH | M | 🟩 | claude | #408 | SBB-1 |
-| FU-3 | `get_mft_extents` through broker | HIGH | M | 🟦 | claude | — | SBB-1 |
-| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | M | ⬜ | — | — | — |
+| FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | claude | #409 | SBB-1 |
+| FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟦 | claude | — | FU-3 |
 | FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
 | FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
 | FU-5 | Async multi-instance broker + `OwnedHandle` | MEDIUM | L | ⬜ | — | — | SBB-2 |
