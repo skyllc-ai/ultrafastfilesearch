@@ -123,10 +123,10 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | FU-2b | USN journal read through broker | HIGH | M | 🟩 | Robert | #408 | SBB-1 |
 | FU-3 | `get_mft_extents` through broker | HIGH | M | 🟩 | Robert | #409 | SBB-1 |
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | Robert | #410 | FU-3 |
-| FU-1 | Windows Service dispatcher | HIGH | M | 🟦 | Robert | — | — |
-| FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
-| FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟦 | Robert | — | SBB-2 |
-| FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | Robert | — | — |
+| FU-1 | Windows Service dispatcher | HIGH | M | 🟩 | Robert | #414 | — |
+| FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | 🟩 | Robert | #412 | — |
+| FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟩 | Robert | #413 #415 | SBB-2 |
+| FU-6 | Non-connecting client pipe probe | LOW | S | 🟩 | Robert | #411 | — |
 | FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ✅ moot | Robert | — | — |
 
 **Shared building blocks** (land these as their own PRs first; several items
@@ -135,7 +135,7 @@ depend on them — see [§3](#3-shared-building-blocks)):
 | ID | Title | Status | PR |
 |----|-------|--------|----|
 | SBB-1 | `try_adopt_broker_handle` shared peek+duplicate in `uffs-mft` | 🟩 | #405 |
-| SBB-2 | `OwnedHandle` Send-safe RAII wrapper | 🟦 | (with FU-5) |
+| SBB-2 | `OwnedHandle` Send-safe RAII wrapper | 🟩 | #413 |
 
 Effort key: `XS` <1h · `S` ~half-day · `M` ~1–2 days · `L` ~3–5 days (all
 including tests + a VM validation round).

@@ -38,6 +38,19 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
+/// Combine an `sc.exe` invocation's stdout + stderr for an error message.
+///
+/// `sc.exe` writes most of its diagnostics to **stdout**, not stderr, so a
+/// stderr-only message comes out empty (as seen on a failed `sc create`).
+#[cfg(windows)]
+fn sc_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!("{} {}", stdout.trim(), stderr.trim())
+        .trim()
+        .to_owned()
+}
+
 /// Register the broker as an auto-start Windows Service and start it.
 ///
 /// # Why the argv is split the way it is
@@ -69,7 +82,7 @@ pub(super) fn install_service() -> anyhow::Result<()> {
     let create = std::process::Command::new("sc.exe")
         .args([
             "create",
-            "UffsAccessBroker",
+            SERVICE_NAME,
             "binPath=",
             &exe.display().to_string(),
             "start=",
@@ -80,17 +93,20 @@ pub(super) fn install_service() -> anyhow::Result<()> {
         .output()?;
 
     if !create.status.success() {
-        // AUDIT-OK(bytes): `sc` stderr surfaced verbatim to the operator —
+        // AUDIT-OK(bytes): `sc` output surfaced verbatim to the operator —
         // display only, no decision.
-        let stderr = String::from_utf8_lossy(&create.stderr);
-        anyhow::bail!("Install failed (sc create): {stderr}");
+        anyhow::bail!(
+            "Install failed (sc create): {}\n(If the service already exists, run \
+             `uffs-broker --uninstall` first.)",
+            sc_output(&create)
+        );
     }
 
     // Start it now so the broker is usable immediately — the whole point
     // is "no future UAC", which only holds once the service is running.
     // `start= auto` also brings it back on every boot.
     let start = std::process::Command::new("sc.exe")
-        .args(["start", "UffsAccessBroker"])
+        .args(["start", SERVICE_NAME])
         .output()?;
 
     if start.status.success() {
@@ -100,12 +116,12 @@ pub(super) fn install_service() -> anyhow::Result<()> {
              access — no more UAC prompts."
         );
     } else {
-        // AUDIT-OK(bytes): `sc` stderr surfaced verbatim to the operator.
-        let stderr = String::from_utf8_lossy(&start.stderr);
+        // AUDIT-OK(bytes): `sc` output surfaced verbatim to the operator.
         println!(
             "Service installed (auto-start on boot), but starting it failed: \
-             {stderr}\nStart it manually from an elevated shell with:\n    \
-             sc.exe start UffsAccessBroker"
+             {}\nStart it manually from an elevated shell with:\n    \
+             sc.exe start UffsAccessBroker",
+            sc_output(&start)
         );
     }
     Ok(())
@@ -126,17 +142,24 @@ pub(super) fn uninstall_service() -> anyhow::Result<()> {
              Open an elevated terminal and re-run:\n    uffs-broker --uninstall"
         );
     }
+    // Stop the service before deleting it.  `sc delete` on a RUNNING service
+    // only MARKS it for deletion (deferred until it stops), which then makes a
+    // later `--install` fail with a cryptic `sc create` error.  Stopping first
+    // makes the delete take effect immediately.  Ignore the stop result — the
+    // service may already be stopped or not exist.
+    let _stopped = std::process::Command::new("sc.exe")
+        .args(["stop", SERVICE_NAME])
+        .output();
     let output = std::process::Command::new("sc.exe")
-        .args(["delete", "UffsAccessBroker"])
+        .args(["delete", SERVICE_NAME])
         .output()?;
 
     if output.status.success() {
         println!("Service uninstalled.");
     } else {
-        // AUDIT-OK(bytes): `sc` command stderr surfaced verbatim in an
-        // error message for the operator — display only, no decision.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Uninstall failed: {stderr}");
+        // AUDIT-OK(bytes): `sc` command output surfaced verbatim in an error
+        // message for the operator — display only, no decision.
+        anyhow::bail!("Uninstall failed: {}", sc_output(&output));
     }
     Ok(())
 }

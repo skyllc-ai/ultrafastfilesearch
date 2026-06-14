@@ -50,21 +50,10 @@ pub(crate) fn validate_data_sources(
     Ok(())
 }
 
-/// TEMP-BROKER-FLOW: manually-bumped build tag so VM logs reveal WHICH dev
-/// build is running.  The dev version is pinned at `0.5.123` across iterations,
-/// so `--version` can't distinguish builds; this string can.  **Bump it on
-/// every build you intend to validate**, and keep it identical to the broker's
-/// tag in `uffs-broker/src/broker.rs`.  Grep `TEMP-BROKER-FLOW` and delete
-/// every hit when the broker follow-ups land — this is NOT a real version.
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #10 (+ FU-5 first-instance fix)";
-
 /// Emit the startup `tracing::info!` line with every config field
 /// the operator might want to grep for.  Extracted so the orchestrator
 /// stays under clippy's `cognitive_complexity` budget.
 pub(crate) fn log_daemon_starting(config: &DaemonConfig) {
-    // TEMP-BROKER-FLOW: build-identity line for VM validation; remove with the
-    // `BROKER_FLOW_BUILD_TAG` const above when the broker work lands.
-    tracing::info!(build_tag = BROKER_FLOW_BUILD_TAG, "BROKER-FLOW BUILD TAG");
     // NOTE: do NOT probe the Access Broker here.  The previous
     // `broker_available()` call used `GetFileAttributesW`, which *connects to*
     // the broker's single pipe instance and leaves it busy — so the real
