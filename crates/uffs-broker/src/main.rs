@@ -26,6 +26,14 @@
 // in `Cargo.toml`, so they don't even exist as `extern crate`s on
 // non-Windows targets — the bin's non-Windows compilation produces no
 // `unused_crate_dependencies` warnings without any markers.
+
+// The workspace prefers `alloc::` over `std::` for smart pointers (clippy
+// `std_instead_of_alloc`); the broker's FU-5 serve loop uses
+// `alloc::sync::Arc`, so bring the crate into scope (Windows-only, like
+// `broker`).
+#[cfg(windows)]
+extern crate alloc;
+
 #[cfg(windows)]
 mod broker;
 

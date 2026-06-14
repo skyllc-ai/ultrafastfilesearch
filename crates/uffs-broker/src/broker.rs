@@ -44,6 +44,34 @@ mod authenticode;
 #[cfg(windows)]
 use authenticode::verify_authenticode;
 
+// `Send`-safe RAII handle wrapper (SBB-2) — lets a connected pipe instance move
+// into a per-connection worker thread (FU-5). See `broker/owned_handle.rs`.
+#[path = "broker/owned_handle.rs"]
+mod owned_handle;
+#[cfg(windows)]
+use owned_handle::OwnedHandle;
+
+// Named-pipe creation + SDDL security descriptor, split out to keep this file
+// under the 800-LOC ceiling. See `broker/pipe.rs`.
+#[path = "broker/pipe.rs"]
+mod pipe;
+#[cfg(windows)]
+use pipe::create_broker_pipe;
+
+/// Per-drive rate-limit state (`drive → last grant time`), shared across the
+/// FU-5 per-connection worker threads behind a `Mutex`.
+#[cfg(windows)]
+type RateLimit = std::sync::Mutex<std::collections::HashMap<char, std::time::Instant>>;
+
+/// Maximum concurrent named-pipe instances the broker serves (FU-5).
+///
+/// One instance is always listening in the accept loop; the rest can be
+/// in-flight on worker threads.  Bounded (not `PIPE_UNLIMITED_INSTANCES`) so a
+/// flood of clients can't exhaust threads/handles — excess clients simply wait
+/// for a free instance.
+#[cfg(windows)]
+const MAX_PIPE_INSTANCES: u32 = 16;
+
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
@@ -94,7 +122,7 @@ fn print_usage() {
 /// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
 /// when the broker follow-ups land — this is NOT a real version.
 #[cfg(windows)]
-const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #7 (+ FU-4 WinVerifyTrust)";
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #8 (+ FU-5 multi-instance broker)";
 
 /// Run the broker in foreground mode.
 #[cfg(windows)]
@@ -145,18 +173,52 @@ fn warn_if_not_elevated() {
 /// - S5.4: Rate limiting (1 request per drive per 10s)
 /// - S5.5: Read-only handles only (enforced in `handle_pipe_request`)
 #[cfg(windows)]
+#[expect(
+    clippy::infinite_loop,
+    reason = "the broker serves connections until the process is stopped"
+)]
 fn serve_pipe_requests() -> anyhow::Result<()> {
-    tracing::info!(pipe = PIPE_NAME, "Listening for handle requests");
+    use alloc::sync::Arc;
+    use core::time::Duration;
 
-    // S5.4: Rate limiter — tracks last request time per drive letter
-    let mut rate_limit: std::collections::HashMap<char, std::time::Instant> =
-        std::collections::HashMap::new();
+    tracing::info!(
+        pipe = PIPE_NAME,
+        max_instances = MAX_PIPE_INSTANCES,
+        "Listening for handle requests"
+    );
+
+    // S5.4: rate-limit state, shared across per-connection workers.
+    let rate_limit: Arc<RateLimit> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     loop {
-        let pipe = create_broker_pipe()?;
-        wait_for_client(pipe)?;
-        handle_one_connection(pipe, &mut rate_limit);
-        disconnect_and_close(pipe);
+        // Create the next listening instance.  If all instances are busy this
+        // fails transiently — back off briefly and retry rather than exit.
+        let pipe = match create_broker_pipe() {
+            Ok(pipe) => pipe,
+            Err(err) => {
+                tracing::warn!(error = %err, "pipe instance unavailable; retrying shortly");
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+        };
+        if let Err(err) = wait_for_client(pipe) {
+            tracing::warn!(error = %err, "wait_for_client failed; dropping instance");
+            disconnect_pipe(pipe);
+            close_pipe(pipe);
+            continue;
+        }
+
+        // Hand the connected instance to a worker and immediately loop to
+        // create the next listener, so there's always an instance accepting.
+        let owned = OwnedHandle::new(pipe);
+        let worker_rate_limit = Arc::clone(&rate_limit);
+        std::thread::spawn(move || {
+            handle_one_connection(owned.raw(), &worker_rate_limit);
+            disconnect_pipe(owned.raw());
+            // `owned` drops here → CloseHandle frees the pipe instance, even if
+            // `handle_one_connection` panicked.
+        });
     }
 }
 
@@ -167,10 +229,7 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
 /// GRANTED / FAILED) inside this function so the caller only needs to
 /// disconnect and loop.
 #[cfg(windows)]
-fn handle_one_connection(
-    pipe: windows::Win32::Foundation::HANDLE,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
-) {
+fn handle_one_connection(pipe: windows::Win32::Foundation::HANDLE, rate_limit: &RateLimit) {
     let Some(pid) = get_pipe_client_pid(pipe) else {
         audit_log("REJECTED", 0, None, None, "could not determine client PID");
         tracing::warn!("Could not determine client PID — rejecting");
@@ -243,7 +302,7 @@ fn process_drive_request(
     client_process: &OwnedProcessHandle,
     pid: u32,
     exe: Option<&str>,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
+    rate_limit: &RateLimit,
 ) {
     match handle_pipe_request_with_rate_limit(pipe, client_process, pid, rate_limit) {
         Ok(drive) => {
@@ -262,7 +321,7 @@ fn handle_pipe_request_with_rate_limit(
     pipe: windows::Win32::Foundation::HANDLE,
     client_process: &OwnedProcessHandle,
     client_pid: u32,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
+    rate_limit: &RateLimit,
 ) -> anyhow::Result<char> {
     // Peek at the 1-byte request via the shared protocol parser.
     // `HandleRequest::parse` rejects non-ASCII bytes and non-alphabetic
@@ -280,15 +339,26 @@ fn handle_pipe_request_with_rate_limit(
         }
     };
 
-    // S5.4: Rate limit — 1 request per drive per 10 seconds
+    // S5.4: Rate limit — 1 request per drive per 10 seconds.  Decide under the
+    // lock (recovering a poisoned mutex), then act without holding it so no
+    // pipe I/O happens while the shared map is locked.
     let now = std::time::Instant::now();
-    if let Some(last) = rate_limit.get(&drive_letter)
-        && now.duration_since(*last).as_secs() < 10
-    {
+    let rate_limited = {
+        let mut guard = rate_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let limited = guard
+            .get(&drive_letter)
+            .is_some_and(|last| now.duration_since(*last).as_secs() < 10);
+        if !limited {
+            guard.insert(drive_letter, now);
+        }
+        limited
+    };
+    if rate_limited {
         write_pipe(pipe, &HandleResponse::error().encode())?;
         anyhow::bail!("Rate limited: drive {drive_letter} requested too recently");
     }
-    rate_limit.insert(drive_letter, now);
 
     // Delegate to actual handle brokering (drive letter already read)
     handle_pipe_request_inner(pipe, client_process, client_pid, drive_letter)?;
@@ -314,140 +384,6 @@ fn audit_log(action: &str, pid: u32, exe: Option<&str>, drive: Option<char>, det
 
 // ── D7.3: Named Pipe Operations ─────────────────────────────────────────
 
-/// Create a named pipe with owner-only access.
-#[cfg(windows)]
-#[expect(unsafe_code, reason = "CreateNamedPipeW is an FFI call")]
-fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
-    use std::os::windows::ffi::OsStrExt as _;
-
-    use windows::Win32::Security::SECURITY_ATTRIBUTES;
-    use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
-    use windows::Win32::System::Pipes::{
-        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
-    };
-    use windows::core::PCWSTR;
-
-    let pipe_name: Vec<u16> = std::ffi::OsStr::new(PIPE_NAME)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    // The whole point of the broker is to serve a NON-elevated daemon.  With
-    // `None` security, an elevated/SYSTEM creator gets an owner-only DACL AND
-    // a high mandatory-integrity label, so the medium-integrity daemon can't
-    // even open the pipe.  Build an explicit descriptor that lets the daemon
-    // connect; the broker still verifies the client is uffsd + Authenticode
-    // before granting any handle (`check_client_identity`), so a permissive
-    // *connect* ACL is not a privilege leak.
-    let security = PipeSecurity::build()?;
-    let sa = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(0),
-        lpSecurityDescriptor: security.descriptor_ptr(),
-        bInheritHandle: false.into(),
-    };
-
-    // SAFETY: `pipe_name` is a NUL-terminated UTF-16 buffer and `sa` (with its
-    // security descriptor) both live until after this call returns; the pipe
-    // copies the descriptor, so `security` may be dropped afterwards.
-    let handle = unsafe {
-        CreateNamedPipeW(
-            PCWSTR(pipe_name.as_ptr()),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,    // max instances
-            1024, // out buffer
-            1024, // in buffer
-            0,    // default timeout
-            Some(&raw const sa),
-        )
-    };
-    drop(security);
-
-    if handle.is_invalid() {
-        anyhow::bail!(
-            "CreateNamedPipeW failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-
-    Ok(handle)
-}
-
-/// Owns a self-relative security descriptor built from SDDL, for the broker
-/// pipe.  Frees the descriptor (`LocalFree`) on drop.
-///
-/// SDDL: `D:(A;;GRGW;;;AU)S:(ML;;NW;;;LW)`
-/// - DACL grants Authenticated Users generic read+write (enough to open and
-///   talk to the pipe — identity is checked at the app layer per request).
-/// - SACL sets a **low** mandatory-integrity label so the medium-integrity
-///   (non-elevated) daemon is not blocked by the high label an elevated/SYSTEM
-///   creator would otherwise stamp on the object.
-#[cfg(windows)]
-struct PipeSecurity {
-    /// `LocalAlloc`-ed self-relative security descriptor; freed on drop.
-    descriptor: windows::Win32::Security::PSECURITY_DESCRIPTOR,
-}
-
-#[cfg(windows)]
-impl PipeSecurity {
-    /// Build the broker-pipe security descriptor from SDDL (see the type docs).
-    #[expect(
-        unsafe_code,
-        reason = "FFI: ConvertStringSecurityDescriptorToSecurityDescriptorW"
-    )]
-    fn build() -> anyhow::Result<Self> {
-        use windows::Win32::Security::Authorization::{
-            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-        };
-        use windows::Win32::Security::PSECURITY_DESCRIPTOR;
-        use windows::core::PCWSTR;
-
-        let sddl: Vec<u16> = "D:(A;;GRGW;;;AU)S:(ML;;NW;;;LW)"
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: `sddl` is a NUL-terminated UTF-16 string valid for the call;
-        // `descriptor` is a valid out-pointer that receives a `LocalAlloc`-ed
-        // descriptor we free in `Drop`.
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                PCWSTR(sddl.as_ptr()),
-                SDDL_REVISION_1,
-                &raw mut descriptor,
-                None,
-            )
-        }
-        .map_err(|err| anyhow::anyhow!("failed to build pipe security descriptor: {err}"))?;
-        Ok(Self { descriptor })
-    }
-
-    /// Raw pointer to the descriptor, for `SECURITY_ATTRIBUTES`.
-    const fn descriptor_ptr(&self) -> *mut core::ffi::c_void {
-        self.descriptor.0
-    }
-}
-
-#[cfg(windows)]
-impl Drop for PipeSecurity {
-    #[expect(
-        unsafe_code,
-        reason = "FFI: LocalFree of the SDDL-allocated descriptor"
-    )]
-    fn drop(&mut self) {
-        if !self.descriptor.0.is_null() {
-            // SAFETY: `descriptor.0` was allocated by
-            // `ConvertStringSecurityDescriptorToSecurityDescriptorW` via
-            // `LocalAlloc`; freeing it once on drop is the documented contract.
-            _ = unsafe {
-                windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
-                    self.descriptor.0,
-                )))
-            };
-        }
-    }
-}
-
 /// Wait for a client to connect to the pipe.
 #[cfg(windows)]
 #[expect(unsafe_code, reason = "ConnectNamedPipe is an FFI call")]
@@ -468,14 +404,11 @@ fn wait_for_client(pipe: windows::Win32::Foundation::HANDLE) -> anyhow::Result<(
     Ok(())
 }
 
-/// Disconnect client and close pipe handle.
+/// Disconnect any connected client from a pipe instance (the handle itself is
+/// closed separately — by [`close_pipe`] or the worker's [`OwnedHandle`] drop).
 #[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "DisconnectNamedPipe + CloseHandle are FFI calls"
-)]
-fn disconnect_and_close(pipe: windows::Win32::Foundation::HANDLE) {
-    use windows::Win32::Foundation::CloseHandle;
+#[expect(unsafe_code, reason = "DisconnectNamedPipe is an FFI call")]
+fn disconnect_pipe(pipe: windows::Win32::Foundation::HANDLE) {
     use windows::Win32::System::Pipes::DisconnectNamedPipe;
 
     // SAFETY: `pipe` is a valid HANDLE created by create_broker_pipe; the
@@ -483,6 +416,16 @@ fn disconnect_and_close(pipe: windows::Win32::Foundation::HANDLE) {
     if let Err(err) = unsafe { DisconnectNamedPipe(pipe) } {
         tracing::debug!(err = ?err, "DisconnectNamedPipe failed (may be already disconnected)");
     }
+}
+
+/// Close a pipe instance handle.  Used on the accept-loop error path where the
+/// instance isn't wrapped in an [`OwnedHandle`]; the worker path closes via the
+/// `OwnedHandle` drop instead.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "CloseHandle is an FFI call")]
+fn close_pipe(pipe: windows::Win32::Foundation::HANDLE) {
+    use windows::Win32::Foundation::CloseHandle;
+
     // SAFETY: `pipe` is about to be discarded; CloseHandle releases its OS
     // kernel-object reference.  Failure is logged but non-fatal.
     if let Err(err) = unsafe { CloseHandle(pipe) } {

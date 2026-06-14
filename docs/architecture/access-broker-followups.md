@@ -125,7 +125,7 @@ pick an item up. `Depends on` must be `🟩` before you start.
 | FU-8 | `$UpCase` overlapped-handle read | LOW–MED | S | 🟩 | claude | #410 | FU-3 |
 | FU-1 | Windows Service dispatcher | HIGH | M | ⬜ | — | — | — |
 | FU-4 | `WinVerifyTrust` + Authenticode cache | MEDIUM | M | ⬜ | — | — | — |
-| FU-5 | Async multi-instance broker + `OwnedHandle` | MEDIUM | L | ⬜ | — | — | SBB-2 |
+| FU-5 | Multi-instance threaded broker + `OwnedHandle` | MEDIUM | L | 🟦 | claude | — | SBB-2 |
 | FU-6 | Non-connecting client pipe probe | LOW | S | 🟦 | claude | — | — |
 | FU-7 | Volume-data FSCTL overlapped | LOW–MED | S | ✅ moot | claude | — | — |
 
@@ -135,7 +135,7 @@ depend on them — see [§3](#3-shared-building-blocks)):
 | ID | Title | Status | PR |
 |----|-------|--------|----|
 | SBB-1 | `try_adopt_broker_handle` shared peek+duplicate in `uffs-mft` | 🟩 | #405 |
-| SBB-2 | `OwnedHandle` Send-safe RAII wrapper | ⬜ | — |
+| SBB-2 | `OwnedHandle` Send-safe RAII wrapper | 🟦 | (with FU-5) |
 
 Effort key: `XS` <1h · `S` ~half-day · `M` ~1–2 days · `L` ~3–5 days (all
 including tests + a VM validation round).
