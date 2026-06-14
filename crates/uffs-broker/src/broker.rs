@@ -80,6 +80,15 @@ fn print_usage() {
     eprintln!("  --run         Run in foreground (debugging)");
 }
 
+/// TEMP-BROKER-FLOW: manually-bumped build tag so VM logs reveal WHICH dev
+/// build is running.  The dev version is pinned at `0.5.123` across iterations,
+/// so it can't distinguish builds; this string can.  **Bump it on every build
+/// you intend to validate**, and keep it identical to the daemon's tag in
+/// `uffs-daemon/src/startup.rs`.  Grep `TEMP-BROKER-FLOW` and delete every hit
+/// when the broker follow-ups land — this is NOT a real version.
+#[cfg(windows)]
+const BROKER_FLOW_BUILD_TAG: &str = "broker-flow 2026-06-14 #1 (FU-9 + SBB-1)";
+
 /// Run the broker in foreground mode.
 #[cfg(windows)]
 fn run_foreground() -> anyhow::Result<()> {
@@ -88,6 +97,9 @@ fn run_foreground() -> anyhow::Result<()> {
         pid = std::process::id(),
         "uffs-broker starting (foreground mode)"
     );
+    // TEMP-BROKER-FLOW: build-identity line for VM validation; remove with the
+    // `BROKER_FLOW_BUILD_TAG` const above when the broker work lands.
+    tracing::info!(build_tag = BROKER_FLOW_BUILD_TAG, "BROKER-FLOW BUILD TAG");
     warn_if_not_elevated();
     serve_pipe_requests()?;
     tracing::info!("uffs-broker stopped");
