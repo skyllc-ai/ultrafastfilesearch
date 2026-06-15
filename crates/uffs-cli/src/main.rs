@@ -81,6 +81,7 @@ fn run() -> Result<()> {
         "aggregate" | "agg" => run_aggregate(subcmd_args)?,
         "daemon" => run_daemon(subcmd_args)?,
         "mcp" => commands::mcp_mgmt::mcp_from_args(subcmd_args)?,
+        "update" => commands::update::run_update(subcmd_args)?,
         "status" => {
             if subcmd_args.iter().any(|arg| arg == "--help" || arg == "-h") {
                 args::print_status_help();

@@ -271,6 +271,52 @@ impl LifecycleManager {
         }
     }
 
+    /// Path to the launch-state sidecar (next to the PID file).
+    fn launch_state_path(&self) -> PathBuf {
+        self.pid_path.with_file_name("daemon.state.json")
+    }
+
+    /// Persist this daemon's launch recipe next to the PID file.
+    ///
+    /// The self-updater reads this back to restart the daemon faithfully
+    /// (same image + same switches) without scraping the OS for another
+    /// process's command line — more reliable than `Win32`/PEB
+    /// introspection and free of any PowerShell shell-out.
+    pub(crate) fn write_launch_state(&self) {
+        let path = self.launch_state_path();
+        let image = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.display().to_string())
+            .unwrap_or_default();
+        let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+        let started_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |dur| dur.as_secs());
+        let state = serde_json::json!({
+            "pid": std::process::id(),
+            "image_path": image,
+            "command_line": command_line,
+            "version": env!("CARGO_PKG_VERSION"),
+            "started_unix": started_unix,
+        });
+        let Ok(content) = serde_json::to_string_pretty(&state) else {
+            return;
+        };
+        if std::fs::write(&path, content).is_err() {
+            return;
+        }
+        let _ignore = uffs_security::fs::set_file_permissions_owner_only(&path);
+        tracing::info!(path = %path.display(), "launch-state file written");
+    }
+
+    /// Remove the launch-state sidecar (called on shutdown).
+    pub(crate) fn remove_launch_state(&self) {
+        let path = self.launch_state_path();
+        if path.exists() {
+            let _ignore = std::fs::remove_file(&path);
+        }
+    }
+
     /// Remove the IPC socket file (called on shutdown).
     ///
     /// Without this, a stale socket file remains after graceful stop and
@@ -691,6 +737,7 @@ impl Drop for LifecycleManager {
         // wrote a PID file, so we must not delete the other daemon's files.
         if self.owns_pid_file {
             self.remove_pid_file();
+            self.remove_launch_state();
             self.remove_socket_file();
         }
     }

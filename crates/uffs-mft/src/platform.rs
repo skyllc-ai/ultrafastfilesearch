@@ -37,6 +37,11 @@ mod extents;
 /// detection through [`Lcn::is_hole`] / [`Lcn::is_zero`] instead of
 /// open-coded `< 0` / `== 0` checks at every call site.
 pub mod lcn;
+/// Native Windows process introspection for the self-update detector.
+///
+/// Image path + pid enumeration — keeps the `unsafe` FFI out of `uffs-cli`.
+#[cfg(windows)]
+pub mod process;
 mod system;
 /// `$UpCase` table reading from live NTFS volume.
 pub mod upcase;

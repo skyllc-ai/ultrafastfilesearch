@@ -94,6 +94,10 @@ serde_json.workspace = true
 # Locates executables on `PATH` (e.g. the daemon binary when auto-spawning).
 which.workspace = true
 
+# Resolve the daemon lifecycle dir (`%LOCALAPPDATA%\uffs`) for self-update
+# detection — mirrors uffs-daemon so the PID-file path matches exactly.
+dirs-next.workspace = true
+
 # FILETIME arithmetic only — zero-dep crate extracted from uffs-mft so
 # the CLI does not transitively link polars, tokio/net, reqwest, or
 # object_store.  Use `uffs_time::{filetime_to_calendar,

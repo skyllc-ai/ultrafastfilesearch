@@ -157,6 +157,7 @@ pub(crate) fn bootstrap_lifecycle_manager(
     }
 
     lifecycle_mgr.write_pid_file()?;
+    lifecycle_mgr.write_launch_state();
     tracing::info!("PID file written");
     Ok(lifecycle_mgr)
 }
