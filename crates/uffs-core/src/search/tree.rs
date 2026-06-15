@@ -610,11 +610,10 @@ pub(crate) fn segment_matches(name: &str, segment: &str) -> bool {
 }
 
 /// Iterative glob matching: `*` matches any sequence, `?` matches one byte.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "all index accesses are bounds-checked by the while/if conditions"
-)]
-fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
+// `const fn` index accesses are bounds-checked by the surrounding
+// `while` / `if` conditions and validated at compile time, so the
+// `indexing_slicing` lint does not fire here.
+const fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
     let mut ti = 0_usize;
     let mut pi = 0_usize;
     let mut last_star_p = usize::MAX;

@@ -421,9 +421,7 @@ fn file_based_key() -> io::Result<[u8; KEY_SIZE]> {
 /// on Linux the file-based key path is already the default.
 #[cfg(target_os = "macos")]
 fn is_dev_mode() -> bool {
-    std::env::var("UFFS_DEV")
-        .ok()
-        .is_some_and(|val| matches!(val.as_str(), "1" | "true" | "yes"))
+    std::env::var("UFFS_DEV").is_ok_and(|val| matches!(val.as_str(), "1" | "true" | "yes"))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
