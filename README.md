@@ -116,7 +116,7 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 
 | Platform | Download | Notes |
 |---|---|---|
-| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + MCP + MFT tools + `uffs-tui` demo. Recommended. |
+| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + Access Broker + MCP + MFT tools + `uffs-tui` demo. Recommended. |
 | **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle + `uffs-tui` demo. |
 | **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh` + `uffs-tui` demo. |
 
@@ -163,10 +163,14 @@ cargo build --release
 
 ## Quick Start
 
-> On Windows, reading the live MFT needs Administrator. Run from an **elevated** terminal, or the first search prints a one-time prompt offering `uffs daemon start --elevate` (a single UAC prompt) or the broker service for no future prompts. macOS/Linux offline analysis needs no elevation.
+> **Windows elevation — three ways.** Reading the live MFT needs Administrator. Easiest: install the **Access Broker** once (`uffs-broker --install`, from an elevated shell) and every later non-elevated `uffs` search runs with **no UAC prompt**, surviving reboots. Otherwise, run from an **elevated** terminal, or let the first search offer a one-time `uffs daemon start --elevate` (a single UAC prompt). macOS/Linux offline analysis needs no elevation.
 
 ```bash
-# Search all drives (daemon auto-starts on first query in an elevated shell)
+# One-time (elevated): install the Access Broker → no UAC on any later search
+uffs-broker --install
+
+# Search all drives (with the broker installed this runs non-elevated;
+# otherwise the daemon auto-starts on first query in an elevated shell)
 uffs "*.rs"
 
 # Search a specific drive
@@ -293,7 +297,7 @@ The older C++ implementation remains useful as a parity and regression baseline,
 
 ## Requirements
 
-- **Windows** for live NTFS MFT reading (Administrator privileges required)
+- **Windows** for live NTFS MFT reading. Administrator is needed to read the MFT — but only **once**: install the Access Broker (`uffs-broker --install`) and every later search runs **non-elevated with no UAC**. Without the broker, run from an elevated shell (or accept a per-session UAC prompt).
 - **macOS / Linux** for offline MFT analysis (no admin needed)
 - **Rust nightly** (Edition 2024) to build from source — channel pinned in `rust-toolchain.toml`; the workspace has no stable MSRV (see CONTRIBUTING.md → "Toolchain policy")
 

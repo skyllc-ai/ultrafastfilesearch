@@ -14,6 +14,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Windows Access Broker: non-elevated search with no UAC prompts
+
+`uffs-broker --install` (one-time, from an elevated shell) registers a small
+`LocalSystem` Windows service that vends elevated NTFS volume handles to the
+non-elevated daemon over a named pipe. After that, **every `uffs` search reads
+the live MFT with no UAC prompt**, surviving reboots — removing the
+"elevate every session" friction that Windows file-search tools normally carry.
+The service verifies the client is the UFFS daemon (name allow-list +
+Authenticode) before granting any handle, and is removed cleanly with
+`uffs-broker --uninstall`.
+
+On the non-elevated path this reaches full parity with an elevated read:
+
+- **Complete MFT index, including fragmented MFTs** — the extent map is
+  bootstrapped from the `$MFT` record's own run list when the file can't be
+  opened directly.
+- **Incremental USN-journal refresh** through the brokered handle (no more
+  full rebuild on every refresh), with a backoff so an unavailable journal
+  never floods the log.
+- **In-process Authenticode verification** (`WinVerifyTrust`) replacing a
+  per-request PowerShell spawn — faster, and no dependency on PowerShell.
+- **Concurrent multi-instance pipe** and a real Windows service lifecycle
+  (install / auto-start on boot / graceful `sc stop` / uninstall).
+
+### Performance — bounded live-drive load fan-out
+
+Loading many drives at once is now capped at roughly the CPU-core count, so a
+large estate (≈25+ drives) no longer fans out into a memory / I-O / thread
+spike during startup. Small estates (drives ≤ cores) load fully in parallel
+exactly as before — no change for typical setups.
+
 ### Fixed — ship pipeline: force `cargo clean` after a `rustc` toolchain bump
 
 `just ship` step `00-toolchain-ensure` can bump the pinned nightly, but
