@@ -22,6 +22,12 @@ mod bitmap;
 /// workspace with a `#[repr(transparent)]` newtype that canonicalises
 /// case and rejects non-ASCII-letter input at the parse boundary.
 pub mod drive_letter;
+/// Drive-prefix splitting for search patterns.
+///
+/// The single canonical parser shared by the CLI parse layer and the
+/// daemon dispatch safety net, so both agree on what a leading `X:`
+/// means.
+pub mod drive_pattern;
 mod extents;
 /// Logical Cluster Number newtype — signed cluster identifier used
 /// by `FSCTL_GET_RETRIEVAL_POINTERS` and the on-disk data-run decoder.
@@ -39,6 +45,7 @@ mod volume;
 
 pub use bitmap::MftBitmap;
 pub use drive_letter::{DriveLetter, DriveLetterError};
+pub use drive_pattern::split_drive_prefix;
 pub use extents::MftExtent;
 pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on

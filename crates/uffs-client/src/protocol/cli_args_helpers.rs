@@ -308,52 +308,12 @@ pub(super) fn extract_extensions_from_regex(pattern: &str) -> Option<Vec<String>
         .then_some(exts)
 }
 
-/// Parse a bare drive-letter prefix from a pattern.
-///
-/// Returns `Some((letter_upper, rest))` when `pattern` matches exactly:
-/// - a single ASCII alphabetic character (the drive letter), followed by
-/// - a literal `:`, followed by
-/// - a non-empty `rest` that does **not** start with `\` or `/` (if it does,
-///   the pattern is path-anchored and must route through the tree walker in
-///   `uffs_core::search::tree`, which already scopes its walk to the drive
-///   root).
-///
-/// Examples that parse:
-/// - `C:*.dll`       → `('C', "*.dll")`
-/// - `D:notepad.exe` → `('D', "notepad.exe")`
-/// - `c:*.log`       → `('C', "*.log")` — letter is uppercased
-///
-/// Examples that return `None`:
-/// - `C:\*.dll`      — rest starts with `\` (path pattern, tree walker).
-/// - `C:/home/*.dll` — rest starts with `/` (path pattern).
-/// - `C:`            — empty rest.
-/// - `C`             — no colon.
-/// - `*.dll`         — no drive prefix.
-/// - `12:34`         — letter is not alphabetic.
-///
-/// Mirrored by `uffs_core::search::backend::parse_bare_drive_prefix`
-/// (the daemon's belt-and-suspenders safety net at dispatch time).
-/// Keep the two definitions in sync.
-pub(super) fn parse_bare_drive_prefix(pattern: &str) -> Option<(DriveLetter, &str)> {
-    let bytes = pattern.as_bytes();
-    let letter = *bytes.first()?;
-    if !letter.is_ascii_alphabetic() {
-        return None;
-    }
-    if *bytes.get(1)? != b':' {
-        return None;
-    }
-    // Drive-letter + ':' are both ASCII → the byte offset to `rest` is 2.
-    let rest = pattern.get(2..)?;
-    if rest.is_empty() || rest.starts_with(['\\', '/']) {
-        return None;
-    }
-    // The `is_ascii_alphabetic` guard above proves the `try_from`
-    // cannot fail; using `?` keeps the API a `Option` and avoids an
-    // unwrap.
-    let drive_letter = DriveLetter::try_from(letter).ok()?;
-    Some((drive_letter, rest))
-}
+// NOTE: the bare-drive-prefix parser used to live here as
+// `parse_bare_drive_prefix`.  It moved to the single canonical
+// `uffs_mft::platform::split_drive_prefix`, shared with the daemon
+// dispatch safety net, so both layers agree on what a leading `X:`
+// means (including the previously-broken `C:`, `C:\`, and
+// `C:\path\…` forms).
 
 #[cfg(test)]
 mod cli_args_error_tests {

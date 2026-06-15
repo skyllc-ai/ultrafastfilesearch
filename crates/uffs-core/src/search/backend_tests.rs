@@ -1926,32 +1926,40 @@ fn search_index_path_only_sort_respects_limit() {
     );
 }
 
-/// Path-anchored `C:\*.txt` must NOT trigger the drive-prefix safety
-/// net — the tree walker already scopes to the drive root and expects
-/// the full `C:\<glob>` form intact.  We verify non-promotion by
-/// checking that `filters.extensions` stays empty (drive-prefix would
-/// strip to `\*.txt` which is still not a pure ext glob, so this is
-/// an indirect but deterministic observation: the result set must
-/// match what we'd get by running the same pattern with an explicit
-/// `drives_filter=[]` on an unchanged backend).
+/// `C:\*.txt` now scopes to drive C and globs.  The drive prefix is
+/// split off, the single `*.txt` segment collapses to a name glob, and
+/// the ext-glob safety net promotes it to `ext=["txt"]`.  (Previously
+/// the `c:` token was mistaken for a directory segment by the tree
+/// walker and the search returned nothing.)
 #[test]
-fn search_index_drive_prefix_with_separator_not_promoted() {
+fn search_index_drive_root_glob_scopes_drive_and_promotes_ext() {
     let index = build_two_drive_index();
     let mut filters = super::super::filters::SearchFilters::default();
-    let _result = search_index(
+    let result = search_index(
         &index,
         SearchRequest::new("C:\\*.txt", &mut filters),
         FieldId::Modified,
         true,
         &[],
     );
-    // Primary observation: ext-filter must stay empty — neither the
-    // drive-prefix safety net nor the ext-glob safety net should fire
-    // on a path-anchored pattern.
+    assert_eq!(
+        filters.extensions,
+        vec!["txt".to_owned()],
+        "drive-prefix split + ext-glob promotion must fire on C:\\*.txt"
+    );
     assert!(
-        filters.extensions.is_empty(),
-        "path-anchored pattern must not trigger any safety-net promotion; filters.extensions = {:?}",
-        filters.extensions
+        result
+            .rows
+            .iter()
+            .all(|row| row.drive == uffs_mft::platform::DriveLetter::C),
+        "results must be scoped to drive C"
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .any(|row| row.path.ends_with("report.txt")),
+        "C:\\*.txt must find report.txt on drive C"
     );
 }
 

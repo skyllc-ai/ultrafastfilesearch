@@ -16,7 +16,7 @@
 pub use super::cli_args_helpers::CliArgsError as Error;
 use super::cli_args_helpers::{
     CliArgsError, drives_csv, extract_extensions_from_regex, flag_val, is_pure_ext_glob, non_empty,
-    parse_bare_drive_prefix, parse_bool, parse_i32, parse_size, parse_u16, parse_u32, parse_u64,
+    parse_bool, parse_i32, parse_size, parse_u16, parse_u32, parse_u64,
 };
 use super::{SearchFilterMode, SearchParams, SearchResponseMode};
 
@@ -425,7 +425,7 @@ impl RawCliArgs {
         } else if let Some(rest) = raw_pattern.strip_prefix("file:") {
             self.files_only = true;
             (false, rest.to_owned())
-        } else if let Some((letter, rest)) = parse_bare_drive_prefix(&raw_pattern) {
+        } else if let Some((letter, rest)) = uffs_mft::platform::split_drive_prefix(&raw_pattern) {
             if self.drive.is_none() && self.drives.is_none() {
                 self.drive = Some(letter);
             }

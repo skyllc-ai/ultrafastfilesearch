@@ -1593,22 +1593,22 @@ fn from_cli_args_drive_prefix_with_literal_preserves_pattern() {
     );
 }
 
-/// Path-anchored: `C:\*.dll` keeps the backslash and must NOT trigger
-/// the drive-prefix sugar — the tree walker already scopes to the
-/// drive root and expects the full `C:\<glob>` form intact.
+/// `C:\*.dll` scopes to drive C and globs.  (Previously this returned
+/// nothing: the `c:` token was mistaken for a directory segment by the
+/// tree walker.)  The drive prefix is split off, the single leftover
+/// segment `*.dll` collapses to a name glob, and ext-glob promotion then
+/// rewrites it to `pattern="*"` + `ext="dll"`.
 #[test]
-fn from_cli_args_drive_prefix_with_separator_not_promoted() {
+fn from_cli_args_drive_root_glob_scopes_drive_and_promotes_ext() {
     let args: Vec<String> = vec!["C:\\*.dll".into()];
     let params = SearchParams::from_cli_args(&args).expect("parse");
-    assert!(
-        params.drives.is_empty(),
-        "path-anchored C:\\*.dll must NOT populate drives filter"
-    );
     assert_eq!(
-        params.pattern, "C:\\*.dll",
-        "path-anchored pattern must be preserved verbatim for tree walker"
+        params.drives,
+        vec![uffs_mft::platform::DriveLetter::C],
+        "C:\\*.dll must scope to drive C"
     );
-    assert!(params.ext.is_none());
+    assert_eq!(params.pattern, "*");
+    assert_eq!(params.ext.as_deref(), Some("dll"));
 }
 
 /// Case normalisation: `c:*.log` → drive uppercased to `'C'`, ext
@@ -2078,4 +2078,57 @@ fn hibernate_request_envelope_round_trip() {
         uffs_mft::platform::DriveLetter::C,
         uffs_mft::platform::DriveLetter::D
     ]);
+}
+
+// ── Drive-prefix pattern parsing (split_drive_prefix front door) ───
+//
+// Regression tests for the `C:` / `C:\` / `C:\path` forms that used to
+// fall through to a literal `c:` substring (matching `.heiC:${…}` ADS
+// streams) or to the tree walker's bogus `c:` directory segment.
+
+/// `C:` → drive C + everything (match-all).
+#[test]
+fn from_cli_args_bare_drive_is_match_all_on_drive() {
+    let args: Vec<String> = vec!["C:".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "*");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// `C:\` and `C:/` are identical to `C:` — drive C + match-all.
+#[test]
+fn from_cli_args_drive_root_is_match_all_on_drive() {
+    for raw in ["C:\\", "C:/"] {
+        let args: Vec<String> = vec![raw.into()];
+        let params = SearchParams::from_cli_args(&args).expect("parse");
+        assert_eq!(params.pattern, "*", "`{raw}` → match-all");
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+}
+
+/// `C:\report` collapses to the same query as `C:report`.
+#[test]
+fn from_cli_args_drive_root_single_segment_matches_bare_drive_name() {
+    let args: Vec<String> = vec!["C:\\report".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "report");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// `C:\report\*` → drive C + tree-walk body `report\*`.
+#[test]
+fn from_cli_args_drive_plus_multi_segment_is_tree_body() {
+    let args: Vec<String> = vec!["C:\\report\\*".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "report\\*");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// No-drive path patterns are untouched and stay un-scoped.
+#[test]
+fn from_cli_args_no_drive_path_pattern_unscoped() {
+    let args: Vec<String> = vec!["\\rnio\\*".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "\\rnio\\*");
+    assert!(params.drives.is_empty());
 }
