@@ -18,6 +18,7 @@ mod channel;
 mod model;
 mod procinfo;
 mod report;
+mod snapshot;
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +37,25 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     }
     let report = detect();
     report::print_human(&report);
+    if args.iter().any(|arg| arg == "--snapshot") {
+        write_and_report_snapshot(&report);
+    }
     print_phase_a_footer();
     Ok(())
+}
+
+/// Write a Phase-B snapshot and report where it landed.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn write_and_report_snapshot(report: &DetectionReport) {
+    match snapshot::write_snapshot(report) {
+        Ok(path) => println!("\nSnapshot written: {}", path.display()),
+        Err(err) => {
+            #[expect(clippy::print_stderr, reason = "CLI user-facing error")]
+            {
+                eprintln!("\nSnapshot failed: {err}");
+            }
+        }
+    }
 }
 
 /// Phase A orchestration: anchors → roots → channel + versions, plus the
