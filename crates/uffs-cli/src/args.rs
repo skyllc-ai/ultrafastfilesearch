@@ -389,8 +389,8 @@ fn parse_daemon_preload(rest: &[String]) -> Result<DaemonAction, anyhow::Error> 
     }
     if drives.is_empty() {
         anyhow::bail!(
-            "`uffs daemon preload` requires at least one drive letter; \
-             see `uffs daemon preload --help`"
+            "`uffs --daemon preload` requires at least one drive letter; \
+             see `uffs --daemon preload --help`"
         );
     }
     Ok(DaemonAction::Preload {
@@ -435,8 +435,8 @@ fn parse_daemon_forget(rest: &[String]) -> Result<DaemonAction, anyhow::Error> {
     }
     if drives.is_empty() {
         anyhow::bail!(
-            "`uffs daemon forget` requires at least one drive letter; \
-             see `uffs daemon forget --help`"
+            "`uffs --daemon forget` requires at least one drive letter; \
+             see `uffs --daemon forget --help`"
         );
     }
     Ok(DaemonAction::Forget { drives, force })
@@ -461,10 +461,13 @@ fn extend_drives_from_csv(drives: &mut Vec<DriveLetter>, value: &str) {
 const HELP: &str = "\
 uffs - Ultra Fast File Search
 
-USAGE:  uffs [OPTIONS] <PATTERN>
-        uffs <SUBCOMMAND> [OPTIONS]
+USAGE:  uffs <PATTERN> [OPTIONS]
+        uffs --<COMMAND> [ACTION] [OPTIONS]
 
-Search is the default action: pass a pattern with no subcommand.
+Search-first: any first token that is NOT a `--command` is a search pattern,
+so `uffs update`, `uffs status`, etc. search for those words. Management is
+`--<command>` (below). To search a pattern that begins with `--`, use
+`uffs -- <PATTERN>`.
 
 EXAMPLES:
   uffs '*.txt'                        Find all .txt files
@@ -472,13 +475,16 @@ EXAMPLES:
   uffs '*' --mft-file C.bin            Offline MFT search
   uffs --ext rs,toml                   Find Rust project files
   uffs --type picture --min-size 10MB  Large images
+  uffs --update doctor                 Self-update health check
 
-SUBCOMMANDS:
-  stats             Show filesystem statistics
-  aggregate|agg     Run aggregate analytics
-  daemon            Manage the UFFS daemon (start/stop/load/status)
-  mcp               Manage the UFFS MCP server
-  status            Show combined system status
+COMMANDS:
+  --search <PATTERN>   Explicit search (same as the bare default)
+  --stats [PATH]       Show filesystem statistics
+  --agg <PRESET>       Run aggregate analytics
+  --daemon <ACTION>    Manage the UFFS daemon (start/stop/load/status)
+  --mcp <ACTION>       Manage the UFFS MCP server
+  --update [ACTION]    Self-update (snapshot/acquire/apply/doctor)
+  --status             Show combined system status
 
 COMMON OPTIONS:
   -v, --verbose           Verbose output
@@ -522,9 +528,9 @@ pub(crate) fn print_version() {
 
 /// Help text for `uffs daemon`.
 const DAEMON_HELP: &str = "\
-uffs daemon — Manage the UFFS background daemon
+uffs --daemon — Manage the UFFS background daemon
 
-USAGE:  uffs daemon <ACTION> [OPTIONS]
+USAGE:  uffs --daemon <ACTION> [OPTIONS]
 
 ACTIONS:
   start              Start the daemon
@@ -565,9 +571,9 @@ pub(crate) fn print_daemon_help() {
 
 /// Help text for `uffs stats`.
 const STATS_HELP: &str = "\
-uffs stats — Show filesystem statistics
+uffs --stats — Show filesystem statistics
 
-USAGE:  uffs stats [PATH] [OPTIONS]
+USAGE:  uffs --stats [PATH] [OPTIONS]
 
 ARGUMENTS:
   [PATH]               Index file path (optional; omit to query daemon)
@@ -586,9 +592,9 @@ pub(crate) fn print_stats_help() {
 
 /// Help text for `uffs aggregate`.
 const AGGREGATE_HELP: &str = "\
-uffs aggregate — Run aggregate analytics on the filesystem index
+uffs --agg — Run aggregate analytics on the filesystem index
 
-USAGE:  uffs aggregate <PRESET> [OPTIONS]
+USAGE:  uffs --agg <PRESET> [OPTIONS]
 
 ARGUMENTS:
   <PRESET>             overview, by_type, by_extension, by_drive,
@@ -610,9 +616,9 @@ pub(crate) fn print_aggregate_help() {
 
 /// Help text for `uffs status`.
 const STATUS_HELP: &str = "\
-uffs status — Show combined system status (daemon + MCP HTTP server)
+uffs --status — Show combined system status (daemon + broker + MCP)
 
-USAGE:  uffs status
+USAGE:  uffs --status
 ";
 
 /// Print status help.

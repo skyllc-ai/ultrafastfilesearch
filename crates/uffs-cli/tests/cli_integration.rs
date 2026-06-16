@@ -81,8 +81,10 @@ mod tests {
     #[test]
     fn help_flag_prints_examples() {
         assert_success("help_flag", &["--help"], &[
-            "Search is the default action",
+            // Search-first grammar note + an example + a `--command`.
+            "Search-first",
             "uffs '*.txt'",
+            "--update",
         ]);
     }
 

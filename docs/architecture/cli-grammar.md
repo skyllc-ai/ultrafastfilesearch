@@ -286,13 +286,18 @@ that internal path; only the *external* entry tokens change.
 
 - [x] **P0 — Dispatcher.** `Command` enum + `from_token` + `run()` rewrite +
       bare-`--` escape. Dispatcher unit tests + disjointness invariant test.
-- [ ] **P1 — Normalize `--update`.** Action-positional parsing
-      (snapshot/acquire/apply/doctor/recover); options as flags. Update its
+- [x] **P1 — Normalize `--update`.** Action-positional parsing
+      (snapshot/acquire/apply/doctor); options as flags. Updated its
       `print_help`. Tests.
-- [ ] **P2 — Wire the rest.** `--stats`, `--agg`, `--daemon`, `--mcp`,
-      `--status`, `--search`. Per-command help (`--<cmd> --help`).
-- [ ] **P3 — Top-level help + usage errors.** New `print_help`; "unknown command
-      `--x` (did you mean …?)"; golden help test.
+- [x] **P2 — Wire the rest.** `--stats`, `--agg`, `--daemon`, `--mcp`,
+      `--status`, `--search` all route via `dispatch_command` (the handlers
+      were already action-/positional-style; no parsing changes needed).
+- [x] **P3 — Top-level help + usage errors.** New top-level help (search-first
+      note + `--command` list); sub-command help titles/usage + the two
+      user-facing daemon error messages updated to `--daemon`; help golden
+      test updated. (A "did you mean …?" hint for `--bogus` is a nice-to-have
+      follow-up; today an unknown leading `--flag` errors via the search
+      parser, and `--update bogus` is rejected with the action list.)
 - [ ] **P4 — Docs.** CLAUDE.md, README, MCP instructions, this doc → Implemented.
 - [ ] **P5 — Validate.** Host + Windows-MSVC clippy clean; full nextest; manual
       smoke of every command + a `uffs update` *search*.
