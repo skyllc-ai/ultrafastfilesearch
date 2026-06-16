@@ -56,28 +56,26 @@ uffs "*.rs"
 # Constrain the scope by drive.
 uffs "*.rs" --drive C
 
-# Daemon status, drive list, version.
+# Combined system status (daemon + broker + MCP) and version.
 uffs --status
-uffs drives
-uffs version
+uffs --version
 
 # Daemon lifecycle.
 uffs --daemon start
 uffs --daemon stop
 uffs --daemon status
 
-# Index management (build / refresh / load / unload).
-uffs index build --drive C
-uffs index refresh --drive C
-uffs index load --drive D
-uffs index unload --drive D
+# Index management is daemon-managed (load / preload / forget).
+uffs --daemon load --drive C     # hot-load a drive into the running daemon
+uffs --daemon preload C          # promote + pin a drive in RAM
+uffs --daemon forget D --force   # evict + delete a drive's on-disk cache
 
 # Output redirection (CSV to disk; byte-identical with daemon's
 # native --out=file path).
 uffs "*.rs" --out-dir /tmp/results
 ```
 
-Run `uffs --help` for the full subcommand reference.
+Run `uffs --help` for the full command reference.
 
 ## Configuration
 

@@ -383,8 +383,9 @@ Beyond forensic MFT analysis, UFFS reads the NTFS **USN Change Journal** (`$UsnJ
 ### Reading the Journal
 
 ```bash
-# Query current journal state
-uffs info --drive C
+# Query current NTFS volume / journal state (the separate uffs-mft tool;
+# the old `uffs info` subcommand was removed with the thin-client split)
+uffs-mft info --drive C
 # Shows: journal_id, first_usn, next_usn, max_size
 
 # The journal is used automatically by the caching system:

@@ -185,25 +185,13 @@ results.  For the `uffs --agg` subcommand, see §7 below.
 
 ---
 
-## 7  Subcommands
+## 7  Commands
 
-### `uffs index`
-
-Build a Parquet index from one or more NTFS drives.
-
-```bash
-uffs index output.parquet              # Index ALL drives
-uffs index -d C output.parquet         # Index C: only
-uffs index --drives C,D,E out.parquet  # Index specific drives
-```
-
-### `uffs info`
-
-Show metadata about a saved index file.
-
-```bash
-uffs info index.parquet
-```
+> Building/loading an index is **daemon-managed** — there is no standalone
+> `uffs index` command. Point the daemon at a live drive or a raw MFT with
+> `uffs --daemon start --data-dir <dir>` / `--mft-file <file>` (see
+> [Daemon](daemon.md)). For low-level NTFS volume/record inspection, use the
+> separate `uffs-mft` tool (`uffs-mft --help`).
 
 ### `uffs --stats`
 

@@ -57,7 +57,7 @@ UFFS accepts three raw MFT file formats:
 | Extension | Source | Description |
 |-----------|--------|-------------|
 | `.iocp` | UFFS cache | Serialized binary index — fastest to load |
-| `.bin` | `uffs save-raw` | Raw MFT byte dump |
+| `.bin` | `uffs-mft save` | Raw MFT byte dump |
 | `.mft` | Third-party tools | Standard raw MFT dump |
 
 When auto-discovering files in `--data-dir`, UFFS prefers `.iocp` over
@@ -91,8 +91,8 @@ name matters.
 1. On a Windows machine, capture the MFT for each drive:
 
    ```powershell
-   # Option A: UFFS native
-   uffs save-raw C C_mft.bin
+   # Option A: UFFS native (the uffs-mft tool; --raw = bare MFT bytes)
+   uffs-mft save --drive C --output C_mft.bin --raw
 
    # Option B: Third-party (e.g. RawCopy, FTK Imager)
    # Produces a .mft file

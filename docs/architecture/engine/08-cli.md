@@ -88,41 +88,25 @@ uffs * --files-only --min-size 1048576  # Files > 1MB
 
 ---
 
-## Subcommands
+## Commands
 
-| Subcommand | Description |
-|------------|-------------|
-| `uffs index` | Build and save a Parquet index from MFT |
-| `uffs info` | Show NTFS volume information |
+| Command | Description |
+|---------|-------------|
 | `uffs --stats` | Display index statistics |
-| `uffs save-raw` | Save raw MFT data to file |
-| `uffs load-raw` | Load and display raw MFT file |
 
-### `uffs index`
+> **Historical note.** The standalone `uffs index` / `uffs info` /
+> `uffs save-raw` / `uffs load-raw` subcommands were removed when the CLI
+> became a thin daemon client. Their capabilities live on elsewhere:
+> index building/loading is **daemon-managed** (`uffs --daemon start
+> --data-dir <dir>` / `--mft-file <file>`), and low-level NTFS volume/record
+> inspection + raw-MFT capture moved to the separate `uffs-mft` tool
+> (run `uffs-mft --help`).
 
-```bash
-uffs index -d C output.parquet     # Save C: index to Parquet
-uffs index -d C,D multi.parquet    # Multi-drive index
-```
-
-### `uffs info`
-
-```bash
-uffs info -d C                     # Show NTFS volume metadata
-# Output: cluster_size, record_size, mft_capacity, mft_extents, etc.
-```
-
-### `uffs save-raw`
+### `uffs --stats`
 
 ```bash
-uffs save-raw -d C C_mft.bin       # Save raw MFT bytes
-uffs save-raw -d C C.iocp          # Save IOCP capture (with chunk metadata)
-```
-
-### `uffs load-raw`
-
-```bash
-uffs load-raw C_mft.bin            # Parse and display raw MFT file
+uffs --stats                       # Live overview via the daemon
+uffs --stats saved.parquet         # Stats from a saved parquet index
 ```
 
 ---

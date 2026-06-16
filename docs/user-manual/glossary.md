@@ -25,7 +25,7 @@ Key terms used throughout the UFFS documentation.
 | **MFT** | Master File Table — the central metadata database of an NTFS volume. Contains one record per file/directory with name, size, timestamps, and attributes. |
 | **MFT bitmap** | A bitmap indicating which MFT records are in use. UFFS uses this to skip free records (faster reads). Disabled with `--no-bitmap`. |
 | **NDJSON** | Newline-Delimited JSON — one JSON object per line. UFFS's `--format json` output format. |
-| **Parquet** | Apache Parquet — a columnar file format. `uffs index` can export the MFT to Parquet for external analysis. |
+| **Parquet** | Apache Parquet — a columnar file format. UFFS can export the MFT to Parquet (daemon-managed, or via the `uffs-mft` tool) for external analysis. |
 | **Path resolution** | The process of reconstructing full file paths from MFT data. The MFT stores only filenames and parent FRS numbers, not full paths. UFFS's `FastPathResolver` walks the parent chain. |
 | **Reparse point** | An NTFS feature for symlinks, junctions, and volume mount points. Detected via the reparse attribute flag. |
 | **SoA** | Struct of Arrays — a data layout where each field is stored in a separate contiguous array. UFFS uses SoA for the compact index, enabling SIMD-friendly scans. |
