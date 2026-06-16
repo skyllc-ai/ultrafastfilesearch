@@ -42,6 +42,9 @@ pub(crate) struct DoctorOpts {
     pub(crate) repair: bool,
     /// Skip the network checks entirely.
     pub(crate) offline: bool,
+    /// Print every check (`-v`); default shows only problems + a one-line
+    /// healthy summary.
+    pub(crate) verbose: bool,
 }
 
 /// Severity of a single finding.
@@ -113,21 +116,35 @@ impl Report {
             })
     }
 
-    /// Print the report.
+    /// Print the report. Default shows only the findings that need attention
+    /// (`[WARN]`/`[FAIL]`) plus a one-line health summary; `verbose` lists
+    /// every check (including the `[ OK ]`s).
     #[expect(clippy::print_stdout, reason = "doctor user-facing report")]
-    fn render(&self, repair: bool) {
+    fn render(&self, repair: bool, verbose: bool) {
         println!(
             "UFFS update doctor (uffs-update {})\n",
             env!("CARGO_PKG_VERSION")
         );
+        let (ok, warn, fail) = self.tally();
         for item in &self.findings {
+            // Default view: skip the passing checks — surface only problems.
+            if !verbose && item.health == Health::Ok {
+                continue;
+            }
             println!("{} {}", item.health.tag(), item.title);
             if let Some(detail) = &item.detail {
                 println!("        {detail}");
             }
         }
-        let (ok, warn, fail) = self.tally();
-        println!("\nsummary: {ok} ok, {warn} warning(s), {fail} failure(s)");
+        if !verbose && warn == 0 && fail == 0 {
+            // Brew-doctor style: nothing wrong → one reassuring line.
+            println!("\u{2713} Healthy — all {ok} checks passed.");
+        } else {
+            println!("\nsummary: {ok} ok, {warn} warning(s), {fail} failure(s)");
+            if !verbose {
+                println!("(run with -v to see every check)");
+            }
+        }
         if !repair && (warn > 0 || fail > 0) {
             println!("hint: re-run with `--repair` to self-heal what can be fixed automatically.");
         }
@@ -162,7 +179,7 @@ pub(crate) fn run(opts: &DoctorOpts) -> bool {
         check_release(opts, snapshot.as_ref(), &mut report);
     }
 
-    report.render(opts.repair);
+    report.render(opts.repair, opts.verbose);
     report.healthy()
 }
 

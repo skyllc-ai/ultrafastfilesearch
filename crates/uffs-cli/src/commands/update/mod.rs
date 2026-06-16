@@ -63,6 +63,11 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         );
     }
 
+    // `-v` / `--verbose`: show the full per-binary + per-process breakdown
+    // (and forward verbosity to the spawned `uffs-update` helper). Default is
+    // a few plain-language lines for someone who just wants the gist.
+    let verbose = args.iter().any(|arg| arg == "-v" || arg == "--verbose");
+
     // `recover` finishes (or rolls back) an interrupted update in the
     // foreground — the on-demand twin of the startup best-effort self-heal.
     if action == Some("recover") {
@@ -78,19 +83,25 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     }
 
     let report = detect();
-    report::print_human(&report);
+    report::print_human(&report, verbose);
     if action == Some("snapshot") {
         write_and_report_snapshot(&report);
     }
-    print_phase_a_footer();
+    if verbose {
+        print_phase_a_footer();
+    }
 
     // `apply` runs the full mutating update (acquire → apply); `acquire` only
     // stages + verifies. `apply` implies the acquire step.
     if matches!(action, Some("acquire" | "apply")) {
         let snapshot_path = snapshot::write_snapshot(&report)?;
-        acquire::spawn(&snapshot_path, flag_value(args, "--version").as_deref())?;
+        acquire::spawn(
+            &snapshot_path,
+            flag_value(args, "--version").as_deref(),
+            verbose,
+        )?;
         if action == Some("apply") {
-            apply::spawn(&snapshot_path)?;
+            apply::spawn(&snapshot_path, verbose)?;
         }
     }
     Ok(())
@@ -282,6 +293,8 @@ fn print_help() {
          \x20 recover             Finish or roll back an interrupted update now\n\
          \x20                     (foreground; the on-demand self-heal).\n\n\
          OPTIONS:\n\
+         \x20 -v, --verbose       Show the full breakdown — per-binary versions,\n\
+         \x20                     PIDs, launch commands, every doctor check.\n\
          \x20 --version <tag>     Acquire/apply a specific release tag (default: latest).\n\
          \x20 --repair            (doctor) self-heal what can be fixed.\n\
          \x20 --offline           (doctor) skip the network checks.\n\n\

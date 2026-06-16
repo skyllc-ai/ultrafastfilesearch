@@ -18,20 +18,26 @@ use super::acquire::find_helper;
 use super::snapshot;
 
 /// Spawn `uffs-update apply` against a written snapshot, streaming its
-/// output. The staging dir is the one acquire filled.
+/// output. The staging dir is the one acquire filled. `verbose` forwards
+/// `--verbose` so the helper can show the full step-by-step detail.
 ///
 /// # Errors
 ///
 /// Fails if the helper cannot be located or the apply exits non-zero (in
 /// which case the helper has already rolled back + restored services).
-pub(crate) fn spawn(snapshot_path: &Path) -> Result<()> {
+pub(crate) fn spawn(snapshot_path: &Path, verbose: bool) -> Result<()> {
     let helper = find_helper()?;
     let stage = snapshot::update_dir().join("stage");
-    let status = Command::new(&helper)
+    let mut command = Command::new(&helper);
+    command
         .args(["apply", "--snapshot"])
         .arg(snapshot_path)
         .arg("--stage")
-        .arg(&stage)
+        .arg(&stage);
+    if verbose {
+        command.arg("--verbose");
+    }
+    let status = command
         .status()
         .with_context(|| format!("spawning {}", helper.display()))?;
     if !status.success() {

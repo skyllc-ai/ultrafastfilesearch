@@ -194,6 +194,7 @@ fn run_doctor(args: &[String]) -> Result<()> {
         tag: flag(args, "--version"),
         repair: has_flag(args, "--repair"),
         offline: has_flag(args, "--offline"),
+        verbose: has_flag(args, "--verbose") || has_flag(args, "-v"),
     };
     if doctor::run(&opts) {
         Ok(())
@@ -275,7 +276,8 @@ fn print_usage() {
          \x20 uffs-update apply   --snapshot <path> --stage <dir>\n\
          \x20 uffs-update recover --journal <path>\n\
          \x20 uffs-update doctor  [--snapshot <path>] [--stage <dir>] \\\n\
-         \x20                     [--repo <owner/name>] [--version <tag>] [--repair] [--offline]\n\n\
+         \x20                     [--repo <owner/name>] [--version <tag>] [--repair]\n\
+         \x20                     [--offline] [--verbose]\n\n\
          acquire: per the snapshot's installed subset, downloads each binary\n\
          as an individual release asset + SHA256SUMS, SHA-256-verifies each,\n\
          and leaves them staged. It does not replace anything (apply phase).\n\

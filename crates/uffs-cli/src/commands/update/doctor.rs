@@ -18,7 +18,8 @@ use super::acquire::{DEFAULT_REPO, find_helper};
 use super::snapshot;
 
 /// Spawn `uffs-update doctor` against a written snapshot, forwarding the
-/// pass-through flags (`--repair`, `--offline`, `--version <tag>`).
+/// pass-through flags (`--repair`, `--offline`, `--version <tag>`, `-v` /
+/// `--verbose`).
 ///
 /// # Errors
 ///
@@ -38,6 +39,9 @@ pub(crate) fn spawn(snapshot_path: &Path, args: &[String]) -> Result<()> {
     }
     if args.iter().any(|arg| arg == "--offline") {
         command.arg("--offline");
+    }
+    if args.iter().any(|arg| arg == "-v" || arg == "--verbose") {
+        command.arg("--verbose");
     }
     if let Some(tag) = flag_value(args, "--version") {
         command.args(["--version", &tag]);
