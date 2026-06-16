@@ -17,6 +17,10 @@ use crate::quiesce::{BROKER_SERVICE, daemon_pid_file, wait_until};
 /// How long to wait for a service to come back up.
 const START_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(20);
 
+/// How long to wait for the broker's named pipe to begin serving (ms).
+#[cfg(windows)]
+const PIPE_READY_TIMEOUT_MS: u32 = 10_000;
+
 /// Restart every component that was running, provider→consumer. Returns
 /// the components that failed to restart (empty = all good).
 pub(crate) fn restore(snapshot: &Snapshot) -> Vec<String> {
@@ -45,12 +49,47 @@ fn start_component(component: &str, running: &SnapRunning) -> bool {
     }
 }
 
-/// `sc start` the broker, then wait until `sc query` reports RUNNING.
+/// `sc start` the broker, wait until `sc query` reports RUNNING, **then**
+/// wait until the pipe is actually serving (R10, §19.13). Service-RUNNING
+/// is necessary but not sufficient: the daemon's warm-up hits
+/// `ERROR_PIPE_BUSY` if it connects before the broker's pipe is listening.
 fn start_broker() -> bool {
     let _ignore = Command::new("sc.exe")
         .args(["start", BROKER_SERVICE])
         .status();
-    wait_until(START_TIMEOUT, || sc_query_running(BROKER_SERVICE))
+    wait_until(START_TIMEOUT, || sc_query_running(BROKER_SERVICE)) && broker_pipe_ready()
+}
+
+/// Wait until the broker's named pipe is serving via a **non-connecting**
+/// `WaitNamedPipe` probe (R10, §19.13). Unlike a connecting open (or
+/// `GetFileAttributesW`), it never consumes the single pipe instance — so
+/// it cannot itself cause the `ERROR_PIPE_BUSY` it guards against. `true`
+/// when the pipe becomes available within the timeout.
+#[cfg(windows)]
+fn broker_pipe_ready() -> bool {
+    use uffs_broker_protocol::PIPE_NAME;
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+    use windows::core::PCWSTR;
+
+    let wide: Vec<u16> = PIPE_NAME
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is a valid NUL-terminated UTF-16 buffer that outlives
+    // the call; the timeout is a plain millisecond count. `WaitNamedPipe`
+    // only waits for availability — it opens nothing.
+    #[expect(
+        unsafe_code,
+        reason = "Win32 FFI — WaitNamedPipeW non-connecting probe"
+    )]
+    let ready = unsafe { WaitNamedPipeW(PCWSTR(wide.as_ptr()), PIPE_READY_TIMEOUT_MS) };
+    ready.as_bool()
+}
+
+/// Non-Windows: there is no broker pipe, so readiness is vacuously true.
+#[cfg(not(windows))]
+const fn broker_pipe_ready() -> bool {
+    true
 }
 
 /// Relaunch a process from its captured `command_line`, detached, then

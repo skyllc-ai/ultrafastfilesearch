@@ -48,6 +48,9 @@ reqwest.workspace = true
 # shell-outs). Both are already in the lock → cargo-vet stays green.
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+# Broker pipe name for the non-connecting WaitNamedPipe readiness probe
+# (R10, §19.13). Windows-only — a pure-logic workspace crate.
+uffs-broker-protocol.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
