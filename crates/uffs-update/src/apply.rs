@@ -51,12 +51,51 @@ pub(crate) fn backup(binary: &Path) -> Result<PathBuf> {
 /// Move a staged new image into place at `target` (atomic rename). The
 /// caller must have [`backup`]'d `target` first.
 ///
+/// **Self-replacement (§19.7):** when `target` is the running
+/// orchestrator's *own* image, this still succeeds — Windows permits
+/// renaming a running `.exe` aside (the prior [`backup`]) and creating a
+/// new file at the freed name; the process keeps executing from the
+/// renamed image's section. The only residue is the `.bak` the live
+/// process cannot delete during its own run; [`sweep_stale_backups`]
+/// reclaims it on the next orchestrator launch (we deliberately do **not**
+/// re-exec mid-run — finishing with the code we started is predictable;
+/// hot-swapping a running orchestrator's code mid-flight is not).
+///
 /// # Errors
 ///
 /// Propagates a rename failure.
 pub(crate) fn swap_in(staged: &Path, target: &Path) -> Result<()> {
     std::fs::rename(staged, target)
         .with_context(|| format!("swapping {} → {}", staged.display(), target.display()))
+}
+
+/// Sweep orphaned `<name>.bak` files in `dir`: remove each `.bak` whose
+/// live sibling (`<name>`) currently exists — i.e. a *completed* swap
+/// whose backup a prior run could not prune (the self-replacement case,
+/// §19.7). A `.bak` with **no** live sibling is left untouched: that is a
+/// mid-rollback state owned by recovery, never a stray to reclaim here.
+///
+/// Best-effort: a still-locked `.bak` (the prior process not yet exited)
+/// is skipped silently and reclaimed on a later launch. Returns the count
+/// removed. The caller must only invoke this when **no** update is
+/// in-flight (no live journal), so it never races an active swap.
+pub(crate) fn sweep_stale_backups(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0_usize;
+    for entry in entries.flatten() {
+        let bak = entry.path();
+        if bak.extension().is_none_or(|ext| ext != "bak") {
+            continue;
+        }
+        // The live sibling is the path with `.bak` stripped.
+        let live = bak.with_extension("");
+        if live.exists() && std::fs::remove_file(&bak).is_ok() {
+            removed = removed.saturating_add(1);
+        }
+    }
+    removed
 }
 
 /// Restore `binary` from its `.bak` (rollback). Idempotent: a no-op if no
@@ -124,7 +163,9 @@ pub(crate) fn backup_and_swap(staged: &Path, target: &Path) -> Result<PathBuf> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{backup, backup_and_swap, backup_path, prune_backup, restore, swap_in};
+    use super::{
+        backup, backup_and_swap, backup_path, prune_backup, restore, swap_in, sweep_stale_backups,
+    };
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("uffs-apply-{}-{tag}", std::process::id()));
@@ -217,6 +258,33 @@ mod tests {
         write(&backup_path(&target), "OLD");
         prune_backup(&target).expect("prune");
         assert!(!backup_path(&target).exists());
+    }
+
+    #[test]
+    fn sweep_reclaims_orphaned_backup_but_spares_rollback_state() {
+        let dir = scratch("sweep");
+        // Completed swap: live `uffs-update.exe` + its unprunable `.bak`.
+        let live = dir.join("uffs-update.exe");
+        write(&live, "NEW");
+        write(&backup_path(&live), "OLD");
+        // Mid-rollback state: a `.bak` whose live sibling is GONE.
+        let orphan_bak = dir.join("uffsd.exe.bak");
+        write(&orphan_bak, "OLD-ROLLBACK");
+
+        let removed = sweep_stale_backups(&dir);
+        assert_eq!(removed, 1, "only the completed-swap backup is reclaimed");
+        assert!(!backup_path(&live).exists(), "completed-swap .bak removed");
+        assert!(live.exists(), "the live binary is untouched");
+        assert!(
+            orphan_bak.exists(),
+            "a .bak with no live sibling is rollback state — must be spared"
+        );
+    }
+
+    #[test]
+    fn sweep_missing_dir_is_zero() {
+        let dir = scratch("sweep-missing").join("does-not-exist");
+        assert_eq!(sweep_stale_backups(&dir), 0);
     }
 
     #[test]

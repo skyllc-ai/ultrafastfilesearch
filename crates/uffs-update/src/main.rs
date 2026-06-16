@@ -47,6 +47,22 @@ fn main() -> Result<()> {
     }
 }
 
+/// Reclaim a prior self-replacement's leftover `.bak` (§19.7, R4) from the
+/// running orchestrator's own directory — but **only** when no update is
+/// in-flight (`update_dir/journal.json` absent), since a live journal means
+/// recovery owns those backups. Best-effort; never fails the caller.
+fn sweep_self_backups_if_idle(update_dir: &Path) {
+    if update_dir.join("journal.json").exists() {
+        return; // recovery owns the .bak files — do not touch
+    }
+    if let Some(self_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        let _swept = apply::sweep_stale_backups(&self_dir);
+    }
+}
+
 /// Parse the `apply` flags and run the full journal-driven flow:
 /// quiesce → backup/swap/smoke → commit → restore → prune. On any
 /// pre-commit failure the binaries are rolled back **and** the stopped
@@ -58,6 +74,10 @@ fn run_apply(args: &[String]) -> Result<()> {
     let update_dir = stage
         .parent()
         .map_or_else(|| stage.clone(), Path::to_path_buf);
+
+    // R4: reclaim any prior self-replacement's leftover `.bak` before we
+    // begin (no live journal yet for this run).
+    sweep_self_backups_if_idle(&update_dir);
 
     let snapshot = plan::Snapshot::load(&snapshot_path)?;
     let backup_dir = update_dir.join(format!("backup-{}", std::process::id()));
@@ -137,6 +157,14 @@ const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
 fn run_acquire(args: &[String]) -> Result<()> {
     let snapshot_path = PathBuf::from(required(flag(args, "--snapshot"), "--snapshot <path>")?);
     let stage = PathBuf::from(required(flag(args, "--stage"), "--stage <dir>")?);
+
+    // R4: a fresh acquire is the natural moment to reclaim a prior
+    // self-replacement's leftover `.bak` (the prior process has long
+    // exited), gated on no in-flight journal.
+    if let Some(update_dir) = stage.parent() {
+        sweep_self_backups_if_idle(update_dir);
+    }
+
     let snapshot = plan::Snapshot::load(&snapshot_path)?;
 
     // The installed subset across every unmanaged root, deduplicated.
