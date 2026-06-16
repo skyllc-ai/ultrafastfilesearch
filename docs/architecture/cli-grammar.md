@@ -105,6 +105,28 @@ It is mildly unconventional (most CLIs use `--` for *options*), but for a
 search-first tool it is coherent and learnable, and it is the price of keeping
 `uffs <anything>` literally mean "search for anything".
 
+### 3.4 The two reserved single-dash exceptions: `-h` and `-V`
+
+There are **exactly two** single-dash tokens that are *not* patterns —
+`-h` (help) and `-V` (version) — and they are reserved **only as the first
+token**. This is a deliberate, enumerated exception to "single-dash = pattern":
+`-h`/`-V` are such universal CLI muscle-memory that the search-first leaders
+keep them too (ripgrep, fd both expose exactly `-h`/`-V` and nothing else
+short). Every *other* single-dash token stays a pattern.
+
+```
+uffs -h            → help        ✅ reserved (the only short help flag)
+uffs -V            → version     ✅ reserved (the only short version flag)
+uffs -x            → search "-x" ✅ every OTHER single dash is a pattern
+uffs -update       → search "-update"
+uffs -- -h         → search the literal "-h"   ← the escape hatch covers it
+```
+
+Searching for a file literally named `-h` is nonsensical, and `uffs -- -h`
+recovers it, so the cost of the exception is ~zero while the convenience is
+universal. The set is closed: `-h` and `-V` only — no other short flag, and
+**no** short *command* aliases (§12).
+
 ## 4. Uniform command model — every command, the same shape
 
 ```

@@ -96,6 +96,35 @@ mod tests {
         ]);
     }
 
+    // ── The two reserved single-dash exceptions (`-h` / `-V`) ────────
+    //
+    // Per docs/architecture/cli-grammar.md §3.4, `-h` and `-V` are the
+    // ONLY single-dash tokens that are not search patterns. Pin both that
+    // they work AND that no other single-dash token is treated as help.
+
+    #[test]
+    fn short_help_flag_prints_help() {
+        assert_success("short_help", &["-h"], &[
+            "uffs - Ultra Fast File Search",
+            "USAGE:",
+        ]);
+    }
+
+    #[test]
+    fn short_version_flag_prints_binary_version() {
+        assert_success("short_version", &["-V"], &[
+            "uffs",
+            env!("CARGO_PKG_VERSION"),
+        ]);
+    }
+
+    #[test]
+    fn other_single_dash_token_is_a_pattern_not_help() {
+        // `-x` must NOT print help/version — it is a search pattern, so with
+        // no daemon it fails trying to connect (it never exits 0 with help).
+        assert_failure("single_dash_pattern", &["-x"], &["daemon"]);
+    }
+
     // ── Validation tests ────────────────────────────────────────────
     //
     // With the thin-client approach, search-flag validation happens on
