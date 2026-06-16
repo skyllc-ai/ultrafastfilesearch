@@ -54,19 +54,20 @@ use assert_cmd as _;
 
 pub mod args;
 pub mod commands;
+mod dispatch;
 
 /// Run the CLI and return a result.
 fn run() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
-    let tokens: Vec<&str> = raw_args.iter().skip(1).map(String::as_str).collect();
 
-    // Fast paths: help / version / no args.
-    match tokens.first().copied() {
-        None | Some("--help" | "-h" | "help") => {
+    // Global fast paths — ONLY the `--`/`-` forms (bare `help` / `version`
+    // are now ordinary search patterns, not commands).
+    match raw_args.get(1).map(String::as_str) {
+        None | Some("--help" | "-h") => {
             args::print_help();
             return Ok(());
         }
-        Some("--version" | "-V" | "version") => {
+        Some("--version" | "-V") => {
             args::print_version();
             return Ok(());
         }
@@ -77,24 +78,23 @@ fn run() -> Result<()> {
     // roll it back in the background. Costs one `stat` in steady state.
     commands::update::maybe_self_heal();
 
-    // Detect subcommand as first non-flag token.
-    let first = tokens.first().copied().unwrap_or("");
-    let subcmd_args = raw_args.get(2..).unwrap_or_default();
-    match first {
-        "stats" => run_stats(subcmd_args)?,
-        "aggregate" | "agg" => run_aggregate(subcmd_args)?,
-        "daemon" => run_daemon(subcmd_args)?,
-        "mcp" => commands::mcp_mgmt::mcp_from_args(subcmd_args)?,
-        "update" => commands::update::run_update(subcmd_args)?,
-        "status" => {
-            if subcmd_args.iter().any(|arg| arg == "--help" || arg == "-h") {
-                args::print_status_help();
-            } else {
-                commands::system_status::system_status();
-            }
+    let first = raw_args.get(1).map_or("", String::as_str);
+
+    // Bare `--` separator → force a search of everything after it (the escape
+    // hatch for a pattern that literally begins with `--`).
+    if first == "--" {
+        return run_search(raw_args.get(2..).unwrap_or_default());
+    }
+
+    // The first token decides the mode: a known `--command` runs that
+    // command; ANYTHING else (bare word, glob, single dash, or a search flag)
+    // is a search — so `uffs update` searches for "update".
+    match dispatch::Command::from_token(first) {
+        Some(command) => {
+            dispatch::dispatch_command(command, raw_args.get(2..).unwrap_or_default())?;
         }
-        _ => {
-            // Default: search — forward ALL args after "uffs" to daemon.
+        None => {
+            // Default: search — forward ALL args after `uffs` to the daemon.
             run_search(raw_args.get(1..).unwrap_or_default())?;
         }
     }
@@ -254,7 +254,7 @@ fn print_client_profile(prof: &ClientProfile<'_>) {
 }
 
 /// Forward raw search args to the daemon via `search_cli` RPC.
-fn run_search(args: &[String]) -> Result<()> {
+pub(crate) fn run_search(args: &[String]) -> Result<()> {
     if args.is_empty() {
         args::print_help();
         return Ok(());
@@ -454,7 +454,7 @@ fn write_search_payload_to_stdout(
 }
 
 /// Handle `uffs stats [path] [--top N] [--data-dir ...] [--mft-file ...]`.
-fn run_stats(args: &[String]) -> Result<()> {
+pub(crate) fn run_stats(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_stats_help();
         return Ok(());
@@ -516,7 +516,7 @@ fn run_stats(args: &[String]) -> Result<()> {
 }
 
 /// Handle `uffs aggregate|agg <preset> [--format ...] [--data-dir ...]`.
-fn run_aggregate(args: &[String]) -> Result<()> {
+pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_aggregate_help();
         return Ok(());
@@ -556,7 +556,7 @@ fn run_aggregate(args: &[String]) -> Result<()> {
 }
 
 /// Handle `uffs daemon <action> [flags...]`.
-fn run_daemon(args: &[String]) -> Result<()> {
+pub(crate) fn run_daemon(args: &[String]) -> Result<()> {
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_daemon_help();
         return Ok(());

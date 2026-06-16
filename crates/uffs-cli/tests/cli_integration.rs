@@ -107,7 +107,7 @@ mod tests {
     fn stats_rejects_non_numeric_top() {
         assert_failure(
             "stats_invalid_top",
-            &["stats", "saved.parquet", "--top", "abc"],
+            &["--stats", "saved.parquet", "--top", "abc"],
             &["Bad --top"],
         );
     }

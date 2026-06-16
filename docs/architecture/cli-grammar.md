@@ -4,8 +4,9 @@ SPDX-License-Identifier: MPL-2.0
 -->
 # UFFS CLI Grammar — search-first, `--command` for everything else
 
-**Status:** Design approved, implementation pending. This is the design +
-implementation + tracking doc for the `uffs` command-line grammar redesign.
+**Status:** Design approved + decisions resolved (§12); **implementation in
+progress on `feat/cli-grammar`**. This is the design + implementation +
+tracking doc for the `uffs` command-line grammar redesign.
 
 **TL;DR:** `uffs <anything>` searches for `<anything>` — *any* word, with no
 reserved words. Management operations are `--<command>` (double-dash), e.g.
@@ -283,7 +284,7 @@ that internal path; only the *external* entry tokens change.
 
 ## 11. Tracking checklist
 
-- [ ] **P0 — Dispatcher.** `Command` enum + `from_token` + `run()` rewrite +
+- [x] **P0 — Dispatcher.** `Command` enum + `from_token` + `run()` rewrite +
       bare-`--` escape. Dispatcher unit tests + disjointness invariant test.
 - [ ] **P1 — Normalize `--update`.** Action-positional parsing
       (snapshot/acquire/apply/doctor/recover); options as flags. Update its
@@ -296,14 +297,12 @@ that internal path; only the *external* entry tokens change.
 - [ ] **P5 — Validate.** Host + Windows-MSVC clippy clean; full nextest; manual
       smoke of every command + a `uffs update` *search*.
 
-## 12. Open questions / decisions
+## 12. Decisions (resolved 2026-06-16)
 
-1. **Top-level `--doctor`?** Keep `uffs --update doctor` only (uniform), or add
-   a `--doctor` convenience alias? *Lean: keep it an update action; revisit if
-   users reach for `uffs --doctor`.*
-2. **`--search` explicit form** — ship it (uniformity + a clean scripting form)
-   or leave search bare-only? *Lean: ship `--search` as the explicit twin of the
-   bare default.*
-3. **Short command aliases?** e.g. `-u` for `--update`. *Lean: no — short single
-   dashes are reserved for patterns/search-short-flags; keep commands `--long`
-   only to preserve the "single dash = data" rule.*
+1. **Top-level `--doctor`? → NO.** Doctor stays solely an action of `--update`
+   (`uffs --update doctor`) — uniform. (May change with user feedback.)
+2. **`--search` explicit form? → YES.** Ship `--search` as the explicit twin of
+   the bare-positional default.
+3. **Short command aliases (e.g. `-u`)? → NO.** Commands are `--long` only, so
+   single dashes stay reserved for patterns / search short-flags and the
+   "single dash = data" rule holds. (May change with user feedback.)
