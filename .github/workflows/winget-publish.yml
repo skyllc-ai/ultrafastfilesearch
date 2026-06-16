@@ -125,7 +125,7 @@ jobs:
           fork-user: githubrobbi
           token: ${{ secrets.WINGET_TOKEN }}
 
-      # ── Auto-seed the extra nested aliases + draft gate ──────────────────
+      # ── Auto-seed the extra nested aliases (fully automatic) ─────────────
       #
       # komac PRESERVES the previous manifest's NestedInstallerFiles but never
       # auto-adds executables newly bundled into the zip.  So `uffs-update`
@@ -133,18 +133,20 @@ jobs:
       # by winget unless they are seeded into the manifest exactly once.  This
       # step does that automatically, on the PR komac just opened, using the
       # SAME WINGET_TOKEN (which can push to the fork) — so the winget package
-      # always installs the full binary set with no manual step.
+      # always installs the full binary set with NO manual step.
       #
-      # It also flips the PR to **draft** first (best-effort): nothing can
-      # merge before the seed lands.  After it pushes the seed, the PR is left
-      # as a draft for a maintainer to review and mark ready.  If the fork
-      # does not support drafts, the seed still happens and the PR stays ready.
+      # Flow per release, hands-off end to end: flip the PR to **draft**
+      # (transient gate so nothing can merge mid-seed) → seed the manifest →
+      # push → **release the draft** (`gh pr ready`) so it proceeds straight to
+      # winget validation.  If the fork doesn't support drafts, the seed still
+      # happens and the PR stays ready.
       #
       # Resilient by design: every recoverable condition (PR not found yet,
-      # manifest absent, draft unsupported, nothing to seed) exits 0 with a
-      # warning, so the manual fallback in packaging/winget/README.md still
-      # applies and a hiccup never looks like a release failure.
-      - name: Seed nested aliases into the komac PR (+ draft gate)
+      # manifest absent, draft unsupported, nothing to seed, push failed)
+      # exits 0 with a warning, so the manual fallback in
+      # packaging/winget/README.md still applies and a hiccup never looks like
+      # a release failure.
+      - name: Seed nested aliases into the komac PR (auto-seed + release)
         if: steps.token.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
@@ -154,6 +156,17 @@ jobs:
         run: |
           set -uo pipefail
           VERSION="${RELEASE_TAG#v}"
+
+          # Release the draft (best-effort) so the PR proceeds to validation.
+          # Reads $PR_URL at call time. A no-op if the PR was never drafted.
+          release_draft() {
+            if gh pr ready "$PR_URL" 2>/dev/null; then
+              echo "Released draft → winget validation."
+            else
+              echo "::notice::Could not auto-release the draft; mark ready manually: gh pr ready ${PR_URL}"
+            fi
+          }
+
           echo "Locating the komac-opened SkyLLC.UFFS ${VERSION} PR on microsoft/winget-pkgs..."
 
           # komac opens the PR asynchronously — poll for it.
@@ -209,6 +222,7 @@ jobs:
           cd forkpr || { echo "::warning::cannot enter forkpr; seed manually."; exit 0; }
           if git diff --quiet; then
             echo "No new aliases to seed — manifest already complete."
+            release_draft   # nothing to push, but still release the draft
             exit 0
           fi
           git config user.name  "uffs-winget-bot"
@@ -221,10 +235,15 @@ jobs:
             exit 0
           fi
 
+          # Release the draft so the PR proceeds straight to winget validation.
+          # The draft was only a transient gate to block any merge mid-seed —
+          # with that done, the flow is fully hands-off (no manual mark-ready).
+          release_draft
+
           {
-            echo "## WinGet PR auto-seeded"
+            echo "## WinGet PR auto-seeded + released"
             echo "- PR: ${PR_URL}"
             echo "- Branch: \`${PR_BRANCH}\`"
             echo "- Seeded the canonical NestedInstallerFiles from \`packaging/winget/nested-aliases.yaml\` (uffs-update, uffs-broker, uffs-tui)."
-            echo "- Left as **draft** if the fork supports it — review, then \`gh pr ready ${PR_URL}\` to validate + merge."
+            echo "- Released the draft → fully automatic. Microsoft's bot now validates + merges on their side."
           } >> "$GITHUB_STEP_SUMMARY"
