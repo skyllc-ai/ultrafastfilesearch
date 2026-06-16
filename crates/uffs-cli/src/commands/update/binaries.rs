@@ -22,11 +22,28 @@ use super::model::BinaryInfo;
 /// `uffs-tui` is deliberately **excluded**: it ships from the separate
 /// `uffs-products` / `uffs-demo` repo with its own versioning and is not a
 /// release asset here, so the engine updater must not chase it.
+///
+/// `uffs-broker` is **Windows-only**: the release publishes no macOS/Linux
+/// broker asset, so off Windows it must NOT be a self-update target — else
+/// `acquire` would try to download a non-existent `uffs-broker-<plat>` asset
+/// (e.g. a stale broker stub left in `~/bin`). It is therefore included only
+/// when compiled for Windows.
+#[cfg(windows)]
 pub(crate) const KNOWN_BINARIES: [&str; 6] = [
     "uffs",        // CLI
     "uffsd",       // daemon
     "uffsmcp",     // MCP server
     "uffs-broker", // elevated handle broker (Windows service)
+    "uffs-update", // the self-update helper itself
+    "uffs-mft",    // MFT diagnostics binary (optional)
+];
+
+/// Non-Windows: the same set minus the Windows-only broker.
+#[cfg(not(windows))]
+pub(crate) const KNOWN_BINARIES: [&str; 5] = [
+    "uffs",        // CLI
+    "uffsd",       // daemon
+    "uffsmcp",     // MCP server
     "uffs-update", // the self-update helper itself
     "uffs-mft",    // MFT diagnostics binary (optional)
 ];
@@ -131,19 +148,30 @@ mod tests {
 
     #[test]
     fn known_set_contains_engine_binaries_and_the_helper() {
-        for stem in [
-            "uffs",
-            "uffsd",
-            "uffsmcp",
-            "uffs-broker",
-            "uffs-update",
-            "uffs-mft",
-        ] {
+        // These are self-update targets on every platform.
+        for stem in ["uffs", "uffsd", "uffsmcp", "uffs-update", "uffs-mft"] {
             assert!(
                 KNOWN_BINARIES.contains(&stem),
                 "missing engine binary {stem}"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn known_set_includes_broker_on_windows() {
+        assert!(KNOWN_BINARIES.contains(&"uffs-broker"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn known_set_excludes_broker_off_windows() {
+        // The broker is Windows-only — off Windows it must not be a
+        // self-update target (no macOS/Linux broker release asset exists).
+        assert!(
+            !KNOWN_BINARIES.contains(&"uffs-broker"),
+            "uffs-broker is Windows-only and must not be acquired off Windows"
+        );
     }
 
     #[test]
