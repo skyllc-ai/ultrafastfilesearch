@@ -78,10 +78,7 @@ fn broker_pipe_ready() -> bool {
     // SAFETY: `wide` is a valid NUL-terminated UTF-16 buffer that outlives
     // the call; the timeout is a plain millisecond count. `WaitNamedPipe`
     // only waits for availability — it opens nothing.
-    #[expect(
-        unsafe_code,
-        reason = "Win32 FFI — WaitNamedPipeW non-connecting probe"
-    )]
+    #[expect(unsafe_code, reason = "Win32 FFI — WaitNamedPipeW")]
     let ready = unsafe { WaitNamedPipeW(PCWSTR(wide.as_ptr()), PIPE_READY_TIMEOUT_MS) };
     ready.as_bool()
 }
