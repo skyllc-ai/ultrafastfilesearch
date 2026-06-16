@@ -70,12 +70,22 @@ const HOST_TRIPLE: &str = "aarch64-apple-darwin";
 /// Binaries uploaded to GitHub Release (the shipping set).
 ///
 /// NOTE: uffs_tui and uffs_gui have moved to the private uffs-products repo.
+/// `uffs-broker` is **Windows-only** — it is staged for the Windows target
+/// only (see [`is_windows_only`]); off Windows it would just be a no-op stub.
 const RELEASE_BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
     ("uffs-mft", "uffs-mft"),
+    ("uffs-update", "uffs-update"),
+    ("uffs-broker", "uffs-broker"),
 ];
+
+/// Binaries that only make sense on Windows — staged for the Windows target
+/// only, never the macOS/Linux ones.
+fn is_windows_only(binary: &str) -> bool {
+    binary == "uffs-broker"
+}
 
 /// All workspace binaries — release + diagnostic tools.
 /// Everything here gets built (via `--workspace`) and copied to `dist/`.
@@ -86,6 +96,8 @@ const ALL_BINARIES: &[(&str, &str)] = &[
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
     ("uffs-mft", "uffs-mft"),
+    ("uffs-update", "uffs-update"),
+    ("uffs-broker", "uffs-broker"), // Windows-only (see is_windows_only)
     // Diagnostic binaries (all hyphenated per issue #213 / F1.13).
     ("analyze-mft-parents", "uffs-diag"),
     ("dump-mft-records", "uffs-diag"),
@@ -448,6 +460,10 @@ fn stage_host_binaries(version: &str, target_dir: &Path) {
     let _ = fs::create_dir_all(&staging_dir);
 
     for (binary, _) in RELEASE_BINARIES {
+        // Windows-only binaries (the broker) are never staged for macOS.
+        if is_windows_only(binary) {
+            continue;
+        }
         let source = target_dir.join("release").join(binary);
         let dest_name = format!("{}-macos-arm64", binary);
         let dest = staging_dir.join(&dest_name);
@@ -1011,6 +1027,10 @@ fn stage_binaries(version: &str, target: &Target, target_dir: &Path) -> bool {
     let mut all_success = true;
 
     for (binary, _) in RELEASE_BINARIES {
+        // The broker only ships on Windows — skip it for mac/linux targets.
+        if is_windows_only(binary) && !target.triple.contains("windows") {
+            continue;
+        }
         let bin_name = if target.triple.contains("windows") {
             format!("{}.exe", binary)
         } else {

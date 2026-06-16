@@ -44,13 +44,31 @@ fn build_profile() -> &'static str {
 /// - uffsd: Background daemon (holds MFT index, serves queries via IPC)
 /// - uffsmcp: MCP HTTP/stdio server (bridges AI agents to daemon)
 /// - uffs_mft: Low-level MFT reading tool
+/// - uffs-update: self-update helper (`uffs update` spawns it as a sibling)
+/// - uffs-broker: Windows elevated handle broker (real service on Windows;
+///   a no-op stub off Windows)
 ///
 /// NOTE: uffs_tui and uffs_gui have moved to the private uffs-products repo.
+/// `uffs-broker` is **Windows-only** (the elevated handle service); it is
+/// not built/installed on macOS/Linux, where it would only be a no-op stub.
+#[cfg(windows)]
 const BINARIES: &[(&str, &str)] = &[
     ("uffs", "uffs-cli"),
     ("uffsd", "uffs-daemon"),
     ("uffsmcp", "uffs-mcp"),
     ("uffs-mft", "uffs-mft"),
+    ("uffs-update", "uffs-update"),
+    ("uffs-broker", "uffs-broker"),
+];
+
+/// Non-Windows host: the same set minus the Windows-only broker.
+#[cfg(not(windows))]
+const BINARIES: &[(&str, &str)] = &[
+    ("uffs", "uffs-cli"),
+    ("uffsd", "uffs-daemon"),
+    ("uffsmcp", "uffs-mcp"),
+    ("uffs-mft", "uffs-mft"),
+    ("uffs-update", "uffs-update"),
 ];
 
 fn main() {

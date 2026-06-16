@@ -92,7 +92,11 @@ copy-binary profile:
     if [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "cygwin"* ]] || [[ -n "$WINDIR" ]]; then EXT=".exe"; printf "\033[0;34m  → Windows detected\033[0m\n"; else EXT=""; printf "\033[0;34m  → Unix-like system detected\033[0m\n"; fi
     SOURCE_DIR="target/{{ profile }}"
     mkdir -p ~/bin
-    for BIN in uffs uffsd uffsmcp; do
+    # uffs-update is the self-update helper (`uffs update` spawns it as a
+    # sibling). uffs-broker is the elevated handle service — Windows only.
+    BINS=(uffs uffsd uffsmcp uffs-mft uffs-update)
+    if [[ -n "$EXT" ]]; then BINS+=(uffs-broker); fi
+    for BIN in "${BINS[@]}"; do
         SOURCE_PATH="$SOURCE_DIR/${BIN}${EXT}"
         DEST_PATH="$HOME/bin/${BIN}${EXT}"
         if [[ ! -f "$SOURCE_PATH" ]]; then
@@ -236,11 +240,14 @@ use:
     extract_ver() { grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true; }
 
     BIN_DIR="$HOME/bin"
+    # uffs-update is the self-update helper, shipped on every platform.
+    # (uffs-broker is Windows-only, so there is no macOS asset to install.)
     declare -A BINARIES=(
         ["uffs-macos-arm64"]="uffs"
         ["uffsd-macos-arm64"]="uffsd"
         ["uffsmcp-macos-arm64"]="uffsmcp"
         ["uffs-mft-macos-arm64"]="uffs-mft"
+        ["uffs-update-macos-arm64"]="uffs-update"
     )
 
     # 1. What origin/main wants (informational + offline-fallback target).
