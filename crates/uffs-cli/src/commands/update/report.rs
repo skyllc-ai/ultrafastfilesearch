@@ -121,7 +121,8 @@ fn print_running(proc: &RunningProcess) {
 }
 
 /// The distinct binary/process versions seen across the whole report, sorted.
-fn distinct_versions(report: &DetectionReport) -> Vec<String> {
+/// More than one ⇒ a skewed install that an update would realign.
+pub(crate) fn distinct_versions(report: &DetectionReport) -> Vec<String> {
     let mut versions: Vec<String> = Vec::new();
     for root in &report.roots {
         for binary in &root.binaries {

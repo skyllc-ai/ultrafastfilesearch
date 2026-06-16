@@ -77,3 +77,23 @@ pub(crate) fn spawn(
     }
     Ok(())
 }
+
+/// Ask the helper for the latest release tag (`vX.Y.Z`) — a single
+/// non-mutating release-metadata fetch, no download. Returns `None` if the
+/// helper is missing or the lookup fails (e.g. offline); the caller then
+/// can't assert "already up to date" and falls back accordingly.
+pub(super) fn latest_version() -> Option<String> {
+    let helper = find_helper().ok()?;
+    let output = Command::new(&helper)
+        .args(["check", "--repo", DEFAULT_REPO])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("latest="))
+        .map(|tag| tag.trim().to_owned())
+        .filter(|tag| !tag.is_empty())
+}

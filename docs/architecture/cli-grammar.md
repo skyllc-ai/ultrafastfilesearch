@@ -167,7 +167,7 @@ different (each internally-consistent) conventions.
 | `uffs aggregate\|agg <preset>` | `uffs --agg <preset>` | — | `--format` |
 | `uffs daemon <a>` | `uffs --daemon <a>` | `start` `status` `stats` `stop` `kill` `restart` `load` `hibernate` `preload` `forget` `status_drives` | `--data-dir` `--mft-file` `--elevate` |
 | `uffs mcp <a>` | `uffs --mcp <a>` | `run` `start` `status` `stop` `kill` `restart` `reload` | `--bind` `--port` `--data-dir` |
-| `uffs update [--acquire\|--apply\|--snapshot]` + `uffs update doctor` | `uffs --update [<a>]` | *(none=detect)* `snapshot` `acquire` `apply` `doctor` `recover` | `--version` `--repair` `--offline` `--repo` |
+| `uffs update [--acquire\|--apply\|--snapshot]` + `uffs update doctor` | `uffs --update [<a>]` | ***(none = update end-to-end if needed)*** `check` `snapshot` `acquire` `apply` `doctor` `recover` | `--version` `--repair` `--offline` `--repo` `-v` |
 | `uffs status` | `uffs --status` | — | — |
 | `uffs --help / --version` | `uffs --help / --version` *(unchanged; global)* | — | — |
 

@@ -5,13 +5,18 @@
 //! `docs/dev/architecture/UFFS-Self-Update-Feasibility-and-Design.md`; CLI
 //! grammar in `docs/architecture/cli-grammar.md`).
 //!
-//! Phase A (detect & capture) is the default (no action): it discovers
-//! every install *root* from the live anchors (invoking CLI + running
-//! daemon / MCP / broker), enumerates the UFFS binaries in each, classifies
-//! the channel that placed them, validates each binary's on-disk version,
-//! and captures the running processes' launch recipes — mutating nothing.
-//! The `snapshot` / `acquire` / `apply` / `doctor` actions add the later
-//! phases on top; `recover` finishes an interrupted update on demand.
+//! **No action** is the ordinary-user command: update UFFS end-to-end. It runs
+//! Phase A (detect & capture) — discovering every install *root* from the live
+//! anchors (invoking CLI + running daemon / MCP / broker), enumerating each
+//! root's binaries + versions — then compares against the latest release; if a
+//! newer release is available (or the install is version-skewed) it
+//! acquires + applies (journaled, auto-rollback), otherwise it reports the
+//! install is current and touches nothing.
+//!
+//! The actions expose the phases for inspection / scripting: `check` (is an
+//! update available? — non-mutating), `snapshot` (freeze the detected state),
+//! `acquire` (download + verify into staging), `apply` (the full mutating
+//! swap), `doctor` (health check), `recover` (finish an interrupted update).
 //!
 //! Entry point: `run_update` (dispatched from `--update` in `main`).
 
@@ -35,7 +40,10 @@ use model::{Anchor, Channel, Component, DetectionReport, InstallRoot, RunningPro
 /// grammar (design: `docs/architecture/cli-grammar.md`). The action is the
 /// first positional token:
 ///
-/// - *(none)* → detect only (Phase A).
+/// - *(none)* → **update end-to-end if one is needed** (the ordinary-user
+///   command): detect → compare to the latest release → acquire + apply, or
+///   report "already up to date" and touch nothing.
+/// - `check`    → is an update available? detect + compare (non-mutating).
 /// - `snapshot` → detect + freeze a snapshot (Phase B).
 /// - `acquire`  → + download + SHA-verify into staging (Phase C).
 /// - `apply`    → + the full mutating update (stop/swap/smoke/commit/restore).
@@ -56,10 +64,13 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         .map(String::as_str)
         .filter(|tok| !tok.starts_with('-'));
     if let Some(act) = action
-        && !matches!(act, "snapshot" | "acquire" | "apply" | "doctor" | "recover")
+        && !matches!(
+            act,
+            "check" | "snapshot" | "acquire" | "apply" | "doctor" | "recover"
+        )
     {
         bail!(
-            "unknown `--update` action `{act}` — expected: snapshot | acquire | apply | doctor | recover"
+            "unknown `--update` action `{act}` — expected: check | snapshot | acquire | apply | doctor | recover"
         );
     }
 
@@ -84,27 +95,145 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
 
     let report = detect();
     report::print_human(&report, verbose);
-    if action == Some("snapshot") {
-        write_and_report_snapshot(&report);
-    }
     if verbose {
         print_phase_a_footer();
     }
 
-    // `apply` runs the full mutating update (acquire → apply); `acquire` only
-    // stages + verifies. `apply` implies the acquire step.
-    if matches!(action, Some("acquire" | "apply")) {
-        let snapshot_path = snapshot::write_snapshot(&report)?;
-        acquire::spawn(
-            &snapshot_path,
-            flag_value(args, "--version").as_deref(),
-            verbose,
-        )?;
-        if action == Some("apply") {
+    match action {
+        // Bare `uffs --update` — the ordinary-user command: update end to end,
+        // but only if one is actually needed (never stop/restart services when
+        // already current).
+        None => run_automatic_update(&report, verbose),
+        // `check` — non-mutating: is an update available?
+        Some("check") => {
+            report_assessment(&assess(&report));
+            Ok(())
+        }
+        Some("snapshot") => {
+            write_and_report_snapshot(&report);
+            Ok(())
+        }
+        // `acquire` only stages + verifies; `apply` implies acquire then swaps.
+        Some("acquire" | "apply") => {
+            let snapshot_path = snapshot::write_snapshot(&report)?;
+            acquire::spawn(
+                &snapshot_path,
+                flag_value(args, "--version").as_deref(),
+                verbose,
+            )?;
+            if action == Some("apply") {
+                apply::spawn(&snapshot_path, verbose)?;
+            }
+            Ok(())
+        }
+        // `doctor`/`recover` returned earlier; any other token was rejected.
+        _ => Ok(()),
+    }
+}
+
+/// Whether an update is warranted, and the target tag.
+enum UpdatePlan {
+    /// Installed matches the latest release and there is no version skew.
+    UpToDate {
+        /// The latest release tag (e.g. `v0.6.5`).
+        latest: String,
+    },
+    /// An update is available (a newer release, or a skewed install to
+    /// realign).
+    Available {
+        /// The latest release tag to move to.
+        latest: String,
+    },
+    /// The release feed could not be reached (offline) — cannot decide.
+    Offline,
+}
+
+/// Compare the detected install against the latest release (one non-mutating
+/// metadata fetch via the helper) to decide whether an update is warranted.
+fn assess(report: &DetectionReport) -> UpdatePlan {
+    let installed = report::distinct_versions(report);
+    let skewed = installed.len() > 1;
+    let Some(latest) = acquire::latest_version() else {
+        return UpdatePlan::Offline;
+    };
+    let newer = match installed.as_slice() {
+        // A single clean version: update only if the release is different.
+        [only] => normalize_tag(&latest) != *only,
+        // Zero or mixed versions → an update realigns the install.
+        _ => true,
+    };
+    if skewed || newer {
+        UpdatePlan::Available { latest }
+    } else {
+        UpdatePlan::UpToDate { latest }
+    }
+}
+
+/// Run the full end-to-end update when one is needed; otherwise report the
+/// install is current. Journaled + auto-rollback (delegated to `apply`).
+fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
+    match assess(report) {
+        UpdatePlan::UpToDate { latest } => {
+            print_already_current(&latest);
+            Ok(())
+        }
+        UpdatePlan::Offline => {
+            print_offline_notice();
+            Ok(())
+        }
+        UpdatePlan::Available { latest } => {
+            print_updating(&latest);
+            let snapshot_path = snapshot::write_snapshot(report)?;
+            acquire::spawn(&snapshot_path, None, verbose)?;
             apply::spawn(&snapshot_path, verbose)?;
+            print_updated(&latest);
+            Ok(())
         }
     }
-    Ok(())
+}
+
+/// Print the verdict for the non-mutating `uffs --update check`.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn report_assessment(plan: &UpdatePlan) {
+    match plan {
+        UpdatePlan::UpToDate { latest } => println!("\n\u{2713} Up to date ({latest})."),
+        UpdatePlan::Offline => print_offline_notice(),
+        UpdatePlan::Available { latest } => {
+            println!("\n\u{2b06} Update available: {latest} — run `uffs --update` to install.");
+        }
+    }
+}
+
+/// Strip a leading `v` from a release tag so `v0.6.5` compares to `0.6.5`.
+fn normalize_tag(tag: &str) -> &str {
+    tag.strip_prefix('v').unwrap_or(tag)
+}
+
+/// "Already up to date" (bare update, nothing to do).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_already_current(latest: &str) {
+    println!("\n\u{2713} UFFS is already up to date ({latest}).");
+}
+
+/// "Updating …" banner before the mutating flow.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_updating(latest: &str) {
+    println!("\nUpdating UFFS \u{2192} {latest} …");
+}
+
+/// "Updated" confirmation after a successful apply.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_updated(latest: &str) {
+    println!("\n\u{2713} UFFS updated to {latest}.");
+}
+
+/// Couldn't reach the release feed — can't download, so can't update.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_offline_notice() {
+    println!(
+        "\nCouldn't check for updates (offline?). Reconnect and re-run, \
+         or `uffs --update apply` to force."
+    );
 }
 
 /// Phase H self-heal entry: spawn `uffs-update recover` if a live update
@@ -274,14 +403,19 @@ fn capture_broker(roots: &mut Vec<InstallRoot>, running: &mut Vec<RunningProcess
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_help() {
     println!(
-        "uffs --update — self-update\n\n\
+        "uffs --update — update UFFS to the latest release\n\n\
          USAGE:\n\
          \x20 uffs --update [<action>] [--options]\n\n\
-         Discovers where UFFS is installed (from the running CLI, daemon,\n\
-         MCP gateway, and broker service), lists binaries + versions per\n\
-         location, and shows the running processes' launch recipes.\n\n\
+         With no action, updates UFFS end-to-end: if a newer release is\n\
+         available (or the install is version-skewed) it downloads, verifies,\n\
+         and swaps every binary in place (journaled + auto-rollback); if you\n\
+         are already current it does nothing. The actions below expose the\n\
+         individual phases for inspection or scripting.\n\n\
          ACTIONS:\n\
-         \x20 (none)              Detect only — non-mutating; nothing is changed.\n\
+         \x20 (none)              Update end-to-end (the default) — only if one\n\
+         \x20                     is needed; never touches services when current.\n\
+         \x20 check               Is an update available? Detect + compare to the\n\
+         \x20                     latest release. Non-mutating.\n\
          \x20 snapshot            Detect + persist the state to JSON.\n\
          \x20 acquire             + download + SHA-256-verify the release into\n\
          \x20                     staging (via the uffs-update helper). No replace.\n\
@@ -299,8 +433,10 @@ fn print_help() {
          \x20 --repair            (doctor) self-heal what can be fixed.\n\
          \x20 --offline           (doctor) skip the network checks.\n\n\
          EXAMPLES:\n\
-         \x20 uffs --update                 uffs --update acquire --version v0.6.3\n\
-         \x20 uffs --update apply           uffs --update doctor --repair\n"
+         \x20 uffs --update                 update now (if needed)\n\
+         \x20 uffs --update check           is a new release available?\n\
+         \x20 uffs --update doctor          health-check the update flow\n\
+         \x20 uffs --update apply --version v0.6.3   pin a specific release\n"
     );
 }
 
@@ -316,7 +452,17 @@ fn print_phase_a_footer() {
 #[cfg(test)]
 mod tests {
     use super::model::{Anchor, InstallRoot};
-    use super::upsert_root;
+    use super::{normalize_tag, upsert_root};
+
+    #[test]
+    fn normalize_tag_strips_leading_v_only() {
+        // `v0.6.5` (release tag) must compare equal to `0.6.5` (installed).
+        assert_eq!(normalize_tag("v0.6.5"), "0.6.5");
+        assert_eq!(normalize_tag("0.6.5"), "0.6.5");
+        // Only a *leading* v is stripped — nothing else is touched.
+        assert_eq!(normalize_tag("v1.2.3-rc.1"), "1.2.3-rc.1");
+        assert_eq!(normalize_tag(""), "");
+    }
 
     fn root_dirs(roots: &[InstallRoot]) -> Vec<String> {
         roots

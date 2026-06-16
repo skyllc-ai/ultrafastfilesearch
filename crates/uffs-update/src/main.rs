@@ -56,6 +56,7 @@ fn run() -> Result<()> {
         Some("apply") => run_apply(args.get(1..).unwrap_or_default()),
         Some("recover") => run_recover(args.get(1..).unwrap_or_default()),
         Some("doctor") => run_doctor(args.get(1..).unwrap_or_default()),
+        Some("check") => run_check(args.get(1..).unwrap_or_default()),
         Some("--version" | "-V") => {
             print_version();
             Ok(())
@@ -65,7 +66,9 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some(other) => {
-            bail!("unknown subcommand `{other}` (try `acquire` / `apply` / `recover` / `doctor`)")
+            bail!(
+                "unknown subcommand `{other}` (try `acquire` / `apply` / `recover` / `doctor` / `check`)"
+            )
         }
     }
 }
@@ -203,6 +206,21 @@ fn run_doctor(args: &[String]) -> Result<()> {
     }
 }
 
+/// Resolve the latest (or `--version`-requested) release tag and print
+/// `latest=<tag>` for the CLI to compare against the installed version.
+/// Non-mutating, no download — a single release-metadata fetch so the
+/// ordinary-user `uffs --update` can short-circuit when already current.
+#[expect(
+    clippy::print_stdout,
+    reason = "machine-readable line consumed by the CLI"
+)]
+fn run_check(args: &[String]) -> Result<()> {
+    let repo = flag(args, "--repo").unwrap_or_else(|| DEFAULT_REPO.to_owned());
+    let release = github::fetch_release(&repo, flag(args, "--version").as_deref())?;
+    println!("latest={}", release.tag_name);
+    Ok(())
+}
+
 /// Print the helper version.
 #[expect(clippy::print_stdout, reason = "intentional version output")]
 fn print_version() {
@@ -269,7 +287,7 @@ fn required(value: Option<String>, what: &str) -> Result<String> {
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_usage() {
     println!(
-        "uffs-update — self-update acquire + apply + recover + doctor helper\n\n\
+        "uffs-update — self-update acquire + apply + recover + doctor + check helper\n\n\
          USAGE:\n\
          \x20 uffs-update acquire --snapshot <path> --stage <dir> \\\n\
          \x20                     [--repo <owner/name>] [--version <tag>] [--sums <asset>]\n\
@@ -277,7 +295,10 @@ fn print_usage() {
          \x20 uffs-update recover --journal <path>\n\
          \x20 uffs-update doctor  [--snapshot <path>] [--stage <dir>] \\\n\
          \x20                     [--repo <owner/name>] [--version <tag>] [--repair]\n\
-         \x20                     [--offline] [--verbose]\n\n\
+         \x20                     [--offline] [--verbose]\n\
+         \x20 uffs-update check   [--repo <owner/name>] [--version <tag>]\n\n\
+         check:   prints `latest=<tag>` (the latest release) for the CLI to\n\
+         compare against the installed version. Non-mutating, no download.\n\
          acquire: per the snapshot's installed subset, downloads each binary\n\
          as an individual release asset + SHA256SUMS, SHA-256-verifies each,\n\
          and leaves them staged. It does not replace anything (apply phase).\n\
