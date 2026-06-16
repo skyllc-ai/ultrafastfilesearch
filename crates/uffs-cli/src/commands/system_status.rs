@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs status` — combined daemon + MCP server status in one view.
+//! `uffs status` — combined daemon + broker + MCP status in one view.
 //!
-//! Shows three sections:
+//! Shows four sections:
 //! - **Daemon**: PID, uptime, drives, queries
+//! - **Access Broker**: SCM state, pid, pipe-serving (native, locale-proof)
 //! - **MCP HTTP Gateway**: PID, transport, health, sessions, tool calls
 //! - **MCP Stdio Sessions**: active `uffs mcp run` processes (one per AI host)
 
@@ -24,9 +25,40 @@ pub(crate) fn system_status() {
     println!();
     print_daemon_status();
     println!();
+    print_broker_status();
+    println!();
     print_mcp_http_status();
     println!();
     print_mcp_stdio_sessions();
+}
+
+/// Short pipe-probe budget for the status line (ms).
+const BROKER_PIPE_PROBE_MS: u32 = 1_000;
+
+/// Print the Access Broker section: SCM state + pid + whether its pipe is
+/// serving. Native `uffs-winsvc` (locale-proof); reports "not installed"
+/// off Windows.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_broker_status() {
+    use uffs_broker_protocol::{PIPE_NAME, SERVICE_NAME};
+
+    println!("── Access Broker ──");
+    let info = uffs_winsvc::query(SERVICE_NAME);
+    if !info.state.is_installed() {
+        println!("  Status:      not installed");
+        println!("  Install:     uffs-broker --install  (one-time; removes UAC prompts)");
+        return;
+    }
+    match info.pid {
+        Some(pid) => println!("  Status:      {} (PID {pid})", info.state.label()),
+        None => println!("  Status:      {}", info.state.label()),
+    }
+    let serving =
+        info.state.is_running() && uffs_winsvc::pipe_serving(PIPE_NAME, BROKER_PIPE_PROBE_MS);
+    println!(
+        "  Pipe:        {}",
+        if serving { "serving" } else { "not serving" }
+    );
 }
 
 /// Print daemon status section.

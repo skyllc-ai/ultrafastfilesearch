@@ -131,15 +131,21 @@ pub(crate) fn find_pids_by_name(stem: &str) -> Vec<u32> {
 
 /// The broker service's registered binary path + running pid, via
 /// `sc.exe`. `None` when the service is not installed.
+///
+/// This is config *discovery* (the registered `BINARY_PATH_NAME`), distinct
+/// from the state control consolidated in `uffs-winsvc`; the service name
+/// is the shared `uffs_broker_protocol::SERVICE_NAME`. Migrating the binPath
+/// read to native `QueryServiceConfigW` is a future follow-up.
 #[cfg(windows)]
 pub(crate) fn broker_service() -> Option<BrokerService> {
-    let qc = sc_output(&["qc", "UffsAccessBroker"])?;
+    let service = uffs_broker_protocol::SERVICE_NAME;
+    let qc = sc_output(&["qc", service])?;
     let bin_path = qc
         .lines()
         .find_map(|line| line.trim().strip_prefix("BINARY_PATH_NAME").map(str::trim))
         .and_then(|rest| rest.strip_prefix(':').map(str::trim))
         .map(PathBuf::from)?;
-    let pid = sc_output(&["queryex", "UffsAccessBroker"]).and_then(|queryex| {
+    let pid = sc_output(&["queryex", service]).and_then(|queryex| {
         queryex.lines().find_map(|line| {
             line.trim()
                 .strip_prefix("PID")

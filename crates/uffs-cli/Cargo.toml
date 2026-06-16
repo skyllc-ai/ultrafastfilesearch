@@ -104,6 +104,12 @@ dirs-next.workspace = true
 # filetime_with_tz_bias}` for timestamp formatting.
 uffs-time.workspace = true
 
+# Broker identity (`SERVICE_NAME` / `PIPE_NAME`) + native SCM status so
+# `uffs status` can report the Access Broker. Both Layer-0 leaves:
+# broker-protocol is pure; uffs-winsvc stubs to "not installed" off Windows.
+uffs-broker-protocol.workspace = true
+uffs-winsvc.workspace = true
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Features (contract documented per playbook §988 — see
 # `crates/uffs-cli/src/main.rs` `# Features` rustdoc and
