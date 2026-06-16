@@ -81,21 +81,29 @@ uffs --update acquire --version v1  → updater, acquire action
 uffs --daemon start                 → daemon, start action
 ```
 
-### 3.2 The precision that makes it airtight: disjoint sets
+### 3.2 The precision that makes it airtight: the first token decides
 
 Search **already uses `--` flags** (`--sort`, `--ext`, `--drive`, `--limit`,
 `--format`, …). So the rule is **not** "any `--` is a command" — it is "**the
-first token is a known *command* word**". The **command set** and the
-**search-flag set** are deliberately **disjoint**, so there is never a clash:
+*first* token is a known *command* word**". That position rule is what makes it
+airtight:
 
 ```
-uffs --ext pdf       → search (--ext is a search flag, not a command)   ✅
+uffs --ext pdf       → search (--ext is a search flag, never a command)  ✅
 uffs --update        → updater (--update is in the command set)          ✅
 uffs --sort -size    → search (--sort is a search flag)                  ✅
 ```
 
-That disjointness is the trick: it lets a *pattern-less* search like
-`uffs --ext pdf` coexist with `uffs --update`.
+Most search flags (`--ext`, `--sort`, `--drive`, …) are **disjoint** from the
+command set, so they can never be confused. The **two deliberate exceptions**
+are `--stats` and `--agg`: each is a command **as the first token**
+(`uffs --stats`, `uffs --agg <preset>`) *and* an inline search modifier
+**after a pattern** (`uffs '*.log' --stats size`, `uffs '*' --agg "…"`). That
+is intentional — it is the *same* operation (stats / aggregation) in two
+positions — and the first-token rule resolves it unambiguously: a dual-use
+name in the first slot is the command; anywhere later it is the modifier. So
+the invariant is the **position**, not strict set-disjointness, and a
+*pattern-less* search like `uffs --ext pdf` still coexists with `uffs --update`.
 
 ### 3.3 The mental model (one sentence the user learns once)
 
@@ -157,8 +165,8 @@ different (each internally-consistent) conventions.
 | `uffs <pattern>` | `uffs <pattern>` *(unchanged)* — also explicit `uffs --search <pattern>` | — | `--sort --ext --drive --limit --format …` |
 | `uffs stats [path]` | `uffs --stats [path]` | — | `--top N` `--data-dir` `--mft-file` |
 | `uffs aggregate\|agg <preset>` | `uffs --agg <preset>` | — | `--format` |
-| `uffs daemon <a>` | `uffs --daemon <a>` | `start` `stop` `restart` `status` | `--data-dir` `--mft-file` `--elevate` |
-| `uffs mcp <a>` | `uffs --mcp <a>` | `run` `serve` `stop` `status` | `--bind` `--port` `--data-dir` |
+| `uffs daemon <a>` | `uffs --daemon <a>` | `start` `status` `stats` `stop` `kill` `restart` `load` `hibernate` `preload` `forget` `status_drives` | `--data-dir` `--mft-file` `--elevate` |
+| `uffs mcp <a>` | `uffs --mcp <a>` | `run` `start` `status` `stop` `kill` `restart` `reload` | `--bind` `--port` `--data-dir` |
 | `uffs update [--acquire\|--apply\|--snapshot]` + `uffs update doctor` | `uffs --update [<a>]` | *(none=detect)* `snapshot` `acquire` `apply` `doctor` `recover` | `--version` `--repair` `--offline` `--repo` |
 | `uffs status` | `uffs --status` | — | — |
 | `uffs --help / --version` | `uffs --help / --version` *(unchanged; global)* | — | — |
@@ -266,8 +274,12 @@ impl Command {
 }
 ```
 
-A **debug-assert / unit test** enforces the disjointness invariant: no
-`Command` token may equal any known search-flag long name.
+A **unit test** (`search_flags_are_never_commands`) enforces the position
+invariant for the genuinely flag-only names: the disjoint search flags
+(`--ext`, `--sort`, `--drive`, `--limit`, …) must never resolve to a command.
+The two dual-use names (`--stats`, `--agg`) are intentionally *not* in that
+list — as a first token they ARE their command; the first-token rule (§3.2)
+keeps them unambiguous.
 
 ### 8.2 Per-command handlers (mostly re-wiring existing code)
 
@@ -314,8 +326,10 @@ that internal path; only the *external* entry tokens change.
      `uffs --update`?"), no daemon round-trip.
    - `--bogus` (near nothing) → Search mode (forwarded to the shared parser /
      daemon, which rejects the unknown flag — see §6's note; no command hint).
-2. **Disjointness invariant test**: assert no `Command` token collides with any
-   search-flag long name (fails loudly if someone adds `--sort` as a command).
+2. **Position invariant test**: assert the *flag-only* names (`--sort`, `--ext`,
+   `--drive`, …) never resolve to a command (fails loudly if someone adds
+   `--sort` as a command). The dual-use `--stats`/`--agg` are excluded by
+   design (§3.2) — first token = command, later = modifier.
 3. **Per-command parse tests**: `--update acquire --version v1` → action=acquire,
    version=v1; `--daemon start` → action=start; etc.
 4. **Golden help-text test**: the new grammar renders + lists every command.

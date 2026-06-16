@@ -153,10 +153,15 @@ mod tests {
     }
 
     #[test]
-    fn search_flags_are_never_commands() {
-        // The disjointness invariant: a search flag as the FIRST token stays
-        // in search mode (e.g. `uffs --ext pdf` is a pattern-less search), so
-        // it must never resolve to a command.
+    fn flag_only_names_are_never_commands() {
+        // Position invariant (cli-grammar.md §3.2): a *flag-only* name as the
+        // FIRST token stays in search mode (e.g. `uffs --ext pdf` is a
+        // pattern-less search), so it must never resolve to a command.
+        //
+        // NOTE: `--stats` and `--agg` are deliberately ABSENT here — they are
+        // the two dual-use names (command as first token, search modifier
+        // later), pinned by `dual_use_names_are_commands_as_first_token`.
+        // Do not add them to this list.
         for flag in [
             "--ext",
             "--sort",
@@ -175,6 +180,16 @@ mod tests {
                 "search flag `{flag}` must NOT be a management command"
             );
         }
+    }
+
+    #[test]
+    fn dual_use_names_are_commands_as_first_token() {
+        // `--stats` / `--agg` are BOTH commands (first token) and inline search
+        // modifiers (after a pattern). The grammar resolves this by position:
+        // as the first token they are their command. Pin that here so the
+        // dual-use contract (cli-grammar.md §3.2) can't silently regress.
+        assert_eq!(Command::from_token("--stats"), Some(Command::Stats));
+        assert_eq!(Command::from_token("--agg"), Some(Command::Agg));
     }
 
     #[test]

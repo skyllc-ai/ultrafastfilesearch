@@ -5,7 +5,7 @@ NTFS Master File Tables directly and searches millions of files in
 milliseconds.
 
 **Search is the default action** — just type `uffs <pattern>`.  No
-subcommand required.
+command required; management lives under `--<command>` (§6).
 
 ![UFFS CLI: real searches, filters, and aggregations across millions of indexed files with measured latency](../../assets/demo/uffs-cli.gif)
 
@@ -22,11 +22,11 @@ subcommand required.
 
 ## 1  Search (Default Action)
 
-When no subcommand is specified, `uffs` performs a search.  The first
-positional argument is the pattern.
+When the first token is not a `--command`, `uffs` performs a search.  The
+first positional argument is the pattern.
 
 ```
-uffs [OPTIONS] <PATTERN>
+uffs <PATTERN> [OPTIONS]
 ```
 
 ### Pattern Syntax
@@ -83,7 +83,7 @@ uffs [OPTIONS] <PATTERN>
 
 ---
 
-## 3  Filters
+## 2  Filters
 
 All filters are detailed in the [Filters guide](filters.md).  Summary:
 
@@ -129,7 +129,7 @@ All filters are detailed in the [Filters guide](filters.md).  Summary:
 
 ---
 
-## 4  Sorting
+## 3  Sorting
 
 All 36+ sortable columns are detailed in the [Sorting guide](sorting.md).
 Summary:
@@ -147,7 +147,7 @@ See [Sorting §2](sorting.md) for the full list.
 
 ---
 
-## 5  Output Control
+## 4  Output Control
 
 All output options are detailed in the [Output Formats guide](output-formats.md).
 Summary:
@@ -165,10 +165,15 @@ Summary:
 
 ---
 
-## 6  Inline Aggregation Flags
+## 5  Inline Aggregation Flags
 
 These flags run server-side analytics alongside (or instead of) search
-results.  For the `uffs --agg` subcommand, see §7 below.
+results.  For the `uffs --agg` command, see §6 below.
+
+> `--stats` and `--agg` are dual-use: as the **first token**
+> (`uffs --stats`, `uffs --agg <preset>`) they are commands; **after a
+> pattern** (`uffs '*.log' --stats size`) they are inline modifiers on a
+> search.  The first token decides — see [CLI Grammar](../architecture/cli-grammar.md).
 
 | Flag | Effect |
 |------|--------|
@@ -185,7 +190,7 @@ results.  For the `uffs --agg` subcommand, see §7 below.
 
 ---
 
-## 7  Commands
+## 6  Commands
 
 > Building/loading an index is **daemon-managed** — there is no standalone
 > `uffs index` command. Point the daemon at a live drive or a raw MFT with
@@ -242,7 +247,8 @@ uffs --daemon restart                         # Stop then restart
 Manage the MCP server for AI agent integration.
 
 ```bash
-uffs --mcp start                    # Start HTTP server on :8080
+uffs --mcp run                      # Run on stdin/stdout (for AI hosts)
+uffs --mcp start                    # Start HTTP server on :8080 (background)
 uffs --mcp start --port 9090        # Custom port
 uffs --mcp status                   # Health + stats
 uffs --mcp stop                     # Graceful shutdown
@@ -262,7 +268,7 @@ uffs --status
 
 ---
 
-## 8  Advanced / Diagnostic Flags
+## 7  Advanced / Diagnostic Flags
 
 These flags are for power users, profiling, and parity testing:
 
@@ -281,7 +287,7 @@ These flags are for power users, profiling, and parity testing:
 
 ---
 
-## 9  Examples
+## 8  Examples
 
 For a comprehensive recipe gallery organized by workflow (quick find,
 cleanup, developer/admin, attribute search, output piping), see
