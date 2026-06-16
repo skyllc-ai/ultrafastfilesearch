@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::orchestrate::exe_name;
+use crate::orchestrate::asset_name;
 use crate::{apply, github, journal, plan, proc, restore};
 
 /// How long the doctor waits on the broker pipe before calling it down
@@ -442,8 +442,9 @@ fn check_release(opts: &DoctorOpts, snapshot: Option<&plan::Snapshot>, report: &
     let sums_present = release.asset("SHA256SUMS").is_some();
     let mut missing = Vec::new();
     for stem in snap.installed_binaries() {
-        if release.asset(&exe_name(&stem)).is_none() {
-            missing.push(exe_name(&stem));
+        let asset = asset_name(&stem);
+        if release.asset(&asset).is_none() {
+            missing.push(asset);
         }
     }
     if !sums_present {

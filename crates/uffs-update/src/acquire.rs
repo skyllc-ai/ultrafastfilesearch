@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::orchestrate::exe_name;
+use crate::orchestrate::{asset_name, exe_name};
 use crate::{github, verify};
 
 /// Inputs for one acquire run.
@@ -62,16 +62,18 @@ pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
         .with_context(|| format!("reading {}", sums_path.display()))?;
     let sums = verify::parse_sha256sums(&sums_text);
 
-    // Each binary as an individual asset.
+    // Each binary as an individual asset. We download the platform-
+    // suffixed release asset (`uffsd-windows-x64.exe`) but stage it under
+    // the plain on-disk name (`uffsd.exe`) so the apply phase finds it.
     let mut staged = Vec::with_capacity(plan.binaries.len());
     for stem in &plan.binaries {
-        let asset = exe_name(stem);
+        let asset = asset_name(stem);
         let url = release
             .asset(&asset)
             .with_context(|| format!("release {} has no asset {asset}", release.tag_name))?
             .browser_download_url
             .clone();
-        let dest = plan.stage.join(&asset);
+        let dest = plan.stage.join(exe_name(stem));
         github::download_to(&url, &dest)?;
 
         let expected = verify::expected_hash(&sums, &asset)

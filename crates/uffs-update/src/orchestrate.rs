@@ -17,12 +17,29 @@ use crate::plan::Snapshot;
 /// Smoke-check argument (`--self-check` where supported, §19.8).
 pub(crate) const SMOKE_ARG: &str = "--version";
 
-/// Platform executable file name for a binary stem.
+/// Platform executable file name for a binary stem — the **on-disk**
+/// name an installed binary has (`uffsd` → `uffsd.exe` on Windows).
 pub(crate) fn exe_name(stem: &str) -> String {
     if cfg!(windows) {
         format!("{stem}.exe")
     } else {
         stem.to_owned()
+    }
+}
+
+/// Release **asset** name for a binary stem — the platform-suffixed name
+/// the release publishes (e.g. `uffsd-windows-x64.exe`), matching the
+/// `final-release/` naming in `.github/workflows/release.yml`. Distinct
+/// from [`exe_name`]: we download the suffixed asset but stage it under
+/// the plain on-disk name so the apply phase finds it. The suffix tracks
+/// the release build matrix (`x86_64` Windows/Linux, `aarch64` macOS).
+pub(crate) fn asset_name(stem: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{stem}-windows-x64.exe")
+    } else if cfg!(target_os = "macos") {
+        format!("{stem}-macos-arm64")
+    } else {
+        format!("{stem}-linux-x64")
     }
 }
 
@@ -180,9 +197,25 @@ pub(crate) fn prune_all(journal: &Journal) {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{apply_all, exe_name, journal_from_snapshot, preflight};
+    use super::{apply_all, asset_name, exe_name, journal_from_snapshot, preflight};
     use crate::journal::{BinaryStatus, UpdateState};
     use crate::plan::Snapshot;
+
+    #[test]
+    fn asset_name_is_platform_suffixed_and_differs_from_on_disk_name() {
+        let asset = asset_name("uffsd");
+        // The release publishes platform-suffixed assets; the on-disk name
+        // is plain. Acquire downloads the former, stages as the latter.
+        assert_ne!(asset, exe_name("uffsd"), "asset must be platform-suffixed");
+        let expected = if cfg!(target_os = "windows") {
+            "uffsd-windows-x64.exe"
+        } else if cfg!(target_os = "macos") {
+            "uffsd-macos-arm64"
+        } else {
+            "uffsd-linux-x64"
+        };
+        assert_eq!(asset, expected);
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("uffs-orch-{}-{tag}", std::process::id()));
