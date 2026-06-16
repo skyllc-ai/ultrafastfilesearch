@@ -41,7 +41,10 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
                 | DaemonAction::StatusDrives
                 | DaemonAction::Start { elevate: true, .. }
         );
-        if !is_read_only_or_uac_start && !uffs_mft::is_elevated() {
+        if !is_read_only_or_uac_start
+            && !uffs_mft::is_elevated()
+            && mutating_management_needs_elevation()
+        {
             #[cfg(windows)]
             anyhow::bail!(
                 "Daemon management commands require an elevated (Administrator) shell.\n\n\
@@ -115,6 +118,44 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
         DaemonAction::Forget { drives, force } => daemon_tiering::daemon_forget(drives, *force),
         DaemonAction::StatusDrives => daemon_tiering::daemon_status_drives(),
     }
+}
+
+/// Whether a *mutating* daemon-management action (stop/kill/restart/load/…)
+/// needs elevation, **given the running daemon's actual owner**.
+///
+/// The gate exists so a non-privileged caller cannot stop or restart a daemon
+/// it could not bring back. On **Unix** that is only true when the running
+/// daemon is owned by a *different* (typically root) user: a daemon we own —
+/// same effective uid — is ours to stop and restart, so no `sudo` is needed
+/// (the common macOS/Linux offline-capture workflow, and what `uffs --update
+/// apply` relies on). The daemon writes its PID file, so the file's owner is
+/// the daemon's uid; an unreadable/absent PID file means there is no daemon to
+/// protect → no elevation required.
+///
+/// On **Windows** (and any non-Unix target) `uffsd` runs elevated to read the
+/// live MFT, so managing it always needs an elevated token — behaviour is
+/// unchanged.
+#[cfg(unix)]
+fn mutating_management_needs_elevation() -> bool {
+    daemon_owner_needs_elevation(&pid_file_path(), uffs_mft::current_euid())
+}
+
+/// Pure core of [`mutating_management_needs_elevation`] (Unix): elevation is
+/// required iff the daemon's PID file exists and is owned by a uid other than
+/// `caller_euid`. An absent/unreadable PID file → no daemon to protect → no
+/// elevation. Split out so the owner comparison is unit-testable without a
+/// live daemon.
+#[cfg(unix)]
+fn daemon_owner_needs_elevation(pid_file: &std::path::Path, caller_euid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    std::fs::metadata(pid_file).is_ok_and(|meta| meta.uid() != caller_euid)
+}
+
+/// Non-Unix: managing the (elevated) daemon always needs an elevated token.
+#[cfg(not(unix))]
+const fn mutating_management_needs_elevation() -> bool {
+    true
 }
 
 /// `uffs --daemon start` — start the daemon, forwarding data-source flags
@@ -693,5 +734,52 @@ mod tests {
     #[test]
     fn non_empty_env_keeps_whitespace_only_values() {
         assert_eq!(non_empty_env(Some(" ".to_owned())), Some(" ".to_owned()));
+    }
+
+    // ── Privilege-aware daemon-management gate (Unix) ────────────────
+    //
+    // A daemon we own (same uid) is ours to stop/restart, so no `sudo` is
+    // needed — this is what unblocks `uffs --update apply` against a
+    // user-owned offline daemon on macOS/Linux.
+
+    #[cfg(unix)]
+    #[test]
+    fn own_daemon_pid_file_needs_no_elevation() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        // A file this test created is owned by the test's own euid; managing a
+        // daemon we own must NOT require elevation.
+        let dir = std::env::temp_dir().join(format!("uffs-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let pid_file = dir.join("daemon.pid");
+        std::fs::write(&pid_file, "1234\n").expect("write pid file");
+
+        let our_uid = std::fs::metadata(&pid_file).expect("stat").uid();
+        assert!(
+            !super::daemon_owner_needs_elevation(&pid_file, our_uid),
+            "a daemon owned by the caller must be manageable without sudo"
+        );
+
+        // A PID file owned by *root* (uid 0) while we run as non-root DOES
+        // require elevation — the daemon is not ours to restart.
+        if our_uid != 0 {
+            assert!(
+                super::daemon_owner_needs_elevation(&pid_file, 0),
+                "a root-owned daemon must require elevation for a non-root caller"
+            );
+        }
+
+        // Best-effort cleanup; bound (not a non-binding `let _`) so the
+        // must-use Result is consumed without tripping clippy either way.
+        let _cleanup = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absent_pid_file_needs_no_elevation() {
+        // No PID file → no daemon to protect → no elevation required (so
+        // `stop`/`start` against a stopped daemon never demands sudo).
+        let missing = std::env::temp_dir().join("uffs-gate-does-not-exist-xyz.pid");
+        assert!(!super::daemon_owner_needs_elevation(&missing, 4242));
     }
 }

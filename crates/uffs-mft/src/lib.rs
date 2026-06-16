@@ -301,6 +301,10 @@ pub use ntfs::{
     StandardInformation, StreamInfo, apply_usa_fixup, extract_data_runs_from_attribute,
     fixup_file_record, parse_data_runs,
 };
+// Caller's effective uid (Unix-only) — daemon-management uses it to decide
+// whether managing the *running* daemon needs elevation (owner comparison).
+#[cfg(unix)]
+pub use platform::current_euid;
 // Elevation check — cross-platform public API (Windows: UAC token check;
 // Unix: geteuid() == 0).  Exported unconditionally so uffs-cli and
 // uffs-daemon can gate mutating daemon commands on all targets.

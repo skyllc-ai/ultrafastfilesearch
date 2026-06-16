@@ -56,6 +56,10 @@ pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
 pub use system::DriveType;
+// Caller's effective uid — Unix-only; lets daemon-management compare the
+// caller against the running daemon's owner (its PID-file uid).
+#[cfg(unix)]
+pub use system::current_euid;
 // Elevation check — available on all platforms (Windows: UAC token check;
 // Unix: geteuid() == 0).  Both the daemon CLI gate and uffs-daemon use this.
 pub use system::is_elevated;

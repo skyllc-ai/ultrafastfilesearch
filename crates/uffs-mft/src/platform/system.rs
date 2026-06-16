@@ -120,6 +120,24 @@ pub fn is_elevated() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+/// Unix: the caller's effective user ID.
+///
+/// Used by daemon-management to decide whether a *mutating* action needs
+/// elevation: a daemon owned by the **same** uid as the caller is theirs to
+/// stop/restart, whereas a daemon owned by a different (typically root) user
+/// is not (see `uffs-cli::commands::daemon_mgmt`).
+#[cfg(unix)]
+#[must_use]
+#[expect(
+    unsafe_code,
+    reason = "FFI: POSIX geteuid() — defined to be safe but the libc binding is unsafe"
+)]
+pub fn current_euid() -> u32 {
+    // SAFETY: `geteuid()` has no preconditions, never fails, and is
+    // signal-safe per POSIX.
+    unsafe { libc::geteuid() }
+}
+
 /// Returns the path to the volume root (e.g., "C:\").
 #[cfg(windows)]
 #[must_use]
