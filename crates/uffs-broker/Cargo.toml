@@ -62,6 +62,10 @@ windows.workspace = true
 # pure-logic protocol module is cross-platform-testable without
 # dragging the Windows FFI surface along.
 uffs-broker-protocol.workspace = true
+# Shared in-process Authenticode (`WinVerifyTrust`) verification — the
+# single implementation now lives in `uffs-security` (DRY with the
+# self-updater) instead of a broker-local copy.
+uffs-security.workspace = true
 
 [lints]
 workspace = true

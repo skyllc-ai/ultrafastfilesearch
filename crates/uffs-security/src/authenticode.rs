@@ -1,56 +1,41 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! S5.2 Authenticode verification of the broker's client image.
+//! In-process Authenticode (`WinVerifyTrust`) signature verification.
 //!
-//! In-process `WinVerifyTrust` (replacing the old per-request PowerShell
-//! `Get-AuthenticodeSignature` spawn — hundreds of ms each, plus a hard
-//! dependency on PowerShell), with a per-`(exe_path, mtime)` result cache so a
-//! client's repeated drive requests verify once.  Split out of `broker.rs` to
-//! keep that file under the 800-LOC ceiling (alongside `service.rs` and
-//! `process_handle.rs`).
+//! The single shared implementation used by both the Access Broker
+//! (verifying its client image) and the self-updater (verifying a
+//! downloaded binary before it is allowed to replace anything).
+//!
+//! Consolidated here so the one piece of `WinVerifyTrust` FFI lives in a
+//! single audited place rather than drifting across crates. Includes a
+//! per-`(exe_path, mtime)` result cache so repeated checks of the same
+//! image verify once; a replaced binary (different mtime) is a cache
+//! **miss** and is re-verified — a substituted image can never inherit
+//! an old "trusted" verdict.
+
+#![cfg(windows)]
 
 /// Map of `exe_path` → (image mtime, verdict) backing [`AUTHENTICODE_CACHE`].
-#[cfg(windows)]
 type AuthenticodeCache = std::collections::HashMap<String, (Option<std::time::SystemTime>, bool)>;
 
-/// Per-`exe_path` cache of Authenticode results, invalidated by image mtime.
-///
-/// Keyed by path; the value carries the image's last-write time so a replaced
-/// binary (different mtime) is a cache **miss** and gets re-verified — a
-/// substituted image can never inherit an old "trusted" verdict.
-#[cfg(windows)]
+/// Per-`exe_path` cache of verification results, invalidated by image mtime.
 static AUTHENTICODE_CACHE: std::sync::OnceLock<std::sync::Mutex<AuthenticodeCache>> =
     std::sync::OnceLock::new();
 
-/// Read a cached verification for `exe_path`, valid only while the stored mtime
-/// still matches the image's current mtime.
-#[cfg(windows)]
-fn cached_authenticode(exe_path: &str, mtime: Option<std::time::SystemTime>) -> Option<bool> {
-    let cache = AUTHENTICODE_CACHE.get()?;
-    // Copy the entry out and release the lock before comparing.
-    let (stored_mtime, result) = cache.lock().ok()?.get(exe_path).copied()?;
-    (stored_mtime == mtime).then_some(result)
-}
-
-/// Store a verification result for `exe_path` keyed by its current mtime.
-#[cfg(windows)]
-fn store_authenticode(exe_path: &str, mtime: Option<std::time::SystemTime>, result: bool) {
-    let cache =
-        AUTHENTICODE_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(exe_path.to_owned(), (mtime, result));
-    }
-}
-
-/// S5.2: Verify the Authenticode signature of the client executable.
+/// Verify the Authenticode signature of the executable at `exe_path`.
 ///
-/// In-process `WinVerifyTrust` — replaces the old per-request PowerShell
-/// `Get-AuthenticodeSignature` spawn (hundreds of ms each, plus a hard
-/// dependency on PowerShell being present and on PATH).  Result is cached per
-/// `(exe_path, mtime)` so a client's repeated drive requests verify once.
-#[cfg(windows)]
-pub(super) fn verify_authenticode(exe_path: &str) -> bool {
+/// In-process `WinVerifyTrust`. The result is cached per `(exe_path,
+/// mtime)` so repeated checks of the same image verify only once.
+///
+/// **Policy:** reject only a **tampered** image (`TRUST_E_BAD_DIGEST` /
+/// hash mismatch); accept `Valid`, `NotSigned` (unsigned dev builds),
+/// and any other non-tamper state. Callers that require a *valid*
+/// signature (not merely "untampered") must layer that on top — this
+/// primitive matches the broker's long-standing "reject only tamper"
+/// contract so the unsigned dev daemon still passes.
+#[must_use]
+pub fn verify_authenticode(exe_path: &str) -> bool {
     let mtime = std::fs::metadata(exe_path)
         .and_then(|meta| meta.modified())
         .ok();
@@ -62,13 +47,25 @@ pub(super) fn verify_authenticode(exe_path: &str) -> bool {
     trusted
 }
 
+/// Read a cached verification for `exe_path`, valid only while the stored
+/// mtime still matches the image's current mtime.
+fn cached_authenticode(exe_path: &str, mtime: Option<std::time::SystemTime>) -> Option<bool> {
+    let cache = AUTHENTICODE_CACHE.get()?;
+    // Copy the entry out and release the lock before comparing.
+    let (stored_mtime, result) = cache.lock().ok()?.get(exe_path).copied()?;
+    (stored_mtime == mtime).then_some(result)
+}
+
+/// Store a verification result for `exe_path` keyed by its current mtime.
+fn store_authenticode(exe_path: &str, mtime: Option<std::time::SystemTime>, result: bool) {
+    let cache =
+        AUTHENTICODE_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(exe_path.to_owned(), (mtime, result));
+    }
+}
+
 /// In-process Authenticode verification of `exe_path` via `WinVerifyTrust`.
-///
-/// Policy is **preserved** from the old PowerShell check: reject only a
-/// **tampered** image (`TRUST_E_BAD_DIGEST` / `HashMismatch`); accept `Valid`
-/// and `NotSigned` (dev builds) and any other non-tamper state — so the
-/// unsigned dev daemon still passes.
-#[cfg(windows)]
 #[expect(unsafe_code, reason = "FFI: WinVerifyTrust signature verification")]
 fn win_verify_trust(exe_path: &str) -> bool {
     use core::mem::size_of;

@@ -36,13 +36,11 @@ use service::{install_service, uninstall_service};
 mod process_handle;
 #[cfg(windows)]
 use process_handle::{OwnedProcessHandle, query_process_image_name, verify_client_handle};
-
-// S5.2 Authenticode verification (WinVerifyTrust + per-image cache), split out
-// to keep this file under the 800-LOC ceiling. See `broker/authenticode.rs`.
-#[path = "broker/authenticode.rs"]
-mod authenticode;
+// S5.2 Authenticode verification (WinVerifyTrust + per-image cache). The single
+// implementation now lives in `uffs_security::authenticode`, shared with the
+// self-updater (DRY) instead of a broker-local copy.
 #[cfg(windows)]
-use authenticode::verify_authenticode;
+use uffs_security::authenticode::verify_authenticode;
 
 // `Send`-safe RAII handle wrapper (SBB-2) — lets a connected pipe instance move
 // into a per-connection worker thread (FU-5). See `broker/owned_handle.rs`.
