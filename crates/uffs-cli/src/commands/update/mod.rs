@@ -11,7 +11,7 @@
 //! the channel that placed them, validates each binary's on-disk version,
 //! and captures the running processes' launch recipes — mutating nothing.
 //! The `snapshot` / `acquire` / `apply` / `doctor` actions add the later
-//! phases on top.
+//! phases on top; `recover` finishes an interrupted update on demand.
 //!
 //! Entry point: `run_update` (dispatched from `--update` in `main`).
 
@@ -40,6 +40,7 @@ use model::{Anchor, Channel, Component, DetectionReport, InstallRoot, RunningPro
 /// - `acquire`  → + download + SHA-verify into staging (Phase C).
 /// - `apply`    → + the full mutating update (stop/swap/smoke/commit/restore).
 /// - `doctor`   → end-to-end health check (`--repair` / `--offline`).
+/// - `recover`  → finish/roll back an interrupted update in the foreground.
 ///
 /// Options (`--version`, `--repair`, `--offline`) follow the action.
 pub(crate) fn run_update(args: &[String]) -> Result<()> {
@@ -55,9 +56,17 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         .map(String::as_str)
         .filter(|tok| !tok.starts_with('-'));
     if let Some(act) = action
-        && !matches!(act, "snapshot" | "acquire" | "apply" | "doctor")
+        && !matches!(act, "snapshot" | "acquire" | "apply" | "doctor" | "recover")
     {
-        bail!("unknown `--update` action `{act}` — expected: snapshot | acquire | apply | doctor");
+        bail!(
+            "unknown `--update` action `{act}` — expected: snapshot | acquire | apply | doctor | recover"
+        );
+    }
+
+    // `recover` finishes (or rolls back) an interrupted update in the
+    // foreground — the on-demand twin of the startup best-effort self-heal.
+    if action == Some("recover") {
+        return self_heal::run_foreground();
     }
 
     // `doctor` runs its own flow: detect → freeze a snapshot → hand off to the
@@ -269,7 +278,9 @@ fn print_help() {
          \x20                     atomically swap + smoke-test, commit, restart.\n\
          \x20                     Journaled + auto-rollback on failure.\n\
          \x20 doctor              End-to-end health check (versions, dirs, journal,\n\
-         \x20                     backups, services, broker pipe, release reach).\n\n\
+         \x20                     backups, services, broker pipe, release reach).\n\
+         \x20 recover             Finish or roll back an interrupted update now\n\
+         \x20                     (foreground; the on-demand self-heal).\n\n\
          OPTIONS:\n\
          \x20 --version <tag>     Acquire/apply a specific release tag (default: latest).\n\
          \x20 --repair            (doctor) self-heal what can be fixed.\n\

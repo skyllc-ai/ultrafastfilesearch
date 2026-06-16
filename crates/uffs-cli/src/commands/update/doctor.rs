@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs update doctor` — end-to-end health check of the self-update flow.
+//! `uffs --update doctor` — end-to-end health check of the self-update flow.
 //!
 //! The CLI is the thin half: it runs Phase-A detection, freezes a snapshot
 //! (so the helper has full install/version/service context), and spawns

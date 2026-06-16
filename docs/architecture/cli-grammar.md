@@ -4,9 +4,10 @@ SPDX-License-Identifier: MPL-2.0
 -->
 # UFFS CLI Grammar — search-first, `--command` for everything else
 
-**Status:** **Implemented** on `feat/cli-grammar` (§11 P0–P4 done; P5
-validation in progress). Decisions resolved (§12). This is the design +
-implementation + tracking doc for the `uffs` command-line grammar redesign.
+**Status:** **Implemented + validated** on `feat/cli-grammar` (§11 P0–P6 all
+done; doc audited against the code, no gaps). Decisions resolved (§12). This is
+the design + implementation + tracking doc for the `uffs` command-line grammar
+redesign.
 
 **TL;DR:** `uffs <anything>` searches for `<anything>` — *any* word, with no
 reserved words. Management operations are `--<command>` (double-dash), e.g.
@@ -179,11 +180,23 @@ convenience alias is an open question, §12.)
 | `uffs -- --update` | search for the literal pattern `--update` (bare `--` = end-of-options) |
 | `uffs --search -- --update` | same, explicit search form |
 | `uffs --update --help` | update help (the `--help` after a command is command-scoped) |
-| `uffs --bogus` | error: unknown command `--bogus` (a `--`-leading first token that is *not* a command + *not* a search flag is a usage error, with a "did you mean …?" hint) |
+| `uffs --bogus` | forwarded to search; the daemon's arg parser rejects the unknown flag. *(See the note below — a CLI-side "unknown command, did you mean …?" hint is intentionally **not** implemented.)* |
 
 The **only** thing not searchable bare is a filename literally beginning with
 `--` (e.g. `--update`), reachable with `uffs -- <pattern>`. Such filenames are
 pathological; the escape is the universal `--` separator.
+
+> **Why no CLI-side "unknown command" hint for `--bogus`.** `uffs` is a
+> **thin client**: it deliberately does *not* know the search-flag set — that
+> lives in the daemon, which owns all search-arg parsing. To tell `--bogus`
+> (typo'd command) apart from `--newer-created` (a real, possibly newer search
+> flag) the CLI would have to duplicate the daemon's entire flag registry and
+> keep it in lock-step — brittle, and it would risk rejecting a *valid* new
+> search flag as an "unknown command". So an unrecognized `--`-leading first
+> token is forwarded to search, and the daemon's parser returns the
+> authoritative "unknown flag" error. The disjointness invariant (§3.2) still
+> holds for the *known* command set; this only changes the error *source* for
+> truly-unknown `--flags`, not the grammar.
 
 ## 7. Why not the alternatives
 
@@ -286,7 +299,8 @@ that internal path; only the *external* entry tokens change.
    - `--update` → Update command.
    - `--ext` (first token) → Search mode (search flag, not a command).
    - `--` then `--update` → Search, pattern == "--update".
-   - `--bogus` → usage error.
+   - `--bogus` → Search mode (forwarded to the daemon parser, which rejects
+     the unknown flag — see §6's thin-client note; no CLI-side hint).
 2. **Disjointness invariant test**: assert no `Command` token collides with any
    search-flag long name (fails loudly if someone adds `--sort` as a command).
 3. **Per-command parse tests**: `--update acquire --version v1` → action=acquire,
@@ -328,8 +342,16 @@ that internal path; only the *external* entry tokens change.
       self-spawn was affected: the updater shells out to the separate
       `uffs-update` binary, autostart to `uffsd`, MCP to `uffsmcp` — each with
       its own grammar.)
-- [ ] **P5 — Validate.** Host + Windows-MSVC clippy clean; full nextest; manual
-      smoke of every command + a `uffs update` *search*.
+- [x] **P5 — Validate.** Host + Windows-MSVC prod clippy clean; full nextest
+      (uffs-cli + uffs-mcp) green; manual smoke of every command, the
+      `uffs update`/`uffs status`-as-search disambiguation, the `uffs --`
+      escape, `-h`/`-V`, and `--update recover`.
+- [x] **P6 — Gap-closure pass.** Audited this doc against the code: wired the
+      `recover` action (§5/§8.2) — `uffs --update recover` runs the
+      foreground self-heal (the helper's `recover` already existed; only the
+      CLI action was missing) + tests; reconciled `--bogus` (§6/§9) to the
+      thin-client reality (the daemon owns flag validation; no duplicated
+      registry). No remaining divergence between doc and implementation.
 
 ## 12. Decisions (resolved 2026-06-16)
 

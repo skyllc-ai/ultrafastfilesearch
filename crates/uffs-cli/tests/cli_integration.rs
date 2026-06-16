@@ -125,6 +125,28 @@ mod tests {
         assert_failure("single_dash_pattern", &["-x"], &["daemon"]);
     }
 
+    // ── `--update` action surface (cli-grammar.md §5) ────────────────
+    //
+    // Pin the full action set — incl. `recover` — so it can't silently
+    // drift from the design doc. Deterministic: no filesystem/network.
+
+    #[test]
+    fn update_help_lists_every_action_including_recover() {
+        assert_success("update_help", &["--update", "--help"], &[
+            "snapshot", "acquire", "apply", "doctor", "recover",
+        ]);
+    }
+
+    #[test]
+    fn update_rejects_unknown_action_and_lists_recover() {
+        // An unknown action errors with the accepted set, which must now
+        // include `recover` (the foreground self-heal action).
+        assert_failure("update_bogus_action", &["--update", "bogus"], &[
+            "unknown `--update` action",
+            "recover",
+        ]);
+    }
+
     // ── Validation tests ────────────────────────────────────────────
     //
     // With the thin-client approach, search-flag validation happens on

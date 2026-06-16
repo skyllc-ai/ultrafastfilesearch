@@ -16,6 +16,8 @@
 
 use std::process::{Command, Stdio};
 
+use anyhow::{Context as _, Result, bail};
+
 use super::acquire::find_helper;
 use super::snapshot;
 
@@ -41,4 +43,33 @@ pub(crate) fn trigger() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+/// Run `uffs-update recover` in the **foreground** — the explicit
+/// `uffs --update recover` action. Unlike [`trigger`], this blocks and lets
+/// the helper's output through, so an operator can deterministically finish
+/// (or roll back) an interrupted update on demand rather than waiting for the
+/// next CLI invocation's best-effort heal.
+///
+/// # Errors
+///
+/// Fails if the `uffs-update` helper cannot be located or it exits non-zero.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn run_foreground() -> Result<()> {
+    let journal = snapshot::update_dir().join(LIVE_JOURNAL);
+    if !journal.exists() {
+        println!("No in-flight update journal found — nothing to recover.");
+        return Ok(());
+    }
+    let helper = find_helper()?;
+    let status = Command::new(&helper)
+        .arg("recover")
+        .arg("--journal")
+        .arg(&journal)
+        .status()
+        .with_context(|| format!("spawning {}", helper.display()))?;
+    if !status.success() {
+        bail!("uffs-update recover failed (exit {:?})", status.code());
+    }
+    Ok(())
 }

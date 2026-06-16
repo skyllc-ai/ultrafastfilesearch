@@ -483,7 +483,7 @@ COMMANDS:
   --agg <PRESET>       Run aggregate analytics
   --daemon <ACTION>    Manage the UFFS daemon (start/stop/load/status)
   --mcp <ACTION>       Manage the UFFS MCP server
-  --update [ACTION]    Self-update (snapshot/acquire/apply/doctor)
+  --update [ACTION]    Self-update (snapshot/acquire/apply/doctor/recover)
   --status             Show combined system status
 
 COMMON OPTIONS:
