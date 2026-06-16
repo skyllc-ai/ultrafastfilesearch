@@ -17,14 +17,6 @@
 //! confirm the new image *executes on this host* before betting services
 //! on it.
 
-// Built ahead of the journal-driven apply/recover orchestration (the
-// next slice). For now these primitives are exercised by the unit tests
-// below; the `expect` is removed once the orchestration wires them.
-#![expect(
-    dead_code,
-    reason = "apply primitives built ahead of the journal-driven orchestration (next slice)"
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

@@ -1,0 +1,156 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! Typed read of the Phase-B snapshot (design §13) — the input to apply,
+//! quiesce, and restore.
+//!
+//! The snapshot is written by `uffs update --snapshot` (in `uffs-cli`);
+//! the apply helper reads it back here. Only the fields the mutating
+//! phases need are modelled; unknown fields are ignored so the schema can
+//! grow without breaking older helpers.
+
+// The `running[]` entries (component / pid / image_path / command_line)
+// are consumed by the quiesce + restore slice; until then they are
+// parsed and exercised only by the tests below.
+#![expect(
+    dead_code,
+    reason = "snapshot `running[]` consumed by the quiesce/restore slice (next)"
+)]
+
+use std::path::PathBuf;
+
+use anyhow::{Context as _, Result};
+use serde::Deserialize;
+
+/// A parsed Phase-B snapshot.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Snapshot {
+    /// Target version the snapshot was captured against (if recorded).
+    #[serde(default)]
+    pub(crate) to_version: Option<String>,
+    /// Install roots = update targets.
+    #[serde(default)]
+    pub(crate) targets: Vec<SnapTarget>,
+    /// Live processes (how to stop + restart each).
+    #[serde(default)]
+    pub(crate) running: Vec<SnapRunning>,
+}
+
+/// One install root from the snapshot.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SnapTarget {
+    /// Install directory.
+    pub(crate) root: PathBuf,
+    /// Channel (`winget` / `unmanaged` / `dev-build`).
+    pub(crate) channel: String,
+    /// Binaries present in this root.
+    #[serde(default)]
+    pub(crate) binaries: Vec<SnapBinary>,
+}
+
+/// One binary entry from the snapshot.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SnapBinary {
+    /// Logical stem (e.g. `uffsd`).
+    pub(crate) name: String,
+    /// On-disk version at snapshot time.
+    #[serde(default)]
+    pub(crate) on_disk_version: Option<String>,
+}
+
+/// One live process from the snapshot (the restart recipe).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SnapRunning {
+    /// Component kind: `daemon` / `broker` / `mcp`.
+    pub(crate) component: String,
+    /// OS process id at snapshot time.
+    pub(crate) pid: u32,
+    /// Image path.
+    #[serde(default)]
+    pub(crate) image_path: Option<PathBuf>,
+    /// Exact launch command line (the restart recipe).
+    #[serde(default)]
+    pub(crate) command_line: Option<String>,
+}
+
+impl Snapshot {
+    /// Load + parse a snapshot file.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the file is missing or not valid snapshot JSON.
+    pub(crate) fn load(path: &std::path::Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading snapshot {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parsing snapshot {}", path.display()))
+    }
+
+    /// The version this update is moving *to* (falls back to `unknown`).
+    pub(crate) fn to_version(&self) -> &str {
+        self.to_version.as_deref().unwrap_or("unknown")
+    }
+
+    /// Roots the **updater** owns: `unmanaged` only. `WinGet` roots are
+    /// delegated to `winget upgrade` by `uffs-cli`; dev-build roots are
+    /// never auto-updated.
+    pub(crate) fn unmanaged_targets(&self) -> impl Iterator<Item = &SnapTarget> {
+        self.targets
+            .iter()
+            .filter(|target| target.channel == "unmanaged")
+    }
+
+    /// The lowest `on_disk_version` across all targets (the "from" version),
+    /// or `unknown` if none recorded.
+    pub(crate) fn prior_version(&self) -> String {
+        self.targets
+            .iter()
+            .flat_map(|target| target.binaries.iter())
+            .filter_map(|binary| binary.on_disk_version.clone())
+            .min()
+            .unwrap_or_else(|| "unknown".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Snapshot;
+
+    const SNAP: &str = r#"{
+      "schema": 2, "to_version": "0.6.2",
+      "targets": [
+        { "root": "C:\\uffs", "channel": "unmanaged",
+          "binaries": [ { "name": "uffsd", "on_disk_version": "0.6.1" } ] },
+        { "root": "C:\\wg", "channel": "winget",
+          "binaries": [ { "name": "uffs", "on_disk_version": "0.6.2" } ] }
+      ],
+      "running": [
+        { "component": "daemon", "pid": 42, "image_path": "C:\\uffs\\uffsd.exe",
+          "command_line": "uffsd --no-retire" }
+      ]
+    }"#;
+
+    #[test]
+    fn parses_and_filters_unmanaged() {
+        let snap: Snapshot = serde_json::from_str(SNAP).expect("parse");
+        assert_eq!(snap.to_version(), "0.6.2");
+        assert_eq!(snap.prior_version(), "0.6.1");
+        let unmanaged: Vec<_> = snap.unmanaged_targets().collect();
+        assert_eq!(unmanaged.len(), 1, "winget root excluded");
+        let binary = unmanaged
+            .first()
+            .and_then(|target| target.binaries.first())
+            .expect("one binary");
+        assert_eq!(binary.name, "uffsd");
+        let running = snap.running.first().expect("one running");
+        assert_eq!(running.component, "daemon");
+        assert_eq!(running.command_line.as_deref(), Some("uffsd --no-retire"));
+    }
+
+    #[test]
+    fn tolerates_missing_optional_fields() {
+        let snap: Snapshot = serde_json::from_str(r#"{ "targets": [] }"#).expect("parse");
+        assert_eq!(snap.to_version(), "unknown");
+        assert_eq!(snap.prior_version(), "unknown");
+        assert_eq!(snap.unmanaged_targets().count(), 0);
+    }
+}

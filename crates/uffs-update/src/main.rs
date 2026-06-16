@@ -16,7 +16,11 @@ mod acquire;
 mod apply;
 mod github;
 mod journal;
+mod orchestrate;
+mod plan;
 mod verify;
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -27,12 +31,40 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("acquire") => run_acquire(args.get(1..).unwrap_or_default()),
+        Some("apply") => run_apply(args.get(1..).unwrap_or_default()),
         Some("--help" | "-h") | None => {
             print_usage();
             Ok(())
         }
-        Some(other) => bail!("unknown subcommand `{other}` (try `acquire`)"),
+        Some(other) => bail!("unknown subcommand `{other}` (try `acquire` / `apply`)"),
     }
+}
+
+/// Parse the `apply` flags and run the journal-driven swap+verify.
+///
+/// Slice 3: assumes services are already stopped (Quiesce wraps this in a
+/// later slice). Swaps + smoke-tests + commits, rolling back on failure.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn run_apply(args: &[String]) -> Result<()> {
+    let snapshot_path = PathBuf::from(required(flag(args, "--snapshot"), "--snapshot <path>")?);
+    let stage = PathBuf::from(required(flag(args, "--stage"), "--stage <dir>")?);
+    let update_dir = stage
+        .parent()
+        .map_or_else(|| stage.clone(), Path::to_path_buf);
+
+    let snapshot = plan::Snapshot::load(&snapshot_path)?;
+    let backup_dir = update_dir.join(format!("backup-{}", std::process::id()));
+    let journal_path = update_dir.join("journal.json");
+    let mut journal = orchestrate::journal_from_snapshot(journal_path, &snapshot, backup_dir);
+    journal.transition(journal::UpdateState::Acquired, "apply.acquired")?;
+
+    orchestrate::apply_all(&mut journal, &stage, |target| {
+        apply::smoke_ok(target, orchestrate::SMOKE_ARG)
+    })?;
+    orchestrate::prune_all(&journal);
+    journal.transition(journal::UpdateState::Done, "apply.done")?;
+    println!("Applied + committed → {}", journal.to_version);
+    Ok(())
 }
 
 /// Parse the `acquire` flags and run it.
@@ -43,7 +75,7 @@ fn run_acquire(args: &[String]) -> Result<()> {
     let plan = AcquirePlan {
         repo,
         tag: flag(args, "--version"),
-        stage: std::path::PathBuf::from(stage),
+        stage: PathBuf::from(stage),
         bundle: flag(args, "--bundle").unwrap_or_else(|| AcquirePlan::default_bundle().to_owned()),
         sums: flag(args, "--sums").unwrap_or_else(|| "SHA256SUMS".to_owned()),
     };
