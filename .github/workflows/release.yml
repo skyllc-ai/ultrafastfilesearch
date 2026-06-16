@@ -519,7 +519,7 @@ jobs:
           # Gated on `apple-darwin` so Windows / Linux artifact paths
           # stay untouched.
           set -euo pipefail
-          for bin in uffs uffsd uffsmcp uffs-mft; do
+          for bin in uffs uffsd uffsmcp uffs-mft uffs-update; do
             path="target/${{ matrix.target }}/release/$bin"
             if [[ -f "$path" ]]; then
               codesign --force --sign - "$path"
@@ -540,10 +540,13 @@ jobs:
                      target/${{ matrix.target }}/release/uffsd \
                      target/${{ matrix.target }}/release/uffsmcp \
                      target/${{ matrix.target }}/release/uffs-mft \
+                     target/${{ matrix.target }}/release/uffs-update \
                      target/${{ matrix.target }}/release/uffs.exe \
                      target/${{ matrix.target }}/release/uffsd.exe \
                      target/${{ matrix.target }}/release/uffsmcp.exe \
-                     target/${{ matrix.target }}/release/uffs-mft.exe; do
+                     target/${{ matrix.target }}/release/uffs-mft.exe \
+                     target/${{ matrix.target }}/release/uffs-broker.exe \
+                     target/${{ matrix.target }}/release/uffs-update.exe; do
             if [[ -f "$bin" ]]; then
               ls -lh "$bin"
             fi
@@ -557,14 +560,17 @@ jobs:
           # Shipping set — kept in lockstep with `RELEASE_BINARIES` in
           # scripts/ci/build-cross-all.rs.  Diagnostic binaries are NOT
           # shipped; they live in uffs-diag and stay workspace-only.
+          # uffs-update (the self-update helper) ships on every platform so
+          # `uffs update` has its sibling; uffs-broker is a Windows-only
+          # service, so its raw binary ships on Windows only.
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            for binary in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe; do
+            for binary in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe uffs-broker.exe uffs-update.exe; do
               if [[ -f "target/${{ matrix.target }}/release/$binary" ]]; then
                 cp "target/${{ matrix.target }}/release/$binary" release-artifacts/
               fi
             done
           else
-            for binary in uffs uffsd uffsmcp uffs-mft; do
+            for binary in uffs uffsd uffsmcp uffs-mft uffs-update; do
               if [[ -f "target/${{ matrix.target }}/release/$binary" ]]; then
                 cp "target/${{ matrix.target }}/release/$binary" release-artifacts/
               fi
@@ -641,11 +647,14 @@ jobs:
             # Engine binaries per tier.  ALL tiers include uffs + uffsd:
             # the CLI auto-spawns the SEPARATE uffsd binary (find_daemon_exe
             # in uffs-client) — `uffs` alone cannot search.
+            # uffs-update (self-update helper) is bundled in EVERY tier so
+            # `uffs update` / `uffs update doctor` work wherever uffs is
+            # installed — including the winget package (the normal-tier zip).
             local engine_bins=()
             case "$tier" in
-              min)    engine_bins=(uffs uffsd) ;;
-              normal) engine_bins=(uffs uffsd uffsmcp uffs-mft) ;;
-              full)   engine_bins=(uffs uffsd uffsmcp uffs-mft "${DIAG_BINS[@]}") ;;
+              min)    engine_bins=(uffs uffsd uffs-update) ;;
+              normal) engine_bins=(uffs uffsd uffsmcp uffs-mft uffs-update) ;;
+              full)   engine_bins=(uffs uffsd uffsmcp uffs-mft uffs-update "${DIAG_BINS[@]}") ;;
             esac
             for b in "${engine_bins[@]}"; do
               if [[ -f "${BINDIR}/${b}${EXT}" ]]; then
@@ -920,7 +929,17 @@ jobs:
           # that could be parsed as options by sha256sum (SC2035).
           sha256sum ./* > CHECKSUMS.txt
 
-          echo "📦 Final release assets (SBOMs + checksums included):"
+          # SHA256SUMS — the conventionally-named manifest the self-update
+          # helper (`uffs-update acquire`) fetches by exact name.  It lists
+          # every raw per-binary asset by its platform-suffixed name (e.g.
+          # `uffsd-windows-x64.exe`), which is what the acquire verifier
+          # matches on.  A copy of CHECKSUMS.txt is the simplest correct
+          # source: identical sha256sum format, and the verifier matches by
+          # basename so the extra zip/SBOM lines are harmless.  Generated
+          # here (before the attestation step) so it is covered by SLSA.
+          cp CHECKSUMS.txt SHA256SUMS
+
+          echo "📦 Final release assets (SBOMs + checksums + SHA256SUMS included):"
           ls -la
 
       - name: Generate SLSA build-provenance attestation
@@ -985,7 +1004,8 @@ jobs:
             embedded.  Also: `uffs-windows-x64-min.zip`,
             `uffs-windows-x64-full.zip`.
           - Raw binaries: `uffs-windows-x64.exe`, `uffsd-windows-x64.exe`,
-            `uffsmcp-windows-x64.exe`, `uffs-mft-windows-x64.exe`.
+            `uffsmcp-windows-x64.exe`, `uffs-mft-windows-x64.exe`,
+            `uffs-broker-windows-x64.exe`, `uffs-update-windows-x64.exe`.
 
           ### 🍏 macOS Apple Silicon — offline MFT analysis
           - **`uffs-macos-arm64.zip`** — recommended (normal tier): raw
@@ -993,7 +1013,7 @@ jobs:
             + icns + docs + `packaging/macos/bundle.sh` for rebuilding.
             Also: `uffs-macos-arm64-min.zip`, `uffs-macos-arm64-full.zip`.
           - Raw binaries: `uffs-macos-arm64`, `uffsd-macos-arm64`,
-            `uffsmcp-macos-arm64`, `uffs-mft-macos-arm64`.
+            `uffsmcp-macos-arm64`, `uffs-mft-macos-arm64`, `uffs-update-macos-arm64`.
           - Intel Macs: run the arm64 build under Rosetta 2.
 
           ### 🐧 Linux x86_64 — offline MFT analysis
@@ -1003,13 +1023,14 @@ jobs:
             icons under `/usr/local` with one `sudo` invocation) + docs.
             Also: `uffs-linux-x64-min.zip`, `uffs-linux-x64-full.zip`.
           - Raw binaries: `uffs-linux-x64`, `uffsd-linux-x64`,
-            `uffsmcp-linux-x64`, `uffs-mft-linux-x64`.
+            `uffsmcp-linux-x64`, `uffs-mft-linux-x64`, `uffs-update-linux-x64`.
           - Use with `--mft-file` to analyse captured MFT snapshots on servers, forensics VMs, or in Docker.
 
           ## 🔐 Verification
 
-          All binaries are accompanied by SHA256 checksums in `CHECKSUMS.txt`.
-          Verify with:
+          All binaries are accompanied by SHA256 checksums in `CHECKSUMS.txt`
+          (and `SHA256SUMS`, the conventionally-named copy the in-app
+          self-update helper fetches).  Verify with:
           ```bash
           sha256sum -c CHECKSUMS.txt
           ```

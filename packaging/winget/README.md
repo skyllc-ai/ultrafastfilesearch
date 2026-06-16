@@ -12,7 +12,8 @@ through `NestedInstallerFiles` / `PortableCommandAlias`.
 
 The founding manifest (`microsoft/winget-pkgs#378294`) seeded the four engine
 aliases `uffs`, `uffsd`, `uffsmcp`, `uffs-mft`. Everything bundled **after** that
-— currently `uffs-tui` and `uffs-broker` — must be seeded once each.
+— currently `uffs-tui`, `uffs-broker`, and `uffs-update` (the self-update helper)
+— must be seeded once each.
 
 ## Why this needs a one-time seed per binary
 
@@ -42,7 +43,8 @@ forward.
 Only seed an alias whose binary is **actually in** `uffs-windows-x64.zip` for the
 version being patched — seeding an absent file fails the winget install-validation
 bot. `release.yml` bundles `uffs-tui.exe` and `uffs-broker.exe` into the Windows
-`normal`/`full` tiers; `uffs-broker.exe` first shipped in **v0.5.122**.
+`normal`/`full` tiers (`uffs-broker.exe` first shipped in **v0.5.122**), and
+`uffs-update.exe` into **every** tier (min/normal/full).
 
 Confirm before seeding:
 
