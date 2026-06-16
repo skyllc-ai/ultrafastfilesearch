@@ -42,17 +42,21 @@ fn find_helper() -> Result<PathBuf> {
         .with_context(|| format!("cannot find `{name}` — install it alongside `uffs`"))
 }
 
-/// Spawn the acquire helper for an optional target version tag.
+/// Spawn the acquire helper against a written snapshot, for an optional
+/// target version tag. The helper reads the snapshot to know the
+/// installed subset and downloads each binary individually.
 ///
 /// # Errors
 ///
 /// Fails if the helper cannot be located or it exits non-zero.
-pub(crate) fn spawn(version: Option<&str>) -> Result<()> {
+pub(crate) fn spawn(snapshot_path: &std::path::Path, version: Option<&str>) -> Result<()> {
     let helper = find_helper()?;
     let stage = snapshot::update_dir().join("stage");
     let mut command = Command::new(&helper);
     command
-        .args(["acquire", "--repo", DEFAULT_REPO, "--stage"])
+        .args(["acquire", "--repo", DEFAULT_REPO, "--snapshot"])
+        .arg(snapshot_path)
+        .arg("--stage")
         .arg(&stage);
     if let Some(tag) = version {
         command.args(["--version", tag]);

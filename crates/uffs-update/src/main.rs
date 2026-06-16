@@ -8,8 +8,8 @@
 //! download/verify step only; detect + snapshot stay in `uffs-cli`.
 //!
 //! ```text
-//! uffs-update acquire --repo <owner/name> --stage <dir>
-//!                     [--version <tag>] [--bundle <asset>] [--sums <asset>]
+//! uffs-update acquire --snapshot <path> --stage <dir>
+//!                     [--repo <owner/name>] [--version <tag>] [--sums <asset>]
 //! ```
 
 mod acquire;
@@ -116,20 +116,41 @@ fn run_recover(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Parse the `acquire` flags and run it.
+/// Default upstream repository for self-update artifacts.
+const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
+
+/// Parse the `acquire` flags and download + verify the installed-subset
+/// binaries from the snapshot.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn run_acquire(args: &[String]) -> Result<()> {
-    let repo = required(flag(args, "--repo"), "--repo <owner/name>")?;
-    let stage = required(flag(args, "--stage"), "--stage <dir>")?;
+    let snapshot_path = PathBuf::from(required(flag(args, "--snapshot"), "--snapshot <path>")?);
+    let stage = PathBuf::from(required(flag(args, "--stage"), "--stage <dir>")?);
+    let snapshot = plan::Snapshot::load(&snapshot_path)?;
+
+    // The installed subset across every unmanaged root, deduplicated.
+    let mut binaries: Vec<String> = snapshot
+        .unmanaged_targets()
+        .flat_map(|target| target.binaries.iter().map(|binary| binary.name.clone()))
+        .collect();
+    binaries.sort();
+    binaries.dedup();
+    if binaries.is_empty() {
+        bail!("no unmanaged binaries to acquire (WinGet roots are delegated to winget)");
+    }
+
     let plan = AcquirePlan {
-        repo,
+        repo: flag(args, "--repo").unwrap_or_else(|| DEFAULT_REPO.to_owned()),
         tag: flag(args, "--version"),
-        stage: PathBuf::from(stage),
-        bundle: flag(args, "--bundle").unwrap_or_else(|| AcquirePlan::default_bundle().to_owned()),
+        stage: stage.clone(),
         sums: flag(args, "--sums").unwrap_or_else(|| "SHA256SUMS".to_owned()),
+        binaries,
     };
     let staged = acquire::run(&plan)?;
-    println!("Acquired + verified: {}", staged.display());
+    println!(
+        "Acquired + verified {} binaries into {}",
+        staged.len(),
+        stage.display()
+    );
     Ok(())
 }
 
@@ -150,11 +171,14 @@ fn required(value: Option<String>, what: &str) -> Result<String> {
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_usage() {
     println!(
-        "uffs-update — self-update acquire helper\n\n\
-         USAGE:\n  uffs-update acquire --repo <owner/name> --stage <dir> \\\n\
-         \x20                     [--version <tag>] [--bundle <asset>] [--sums <asset>]\n\n\
-         Fetches the release, downloads the platform bundle + SHA256SUMS,\n\
-         verifies the bundle's SHA-256, and leaves it staged. It does not\n\
-         extract, verify Authenticode, or replace anything (apply phase).\n"
+        "uffs-update — self-update acquire + apply + recover helper\n\n\
+         USAGE:\n\
+         \x20 uffs-update acquire --snapshot <path> --stage <dir> \\\n\
+         \x20                     [--repo <owner/name>] [--version <tag>] [--sums <asset>]\n\
+         \x20 uffs-update apply   --snapshot <path> --stage <dir>\n\
+         \x20 uffs-update recover --journal <path>\n\n\
+         acquire: per the snapshot's installed subset, downloads each binary\n\
+         as an individual release asset + SHA256SUMS, SHA-256-verifies each,\n\
+         and leaves them staged. It does not replace anything (apply phase).\n"
     );
 }

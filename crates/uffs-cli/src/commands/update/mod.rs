@@ -40,7 +40,9 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     }
     print_phase_a_footer();
     if args.iter().any(|arg| arg == "--acquire") {
-        acquire::spawn(flag_value(args, "--version").as_deref())?;
+        // Acquire reads a snapshot to know the installed subset.
+        let snapshot_path = snapshot::write_snapshot(&report)?;
+        acquire::spawn(&snapshot_path, flag_value(args, "--version").as_deref())?;
     }
     Ok(())
 }

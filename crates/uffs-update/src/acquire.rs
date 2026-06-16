@@ -1,97 +1,86 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Acquire orchestration (self-update Phase C).
+//! Acquire (self-update Phase C) — **per-binary**, no archive.
 //!
-//! Fetch the target GitHub release, download the platform bundle plus its
-//! `SHA256SUMS`, verify the bundle's SHA-256, and leave the verified
-//! bundle staged. Extraction, Authenticode, stopping services, and the
-//! actual replace are the **apply** phase's job — acquire never touches a
-//! live install.
+//! For each binary the install actually has, download that binary as an
+//! individual release asset (`uffsd.exe`, `uffs.exe`, …) and verify its
+//! SHA-256 against the release's `SHA256SUMS`, straight into the staging
+//! dir — which is exactly the loose-binary layout the apply phase reads.
+//!
+//! Why per-binary, not a bundle zip: it needs **no in-process archive
+//! crate** (zip/tar pull unaudited deps and, shelled, aren't on every
+//! Windows), each binary is **individually** SHA- and (at apply time)
+//! Authenticode-verifiable, and we only fetch the installed subset.
+//!
+//! Requires the release to publish per-binary assets + `SHA256SUMS` (a
+//! release-pipeline follow-up; the code is ready for it).
 
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::orchestrate::exe_name;
 use crate::{github, verify};
 
 /// Inputs for one acquire run.
 pub(crate) struct AcquirePlan {
-    /// GitHub `owner/repo` to fetch from.
+    /// GitHub `owner/repo`.
     pub(crate) repo: String,
-    /// Release tag (e.g. `v0.6.2`), or `None` for the latest release.
+    /// Release tag (e.g. `v0.6.2`), or `None` for latest.
     pub(crate) tag: Option<String>,
-    /// Directory to stage downloads into.
+    /// Directory to stage verified binaries into.
     pub(crate) stage: PathBuf,
-    /// Platform bundle asset name.
-    pub(crate) bundle: String,
     /// Checksums asset name.
     pub(crate) sums: String,
+    /// Binary stems to fetch (e.g. `["uffs", "uffsd"]`).
+    pub(crate) binaries: Vec<String>,
 }
 
-impl AcquirePlan {
-    /// Default bundle asset name for the current OS/arch.
-    pub(crate) const fn default_bundle() -> &'static str {
-        if cfg!(windows) {
-            "uffs-windows-x64.zip"
-        } else if cfg!(target_os = "macos") {
-            "uffs-macos-arm64.tar.gz"
-        } else {
-            "uffs-linux-x64.tar.gz"
-        }
-    }
-}
-
-/// Run the acquire and return the path to the verified, staged bundle.
+/// Download + SHA-verify every requested binary into the staging dir.
+/// Returns the staged paths. Aborts (leaving nothing trusted) on a
+/// missing asset, a missing checksum, or a SHA mismatch.
 ///
 /// # Errors
 ///
-/// Fails on network/HTTP errors, a missing asset, a missing checksum
-/// entry, or a SHA-256 mismatch (in which case nothing is left trusted).
-pub(crate) fn run(plan: &AcquirePlan) -> Result<PathBuf> {
+/// Network/HTTP errors, missing assets/checksums, or hash mismatch.
+pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(&plan.stage)
         .with_context(|| format!("creating stage dir {}", plan.stage.display()))?;
 
     let release = github::fetch_release(&plan.repo, plan.tag.as_deref())?;
-    let bundle_url = release
-        .asset(&plan.bundle)
-        .with_context(|| {
-            format!(
-                "release {} has no asset named {}",
-                release.tag_name, plan.bundle
-            )
-        })?
-        .browser_download_url
-        .clone();
+
+    // Checksums first.
     let sums_url = release
         .asset(&plan.sums)
-        .with_context(|| {
-            format!(
-                "release {} has no asset named {}",
-                release.tag_name, plan.sums
-            )
-        })?
+        .with_context(|| format!("release {} has no asset {}", release.tag_name, plan.sums))?
         .browser_download_url
         .clone();
-
-    let bundle_path = plan.stage.join(&plan.bundle);
     let sums_path = plan.stage.join(&plan.sums);
     github::download_to(&sums_url, &sums_path)?;
-    github::download_to(&bundle_url, &bundle_path)?;
-
     let sums_text = std::fs::read_to_string(&sums_path)
         .with_context(|| format!("reading {}", sums_path.display()))?;
     let sums = verify::parse_sha256sums(&sums_text);
-    let expected = verify::expected_hash(&sums, &plan.bundle)
-        .with_context(|| format!("{} is not listed in {}", plan.bundle, plan.sums))?;
 
-    if !verify::verify_sha256(&bundle_path, expected)? {
-        // Remove the unverified download so it can never be mistaken for trusted.
-        let _ignore = std::fs::remove_file(&bundle_path);
-        bail!(
-            "SHA-256 mismatch for {} — download rejected, nothing staged",
-            plan.bundle
-        );
+    // Each binary as an individual asset.
+    let mut staged = Vec::with_capacity(plan.binaries.len());
+    for stem in &plan.binaries {
+        let asset = exe_name(stem);
+        let url = release
+            .asset(&asset)
+            .with_context(|| format!("release {} has no asset {asset}", release.tag_name))?
+            .browser_download_url
+            .clone();
+        let dest = plan.stage.join(&asset);
+        github::download_to(&url, &dest)?;
+
+        let expected = verify::expected_hash(&sums, &asset)
+            .with_context(|| format!("{asset} is not listed in {}", plan.sums))?;
+        if !verify::verify_sha256(&dest, expected)? {
+            let _ignore = std::fs::remove_file(&dest);
+            bail!("SHA-256 mismatch for {asset} — download rejected, nothing staged");
+        }
+        staged.push(dest);
     }
-    Ok(bundle_path)
+    Ok(staged)
 }
