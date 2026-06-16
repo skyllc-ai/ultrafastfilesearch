@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 
 use crate::apply;
 use crate::journal::{BinaryEntry, BinaryStatus, Journal, TargetEntry, UpdateState};
@@ -56,6 +56,40 @@ pub(crate) fn journal_from_snapshot(
         })
         .collect();
     journal
+}
+
+/// Pre-flight guard (§19, Phase D): prove the update *can* succeed
+/// **before** any service is stopped — every staged binary is present,
+/// and every target directory is writable. A failure here is zero-
+/// downtime: nothing has been quiesced or swapped yet.
+///
+/// # Errors
+///
+/// A missing staged binary, or a target directory we cannot write to
+/// (typically: needs elevation).
+pub(crate) fn preflight(journal: &Journal, staged_dir: &Path) -> Result<()> {
+    for (root, stem, _target) in collect_plan(journal) {
+        let staged = staged_dir.join(exe_name(&stem));
+        if !staged.is_file() {
+            return Err(anyhow!(
+                "staged binary missing: {} (acquire incomplete?)",
+                staged.display()
+            ));
+        }
+        ensure_writable_dir(&root)?;
+    }
+    Ok(())
+}
+
+/// Confirm `dir` accepts writes by round-tripping a uniquely-named probe
+/// file. A failure means the swap would later fail mid-flight (after a
+/// service is already stopped) — so we surface it up front.
+fn ensure_writable_dir(dir: &Path) -> Result<()> {
+    let probe = dir.join(format!(".uffs-update-probe-{}", std::process::id()));
+    std::fs::write(&probe, b"")
+        .with_context(|| format!("target dir not writable: {} (try elevated)", dir.display()))?;
+    let _removed = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 /// (root, stem, on-disk target path) for every targeted binary.
@@ -140,7 +174,7 @@ pub(crate) fn prune_all(journal: &Journal) {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{apply_all, exe_name, journal_from_snapshot};
+    use super::{apply_all, exe_name, journal_from_snapshot, preflight};
     use crate::journal::{BinaryStatus, UpdateState};
     use crate::plan::Snapshot;
 
@@ -200,6 +234,21 @@ mod tests {
             std::fs::read_to_string(root.join(exe_name("uffsd"))).expect("read"),
             "OLD"
         );
+    }
+
+    #[test]
+    fn preflight_passes_when_staged_present_and_writable() {
+        let (_root, stage, _base, journal) = setup("pf-ok");
+        preflight(&journal, &stage).expect("preflight should pass");
+    }
+
+    #[test]
+    fn preflight_fails_when_staged_binary_missing() {
+        let (_root, _stage, base, journal) = setup("pf-missing");
+        let empty_stage = base.join("empty-stage");
+        std::fs::create_dir_all(&empty_stage).expect("mkdir");
+        let err = preflight(&journal, &empty_stage).expect_err("missing staged must fail");
+        assert!(err.to_string().contains("staged binary missing"), "{err}");
     }
 
     #[test]

@@ -67,6 +67,15 @@ fn run_apply(args: &[String]) -> Result<()> {
     journal.snapshot_ref = Some(snapshot_path.display().to_string());
     journal.transition(journal::UpdateState::Acquired, "apply.acquired")?;
 
+    // Pre-flight BEFORE touching any service: prove every staged binary
+    // is present and every target dir is writable. A failure here is
+    // zero-downtime — nothing is quiesced or swapped yet (§19, Phase D).
+    if let Err(err) = orchestrate::preflight(&journal, &stage) {
+        journal.transition(journal::UpdateState::Aborted, "preflight.failed")?;
+        return Err(err);
+    }
+    journal.transition(journal::UpdateState::PreflightOk, "preflight.ok")?;
+
     // Stop the resident services so their files unlock.
     quiesce::quiesce(&mut journal, &snapshot)?;
 
