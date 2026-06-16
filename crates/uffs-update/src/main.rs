@@ -18,6 +18,8 @@ mod github;
 mod journal;
 mod orchestrate;
 mod plan;
+mod quiesce;
+mod restore;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -40,10 +42,10 @@ fn main() -> Result<()> {
     }
 }
 
-/// Parse the `apply` flags and run the journal-driven swap+verify.
-///
-/// Slice 3: assumes services are already stopped (Quiesce wraps this in a
-/// later slice). Swaps + smoke-tests + commits, rolling back on failure.
+/// Parse the `apply` flags and run the full journal-driven flow:
+/// quiesce → backup/swap/smoke → commit → restore → prune. On any
+/// pre-commit failure the binaries are rolled back **and** the stopped
+/// services are restarted (INV-1: never leave a service down).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn run_apply(args: &[String]) -> Result<()> {
     let snapshot_path = PathBuf::from(required(flag(args, "--snapshot"), "--snapshot <path>")?);
@@ -58,9 +60,35 @@ fn run_apply(args: &[String]) -> Result<()> {
     let mut journal = orchestrate::journal_from_snapshot(journal_path, &snapshot, backup_dir);
     journal.transition(journal::UpdateState::Acquired, "apply.acquired")?;
 
-    orchestrate::apply_all(&mut journal, &stage, |target| {
+    // Stop the resident services so their files unlock.
+    quiesce::quiesce(&mut journal, &snapshot)?;
+
+    // Swap + smoke + commit; on failure the binaries are already rolled
+    // back — now restart the services we stopped (INV-1) and abort.
+    if let Err(err) = orchestrate::apply_all(&mut journal, &stage, |target| {
         apply::smoke_ok(target, orchestrate::SMOKE_ARG)
-    })?;
+    }) {
+        let failed = restore::restore(&snapshot);
+        journal.transition(
+            journal::UpdateState::Aborted,
+            &format!("apply.aborted; restart_failed=[{}]", failed.join(", ")),
+        )?;
+        return Err(err);
+    }
+
+    // Committed: relaunch services into the new binaries.
+    let failed = restore::restore(&snapshot);
+    journal.transition(journal::UpdateState::Restored, "restore.done")?;
+    if !failed.is_empty() {
+        #[expect(clippy::print_stderr, reason = "CLI user-facing warning")]
+        {
+            eprintln!(
+                "warning: components failed to restart: [{}]",
+                failed.join(", ")
+            );
+        }
+    }
+
     orchestrate::prune_all(&journal);
     journal.transition(journal::UpdateState::Done, "apply.done")?;
     println!("Applied + committed → {}", journal.to_version);

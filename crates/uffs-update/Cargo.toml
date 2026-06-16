@@ -36,6 +36,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
+# Resolve the daemon lifecycle dir (`%LOCALAPPDATA%\uffs`) so quiesce can
+# poll the PID file as the "daemon stopped" signal — no process FFI.
+dirs-next.workspace = true
 # Blocking HTTP with rustls + the system trust store — workspace-inherited
 # so the feature set lives in one place. A one-shot CLI step, so the async
 # runtime overhead of a full client is unwarranted.

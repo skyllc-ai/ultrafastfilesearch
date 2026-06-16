@@ -4674,6 +4674,7 @@ name = "uffs-update"
 version = "0.6.2"
 dependencies = [
  "anyhow",
+ "dirs-next",
  "hex",
  "reqwest",
  "serde",
