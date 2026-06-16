@@ -69,16 +69,39 @@ fn stop_component(component: &str, running: &SnapRunning) -> Result<()> {
     }
 }
 
-/// `uffs` binary next to a component's image (else bare `uffs` on PATH).
+/// The `uffs` binary to drive a service stop. Prefer the one next to the
+/// running `uffs-update` helper (the install being updated — its CLI carries
+/// the **current** management logic, e.g. the privilege-aware stop gate), then
+/// the component's own image dir, then bare `uffs` on PATH.
+///
+/// Stopping goes through the daemon socket, so *any* working `uffs` can stop
+/// *any* daemon. Preferring the helper's sibling avoids driving the stop with
+/// a **stale co-located** binary: a daemon launched from an old
+/// `target/release` build would otherwise be stopped by that old `uffs`, whose
+/// pre-fix Unix gate refuses → "daemon did not stop within 20s". (Manual
+/// `~/bin/uffs --daemon stop` works precisely because it uses the current CLI.)
 fn uffs_sibling(running: &SnapRunning) -> PathBuf {
-    running
+    let helper_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let image_dir = running
         .image_path
         .as_deref()
         .and_then(Path::parent)
-        .map_or_else(
-            || PathBuf::from(exe_name("uffs")),
-            |dir| dir.join(exe_name("uffs")),
-        )
+        .map(Path::to_path_buf);
+    pick_uffs(helper_dir.as_deref(), image_dir.as_deref())
+}
+
+/// Resolve the `uffs` binary: the first that exists among the helper dir then
+/// the component image dir, else bare `uffs` (PATH). Pure — unit-tested.
+fn pick_uffs(helper_dir: Option<&Path>, image_dir: Option<&Path>) -> PathBuf {
+    for dir in [helper_dir, image_dir].into_iter().flatten() {
+        let candidate = dir.join(exe_name("uffs"));
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    PathBuf::from(exe_name("uffs"))
 }
 
 /// Daemon PID file (`<lifecycle_dir>/daemon.pid`) — its absence is the
@@ -129,28 +152,35 @@ pub(crate) fn wait_until(timeout: Duration, done: impl Fn() -> bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{uffs_sibling, wait_until};
-    use crate::plan::SnapRunning;
+    use std::path::PathBuf;
 
-    fn running_with_image(image: &std::path::Path) -> SnapRunning {
-        let json = format!(
-            r#"{{ "component": "daemon", "pid": 1, "image_path": {:?} }}"#,
-            image.to_string_lossy()
-        );
-        serde_json::from_str(&json).expect("running")
-    }
+    use super::{pick_uffs, wait_until};
+    use crate::orchestrate::exe_name;
 
     #[test]
-    fn uffs_sibling_next_to_image() {
-        // Host-valid path so `Path::parent` works on the test runner.
-        let dir = std::env::temp_dir();
-        let run = running_with_image(&dir.join("uffsd"));
-        let sib = uffs_sibling(&run);
-        assert_eq!(sib.parent(), Some(dir.as_path()));
-        assert!(
-            sib.file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("uffs"))
-        );
+    fn pick_uffs_prefers_helper_then_image_then_path() {
+        let base = std::env::temp_dir().join(format!("uffs-sib-{}", std::process::id()));
+        let helper = base.join("helper");
+        let image = base.join("image");
+        std::fs::create_dir_all(&helper).expect("mk helper dir");
+        std::fs::create_dir_all(&image).expect("mk image dir");
+        let name = exe_name("uffs");
+
+        // Both dirs have a `uffs` → prefer the helper's (install under update),
+        // NOT the component's possibly-stale co-located binary.
+        std::fs::write(helper.join(&name), b"x").expect("write helper uffs");
+        std::fs::write(image.join(&name), b"x").expect("write image uffs");
+        assert_eq!(pick_uffs(Some(&helper), Some(&image)), helper.join(&name));
+
+        // Helper has none → fall back to the component's image dir.
+        std::fs::remove_file(helper.join(&name)).expect("rm helper uffs");
+        assert_eq!(pick_uffs(Some(&helper), Some(&image)), image.join(&name));
+
+        // Neither has one → bare name (resolved on PATH at spawn time).
+        std::fs::remove_file(image.join(&name)).expect("rm image uffs");
+        assert_eq!(pick_uffs(Some(&helper), Some(&image)), PathBuf::from(&name));
+
+        let _cleanup = std::fs::remove_dir_all(&base);
     }
 
     #[test]
