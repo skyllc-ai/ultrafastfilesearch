@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! Apply primitives: atomic **backup → swap → smoke** and **restore**
+//! (design §9 / §19.3 / §19.8).
+//!
+//! The crash-sensitive core. Every file transition is an **atomic
+//! same-volume rename** (`std::fs::rename` replaces atomically on Windows
+//! and Unix), and the original is always renamed aside to `<file>.bak`
+//! **before** the new image moves in — so a crash at any point leaves
+//! either the old file, the `.bak`, or the new file in place, never a
+//! torn one (INV-2), and rollback is always possible (INV-3).
+//!
+//! These operate on already-staged binaries; extracting the verified
+//! bundle into the staging dir is a separate step. Smoke-testing
+//! (`--self-check` / `--version`) gates the commit point (§19.8): we
+//! confirm the new image *executes on this host* before betting services
+//! on it.
+
+// Built ahead of the journal-driven apply/recover orchestration (the
+// next slice). For now these primitives are exercised by the unit tests
+// below; the `expect` is removed once the orchestration wires them.
+#![expect(
+    dead_code,
+    reason = "apply primitives built ahead of the journal-driven orchestration (next slice)"
+)]
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context as _, Result, bail};
+
+/// The `.bak` path for a binary (same directory ⇒ same volume ⇒ atomic
+/// rename).
+pub(crate) fn backup_path(binary: &Path) -> PathBuf {
+    let mut name = binary.as_os_str().to_os_string();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// Rename `binary` aside to its `.bak`. Idempotent: if the `.bak` already
+/// exists (a prior interrupted run), this is a no-op so recovery can
+/// re-run it safely (INV-5).
+///
+/// # Errors
+///
+/// Propagates a rename failure (e.g. the file is still locked — Quiesce
+/// should have prevented that).
+pub(crate) fn backup(binary: &Path) -> Result<PathBuf> {
+    let bak = backup_path(binary);
+    if bak.exists() {
+        return Ok(bak); // already backed up
+    }
+    std::fs::rename(binary, &bak)
+        .with_context(|| format!("backing up {} → {}", binary.display(), bak.display()))?;
+    Ok(bak)
+}
+
+/// Move a staged new image into place at `target` (atomic rename). The
+/// caller must have [`backup`]'d `target` first.
+///
+/// # Errors
+///
+/// Propagates a rename failure.
+pub(crate) fn swap_in(staged: &Path, target: &Path) -> Result<()> {
+    std::fs::rename(staged, target)
+        .with_context(|| format!("swapping {} → {}", staged.display(), target.display()))
+}
+
+/// Restore `binary` from its `.bak` (rollback). Idempotent: a no-op if no
+/// `.bak` exists (nothing was backed up, or already restored).
+///
+/// # Errors
+///
+/// Propagates a rename failure.
+pub(crate) fn restore(binary: &Path) -> Result<()> {
+    let bak = backup_path(binary);
+    if !bak.exists() {
+        return Ok(());
+    }
+    // Remove a half-swapped new image first so the restore rename can land.
+    if binary.exists() {
+        std::fs::remove_file(binary)
+            .with_context(|| format!("clearing {} before restore", binary.display()))?;
+    }
+    std::fs::rename(&bak, binary)
+        .with_context(|| format!("restoring {} → {}", bak.display(), binary.display()))
+}
+
+/// Smoke-test a binary: run `<binary> <check_arg>` and require exit `0`.
+///
+/// Confirms the image *executes on this host* (right arch, no missing
+/// runtime DLL, not corrupt) **before** the commit point. `check_arg` is
+/// `--self-check` where supported, else `--version`.
+pub(crate) fn smoke_ok(binary: &Path, check_arg: &str) -> bool {
+    Command::new(binary)
+        .arg(check_arg)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Prune a binary's `.bak` after a committed, verified update.
+///
+/// # Errors
+///
+/// Propagates a remove failure.
+pub(crate) fn prune_backup(binary: &Path) -> Result<()> {
+    let bak = backup_path(binary);
+    if bak.exists() {
+        std::fs::remove_file(&bak).with_context(|| format!("pruning backup {}", bak.display()))?;
+    }
+    Ok(())
+}
+
+/// Backup-then-swap a single binary from `staged` into `target`, leaving
+/// a `.bak` for rollback. Fails (without swapping) if the staged image is
+/// missing.
+///
+/// # Errors
+///
+/// Propagates backup/swap failures; bails if `staged` is absent.
+pub(crate) fn backup_and_swap(staged: &Path, target: &Path) -> Result<PathBuf> {
+    if !staged.is_file() {
+        bail!("staged image missing: {}", staged.display());
+    }
+    let bak = backup(target)?;
+    swap_in(staged, target)?;
+    Ok(bak)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{backup, backup_and_swap, backup_path, prune_backup, restore, swap_in};
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("uffs-apply-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    fn write(path: &Path, content: &str) {
+        std::fs::write(path, content).expect("write");
+    }
+
+    fn read(path: &Path) -> String {
+        std::fs::read_to_string(path).expect("read")
+    }
+
+    #[test]
+    fn backup_swap_round_trip() {
+        let dir = scratch("swap");
+        let target = dir.join("uffsd");
+        let staged = dir.join("uffsd.new");
+        write(&target, "OLD");
+        write(&staged, "NEW");
+
+        let bak = backup_and_swap(&staged, &target).expect("apply");
+        assert_eq!(read(&target), "NEW", "target holds the new image");
+        assert_eq!(read(&bak), "OLD", "backup holds the old image");
+        assert!(!staged.exists(), "staged consumed by the rename");
+
+        // Rollback restores the old image.
+        restore(&target).expect("restore");
+        assert_eq!(read(&target), "OLD");
+        assert!(!bak.exists(), "backup consumed by the restore");
+    }
+
+    #[test]
+    fn backup_is_idempotent() {
+        let dir = scratch("idem");
+        let target = dir.join("uffs");
+        write(&target, "OLD");
+        let bak1 = backup(&target).expect("first backup");
+        // Simulate a re-run: a new image now sits at target.
+        write(&target, "NEW");
+        let bak2 = backup(&target).expect("second backup is a no-op");
+        assert_eq!(bak1, bak2);
+        assert_eq!(
+            read(&bak1),
+            "OLD",
+            "idempotent backup never clobbers the saved old image"
+        );
+    }
+
+    #[test]
+    fn restore_clears_half_swapped_new_image() {
+        let dir = scratch("half");
+        let target = dir.join("uffsmcp");
+        write(&target, "OLD");
+        let _bak = backup(&target).expect("backup");
+        // Crash simulated *after* a new image landed but before commit.
+        write(&target, "HALF-NEW");
+        restore(&target).expect("restore over the half-new image");
+        assert_eq!(read(&target), "OLD");
+    }
+
+    #[test]
+    fn restore_without_backup_is_noop() {
+        let dir = scratch("noop");
+        let target = dir.join("uffs-tui");
+        write(&target, "CURRENT");
+        restore(&target).expect("noop restore");
+        assert_eq!(read(&target), "CURRENT");
+    }
+
+    #[test]
+    fn missing_staged_image_aborts_before_backup() {
+        let dir = scratch("missing");
+        let target = dir.join("uffsd");
+        write(&target, "OLD");
+        let staged = dir.join("absent.new");
+        backup_and_swap(&staged, &target).expect_err("missing staged image must abort");
+        // The original must be untouched (no backup, no swap) on a pre-check fail.
+        assert_eq!(read(&target), "OLD");
+        assert!(!backup_path(&target).exists(), "no backup created on abort");
+    }
+
+    #[test]
+    fn prune_removes_backup() {
+        let dir = scratch("prune");
+        let target = dir.join("uffs");
+        write(&target, "NEW");
+        write(&backup_path(&target), "OLD");
+        prune_backup(&target).expect("prune");
+        assert!(!backup_path(&target).exists());
+    }
+
+    #[test]
+    fn swap_in_is_a_plain_rename() {
+        let dir = scratch("plain");
+        let staged = dir.join("x.new");
+        let target = dir.join("x");
+        write(&staged, "Z");
+        swap_in(&staged, &target).expect("swap");
+        assert_eq!(read(&target), "Z");
+    }
+}

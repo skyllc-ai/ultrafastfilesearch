@@ -13,6 +13,7 @@
 //! ```
 
 mod acquire;
+mod apply;
 mod github;
 mod journal;
 mod verify;
