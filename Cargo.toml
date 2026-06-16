@@ -34,7 +34,8 @@ members = [
   "crates/uffs-mcp",    # 🤖 MCP stdio adapter for AI agents
   "crates/uffs-broker", # 🔑 Windows elevated handle broker (optional)
   # ── Surfaces ──
-  "crates/uffs-cli", # 🖥️  Command-line interface
+  "crates/uffs-cli",    # 🖥️  Command-line interface
+  "crates/uffs-update", # ⬆️  Self-update acquire helper (HTTP/TLS isolated from the CLI)
   # NOTE: uffs-tui and uffs-gui have moved to the private uffs-products repo.
   # ── Tools ──
   "crates/uffs-diag",          # 🔬 Retained workspace-only diagnostic tools (not shipped in dist/)
@@ -281,6 +282,15 @@ rustc-hash = "2.1.2"
 itoa = "1.0.18"
 sha2 = "0.11.0"
 hex = "0.4.3"
+
+# ───── Network (self-update acquire helper only) ─────
+# Blocking HTTP with rustls + the system trust store. `rustls-tls-native-roots`
+# matches the existing transitive reqwest config so no new crate enters the lock.
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "rustls-tls-native-roots",
+  "json",
+] }
 
 # ───── Parallelism ─────
 rayon = "1.12.0"

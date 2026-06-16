@@ -13,6 +13,7 @@
 //!
 //! Entry point: `run_update` (wired to `uffs update` in `main`).
 
+mod acquire;
 mod binaries;
 mod channel;
 mod model;
@@ -25,11 +26,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use model::{Anchor, Channel, Component, DetectionReport, InstallRoot, RunningProcess, Scope};
 
-/// Run `uffs update`. Phase A only: prints the detection report.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "matches the command-handler signature; later self-update phases return errors"
-)]
+/// Run `uffs update`: detect (Phase A), optional snapshot (Phase B), and
+/// optional acquire (Phase C, via the `uffs-update` helper).
 pub(crate) fn run_update(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();
@@ -41,7 +39,18 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         write_and_report_snapshot(&report);
     }
     print_phase_a_footer();
+    if args.iter().any(|arg| arg == "--acquire") {
+        acquire::spawn(flag_value(args, "--version").as_deref())?;
+    }
     Ok(())
+}
+
+/// Return the value following `name` in `args` (`--name value`).
+fn flag_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|idx| args.get(idx + 1))
+        .cloned()
 }
 
 /// Write a Phase-B snapshot and report where it landed.
@@ -196,21 +205,25 @@ fn capture_broker(roots: &mut Vec<InstallRoot>, running: &mut Vec<RunningProcess
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_help() {
     println!(
-        "uffs update — self-update (Phase A: detect & capture)\n\n\
-         USAGE:\n  uffs update [--check]\n\n\
-         Phase A discovers where UFFS is installed (from the running CLI,\n\
-         daemon, MCP gateway, and broker service), lists the binaries and\n\
-         their versions per location, and shows the running processes'\n\
-         launch recipes. It does not change anything yet.\n"
+        "uffs update — self-update\n\n\
+         USAGE:\n  uffs update [--snapshot] [--acquire [--version <tag>]]\n\n\
+         Discovers where UFFS is installed (from the running CLI, daemon,\n\
+         MCP gateway, and broker service), lists binaries + versions per\n\
+         location, and shows the running processes' launch recipes.\n\n\
+         FLAGS:\n\
+         \x20 --snapshot          Persist the detection + live daemon state to JSON.\n\
+         \x20 --acquire           Download + SHA-256-verify the release into staging\n\
+         \x20                     (via the uffs-update helper). Does NOT replace.\n\
+         \x20 --version <tag>     Acquire a specific release tag (default: latest).\n"
     );
 }
 
-/// Footer clarifying that only detection is implemented so far.
+/// Footer clarifying which mutating phases are not yet implemented.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_phase_a_footer() {
     println!(
-        "\n(Phase A — detection only. Stop / replace / restore land in later phases; \
-         nothing was changed.)"
+        "\n(Detect + snapshot + acquire are non-mutating. Stop / replace / restore \
+         land in the apply phase; nothing on a live install was changed.)"
     );
 }
 

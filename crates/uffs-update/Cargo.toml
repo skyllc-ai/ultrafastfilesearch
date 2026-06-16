@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+
+# uffs-update: self-update **acquire** helper binary.
+#
+# Deliberately a SEPARATE binary from `uffs` so the HTTP/TLS stack
+# (reqwest + rustls) never bloats the lean, fast-starting CLI. `uffs
+# update` spawns this only for the download/verify step; everything else
+# (detect, snapshot) stays in `uffs-cli`.
+
+[package]
+name = "uffs-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Internal tooling binary — not published to crates.io.
+publish.workspace = true
+
+[[bin]]
+name = "uffs-update"
+path = "src/main.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+sha2.workspace = true
+hex.workspace = true
+# Blocking HTTP with rustls + the system trust store — workspace-inherited
+# so the feature set lives in one place. A one-shot CLI step, so the async
+# runtime overhead of a full client is unwarranted.
+reqwest.workspace = true
+
+[lints]
+workspace = true
