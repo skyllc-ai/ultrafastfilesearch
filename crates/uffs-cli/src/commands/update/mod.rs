@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs update` — self-update **Phase A: detect & capture** (design in
-//! `docs/dev/architecture/UFFS-Self-Update-Feasibility-and-Design.md` §5).
+//! `uffs --update [<action>]` — self-update (design in
+//! `docs/dev/architecture/UFFS-Self-Update-Feasibility-and-Design.md`; CLI
+//! grammar in `docs/architecture/cli-grammar.md`).
 //!
-//! This is the **detection slice only**: it discovers every install
-//! *root* from the live anchors (invoking CLI + running daemon / MCP /
-//! broker), enumerates the UFFS binaries in each, classifies the channel
-//! that placed them, validates each binary's on-disk version, and
-//! captures the running processes' launch recipes. It **mutates
-//! nothing** — stopping, replacing, and restoring land in later phases.
+//! Phase A (detect & capture) is the default (no action): it discovers
+//! every install *root* from the live anchors (invoking CLI + running
+//! daemon / MCP / broker), enumerates the UFFS binaries in each, classifies
+//! the channel that placed them, validates each binary's on-disk version,
+//! and captures the running processes' launch recipes — mutating nothing.
+//! The `snapshot` / `acquire` / `apply` / `doctor` actions add the later
+//! phases on top.
 //!
-//! Entry point: `run_update` (wired to `uffs update` in `main`).
+//! Entry point: `run_update` (dispatched from `--update` in `main`).
 
 mod acquire;
 mod apply;
@@ -26,37 +28,59 @@ mod snapshot;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use model::{Anchor, Channel, Component, DetectionReport, InstallRoot, RunningProcess, Scope};
 
-/// Run `uffs update`: detect (Phase A), optional snapshot (Phase B), and
-/// optional acquire (Phase C, via the `uffs-update` helper).
+/// Run `uffs --update [<action>]` — uniform `--<command> [action] [--options]`
+/// grammar (design: `docs/architecture/cli-grammar.md`). The action is the
+/// first positional token:
+///
+/// - *(none)* → detect only (Phase A).
+/// - `snapshot` → detect + freeze a snapshot (Phase B).
+/// - `acquire`  → + download + SHA-verify into staging (Phase C).
+/// - `apply`    → + the full mutating update (stop/swap/smoke/commit/restore).
+/// - `doctor`   → end-to-end health check (`--repair` / `--offline`).
+///
+/// Options (`--version`, `--repair`, `--offline`) follow the action.
 pub(crate) fn run_update(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();
         return Ok(());
     }
-    // `uffs update doctor [...]` — detect, freeze a snapshot, then hand off
-    // to the helper's end-to-end health check (which prints its own report).
-    if args.first().is_some_and(|arg| arg == "doctor") {
+
+    // The action is the first *positional* token (a leading flag or nothing
+    // means bare detect). Validate up front, before any detection/output.
+    let action = args
+        .first()
+        .map(String::as_str)
+        .filter(|tok| !tok.starts_with('-'));
+    if let Some(act) = action
+        && !matches!(act, "snapshot" | "acquire" | "apply" | "doctor")
+    {
+        bail!("unknown `--update` action `{act}` — expected: snapshot | acquire | apply | doctor");
+    }
+
+    // `doctor` runs its own flow: detect → freeze a snapshot → hand off to the
+    // helper's health check (which prints its own report).
+    if action == Some("doctor") {
         let report = detect();
         let snapshot_path = snapshot::write_snapshot(&report)?;
         return doctor::spawn(&snapshot_path, args);
     }
+
     let report = detect();
     report::print_human(&report);
-    if args.iter().any(|arg| arg == "--snapshot") {
+    if action == Some("snapshot") {
         write_and_report_snapshot(&report);
     }
     print_phase_a_footer();
-    // `--apply` runs the full mutating update (acquire → apply); `--acquire`
-    // only stages + verifies. `--apply` implies the acquire step.
-    let do_apply = args.iter().any(|arg| arg == "--apply");
-    if do_apply || args.iter().any(|arg| arg == "--acquire") {
-        // Both read a snapshot to know the installed subset.
+
+    // `apply` runs the full mutating update (acquire → apply); `acquire` only
+    // stages + verifies. `apply` implies the acquire step.
+    if matches!(action, Some("acquire" | "apply")) {
         let snapshot_path = snapshot::write_snapshot(&report)?;
         acquire::spawn(&snapshot_path, flag_value(args, "--version").as_deref())?;
-        if do_apply {
+        if action == Some("apply") {
             apply::spawn(&snapshot_path)?;
         }
     }
@@ -230,26 +254,29 @@ fn capture_broker(roots: &mut Vec<InstallRoot>, running: &mut Vec<RunningProcess
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_help() {
     println!(
-        "uffs update — self-update\n\n\
+        "uffs --update — self-update\n\n\
          USAGE:\n\
-         \x20 uffs update [--snapshot] [--acquire | --apply] [--version <tag>]\n\
-         \x20 uffs update doctor [--repair] [--offline] [--version <tag>]\n\n\
+         \x20 uffs --update [<action>] [--options]\n\n\
          Discovers where UFFS is installed (from the running CLI, daemon,\n\
          MCP gateway, and broker service), lists binaries + versions per\n\
          location, and shows the running processes' launch recipes.\n\n\
-         FLAGS:\n\
-         \x20 --snapshot          Persist the detection + live daemon state to JSON.\n\
-         \x20 --acquire           Download + SHA-256-verify the release into staging\n\
-         \x20                     (via the uffs-update helper). Does NOT replace.\n\
-         \x20 --apply             Run the FULL mutating update: acquire, then stop\n\
-         \x20                     services, atomically swap + smoke-test, commit,\n\
-         \x20                     and restart. Journaled + auto-rollback on failure.\n\
-         \x20 --version <tag>     Acquire/apply a specific release tag (default: latest).\n\n\
-         SUBCOMMANDS:\n\
-         \x20 doctor              End-to-end health check of the update flow\n\
-         \x20                     (versions, dirs, journal, backups, services,\n\
-         \x20                     broker pipe, release reachability). `--repair`\n\
-         \x20                     self-heals; `--offline` skips network checks.\n"
+         ACTIONS:\n\
+         \x20 (none)              Detect only — non-mutating; nothing is changed.\n\
+         \x20 snapshot            Detect + persist the state to JSON.\n\
+         \x20 acquire             + download + SHA-256-verify the release into\n\
+         \x20                     staging (via the uffs-update helper). No replace.\n\
+         \x20 apply               + the FULL mutating update: stop services,\n\
+         \x20                     atomically swap + smoke-test, commit, restart.\n\
+         \x20                     Journaled + auto-rollback on failure.\n\
+         \x20 doctor              End-to-end health check (versions, dirs, journal,\n\
+         \x20                     backups, services, broker pipe, release reach).\n\n\
+         OPTIONS:\n\
+         \x20 --version <tag>     Acquire/apply a specific release tag (default: latest).\n\
+         \x20 --repair            (doctor) self-heal what can be fixed.\n\
+         \x20 --offline           (doctor) skip the network checks.\n\n\
+         EXAMPLES:\n\
+         \x20 uffs --update                 uffs --update acquire --version v0.6.3\n\
+         \x20 uffs --update apply           uffs --update doctor --repair\n"
     );
 }
 
