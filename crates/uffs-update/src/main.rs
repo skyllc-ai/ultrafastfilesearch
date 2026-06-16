@@ -14,6 +14,7 @@
 
 mod acquire;
 mod github;
+mod journal;
 mod verify;
 
 use anyhow::{Result, bail};

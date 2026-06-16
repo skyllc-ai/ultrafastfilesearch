@@ -33,6 +33,7 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 [dependencies]
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 # Blocking HTTP with rustls + the system trust store — workspace-inherited
