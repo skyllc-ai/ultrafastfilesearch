@@ -311,16 +311,27 @@ use:
     fi
 
     # ── No-op: already on target with a complete install ─────────────
+    # Gate on EVERY binary, not just `uffs`: each must be present AND at the
+    # target version.  Otherwise a stale sibling (e.g. a `uffs-update` left at
+    # an older version by a prior run) is silently kept while `uffs` reports
+    # current — the bug that left uffs-update at 0.6.2 on a 0.6.4 install.
     if [[ -n "$INSTALLED_VER" ]] && [[ -n "$CARGO_VER" ]] && [[ "$INSTALLED_VER" == "$CARGO_VER" ]]; then
-        ALL_PRESENT=1
+        ALL_CURRENT=1
+        STALE_NOTE=""
         for DEST_NAME in "${BINARIES[@]}"; do
-            [[ -x "$BIN_DIR/$DEST_NAME" ]] || { ALL_PRESENT=0; break; }
+            if [[ ! -x "$BIN_DIR/$DEST_NAME" ]]; then
+                ALL_CURRENT=0; STALE_NOTE="$DEST_NAME missing"; break
+            fi
+            BV=$("$BIN_DIR/$DEST_NAME" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+            if [[ -n "$BV" ]] && [[ "v$BV" != "$CARGO_VER" ]]; then
+                ALL_CURRENT=0; STALE_NOTE="$DEST_NAME is v$BV (want $CARGO_VER)"; break
+            fi
         done
-        if [[ "$ALL_PRESENT" -eq 1 ]]; then
+        if [[ "$ALL_CURRENT" -eq 1 ]]; then
             printf "\033[0;32m  ✅ Already up to date: %s installed in ~/bin — nothing to do.\033[0m\n" "$INSTALLED_VER"
             exit 0
         fi
-        printf "\033[1;33m  ⚠️  %s installed but some binaries are missing — reinstalling.\033[0m\n" "$INSTALLED_VER"
+        printf "\033[1;33m  ⚠️  Stale install (%s) — reinstalling all binaries.\033[0m\n" "$STALE_NOTE"
     fi
 
     DIST_DIR=""
@@ -567,16 +578,24 @@ use:
     }
 
     # ── No-op: already on target with a complete install ─────────────
+    # Gate on EVERY binary, not just uffs.exe: each must be present AND at the
+    # target version. Otherwise a stale sibling (e.g. uffs-update.exe left at an
+    # older version by a prior run / file lock) is silently kept while uffs.exe
+    # reports current — the bug that left uffs-update at 0.6.2 on a 0.6.4 install.
     if ($installedVer -and $cargoVer -and ($installedVer -eq $cargoVer)) {
-        $allPresent = $true
+        $allCurrent = $true
+        $staleNote2 = ""
         foreach ($d in $binaries.Values) {
-            if (-not (Test-Path (Join-Path $binDir $d))) { $allPresent = $false; break }
+            $p = Join-Path $binDir $d
+            if (-not (Test-Path $p)) { $allCurrent = $false; $staleNote2 = "$d missing"; break }
+            $bv = Get-SemVer (& $p --version 2>$null)
+            if ($bv -and ($bv -ne $cargoVer)) { $allCurrent = $false; $staleNote2 = "$d is $bv (want $cargoVer)"; break }
         }
-        if ($allPresent) {
+        if ($allCurrent) {
             Write-Host "  OK: Already up to date: $installedVer installed in ~/bin - nothing to do." -ForegroundColor Green
             exit 0
         }
-        Write-Host "  WARNING: $installedVer installed but some binaries are missing - reinstalling." -ForegroundColor Yellow
+        Write-Host "  WARNING: Stale install ($staleNote2) - reinstalling all binaries." -ForegroundColor Yellow
     }
 
     $distDir = $null
