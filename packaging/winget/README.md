@@ -2,7 +2,7 @@
 SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
 SPDX-License-Identifier: MPL-2.0
 -->
-# WinGet manifest — nested-alias seed contract
+# WinGet manifest — nested-alias seeding
 
 The `SkyLLC.UFFS` WinGet package is **auto-submitted** to `microsoft/winget-pkgs`
 by [`.github/workflows/winget-publish.yml`](../../.github/workflows/winget-publish.yml)
@@ -10,10 +10,18 @@ on every release, via `winget-releaser` (komac under the hood). The package is a
 **zip → portable** installer that exposes its bundled binaries as typed commands
 through `NestedInstallerFiles` / `PortableCommandAlias`.
 
+> **✅ Seeding is now AUTOMATIC (since v0.6.3).** `winget-publish.yml` drafts the
+> komac PR, runs the seeder below against the new version's manifest, pushes, and
+> releases the draft — every release, no manual step. **Adding a future binary is
+> a one-line edit to [`nested-aliases.yaml`](nested-aliases.yaml)** and nothing
+> else. The procedure below is now the **manual fallback** (e.g. if the auto-seed
+> step logs a `::warning::` for a release).
+
 The founding manifest (`microsoft/winget-pkgs#378294`) seeded the four engine
 aliases `uffs`, `uffsd`, `uffsmcp`, `uffs-mft`. Everything bundled **after** that
 — currently `uffs-tui`, `uffs-broker`, and `uffs-update` (the self-update helper)
-— must be seeded once each.
+— gets its alias from this same list (`uffs-broker` + `uffs-update` first
+auto-seeded in v0.6.3).
 
 ## Why this needs a one-time seed per binary
 

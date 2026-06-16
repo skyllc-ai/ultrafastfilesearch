@@ -17,18 +17,18 @@
 # bundled uffs-tui demo) carries over automatically with no manifest
 # authoring on our side.
 #
-# ── nested-alias seed contract ───────────────────────────────────────
+# ── nested-alias seeding (now AUTOMATIC) ─────────────────────────────
 # komac PRESERVES NestedInstallerFiles across version bumps but does NOT
 # auto-add executables it finds in the zip.  Each binary bundled beyond
 # the founding four (uffs/uffsd/uffsmcp/uffs-mft) — currently uffs-tui,
-# uffs-broker, and uffs-update — must be SEEDED into the manifest ONCE,
-# into the auto-generated PR for the first release whose uffs-windows-x64.zip
-# actually contains it; thereafter komac carries it forward.  Canonical
-# alias list + idempotent seeder: packaging/winget/nested-aliases.yaml,
-# scripts/dev/winget_seed_aliases.sh (see packaging/winget/README.md).
-# NOTE: uffs-broker (shipped in the zip at v0.5.122) and uffs-update (the
-# self-update helper, added to every zip tier here) are NOT yet seeded in
-# the manifest — seed BOTH on the next SkyLLC.UFFS winget PR.
+# uffs-broker, and uffs-update — needs its alias seeded into the manifest.
+# This used to be a manual step; the "Seed nested aliases" job below now
+# does it AUTOMATICALLY on every release (draft → seed from
+# packaging/winget/nested-aliases.yaml → release).  Adding a future binary
+# is a one-line edit to that yaml — never a manual winget-pkgs commit.
+# Idempotent seeder: scripts/dev/winget_seed_aliases.sh (see
+# packaging/winget/README.md).  uffs-broker + uffs-update were first
+# auto-seeded in v0.6.3 (PR microsoft/winget-pkgs#388427).
 #
 # ── Required secret ──────────────────────────────────────────────────
 # `WINGET_TOKEN` — a **classic** Personal Access Token with the
@@ -125,7 +125,7 @@ jobs:
           fork-user: githubrobbi
           token: ${{ secrets.WINGET_TOKEN }}
 
-      # ── Auto-seed the extra nested aliases + draft gate ──────────────────
+      # ── Auto-seed the extra nested aliases (fully automatic) ─────────────
       #
       # komac PRESERVES the previous manifest's NestedInstallerFiles but never
       # auto-adds executables newly bundled into the zip.  So `uffs-update`
@@ -133,18 +133,20 @@ jobs:
       # by winget unless they are seeded into the manifest exactly once.  This
       # step does that automatically, on the PR komac just opened, using the
       # SAME WINGET_TOKEN (which can push to the fork) — so the winget package
-      # always installs the full binary set with no manual step.
+      # always installs the full binary set with NO manual step.
       #
-      # It also flips the PR to **draft** first (best-effort): nothing can
-      # merge before the seed lands.  After it pushes the seed, the PR is left
-      # as a draft for a maintainer to review and mark ready.  If the fork
-      # does not support drafts, the seed still happens and the PR stays ready.
+      # Flow per release, hands-off end to end: flip the PR to **draft**
+      # (transient gate so nothing can merge mid-seed) → seed the manifest →
+      # push → **release the draft** (`gh pr ready`) so it proceeds straight to
+      # winget validation.  If the fork doesn't support drafts, the seed still
+      # happens and the PR stays ready.
       #
       # Resilient by design: every recoverable condition (PR not found yet,
-      # manifest absent, draft unsupported, nothing to seed) exits 0 with a
-      # warning, so the manual fallback in packaging/winget/README.md still
-      # applies and a hiccup never looks like a release failure.
-      - name: Seed nested aliases into the komac PR (+ draft gate)
+      # manifest absent, draft unsupported, nothing to seed, push failed)
+      # exits 0 with a warning, so the manual fallback in
+      # packaging/winget/README.md still applies and a hiccup never looks like
+      # a release failure.
+      - name: Seed nested aliases into the komac PR (auto-seed + release)
         if: steps.token.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
@@ -154,6 +156,17 @@ jobs:
         run: |
           set -uo pipefail
           VERSION="${RELEASE_TAG#v}"
+
+          # Release the draft (best-effort) so the PR proceeds to validation.
+          # Reads $PR_URL at call time. A no-op if the PR was never drafted.
+          release_draft() {
+            if gh pr ready "$PR_URL" 2>/dev/null; then
+              echo "Released draft → winget validation."
+            else
+              echo "::notice::Could not auto-release the draft; mark ready manually: gh pr ready ${PR_URL}"
+            fi
+          }
+
           echo "Locating the komac-opened SkyLLC.UFFS ${VERSION} PR on microsoft/winget-pkgs..."
 
           # komac opens the PR asynchronously — poll for it.
@@ -209,6 +222,7 @@ jobs:
           cd forkpr || { echo "::warning::cannot enter forkpr; seed manually."; exit 0; }
           if git diff --quiet; then
             echo "No new aliases to seed — manifest already complete."
+            release_draft   # nothing to push, but still release the draft
             exit 0
           fi
           git config user.name  "uffs-winget-bot"
@@ -221,10 +235,15 @@ jobs:
             exit 0
           fi
 
+          # Release the draft so the PR proceeds straight to winget validation.
+          # The draft was only a transient gate to block any merge mid-seed —
+          # with that done, the flow is fully hands-off (no manual mark-ready).
+          release_draft
+
           {
-            echo "## WinGet PR auto-seeded"
+            echo "## WinGet PR auto-seeded + released"
             echo "- PR: ${PR_URL}"
             echo "- Branch: \`${PR_BRANCH}\`"
             echo "- Seeded the canonical NestedInstallerFiles from \`packaging/winget/nested-aliases.yaml\` (uffs-update, uffs-broker, uffs-tui)."
-            echo "- Left as **draft** if the fork supports it — review, then \`gh pr ready ${PR_URL}\` to validate + merge."
+            echo "- Released the draft → fully automatic. Microsoft's bot now validates + merges on their side."
           } >> "$GITHUB_STEP_SUMMARY"
