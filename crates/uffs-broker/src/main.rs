@@ -11,6 +11,7 @@
 //! ```bash
 //! uffs-broker --install     # Install as Windows Service
 //! uffs-broker --uninstall   # Remove Windows Service
+//! uffs-broker --status      # Show state, pid, and pipe-serving status
 //! uffs-broker --start       # Start the service
 //! uffs-broker --stop        # Stop the service
 //! uffs-broker --run         # Run in foreground (for debugging)

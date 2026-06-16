@@ -66,6 +66,9 @@ uffs-broker-protocol.workspace = true
 # single implementation now lives in `uffs-security` (DRY with the
 # self-updater) instead of a broker-local copy.
 uffs-security.workspace = true
+# Native SCM control for the operator-facing `--status` / `--start` /
+# `--stop` commands — the same locale-proof primitive the updater uses.
+uffs-winsvc.workspace = true
 
 [lints]
 workspace = true
