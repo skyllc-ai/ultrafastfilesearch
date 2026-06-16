@@ -83,6 +83,11 @@ jobs:
     # Never run from forks — only the canonical repo holds WINGET_TOKEN.
     if: github.repository_owner == 'skyllc-ai'
     steps:
+      # Needed so the post-submit step can run scripts/dev/winget_seed_aliases.sh
+      # and read packaging/winget/nested-aliases.yaml (the canonical alias list).
+      - name: Checkout UFFS (for the alias seeder)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
       # Graceful no-op when the token is absent: warn (not ❌) so a
       # missing/rotated secret never shows as a hard failure.  The
       # weekly `winget-token-expiry-check.yml` is the durable alarm for
@@ -119,3 +124,107 @@ jobs:
           # has no winget-pkgs fork).
           fork-user: githubrobbi
           token: ${{ secrets.WINGET_TOKEN }}
+
+      # ── Auto-seed the extra nested aliases + draft gate ──────────────────
+      #
+      # komac PRESERVES the previous manifest's NestedInstallerFiles but never
+      # auto-adds executables newly bundled into the zip.  So `uffs-update`
+      # (every tier) and `uffs-broker` (since v0.5.122) would NOT be installed
+      # by winget unless they are seeded into the manifest exactly once.  This
+      # step does that automatically, on the PR komac just opened, using the
+      # SAME WINGET_TOKEN (which can push to the fork) — so the winget package
+      # always installs the full binary set with no manual step.
+      #
+      # It also flips the PR to **draft** first (best-effort): nothing can
+      # merge before the seed lands.  After it pushes the seed, the PR is left
+      # as a draft for a maintainer to review and mark ready.  If the fork
+      # does not support drafts, the seed still happens and the PR stays ready.
+      #
+      # Resilient by design: every recoverable condition (PR not found yet,
+      # manifest absent, draft unsupported, nothing to seed) exits 0 with a
+      # warning, so the manual fallback in packaging/winget/README.md still
+      # applies and a hiccup never looks like a release failure.
+      - name: Seed nested aliases into the komac PR (+ draft gate)
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          FORK_USER: githubrobbi
+        shell: bash
+        run: |
+          set -uo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          echo "Locating the komac-opened SkyLLC.UFFS ${VERSION} PR on microsoft/winget-pkgs..."
+
+          # komac opens the PR asynchronously — poll for it.
+          PR_JSON=""
+          for attempt in $(seq 1 12); do
+            PR_JSON=$(gh pr list --repo microsoft/winget-pkgs \
+              --author "$FORK_USER" --state open \
+              --search "SkyLLC.UFFS ${VERSION}" \
+              --json number,url,title,headRefName --limit 10 2>/dev/null \
+              | jq -c --arg v "$VERSION" \
+                  '[.[] | select((.title + " " + .headRefName) | contains($v))][0] // empty')
+            [[ -n "$PR_JSON" ]] && break
+            echo "  not found yet (attempt ${attempt}/12); waiting 20s..."
+            sleep 20
+          done
+
+          if [[ -z "$PR_JSON" ]]; then
+            echo "::warning title=winget PR not found::Could not locate the SkyLLC.UFFS ${VERSION} PR within the poll window. Seed it manually per packaging/winget/README.md once komac's PR appears."
+            exit 0
+          fi
+
+          PR_URL=$(jq -r '.url' <<<"$PR_JSON")
+          PR_BRANCH=$(jq -r '.headRefName' <<<"$PR_JSON")
+          echo "Found PR ${PR_URL} (branch ${PR_BRANCH})"
+
+          # Draft gate (best-effort) — block any auto-merge before the seed.
+          if gh pr ready "$PR_URL" --undo 2>/tmp/draft.err; then
+            echo "Converted PR to draft."
+          else
+            echo "::notice::Could not draft the PR (fork drafts may be unsupported): $(cat /tmp/draft.err 2>/dev/null). Continuing to seed; PR stays ready."
+          fi
+
+          # Clone the fork PR branch and run the canonical-alias seeder.
+          rm -rf forkpr
+          if ! git clone --depth 1 --branch "$PR_BRANCH" \
+                 "https://x-access-token:${GH_TOKEN}@github.com/${FORK_USER}/winget-pkgs.git" forkpr 2>/dev/null; then
+            echo "::warning::Could not clone the fork PR branch ${PR_BRANCH}; seed manually."
+            exit 0
+          fi
+          MANIFEST="forkpr/manifests/s/SkyLLC/UFFS/${VERSION}/SkyLLC.UFFS.installer.yaml"
+          if [[ ! -f "$MANIFEST" ]]; then
+            echo "::warning::Expected manifest ${MANIFEST} not found; seed manually."
+            exit 0
+          fi
+
+          # The seeder reads packaging/winget/nested-aliases.yaml from THIS repo
+          # (checked out above) and edits the fork manifest in place. Idempotent.
+          if ! "${GITHUB_WORKSPACE}/scripts/dev/winget_seed_aliases.sh" "${GITHUB_WORKSPACE}/${MANIFEST}"; then
+            echo "::warning::Seeder reported a problem; seed manually per packaging/winget/README.md."
+            exit 0
+          fi
+
+          cd forkpr || { echo "::warning::cannot enter forkpr; seed manually."; exit 0; }
+          if git diff --quiet; then
+            echo "No new aliases to seed — manifest already complete."
+            exit 0
+          fi
+          git config user.name  "uffs-winget-bot"
+          git config user.email "50460704+githubrobbi@users.noreply.github.com"
+          git commit -am "Seed nested aliases (uffs-update, uffs-broker, uffs-tui) for SkyLLC.UFFS ${VERSION}"
+          if git push origin "HEAD:${PR_BRANCH}" 2>/dev/null; then
+            echo "Seeded + pushed to ${PR_BRANCH}."
+          else
+            echo "::warning::Seed committed but push failed; push HEAD:${PR_BRANCH} manually."
+            exit 0
+          fi
+
+          {
+            echo "## WinGet PR auto-seeded"
+            echo "- PR: ${PR_URL}"
+            echo "- Branch: \`${PR_BRANCH}\`"
+            echo "- Seeded the canonical NestedInstallerFiles from \`packaging/winget/nested-aliases.yaml\` (uffs-update, uffs-broker, uffs-tui)."
+            echo "- Left as **draft** if the fork supports it — review, then \`gh pr ready ${PR_URL}\` to validate + merge."
+          } >> "$GITHUB_STEP_SUMMARY"
