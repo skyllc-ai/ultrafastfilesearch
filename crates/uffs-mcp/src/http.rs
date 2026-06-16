@@ -71,7 +71,7 @@ pub struct HttpGatewayConfig {
     pub bind_addr: core::net::SocketAddr,
     /// Optional bearer token for authenticating MCP requests.
     pub auth_token: Option<String>,
-    /// Extra CLI args forwarded to `uffs daemon run` on auto-start.
+    /// Extra CLI args forwarded to `uffs --daemon run` on auto-start.
     pub daemon_spawn_args: Vec<std::ffi::OsString>,
 }
 

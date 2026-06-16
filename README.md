@@ -165,7 +165,7 @@ cargo build --release
 
 ## Quick Start
 
-> **Windows elevation — three ways.** Reading the live MFT needs Administrator. Easiest: install the **Access Broker** once (`uffs-broker --install`, from an elevated shell) and every later non-elevated `uffs` search runs with **no UAC prompt**, surviving reboots. Otherwise, run from an **elevated** terminal, or let the first search offer a one-time `uffs daemon start --elevate` (a single UAC prompt). macOS/Linux offline analysis needs no elevation.
+> **Windows elevation — three ways.** Reading the live MFT needs Administrator. Easiest: install the **Access Broker** once (`uffs-broker --install`, from an elevated shell) and every later non-elevated `uffs` search runs with **no UAC prompt**, surviving reboots. Otherwise, run from an **elevated** terminal, or let the first search offer a one-time `uffs --daemon start --elevate` (a single UAC prompt). macOS/Linux offline analysis needs no elevation.
 
 ```bash
 # One-time (elevated): install the Access Broker → no UAC on any later search
@@ -184,15 +184,15 @@ uffs "*.log" --min-size 100MB --newer 7d --files-only
 # macOS/Linux: search offline MFT captures
 uffs "*.txt" --data-dir ~/uffs_data
 
-# Daemon management
-uffs daemon status
-uffs daemon restart
+# Daemon management ( `--<command>` = management; bare words are searches )
+uffs --daemon status
+uffs --daemon restart
 
 # Memory tiering — operator-driven controls (Phase 8)
-uffs daemon status_drives                 # per-drive tier + telemetry table
-uffs daemon hibernate                     # demote every drive to Cold (free RAM)
-uffs daemon preload C --pin-minutes 60    # pin a hot drive in RAM
-uffs daemon forget C --force              # evict + delete on-disk caches
+uffs --daemon status_drives               # per-drive tier + telemetry table
+uffs --daemon hibernate                   # demote every drive to Cold (free RAM)
+uffs --daemon preload C --pin-minutes 60  # pin a hot drive in RAM
+uffs --daemon forget C --force            # evict + delete on-disk caches
 ```
 
 > 📖 **[Installation](docs/user-manual/installation.md)** · **[5-minute tutorial](docs/user-manual/getting-started.md)** · **[CLI reference](docs/user-manual/cli-overview.md)** · **[40+ filters](docs/user-manual/filters.md)**

@@ -37,7 +37,7 @@ struct Args {
     bind: SocketAddr,
     /// Optional bearer token for authenticating MCP requests.
     auth_token: Option<String>,
-    /// Extra args forwarded to `uffs daemon run` on auto-start.
+    /// Extra args forwarded to `uffs --daemon run` on auto-start.
     #[expect(
         clippy::struct_field_names,
         reason = "clarity: distinguishes from other arg types"

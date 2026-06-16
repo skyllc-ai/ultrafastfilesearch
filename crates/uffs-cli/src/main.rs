@@ -555,7 +555,7 @@ pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
     run_search(&synth_args)
 }
 
-/// Handle `uffs daemon <action> [flags...]`.
+/// Handle `uffs --daemon <action> [flags...]`.
 pub(crate) fn run_daemon(args: &[String]) -> Result<()> {
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_daemon_help();

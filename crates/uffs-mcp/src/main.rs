@@ -6,7 +6,7 @@
 //! Handles all MCP lifecycle commands: `run`, `serve`, `start`, `stop`,
 //! `status`, `stats`, `kill`, `restart`, `reload`.
 //!
-//! The CLI (`uffs mcp <action>`) delegates to this binary so the thin
+//! The CLI (`uffs --mcp <action>`) delegates to this binary so the thin
 //! client stays small.
 //!
 //! # MCP Configuration

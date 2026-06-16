@@ -66,7 +66,7 @@ enum ClientSlot {
     /// Active mode — `spawn_args` are forwarded to
     /// [`UffsClient::connect_with_args`] on every daemon-backed call.
     Active {
-        /// Args forwarded to `uffs daemon run` on auto-start.
+        /// Args forwarded to `uffs --daemon run` on auto-start.
         spawn_args: Vec<std::ffi::OsString>,
     },
     /// No daemon — metadata-only / testing.

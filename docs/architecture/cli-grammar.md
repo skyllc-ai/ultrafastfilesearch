@@ -4,9 +4,9 @@ SPDX-License-Identifier: MPL-2.0
 -->
 # UFFS CLI Grammar — search-first, `--command` for everything else
 
-**Status:** Design approved + decisions resolved (§12); **implementation in
-progress on `feat/cli-grammar`**. This is the design + implementation +
-tracking doc for the `uffs` command-line grammar redesign.
+**Status:** **Implemented** on `feat/cli-grammar` (§11 P0–P4 done; P5
+validation in progress). Decisions resolved (§12). This is the design +
+implementation + tracking doc for the `uffs` command-line grammar redesign.
 
 **TL;DR:** `uffs <anything>` searches for `<anything>` — *any* word, with no
 reserved words. Management operations are `--<command>` (double-dash), e.g.
@@ -298,7 +298,14 @@ that internal path; only the *external* entry tokens change.
       test updated. (A "did you mean …?" hint for `--bogus` is a nice-to-have
       follow-up; today an unknown leading `--flag` errors via the search
       parser, and `--update bogus` is rejected with the action list.)
-- [ ] **P4 — Docs.** CLAUDE.md, README, MCP instructions, this doc → Implemented.
+- [x] **P4 — Docs.** README command examples → `uffs --daemon …` (+ a
+      "`--command` = management; bare words search" note); CLAUDE.md and the
+      MCP server `instructions` had no old-grammar CLI refs; internal
+      doc-comments that named the conceptual `uffs daemon/mcp …` forms updated
+      to `uffs --daemon/--mcp …`; this doc → Implemented. (No internal
+      self-spawn was affected: the updater shells out to the separate
+      `uffs-update` binary, autostart to `uffsd`, MCP to `uffsmcp` — each with
+      its own grammar.)
 - [ ] **P5 — Validate.** Host + Windows-MSVC clippy clean; full nextest; manual
       smoke of every command + a `uffs update` *search*.
 

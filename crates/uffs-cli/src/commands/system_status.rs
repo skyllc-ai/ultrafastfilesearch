@@ -7,7 +7,8 @@
 //! - **Daemon**: PID, uptime, drives, queries
 //! - **Access Broker**: SCM state, pid, pipe-serving (native, locale-proof)
 //! - **MCP HTTP Gateway**: PID, transport, health, sessions, tool calls
-//! - **MCP Stdio Sessions**: active `uffs mcp run` processes (one per AI host)
+//! - **MCP Stdio Sessions**: active `uffs --mcp run` processes (one per AI
+//!   host)
 
 #[cfg(feature = "mcp-http-probe")]
 use anyhow::{Context as _, Result};
@@ -355,7 +356,7 @@ fn print_mcp_stats(stats: &serde_json::Value) {
 
 /// Print MCP stdio session list.
 ///
-/// Scans for running `uffs mcp run` processes.  Each one is an AI-host
+/// Scans for running `uffs --mcp run` processes.  Each one is an AI-host
 /// (Augment, Claude Desktop, Cursor, etc.) connected via stdio transport.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_mcp_stdio_sessions() {
@@ -403,7 +404,7 @@ struct StdioSession {
     is_stale: bool,
 }
 
-/// Find running `uffs mcp run` processes via `ps`.
+/// Find running `uffs --mcp run` processes via `ps`.
 ///
 /// Also detects stale binaries by comparing the on-disk mtime of each
 /// process's executable against the current running binary.
@@ -446,7 +447,7 @@ fn find_mcp_stdio_processes() -> Vec<StdioSession> {
         };
         let cmdline: String = fields.collect::<Vec<_>>().join(" ");
 
-        // Match `uffs mcp run` in any path.
+        // Match `uffs --mcp run` in any path.
         if !cmdline.contains("mcp") || !cmdline.contains("run") {
             continue;
         }

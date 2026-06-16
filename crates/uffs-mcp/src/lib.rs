@@ -52,7 +52,7 @@
 //!
 //! UFFS ships the HTTP gateway as a first-class transport (the
 //! stdio-only path covers Claude Desktop / Cursor / Windsurf, but
-//! `uffs daemon http` and browser-side MCP clients need the streamable
+//! `uffs --daemon http` and browser-side MCP clients need the streamable
 //! HTTP server).  Downstream MCP integrations that only want the
 //! stdio transport can pass `default-features = false` to drop
 //! axum and tower-service from their binary; both transports share
@@ -224,7 +224,7 @@ use tracing::info;
 /// `McpConfigBuilder`.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
-    /// Extra CLI args forwarded to `uffs daemon run` when auto-starting
+    /// Extra CLI args forwarded to `uffs --daemon run` when auto-starting
     /// (e.g. `["--data-dir", "/path"]`).
     pub daemon_spawn_args: Vec<std::ffi::OsString>,
     /// Idle timeout in seconds.  The MCP server will auto-exit if no

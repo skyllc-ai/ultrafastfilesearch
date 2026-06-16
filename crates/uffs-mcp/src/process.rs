@@ -480,7 +480,7 @@ fn parse_ps_etime(etime: &str) -> core::time::Duration {
     core::time::Duration::from_secs(total_secs)
 }
 
-/// Find PIDs of running `uffs mcp run` / `uffsmcp run` processes.
+/// Find PIDs of running `uffs --mcp run` / `uffsmcp run` processes.
 #[must_use]
 pub(crate) fn find_mcp_run_pids() -> Vec<u32> {
     let Ok(raw_output) = std::process::Command::new("ps")

@@ -202,7 +202,7 @@ pub(crate) enum DaemonAction {
     StatusDrives,
 }
 
-/// Parse `uffs daemon <action> [flags...]` from raw args.
+/// Parse `uffs --daemon <action> [flags...]` from raw args.
 ///
 /// # Errors
 ///
