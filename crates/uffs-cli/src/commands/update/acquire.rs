@@ -16,7 +16,7 @@ use anyhow::{Context as _, Result, bail};
 use super::snapshot;
 
 /// Default upstream repository for self-update artifacts.
-const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
+pub(super) const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
 
 /// Platform file name of the helper binary.
 const fn helper_file_name() -> &'static str {

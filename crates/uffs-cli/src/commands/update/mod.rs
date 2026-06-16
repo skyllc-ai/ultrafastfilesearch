@@ -16,6 +16,7 @@
 mod acquire;
 mod binaries;
 mod channel;
+mod doctor;
 mod model;
 mod procinfo;
 mod report;
@@ -33,6 +34,13 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();
         return Ok(());
+    }
+    // `uffs update doctor [...]` — detect, freeze a snapshot, then hand off
+    // to the helper's end-to-end health check (which prints its own report).
+    if args.first().is_some_and(|arg| arg == "doctor") {
+        let report = detect();
+        let snapshot_path = snapshot::write_snapshot(&report)?;
+        return doctor::spawn(&snapshot_path, args);
     }
     let report = detect();
     report::print_human(&report);
@@ -216,7 +224,9 @@ fn capture_broker(roots: &mut Vec<InstallRoot>, running: &mut Vec<RunningProcess
 fn print_help() {
     println!(
         "uffs update — self-update\n\n\
-         USAGE:\n  uffs update [--snapshot] [--acquire [--version <tag>]]\n\n\
+         USAGE:\n\
+         \x20 uffs update [--snapshot] [--acquire [--version <tag>]]\n\
+         \x20 uffs update doctor [--repair] [--offline] [--version <tag>]\n\n\
          Discovers where UFFS is installed (from the running CLI, daemon,\n\
          MCP gateway, and broker service), lists binaries + versions per\n\
          location, and shows the running processes' launch recipes.\n\n\
@@ -224,7 +234,12 @@ fn print_help() {
          \x20 --snapshot          Persist the detection + live daemon state to JSON.\n\
          \x20 --acquire           Download + SHA-256-verify the release into staging\n\
          \x20                     (via the uffs-update helper). Does NOT replace.\n\
-         \x20 --version <tag>     Acquire a specific release tag (default: latest).\n"
+         \x20 --version <tag>     Acquire a specific release tag (default: latest).\n\n\
+         SUBCOMMANDS:\n\
+         \x20 doctor              End-to-end health check of the update flow\n\
+         \x20                     (versions, dirs, journal, backups, services,\n\
+         \x20                     broker pipe, release reachability). `--repair`\n\
+         \x20                     self-heals; `--offline` skips network checks.\n"
     );
 }
 

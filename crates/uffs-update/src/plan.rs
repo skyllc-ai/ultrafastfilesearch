@@ -55,13 +55,9 @@ pub(crate) struct SnapBinary {
 pub(crate) struct SnapRunning {
     /// Component kind: `daemon` / `broker` / `mcp`.
     pub(crate) component: String,
-    /// OS process id at snapshot time. Parsed for audit completeness only:
+    /// OS process id at snapshot time. The doctor probes its liveness;
     /// quiesce/restore act via the PID file + `sc.exe` + the captured
     /// command line, never this (stale-by-restart) raw pid.
-    #[expect(
-        dead_code,
-        reason = "snapshot audit field; not used by stop/start logic"
-    )]
     pub(crate) pid: u32,
     /// Image path.
     #[serde(default)]
@@ -105,6 +101,19 @@ impl Snapshot {
         self.targets
             .iter()
             .filter(|target| target.channel == "winget")
+    }
+
+    /// The deduplicated set of binary stems installed across every
+    /// **unmanaged** root (e.g. `["uffs", "uffsd"]`) — the subset the
+    /// updater acquires + applies. Sorted for stable output.
+    pub(crate) fn installed_binaries(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .unmanaged_targets()
+            .flat_map(|target| target.binaries.iter().map(|binary| binary.name.clone()))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// The lowest `on_disk_version` across all targets (the "from" version),

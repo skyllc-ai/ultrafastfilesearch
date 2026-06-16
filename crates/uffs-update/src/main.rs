@@ -14,6 +14,7 @@
 
 mod acquire;
 mod apply;
+mod doctor;
 mod github;
 mod journal;
 mod orchestrate;
@@ -37,12 +38,17 @@ fn main() -> Result<()> {
         Some("acquire") => run_acquire(args.get(1..).unwrap_or_default()),
         Some("apply") => run_apply(args.get(1..).unwrap_or_default()),
         Some("recover") => run_recover(args.get(1..).unwrap_or_default()),
+        Some("doctor") => run_doctor(args.get(1..).unwrap_or_default()),
+        Some("--version" | "-V") => {
+            print_version();
+            Ok(())
+        }
         Some("--help" | "-h") | None => {
             print_usage();
             Ok(())
         }
         Some(other) => {
-            bail!("unknown subcommand `{other}` (try `acquire` / `apply` / `recover`)")
+            bail!("unknown subcommand `{other}` (try `acquire` / `apply` / `recover` / `doctor`)")
         }
     }
 }
@@ -161,6 +167,30 @@ fn run_recover(args: &[String]) -> Result<()> {
 /// Default upstream repository for self-update artifacts.
 const DEFAULT_REPO: &str = "skyllc-ai/UltraFastFileSearch";
 
+/// Parse the `doctor` flags and run the end-to-end health check. Exits
+/// non-zero when a hard failure is found so it composes in scripts/CI.
+fn run_doctor(args: &[String]) -> Result<()> {
+    let opts = doctor::DoctorOpts {
+        snapshot: flag(args, "--snapshot").map(PathBuf::from),
+        stage: flag(args, "--stage").map(PathBuf::from),
+        repo: flag(args, "--repo").unwrap_or_else(|| DEFAULT_REPO.to_owned()),
+        tag: flag(args, "--version"),
+        repair: has_flag(args, "--repair"),
+        offline: has_flag(args, "--offline"),
+    };
+    if doctor::run(&opts) {
+        Ok(())
+    } else {
+        bail!("doctor found one or more failures")
+    }
+}
+
+/// Print the helper version.
+#[expect(clippy::print_stdout, reason = "intentional version output")]
+fn print_version() {
+    println!("uffs-update {}", env!("CARGO_PKG_VERSION"));
+}
+
 /// Parse the `acquire` flags and download + verify the installed-subset
 /// binaries from the snapshot.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
@@ -178,12 +208,7 @@ fn run_acquire(args: &[String]) -> Result<()> {
     let snapshot = plan::Snapshot::load(&snapshot_path)?;
 
     // The installed subset across every unmanaged root, deduplicated.
-    let mut binaries: Vec<String> = snapshot
-        .unmanaged_targets()
-        .flat_map(|target| target.binaries.iter().map(|binary| binary.name.clone()))
-        .collect();
-    binaries.sort();
-    binaries.dedup();
+    let binaries = snapshot.installed_binaries();
     if binaries.is_empty() {
         bail!("no unmanaged binaries to acquire (WinGet roots are delegated to winget)");
     }
@@ -212,6 +237,11 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+/// `true` if the bare flag `name` is present.
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
 /// Turn a missing required flag into a clear error.
 fn required(value: Option<String>, what: &str) -> Result<String> {
     value.ok_or_else(|| anyhow::anyhow!("missing required {what}"))
@@ -221,14 +251,19 @@ fn required(value: Option<String>, what: &str) -> Result<String> {
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_usage() {
     println!(
-        "uffs-update — self-update acquire + apply + recover helper\n\n\
+        "uffs-update — self-update acquire + apply + recover + doctor helper\n\n\
          USAGE:\n\
          \x20 uffs-update acquire --snapshot <path> --stage <dir> \\\n\
          \x20                     [--repo <owner/name>] [--version <tag>] [--sums <asset>]\n\
          \x20 uffs-update apply   --snapshot <path> --stage <dir>\n\
-         \x20 uffs-update recover --journal <path>\n\n\
+         \x20 uffs-update recover --journal <path>\n\
+         \x20 uffs-update doctor  [--snapshot <path>] [--stage <dir>] \\\n\
+         \x20                     [--repo <owner/name>] [--version <tag>] [--repair] [--offline]\n\n\
          acquire: per the snapshot's installed subset, downloads each binary\n\
          as an individual release asset + SHA256SUMS, SHA-256-verifies each,\n\
-         and leaves them staged. It does not replace anything (apply phase).\n"
+         and leaves them staged. It does not replace anything (apply phase).\n\
+         doctor:  end-to-end health check of the update flow; `--repair`\n\
+         resumes/rolls-back an interrupted update, sweeps stale backups, and\n\
+         restarts any stopped service. Exits non-zero on a hard failure.\n"
     );
 }
