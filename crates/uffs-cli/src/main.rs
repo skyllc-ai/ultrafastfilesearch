@@ -255,7 +255,12 @@ fn print_client_profile(prof: &ClientProfile<'_>) {
 
 /// Forward raw search args to the daemon via `search_cli` RPC.
 pub(crate) fn run_search(args: &[String]) -> Result<()> {
-    if args.is_empty() {
+    // No pattern, or an explicit help request as the first token
+    // (`uffs --search --help`) → the search-first top-level help.
+    if matches!(
+        args.first().map(String::as_str),
+        None | Some("--help" | "-h")
+    ) {
         args::print_help();
         return Ok(());
     }
