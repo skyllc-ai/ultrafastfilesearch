@@ -361,6 +361,12 @@ criteria = "safe-to-deploy"
 delta = "1.23.1 -> 1.23.2"
 notes = "Delta audit (cargo vet diff 1.23.1 -> 1.23.2). Files: Cargo.toml(.orig) version bump, README, src/{error,fmt,parser,lib,external/serde_support}.rs. Patch release by KodrAus (uuid maintainer): formatting/parser refinements + serde tweak. The single unsafe is std::str::from_utf8_unchecked(self.0) on the crate's own fixed-size format buffer, which uuid populates exclusively with ASCII hex digits + hyphens before formatting — sound zero-copy formatting (same pattern as the vetted 1.23.1). No new I/O / FFI / process / network / ambient capability."
 
+[[audits.uuid]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.2 -> 1.23.3"
+notes = "Patch bump reviewed: src/error.rs REMOVES an unsafe std::str::from_utf8_unchecked in the parse-error formatter (uses the already-safe &str input instead) — a net safety improvement; equivalent slice-pattern refactor; parser.rs adds parse-error tests; remainder is version/doc/WASM-dev-fixture bumps. No new unsafe, network, fs, or process surface."
+
 [[audits.which]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
