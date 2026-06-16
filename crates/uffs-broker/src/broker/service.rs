@@ -9,10 +9,11 @@
 //! `LocalSystem` entry point the SCM invokes at boot — so the broker runs as a
 //! real service without the `--run` terminal.
 
-/// Registered service name — must match the `sc create` name and the
-/// `service_main` table entry.
+/// Registered service name — the single source of truth shared with the
+/// updater + CLI. Used for `sc create`/`delete` and the `service_main`
+/// table entry.
 #[cfg(windows)]
-const SERVICE_NAME: &str = "UffsAccessBroker";
+use uffs_broker_protocol::SERVICE_NAME;
 
 /// Set by the SCM control handler on STOP / SHUTDOWN; polled by the broker's
 /// accept loop ([`stop_requested`]) so it exits between connections.

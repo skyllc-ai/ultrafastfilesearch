@@ -46,7 +46,8 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Layer 0 — Foundation (zero internal deps; only external crates)             │
-│   uffs-polars   uffs-security   uffs-text   uffs-time   uffs-broker-protocol│
+│   uffs-polars  uffs-security  uffs-text  uffs-time  uffs-broker-protocol     │
+│   uffs-winsvc                                                                │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──── Parallel tree (not part of the layer hierarchy) ────┐
@@ -57,7 +58,7 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 
 ## 2. Per-layer crate inventory
 
-### Layer 0 — Foundation (5 crates, all publishable)
+### Layer 0 — Foundation (6 crates, all publishable)
 
 | Crate | Description | External-dep footprint |
 |---|---|---|
@@ -65,7 +66,8 @@ UFFS uses a strict layered architecture with **5 layers** plus a parallel **tool
 | `uffs-security` | Crypto, keystore, secure FS ops, FILE_FLAG_RANDOM_ACCESS handling | Windows DPAPI / DACL, libc flock, memmap2 |
 | `uffs-text` | Unicode/NTFS case folding, trigram keys, i18n primitives | Pure logic; zero unsafe |
 | `uffs-time` | NTFS FILETIME arithmetic (`const fn`) | Pure logic; zero deps |
-| `uffs-broker-protocol` | Cross-platform broker wire-protocol types | Pure logic; zero unsafe |
+| `uffs-broker-protocol` | Cross-platform broker wire-protocol types (`PIPE_NAME`, `SERVICE_NAME`) | Pure logic; zero unsafe |
+| `uffs-winsvc` | Native Windows service control (SCM) + broker-pipe readiness probe; the single home for the `sc`/SCM mechanics shared by uffs-broker, uffs-update, uffs-cli | `windows` (windows-target only); pure stubs off Windows |
 
 **Layer-0 contract:** Zero internal-crate dependencies.  Any new Layer-0 crate must compile against `cargo check -p <crate>` with no `uffs-*` deps in `[dependencies]`.
 
