@@ -14,15 +14,21 @@ use std::process::Command;
 
 use super::model::BinaryInfo;
 
-/// Logical stems of every UFFS binary the updater knows about. The
-/// platform `.exe` suffix is added by [`exe_file_name`].
+/// Logical stems of every UFFS binary the updater knows about — i.e. the
+/// engine binaries this repo builds and publishes as release assets, so
+/// each can be acquired + swapped. The platform `.exe` suffix is added by
+/// [`exe_file_name`].
+///
+/// `uffs-tui` is deliberately **excluded**: it ships from the separate
+/// `uffs-products` / `uffs-demo` repo with its own versioning and is not a
+/// release asset here, so the engine updater must not chase it.
 pub(crate) const KNOWN_BINARIES: [&str; 6] = [
     "uffs",        // CLI
     "uffsd",       // daemon
     "uffsmcp",     // MCP server
     "uffs-broker", // elevated handle broker (Windows service)
-    "uffs-tui",    // interactive TUI (optional)
-    "uffs-mft",    // diagnostics (optional)
+    "uffs-update", // the self-update helper itself
+    "uffs-mft",    // MFT diagnostics binary (optional)
 ];
 
 /// Append the platform executable suffix to a binary stem
@@ -124,9 +130,29 @@ mod tests {
     }
 
     #[test]
-    fn known_set_contains_core_and_optional() {
-        for stem in ["uffs", "uffsd", "uffsmcp", "uffs-broker"] {
-            assert!(KNOWN_BINARIES.contains(&stem), "missing core binary {stem}");
+    fn known_set_contains_engine_binaries_and_the_helper() {
+        for stem in [
+            "uffs",
+            "uffsd",
+            "uffsmcp",
+            "uffs-broker",
+            "uffs-update",
+            "uffs-mft",
+        ] {
+            assert!(
+                KNOWN_BINARIES.contains(&stem),
+                "missing engine binary {stem}"
+            );
         }
+    }
+
+    #[test]
+    fn known_set_excludes_the_demo_tui() {
+        // `uffs-tui` ships from the separate uffs-demo repo with its own
+        // versioning; the engine updater must never try to acquire it.
+        assert!(
+            !KNOWN_BINARIES.contains(&"uffs-tui"),
+            "uffs-tui is not an engine release asset and must not be auto-updated"
+        );
     }
 }
