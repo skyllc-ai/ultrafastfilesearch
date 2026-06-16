@@ -76,6 +76,7 @@ fn roll_forward(journal: &mut Journal, snapshot: &plan::Snapshot) -> Result<()> 
     journal.transition(UpdateState::Restored, "recover.roll_forward")?;
     orchestrate::prune_all(journal);
     journal.transition(UpdateState::Done, "recover.done")?;
+    journal.archive();
     Ok(())
 }
 
@@ -85,6 +86,7 @@ fn roll_back(journal: &mut Journal, snapshot: &plan::Snapshot) -> Result<()> {
     orchestrate::rollback_all(journal)?;
     let _failed = restore::restore(snapshot); // INV-1
     journal.transition(UpdateState::Aborted, "recover.roll_back")?;
+    journal.archive();
     Ok(())
 }
 

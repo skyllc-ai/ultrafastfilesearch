@@ -72,6 +72,7 @@ fn run_apply(args: &[String]) -> Result<()> {
     // zero-downtime — nothing is quiesced or swapped yet (§19, Phase D).
     if let Err(err) = orchestrate::preflight(&journal, &stage) {
         journal.transition(journal::UpdateState::Aborted, "preflight.failed")?;
+        journal.archive();
         return Err(err);
     }
     journal.transition(journal::UpdateState::PreflightOk, "preflight.ok")?;
@@ -89,6 +90,7 @@ fn run_apply(args: &[String]) -> Result<()> {
             journal::UpdateState::Aborted,
             &format!("apply.aborted; restart_failed=[{}]", failed.join(", ")),
         )?;
+        journal.archive();
         return Err(err);
     }
 
@@ -107,6 +109,7 @@ fn run_apply(args: &[String]) -> Result<()> {
 
     orchestrate::prune_all(&journal);
     journal.transition(journal::UpdateState::Done, "apply.done")?;
+    journal.archive();
     println!("Applied + committed → {}", journal.to_version);
     Ok(())
 }

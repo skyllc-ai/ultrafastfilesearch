@@ -73,6 +73,10 @@ fn run() -> Result<()> {
         _ => {}
     }
 
+    // Phase H self-heal: if a prior update crashed mid-flight, finish or
+    // roll it back in the background. Costs one `stat` in steady state.
+    commands::update::maybe_self_heal();
+
     // Detect subcommand as first non-flag token.
     let first = tokens.first().copied().unwrap_or("");
     let subcmd_args = raw_args.get(2..).unwrap_or_default();

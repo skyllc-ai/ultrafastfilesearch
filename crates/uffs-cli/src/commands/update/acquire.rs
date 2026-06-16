@@ -29,7 +29,7 @@ const fn helper_file_name() -> &'static str {
 
 /// Locate the `uffs-update` helper — next to the running `uffs` first,
 /// then on `PATH`.
-fn find_helper() -> Result<PathBuf> {
+pub(super) fn find_helper() -> Result<PathBuf> {
     let name = helper_file_name();
     if let Some(sibling) = std::env::current_exe()
         .ok()

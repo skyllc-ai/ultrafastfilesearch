@@ -206,6 +206,17 @@ impl Journal {
         Ok(())
     }
 
+    /// Archive a terminal journal: rename the live `journal.json` to a
+    /// sibling `journal.json.last` (overwriting any prior). This keeps an
+    /// audit copy while freeing the live path as the unambiguous
+    /// "an update is in-flight or crashed" signal that the CLI self-heal
+    /// trigger checks (§19.4). Best-effort — a failure to archive is not
+    /// fatal to an already-completed update.
+    pub(crate) fn archive(&self) {
+        let dest = self.path.with_extension("json.last");
+        let _archived = std::fs::rename(&self.path, &dest);
+    }
+
     /// Record an event, transition to `state`, and persist atomically.
     ///
     /// # Errors
@@ -345,5 +356,18 @@ mod tests {
         assert!(UpdateState::Aborted.is_terminal());
         assert!(!UpdateState::Swapping.is_terminal());
         assert!(!UpdateState::SmokeOk.is_terminal());
+    }
+
+    #[test]
+    fn archive_frees_live_path_and_keeps_audit_copy() {
+        let path = temp_path("archive");
+        let journal = sample(path.clone());
+        journal.save().expect("save");
+        assert!(path.exists(), "live journal should exist before archive");
+        journal.archive();
+        assert!(!path.exists(), "live journal must be gone after archive");
+        let last = path.with_extension("json.last");
+        assert!(last.exists(), "audit copy must exist after archive");
+        let _removed = std::fs::remove_file(&last);
     }
 }

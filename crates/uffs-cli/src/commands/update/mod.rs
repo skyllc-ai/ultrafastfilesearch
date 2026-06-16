@@ -19,6 +19,7 @@ mod channel;
 mod model;
 mod procinfo;
 mod report;
+mod self_heal;
 mod snapshot;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,13 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         acquire::spawn(&snapshot_path, flag_value(args, "--version").as_deref())?;
     }
     Ok(())
+}
+
+/// Phase H self-heal entry: spawn `uffs-update recover` if a live update
+/// journal is present. Best-effort and non-blocking, so a crash mid-update
+/// is healed on the next `uffs` invocation. Called once at CLI startup.
+pub(crate) fn maybe_self_heal() {
+    self_heal::trigger();
 }
 
 /// Return the value following `name` in `args` (`--name value`).
