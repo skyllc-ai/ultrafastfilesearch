@@ -25,6 +25,7 @@ members = [
   "crates/uffs-text",            # 📝 Unicode text processing, i18n foundation
   "crates/uffs-time",            # ⏱️ NTFS FILETIME arithmetic (pure, zero deps)
   "crates/uffs-broker-protocol", # 📟 Cross-platform broker wire-protocol types (F5)
+  "crates/uffs-winsvc",          # 🪟 Native Windows service control + broker-pipe probe (leaf)
   "crates/uffs-mft",             # 📦 MFT reading → Polars DataFrame
   "crates/uffs-format",          # 🧾 Shared CSV formatter (daemon + thin CLI)
   "crates/uffs-core",            # 🎯 Query engine + compact search engine
@@ -140,6 +141,13 @@ uffs-client = { path = "crates/uffs-client", version = "0.6.2" }
 # F5 (issue #205) so neither side duplicates `BROKER_PIPE_NAME` /
 # wire-format byte literals.
 uffs-broker-protocol = { path = "crates/uffs-broker-protocol", version = "0.6.2" }
+# `uffs-winsvc` — native Windows service control (SCM query/start/stop) +
+# the non-connecting broker-pipe readiness probe.  Layer-0 leaf: its only
+# dependency is the `windows` crate (windows-target), with non-Windows
+# stubs so cross-platform consumers (uffs-update, uffs-cli) compile.
+# Single source of truth for the `sc`/SCM mechanics previously duplicated
+# across uffs-broker, uffs-update, and uffs-cli.
+uffs-winsvc = { path = "crates/uffs-winsvc", version = "0.6.2" }
 # NOTE: no `uffs-broker` workspace dependency alias on purpose —
 # `uffs-broker` is a binary-only crate (the only `[lib]` it carries is
 # this protocol module's now-extracted sibling); no other workspace

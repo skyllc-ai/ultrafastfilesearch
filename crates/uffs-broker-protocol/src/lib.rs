@@ -59,6 +59,19 @@ use thiserror::Error;
 /// daemon's stub compiles), but no kernel object exists at that path.
 pub const PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
 
+/// Registered Windows service name of the Access Broker.
+///
+/// The single source of truth shared by everything that names the
+/// service: `uffs-broker` (install / control), `uffs-update`
+/// (quiesce / restore), and `uffs-cli` (`uffs status` + update
+/// detection). It belongs here, next to [`PIPE_NAME`], because both are
+/// the broker's *identity* on the wire / on the box — the SCM control
+/// *mechanism* lives separately in `uffs-winsvc`.
+///
+/// Defined on every platform so cross-platform consumers compile; only
+/// Windows has an actual service registered under it.
+pub const SERVICE_NAME: &str = "UffsAccessBroker";
+
 /// Total size of an encoded [`HandleRequest`] on the wire.
 pub const REQUEST_WIRE_LEN: usize = 1;
 

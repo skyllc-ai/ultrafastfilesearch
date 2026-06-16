@@ -1,0 +1,55 @@
+# ============================================================================
+# uffs-winsvc: native Windows service control + broker-pipe readiness probe
+# ============================================================================
+# Layer-0 foundation crate. Its ONLY dependency is the `windows` crate
+# (windows-target), plus `anyhow` for ergonomic errors; non-Windows builds
+# are pure stubs so the cross-platform consumers (uffs-update, uffs-cli)
+# compile everywhere.
+#
+# WHY THIS CRATE EXISTS
+# ---------------------
+# Service control (`sc.exe`) for the Access Broker used to be hand-rolled in
+# three places — uffs-broker (install/control), uffs-update (quiesce/restore),
+# uffs-cli (status/detection) — each parsing `sc query` output. That text is
+# LOCALIZED on non-English Windows, so the state-word matching silently broke.
+# This crate replaces all of that with native SCM (`QueryServiceStatusEx`,
+# `ControlService`, `StartServiceW`) returning numeric, locale-proof states,
+# and is the single source of truth for the mechanism. The broker's *identity*
+# (service name, pipe name) lives in `uffs-broker-protocol`; this crate is the
+# pure mechanism — it takes the name as a parameter.
+#
+# Mirrors the `uffs-broker-protocol` pattern (issue #205): replace textual
+# coupling with a compile-enforced single source of truth.
+# ============================================================================
+
+[package]
+name = "uffs-winsvc"
+description = "Native Windows service control (SCM) + broker named-pipe readiness probe for UFFS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Internal foundation crate — name reserved, never published with content.
+publish.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+# Windows-specific FFI — render the Windows target so the real impl is documented.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+[dependencies]
+# Ergonomic error context for the fallible start/stop operations.
+anyhow.workspace = true
+
+# Native SCM + named-pipe FFI. Only on Windows targets; non-Windows builds
+# use the stub paths in `lib.rs`, so nothing is linked off-Windows.
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true
