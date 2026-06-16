@@ -265,6 +265,25 @@ pub(crate) fn run_search(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    // Command-typo hint. If the first token is a `--`-flag that the shared
+    // parser rejects AND it is a near-miss of a management command, surface a
+    // "did you mean" hint up front instead of spinning up the daemon only for
+    // it to return a bare unknown-flag error. The CLI suggests over ITS own
+    // command set; flag validation stays in `uffs_client::from_cli_args`, so
+    // the daemon never learns CLI commands (design: cli-grammar.md §6).
+    if let Some(first) = args.first()
+        && first.starts_with("--")
+        && dispatch::Command::from_token(first).is_none()
+        && let Err(uffs_client::protocol::cli_args::Error::UnknownFlag { flag }) =
+            uffs_client::protocol::SearchParams::from_cli_args(args)
+        && let Some(command) = dispatch::suggest_command(&flag)
+    {
+        anyhow::bail!(
+            "`{flag}` is not a known search flag.\n\
+             Did you mean the command `uffs {command}`?  (run `uffs {command} --help`)"
+        );
+    }
+
     // Extract daemon-spawn args (--data-dir, --mft-file, --no-cache)
     // from the raw args so we can auto-start the daemon if needed.
     let spawn_args = commands::search::args::extract_spawn_args(args);

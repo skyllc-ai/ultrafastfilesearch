@@ -53,6 +53,43 @@ impl Command {
     }
 }
 
+/// Every command token (incl. the `--aggregate` alias) — the canonical set
+/// the CLI suggests over for a `--`-flag typo. Kept in lock-step with
+/// [`Command::from_token`] by `command_tokens_all_resolve` (test).
+const COMMAND_TOKENS: &[&str] = &[
+    "--search",
+    "--stats",
+    "--agg",
+    "--aggregate",
+    "--daemon",
+    "--mcp",
+    "--update",
+    "--status",
+];
+
+/// Maximum edit distance for a `--`-flag typo to be read as a command miss.
+/// `2` catches a one- or two-character slip (`--updat`, `--statu`, `--mc`)
+/// while leaving an unrelated unknown flag (`--bogus`) without a (wrong)
+/// command suggestion.
+const MAX_COMMAND_TYPO_DISTANCE: usize = 2;
+
+/// If `flag` (a `--`-token the shared search parser already **rejected** as
+/// an unknown flag) is a near-miss of a management command, return that
+/// command token. The CLI suggests over its **own** command set only —
+/// search-flag validation stays in `uffs-client::from_cli_args`, so the
+/// daemon never learns CLI commands.
+///
+/// Returns the closest command within [`MAX_COMMAND_TYPO_DISTANCE`], or
+/// `None` when nothing is close enough (→ the parser's flag error stands).
+pub(crate) fn suggest_command(flag: &str) -> Option<&'static str> {
+    COMMAND_TOKENS
+        .iter()
+        .map(|cmd| (*cmd, strsim::levenshtein(flag, cmd)))
+        .filter(|&(_, dist)| dist <= MAX_COMMAND_TYPO_DISTANCE)
+        .min_by_key(|&(_, dist)| dist)
+        .map(|(cmd, _)| cmd)
+}
+
 /// Dispatch a resolved [`Command`] to its handler. `args` is everything
 /// after the `--<command>` token.
 ///
@@ -136,6 +173,42 @@ mod tests {
                 Command::from_token(flag),
                 None,
                 "search flag `{flag}` must NOT be a management command"
+            );
+        }
+    }
+
+    #[test]
+    fn command_tokens_all_resolve() {
+        // The suggestion set must stay in lock-step with the dispatcher:
+        // every COMMAND_TOKENS entry (incl. the `--aggregate` alias) must
+        // resolve via `from_token`, so a typo can never suggest a token the
+        // grammar would not actually accept.
+        for token in super::COMMAND_TOKENS {
+            assert!(
+                Command::from_token(token).is_some(),
+                "`{token}` is in COMMAND_TOKENS but is not a dispatchable command"
+            );
+        }
+    }
+
+    #[test]
+    fn suggest_command_maps_near_misses() {
+        // One- or two-character slips map to their command.
+        assert_eq!(super::suggest_command("--updat"), Some("--update"));
+        assert_eq!(super::suggest_command("--daemo"), Some("--daemon"));
+        assert_eq!(super::suggest_command("--mc"), Some("--mcp"));
+        assert_eq!(super::suggest_command("--searc"), Some("--search"));
+    }
+
+    #[test]
+    fn suggest_command_ignores_unrelated_or_valid_flags() {
+        // An unrelated unknown flag has no close command → no (wrong) hint;
+        // and a real search flag must not be mistaken for a command typo.
+        for token in ["--bogus", "--ext", "--sort", "--newer-created", "--xyz"] {
+            assert_eq!(
+                super::suggest_command(token),
+                None,
+                "`{token}` must not be suggested as a command typo"
             );
         }
     }

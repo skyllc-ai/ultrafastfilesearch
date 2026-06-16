@@ -94,6 +94,12 @@ serde_json.workspace = true
 # Locates executables on `PATH` (e.g. the daemon binary when auto-spawning).
 which.workspace = true
 
+# Nearest-command suggestion for a `--`-flag typo (`--updat` → `--update`).
+# Zero-dep, tiny; the CLI suggests over ITS command set only — the shared
+# `from_cli_args` parser (uffs-client) stays the single source of truth for
+# search-flag validation, so the daemon never learns CLI commands.
+strsim.workspace = true
+
 # Resolve the daemon lifecycle dir (`%LOCALAPPDATA%\uffs`) for self-update
 # detection — mirrors uffs-daemon so the PID-file path matches exactly.
 dirs-next.workspace = true

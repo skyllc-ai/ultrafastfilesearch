@@ -54,6 +54,14 @@ fnd = "fnd"               # internal `FileNameData` abbreviation
 Connct = "Connct"         # historical log-message identifier
 decendents = "decendents" # alt-English of descendants (used in internal docs)
 
+# ── Intentional example typos for the command-suggestion feature ─────
+# `dispatch::suggest_command` maps a near-miss `--`-flag to its command
+# (cli-grammar.md §6). These fragments appear *on purpose* in its doc
+# comments, tests, and the integration test that proves the hint fires —
+# they are the typos the feature exists to catch, not real misspellings.
+updat = "updat" # `--updat` → suggests `--update`
+statu = "statu" # `--statu` → suggests `--stats`/`--status`
+
 [files]
 # Frozen / historical / third-party-metadata locations — not subject
 # to spelling review.

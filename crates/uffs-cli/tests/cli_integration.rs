@@ -125,6 +125,38 @@ mod tests {
         assert_failure("single_dash_pattern", &["-x"], &["daemon"]);
     }
 
+    // ── Command-typo hint (cli-grammar.md §6) ────────────────────────
+    //
+    // A `--`-flag the shared parser rejects that is a near-miss of a
+    // management command surfaces a "did you mean" hint up front — without
+    // the daemon (the CLI suggests over its own command set). Deterministic.
+
+    #[test]
+    fn flag_typo_near_a_command_suggests_it() {
+        assert_failure("flag_typo_command", &["--updat"], &[
+            "not a known search flag",
+            "Did you mean the command",
+            "uffs --update",
+        ]);
+    }
+
+    #[test]
+    fn unrelated_unknown_flag_gets_no_command_hint() {
+        // `--bogus` is not near any command, so it must NOT get a command
+        // hint — it falls through to search (here: a daemon-connect error,
+        // since there is no daemon in the test environment).
+        let output = run_cli("unrelated_unknown_flag", &["--bogus"]);
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !combined.contains("Did you mean the command"),
+            "`--bogus` must not produce a command suggestion: {combined}"
+        );
+    }
+
     // ── `--update` action surface (cli-grammar.md §5) ────────────────
     //
     // Pin the full action set — incl. `recover` — so it can't silently

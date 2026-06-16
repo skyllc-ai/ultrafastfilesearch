@@ -283,6 +283,12 @@ dirs-next = "2.0.0"
 # when async spawn lands).
 which = "8.0.3"
 
+# `strsim` — small, zero-dep Levenshtein impl (already in the tree +
+# audited by Google/Mozilla).  Used by `uffs-cli` to suggest the nearest
+# management command for a `--`-flag typo (`--updat` → `--update`) without
+# the thin CLI duplicating the daemon's search-flag registry.
+strsim = "0.11.1"
+
 # ───── Hashing ─────
 rustc-hash = "2.1.2"
 

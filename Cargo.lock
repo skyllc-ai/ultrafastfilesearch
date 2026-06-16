@@ -4431,6 +4431,7 @@ dependencies = [
  "assert_cmd",
  "dirs-next",
  "serde_json",
+ "strsim",
  "uffs-broker-protocol",
  "uffs-client",
  "uffs-format",

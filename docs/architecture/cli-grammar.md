@@ -180,23 +180,34 @@ convenience alias is an open question, §12.)
 | `uffs -- --update` | search for the literal pattern `--update` (bare `--` = end-of-options) |
 | `uffs --search -- --update` | same, explicit search form |
 | `uffs --update --help` | update help (the `--help` after a command is command-scoped) |
-| `uffs --bogus` | forwarded to search; the daemon's arg parser rejects the unknown flag. *(See the note below — a CLI-side "unknown command, did you mean …?" hint is intentionally **not** implemented.)* |
+| `uffs --updat` (near a command) | CLI hint up front: "`--updat` is not a known search flag. Did you mean the command `uffs --update`?" — no daemon round-trip (see the note below) |
+| `uffs --bogus` (not near a command) | forwarded to search; the shared parser / daemon rejects the unknown flag with the authoritative error (no command hint) |
 
 The **only** thing not searchable bare is a filename literally beginning with
 `--` (e.g. `--update`), reachable with `uffs -- <pattern>`. Such filenames are
 pathological; the escape is the universal `--` separator.
 
-> **Why no CLI-side "unknown command" hint for `--bogus`.** `uffs` is a
-> **thin client**: it deliberately does *not* know the search-flag set — that
-> lives in the daemon, which owns all search-arg parsing. To tell `--bogus`
-> (typo'd command) apart from `--newer-created` (a real, possibly newer search
-> flag) the CLI would have to duplicate the daemon's entire flag registry and
-> keep it in lock-step — brittle, and it would risk rejecting a *valid* new
-> search flag as an "unknown command". So an unrecognized `--`-leading first
-> token is forwarded to search, and the daemon's parser returns the
-> authoritative "unknown flag" error. The disjointness invariant (§3.2) still
-> holds for the *known* command set; this only changes the error *source* for
-> truly-unknown `--flags`, not the grammar.
+> **How the "did you mean a command?" hint stays thin — and keeps the daemon
+> ignorant of CLI commands.** Each layer suggests within its *own* vocabulary,
+> and neither learns the other's:
+>
+> - **Search-flag validation** is the **shared parser's** job
+>   (`uffs_client::protocol::SearchParams::from_cli_args`, the single source of
+>   truth used by both the daemon and — on the error path only — the CLI). It
+>   already returns a *structured* `UnknownFlag { flag }`.
+> - **Command suggestions** are the **CLI's** job, over its own ~8-token
+>   command set (`dispatch::COMMAND_TOKENS`, kept in lock-step with
+>   `from_token` by a test). When a first-token `--`-flag is *rejected by the
+>   shared parser* AND is within Levenshtein ≤ 2 of a command, the CLI prints
+>   the hint and stops — no daemon round-trip.
+>
+> So the CLI never duplicates the flag registry (it *calls* the shared parser),
+> and the **daemon never needs to know CLI commands** — the command list lives
+> only in the CLI. `--updat` → "did you mean `uffs --update`?"; `--bogus`
+> (near nothing) → the parser's authoritative "unknown flag" error;
+> `--newer-created` (a real flag) → parses fine, never mistaken for a command.
+> The gate on "rejected by the shared parser" is what guarantees a *valid* new
+> search flag is never mis-flagged as a command typo.
 
 ## 7. Why not the alternatives
 
@@ -299,8 +310,10 @@ that internal path; only the *external* entry tokens change.
    - `--update` → Update command.
    - `--ext` (first token) → Search mode (search flag, not a command).
    - `--` then `--update` → Search, pattern == "--update".
-   - `--bogus` → Search mode (forwarded to the daemon parser, which rejects
-     the unknown flag — see §6's thin-client note; no CLI-side hint).
+   - `--updat` (near a command) → CLI command-typo hint ("did you mean
+     `uffs --update`?"), no daemon round-trip.
+   - `--bogus` (near nothing) → Search mode (forwarded to the shared parser /
+     daemon, which rejects the unknown flag — see §6's note; no command hint).
 2. **Disjointness invariant test**: assert no `Command` token collides with any
    search-flag long name (fails loudly if someone adds `--sort` as a command).
 3. **Per-command parse tests**: `--update acquire --version v1` → action=acquire,
@@ -349,9 +362,16 @@ that internal path; only the *external* entry tokens change.
 - [x] **P6 — Gap-closure pass.** Audited this doc against the code: wired the
       `recover` action (§5/§8.2) — `uffs --update recover` runs the
       foreground self-heal (the helper's `recover` already existed; only the
-      CLI action was missing) + tests; reconciled `--bogus` (§6/§9) to the
-      thin-client reality (the daemon owns flag validation; no duplicated
-      registry). No remaining divergence between doc and implementation.
+      CLI action was missing) + tests.
+- [x] **P7 — Command-typo hint (§6/§9).** Implemented the "did you mean a
+      command?" hint *thinly*: the CLI calls the shared `from_cli_args` parser
+      (single source of truth for flags) on the error path and, when a
+      first-token `--`-flag is rejected AND within Levenshtein ≤ 2 of a
+      command (`dispatch::suggest_command` over `COMMAND_TOKENS`, `strsim`),
+      prints the hint without a daemon round-trip. The daemon never learns CLI
+      commands; the CLI never duplicates the flag registry. Unit + integration
+      tests pin both directions (near-miss suggests; unrelated/valid flags do
+      not). Doc and implementation now fully aligned.
 
 ## 12. Decisions (resolved 2026-06-16)
 
