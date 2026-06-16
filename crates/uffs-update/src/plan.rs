@@ -56,8 +56,8 @@ pub(crate) struct SnapRunning {
     /// Component kind: `daemon` / `broker` / `mcp`.
     pub(crate) component: String,
     /// OS process id at snapshot time. The doctor probes its liveness;
-    /// quiesce/restore act via the PID file + `sc.exe` + the captured
-    /// command line, never this (stale-by-restart) raw pid.
+    /// quiesce/restore act via the PID file + native SCM (`uffs-winsvc`) +
+    /// the captured command line, never this (stale-by-restart) raw pid.
     pub(crate) pid: u32,
     /// Image path.
     #[serde(default)]

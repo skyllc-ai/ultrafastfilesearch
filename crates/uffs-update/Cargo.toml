@@ -43,14 +43,18 @@ dirs-next.workspace = true
 # so the feature set lives in one place. A one-shot CLI step, so the async
 # runtime overhead of a full client is unwarranted.
 reqwest.workspace = true
+# Broker identity (`SERVICE_NAME` / `PIPE_NAME`) for quiesce/restore — pure
+# cross-platform crate, so it lives here, not under cfg(windows).
+uffs-broker-protocol.workspace = true
+# Native Windows service control (quiesce stop / restore start) + the
+# broker-pipe readiness probe. Cross-platform (stubs off Windows), so the
+# quiesce/restore logic compiles everywhere without `sc.exe` text parsing.
+uffs-winsvc.workspace = true
 
 # Native owner-PID liveness for Phase H (no fragile `tasklist`/`kill`
-# shell-outs). Both are already in the lock → cargo-vet stays green.
+# shell-outs). Already in the lock → cargo-vet stays green.
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
-# Broker pipe name for the non-connecting WaitNamedPipe readiness probe
-# (R10, §19.13). Windows-only — a pure-logic workspace crate.
-uffs-broker-protocol.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

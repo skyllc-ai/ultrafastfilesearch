@@ -5,19 +5,20 @@
 //! unlock, recording each stop in the journal so Phase H can restart them
 //! (INV-1).
 //!
-//! Robust by construction — **no fragile external tools, no FFI**:
+//! Robust by construction — **no fragile external tools, no `sc` text
+//! parsing**:
 //! - daemon / MCP: graceful via our **own** in-tree `uffs daemon stop` / `uffs
-//!   mcp stop`;
-//! - broker: `sc.exe stop` (a core OS component on every Windows);
-//! - "is it down yet": poll the daemon **PID file** (the daemon deletes it on
-//!   clean exit) and `sc query` for the broker.
+//!   mcp stop`, then poll the daemon **PID file** (deleted on clean exit);
+//! - broker: native SCM stop via `uffs-winsvc` (numeric, locale-proof state —
+//!   never `sc query` text, which is localized).
 
 use core::time::Duration;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
+use uffs_broker_protocol::SERVICE_NAME;
 
 use crate::journal::{Journal, UpdateState};
 use crate::orchestrate::exe_name;
@@ -27,8 +28,6 @@ use crate::plan::{SnapRunning, Snapshot};
 const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Poll interval while waiting.
 const POLL: Duration = Duration::from_millis(200);
-/// The broker Windows service name.
-pub(crate) const BROKER_SERVICE: &str = "UffsAccessBroker";
 
 /// Stop every running core component in dependency order (consumers
 /// before providers: MCP → daemon → broker), recording each in
@@ -100,16 +99,11 @@ fn stop_daemon(running: &SnapRunning) -> Result<()> {
     }
 }
 
-/// Stop the broker service, then wait until `sc query` reports STOPPED.
+/// Stop the broker service via native SCM and wait until it reports STOPPED
+/// (numeric state — `uffs-winsvc` waits internally). A no-op if it is not
+/// installed or already stopped.
 fn stop_broker() -> Result<()> {
-    let _ignore = Command::new("sc.exe")
-        .args(["stop", BROKER_SERVICE])
-        .status();
-    if wait_until(STOP_TIMEOUT, || sc_query_stopped(BROKER_SERVICE)) {
-        Ok(())
-    } else {
-        bail!("broker service did not reach STOPPED within {STOP_TIMEOUT:?}")
-    }
+    uffs_winsvc::stop(SERVICE_NAME).context("stopping the broker service")
 }
 
 /// Best-effort MCP gateway stop (a client just reconnects later).
@@ -132,31 +126,9 @@ pub(crate) fn wait_until(timeout: Duration, done: impl Fn() -> bool) -> bool {
     }
 }
 
-/// `true` when `sc query <service>` reports the service STOPPED (or it
-/// isn't installed — also "not running").
-fn sc_query_stopped(service: &str) -> bool {
-    let Ok(out) = Command::new("sc.exe").args(["query", service]).output() else {
-        return false;
-    };
-    if !out.status.success() {
-        // Non-zero typically means "service does not exist" → not running.
-        return true;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    sc_state_is_stopped(&text)
-}
-
-/// Parse `sc query` stdout for a STOPPED state (pure — testable).
-fn sc_state_is_stopped(sc_output: &str) -> bool {
-    sc_output.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with("STATE") && trimmed.contains("STOPPED")
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{sc_state_is_stopped, uffs_sibling, wait_until};
+    use super::{uffs_sibling, wait_until};
     use crate::plan::SnapRunning;
 
     fn running_with_image(image: &std::path::Path) -> SnapRunning {
@@ -178,17 +150,6 @@ mod tests {
             sib.file_name()
                 .is_some_and(|name| name.to_string_lossy().starts_with("uffs"))
         );
-    }
-
-    #[test]
-    fn sc_state_parsing() {
-        assert!(sc_state_is_stopped(
-            "        STATE              : 1  STOPPED"
-        ));
-        assert!(!sc_state_is_stopped(
-            "        STATE              : 4  RUNNING"
-        ));
-        assert!(!sc_state_is_stopped("no state line here"));
     }
 
     #[test]
