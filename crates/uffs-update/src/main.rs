@@ -31,8 +31,25 @@ use anyhow::{Result, bail};
 
 use crate::acquire::AcquirePlan;
 
-/// Entry point. Returns a non-zero exit on any failure.
-fn main() -> Result<()> {
+/// Entry point. Prints a clean `Error: …` chain (no Rust backtrace) and exits
+/// non-zero on any failure — a usage slip like `uffs-update --doctor` should
+/// read like advice, not a crash. Mirrors `uffs`'s `main` error rendering.
+#[expect(clippy::print_stderr, reason = "top-level CLI error output")]
+fn main() {
+    if let Err(err) = run() {
+        for (idx, cause) in err.chain().enumerate() {
+            if idx == 0 {
+                eprintln!("Error: {cause}");
+            } else {
+                eprintln!("  Caused by: {cause}");
+            }
+        }
+        std::process::exit(1);
+    }
+}
+
+/// Dispatch the subcommand. Returns a non-zero exit (via [`main`]) on failure.
+fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("acquire") => run_acquire(args.get(1..).unwrap_or_default()),
