@@ -24,26 +24,113 @@ use std::path::Path;
 // Directory & File Permissions (S1.2)
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Create a brand-new file with owner-only permissions, failing if the
+/// path already exists (including as a dangling symlink).
+///
+/// On Unix the file is born `0o600` via `O_CREAT | O_EXCL` + `mode()`, so
+/// there is never a window where it is world-readable (cf.
+/// `set_permissions`-after-create). On Windows `create_new` likewise refuses
+/// to follow/replace an existing path; owner-only ACL is applied immediately.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
+/// error from the underlying open.
+pub fn create_new_secure_file(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(windows)]
+    {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        // Apply owner-only ACL immediately (best-effort, same as elsewhere).
+        if !win_set_owner_only_acl(path) {
+            win_set_hidden(path);
+        }
+        Ok(file)
+    }
+}
+
+/// Create a brand-new file at a **user-chosen output path**, failing if the
+/// path already exists (including as a symlink/pre-planted target).
+///
+/// Unlike [`create_new_secure_file`], this does **not** apply an owner-only
+/// ACL (Windows) or `0o600` mode (Unix). The destination is a path the user
+/// explicitly asked us to write (e.g. `--out=<path>`), so the file should
+/// adopt the normal permissions of the directory the user chose rather than
+/// being locked to the daemon's owner — forcing owner-only here is both
+/// surprising (e.g. exporting into a shared folder) and, on Windows, costly:
+/// the owner-only ACL path historically shelled out to `icacls.exe`, adding a
+/// process-spawn (~tens of ms) to **every** query that writes results.
+///
+/// The exclusive `create_new(true)` open still closes the TOCTOU /
+/// symlink-swap window, which is the only hardening that matters for a
+/// throwaway temp file that is `rename`d into place. Callers that write a
+/// *secret* (cache key, daemon state) must use [`create_new_secure_file`]
+/// instead.
+///
+/// # Errors
+///
+/// Returns [`io::ErrorKind::AlreadyExists`] if the path exists, or any other
+/// error from the underlying open.
+pub fn create_new_file_exclusive(path: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+/// Write `data` to a **new** secret file born with owner-only permissions.
+///
+/// Refuses to overwrite an existing path; callers that intend to replace an
+/// existing secret must remove it first (so a symlink cannot be followed).
+///
+/// # Errors
+///
+/// Returns an error if creation, writing, or syncing fails.
+pub fn write_secret_file(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut file = create_new_secure_file(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 /// Creates a directory (and parents) with owner-only permissions.
 ///
-/// - **Unix** (macOS + Linux): mode `0700` (`drwx------`)
-/// - **Windows**: creates the directory; sets read-only attribute as a basic
-///   protection layer (full DACL requires elevated context)
+/// - **Unix** (macOS + Linux): each component we create is **born** `0700`
+///   (`drwx------`) via `DirBuilderExt::mode`, so there is no window where the
+///   dir exists at default perms. `recursive(true)` makes the call succeed if
+///   the dir already exists; components that already existed keep their current
+///   perms (we only guarantee birth perms for what we create).
+/// - **Windows**: creates the directory; applies an owner-only ACL (falling
+///   back to the hidden attribute) since full DACL control requires elevation.
 ///
 /// # Errors
 ///
 /// Returns an error if directory creation or permission setting fails.
 pub fn create_secure_dir(path: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(path)?;
-
     #[cfg(unix)]
     return {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
     };
 
     #[cfg(windows)]
     return {
+        std::fs::create_dir_all(path)?;
         // Try icacls first — works without elevation, sets proper DACL
         if !win_set_owner_only_acl(path) {
             // Fallback: at least mark hidden (best-effort, infallible).
@@ -164,44 +251,186 @@ fn win_set_file_attributes(wide: &[u16], attrs: u32) -> bool {
     result.is_ok()
 }
 
-/// Windows: set owner-only ACL via `icacls` command.
+/// Windows: grant the current user full control of `path` via the native
+/// Win32 security APIs (no subprocess).
 ///
-/// S1.2.6: Grants current user full control with inheritance.
-/// NOTE: We no longer strip inherited ACEs (`/inheritance:r`) because when
-/// running as Administrator, `%USERNAME%` may differ from the effective SID,
-/// causing `icacls /grant:r` to grant to the wrong principal and leaving
-/// the directory inaccessible. Instead we keep inherited permissions and
-/// add an explicit grant for the current user. This is still secure for the
-/// cache use case (user-private %LOCALAPPDATA% directory).
+/// S1.2.6: adds an explicit full-control ACE for the **process token's owner
+/// SID** while keeping inherited ACEs intact (the DACL is set *unprotected*,
+/// so the parent's inheritable ACEs are re-applied). This is still secure for
+/// the cache use case (a user-private `%LOCALAPPDATA%` directory).
+///
+/// Why native instead of `icacls`:
+/// - **Correctness.** The old path resolved the principal from `%USERNAME%`,
+///   which diverges from the effective SID under elevation — it could grant to
+///   the wrong principal. The token's owner SID is always the right one.
+/// - **Cost.** Shelling out to `icacls.exe` is a full process spawn (tens of
+///   ms). `create_new_secure_file` runs this on every write, so the spawn was a
+///   per-call tax; the native calls are microseconds.
+///
+/// Returns `true` on success; callers fall back to the hidden attribute.
 #[cfg(windows)]
 fn win_set_owner_only_acl(path: &Path) -> bool {
-    let username = std::env::var("USERNAME").unwrap_or_default();
-    if username.is_empty() {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::TOKEN_QUERY;
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    // SAFETY: returns a pseudo-handle that is always valid for the current
+    // process and needs no close.
+    #[expect(unsafe_code, reason = "Win32 FFI — current-process pseudo-handle")]
+    let process = unsafe { GetCurrentProcess() };
+
+    let mut token = HANDLE::default();
+    // SAFETY: `process` is valid; `&raw mut token` is a valid out-pointer for
+    // the returned token handle.
+    #[expect(unsafe_code, reason = "Win32 FFI — open our own process token")]
+    let opened = unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) };
+    if opened.is_err() {
         return false;
     }
 
-    let path_str = path.to_string_lossy();
+    let applied = win_apply_owner_ace(path, token);
 
-    // Grant current user full control (keep inherited ACEs intact)
-    let grant_arg = format!("{username}:(OI)(CI)F");
-    let grant_result = std::process::Command::new("icacls")
-        .args([path_str.as_ref(), "/grant", &grant_arg])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // SAFETY: `token` was returned by a successful `OpenProcessToken` and has
+    // not been closed elsewhere.
+    #[expect(unsafe_code, reason = "Win32 FFI — close the process token handle")]
+    let _closed = unsafe { CloseHandle(token) };
+    applied
+}
 
-    grant_result.is_ok_and(|status| status.success())
+/// Read the process token's owner SID and apply a full-control ACE for it to
+/// `path`'s DACL. Split out so the token handle in the caller is always
+/// closed on every return path.
+#[cfg(windows)]
+fn win_apply_owner_ace(path: &Path, token: windows::Win32::Foundation::HANDLE) -> bool {
+    use core::ffi::c_void;
+
+    use windows::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW, SetNamedSecurityInfoW,
+        TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, GetTokenInformation, PSID,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_USER, TokenUser,
+    };
+    use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows::core::PWSTR;
+
+    // Size the TOKEN_USER buffer (first call fails, filling `needed`).
+    let mut needed = 0_u32;
+    // SAFETY: a null buffer with length 0 is the documented "query size" call;
+    // `&raw mut needed` receives the required byte count.
+    #[expect(unsafe_code, reason = "Win32 FFI — size the token-info buffer")]
+    let _probe = unsafe { GetTokenInformation(token, TokenUser, None, 0, &raw mut needed) };
+    if needed == 0 {
+        return false;
+    }
+
+    // Over-aligned backing store: a `TOKEN_USER` embeds a pointer (8-byte
+    // aligned on x64) which a `Vec<u8>` would not guarantee. Round the byte
+    // count up to whole `u64` words so the cast below is well-aligned. We pass
+    // `needed` (≤ the allocation) as the length, so no `usize→u32` cast.
+    let words = (needed as usize).div_ceil(size_of::<u64>());
+    let mut buffer = vec![0_u64; words];
+    // SAFETY: `buffer` is `words * 8 ≥ needed` bytes; the pointer/length pair
+    // stay within it and `&raw mut needed` receives the bytes written.
+    #[expect(unsafe_code, reason = "Win32 FFI — read the token user/SID")]
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr().cast::<c_void>()),
+            needed,
+            &raw mut needed,
+        )
+    };
+    if read.is_err() {
+        return false;
+    }
+
+    // The SID lives *inside* `buffer`, which must outlive every use below.
+    #[expect(
+        unsafe_code,
+        reason = "Win32 FFI — interpret token buffer as TOKEN_USER"
+    )]
+    // SAFETY: `GetTokenInformation(TokenUser)` populated `buffer` (a `u64`
+    // allocation, so 8-aligned) with a `TOKEN_USER` whose `User.Sid` points
+    // into that same allocation.
+    let sid: PSID = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    if sid.is_invalid() {
+        return false;
+    }
+
+    // The SID is passed through the `ptstrName` pointer slot, per the
+    // documented `TRUSTEE_IS_SID` convention — it is never dereferenced as
+    // UTF-16.
+    let sid_name = PWSTR(sid.0.cast::<u16>());
+
+    // Grant the owner SID full control; (OI)(CI) so a directory's children
+    // inherit it (ignored for plain files).
+    let explicit = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_ALL_ACCESS.0,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        Trustee: TRUSTEE_W {
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: sid_name,
+            ..Default::default()
+        },
+    };
+
+    let mut new_dacl: *mut ACL = core::ptr::null_mut();
+    let entries = [explicit];
+    // SAFETY: `entries` outlives the call; `&raw mut new_dacl` receives a
+    // `LocalAlloc`-owned ACL we free below.
+    #[expect(unsafe_code, reason = "Win32 FFI — build the new DACL")]
+    let build = unsafe { SetEntriesInAclW(Some(&entries), None, &raw mut new_dacl) };
+    if build != ERROR_SUCCESS {
+        return false;
+    }
+
+    let mut wide = path_to_wide(path);
+    // SAFETY: `wide` is a mutable null-terminated UTF-16 buffer; `new_dacl` is
+    // a valid ACL from `SetEntriesInAclW`. Owner/group are unchanged (`None`);
+    // only the DACL is set, unprotected (inherited ACEs preserved).
+    #[expect(unsafe_code, reason = "Win32 FFI — apply the DACL to the path")]
+    let set = unsafe {
+        SetNamedSecurityInfoW(
+            PWSTR(wide.as_mut_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(new_dacl),
+            None,
+        )
+    };
+
+    if !new_dacl.is_null() {
+        // SAFETY: `new_dacl` was allocated by `SetEntriesInAclW` via
+        // `LocalAlloc`, so `LocalFree` is the matching deallocator.
+        #[expect(unsafe_code, reason = "Win32 FFI — free the ACL allocation")]
+        let _freed = unsafe { LocalFree(Some(HLOCAL(new_dacl.cast::<c_void>()))) };
+    }
+
+    set == ERROR_SUCCESS
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Atomic Writes (S1.3)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Writes data atomically: write to `.uffs.tmp`, `sync_all()`, rename over
-/// the target.
+/// Writes data atomically: write to a **randomised** temp in the same
+/// directory, `sync_all()`, rename over the target.
 ///
 /// If the process is killed mid-write, the original file remains intact.
-/// Stale `.uffs.tmp` files are cleaned up on the next `cache_dir()` call.
+/// Stale temp files are cleaned up on the next `cache_dir()` call.
+///
+/// The temp file is **born** `0600` via [`create_new_secure_file`] and carries
+/// a random suffix, so there is no perms-after-create window and no
+/// predictable name an attacker could pre-plant as a symlink (`create_new`
+/// refuses to follow it).
 ///
 /// Works on all platforms: POSIX `rename` is atomic on the same filesystem;
 /// on Windows `std::fs::rename` uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
@@ -212,17 +441,32 @@ fn win_set_owner_only_acl(path: &Path) -> bool {
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
 
-    let tmp_path = path.with_extension("uffs.tmp");
+    use rand::Rng as _;
 
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
+    // Unique temp name in the SAME directory as `path` (same-FS rename stays
+    // atomic). `unwrap_or_default` here is on `Option`, not `Result`.
+    // Use `fill_bytes` (the API the keystore/crypto already use) for the
+    // random suffix rather than the version-sensitive `random()` helper.
+    let mut suffix_bytes = [0_u8; 8];
+    rand::rng().fill_bytes(&mut suffix_bytes);
+    let suffix = u64::from_le_bytes(suffix_bytes);
+    let file_name = path.file_name().unwrap_or_default();
+    let tmp_name = format!("{}.{:016x}.uffs.tmp", file_name.to_string_lossy(), suffix);
+    let tmp_path = path.with_file_name(tmp_name);
 
-    set_file_permissions_owner_only(&tmp_path)?;
-    std::fs::rename(&tmp_path, path)?;
+    let write_result = (|| -> io::Result<()> {
+        let mut file = create_new_secure_file(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp_path, path)
+    })();
 
-    Ok(())
+    if write_result.is_err() {
+        // Best-effort cleanup of the temp on any failure before rename.
+        let _ignore = std::fs::remove_file(&tmp_path);
+    }
+    write_result
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -247,22 +491,28 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
     /// Size of the zero-fill buffer for secure wipe.
     const ZERO_BUF_SIZE: usize = 64 * 1024;
 
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-
-    let file_len = meta.len();
-    // `meta` goes out of scope at end-of-function; no explicit drop needed.
-
-    // On Windows, ensure the file isn't read-only before we try to write.
-    // See `win_clear_readonly` docs for why we don't use
-    // `std::fs::Permissions::set_readonly(false)` here.
+    // On Windows, ensure the file isn't read-only before we try to open it
+    // for write. This is a path-based attribute clear that necessarily
+    // precedes the fd anchor below — acceptable because it only toggles an
+    // attribute, not content. See `win_clear_readonly` docs for why we don't
+    // use `std::fs::Permissions::set_readonly(false)` here.
     #[cfg(windows)]
     win_clear_readonly(path)?;
 
-    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    // Anchor on a single fd: open once, then read the length from the OPEN
+    // file (not a separate `std::fs::metadata(path)` stat). This closes the
+    // TOCTOU window where the path could be re-pointed between the size we
+    // overwrite and the bytes we write. NotFound is a no-op, as before.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let file_len = file.metadata()?.len();
 
     let zeros = vec![0_u8; ZERO_BUF_SIZE];
     let mut remaining = file_len;
@@ -286,6 +536,58 @@ pub fn secure_remove(path: &Path) -> io::Result<()> {
     drop(file);
 
     std::fs::remove_file(path)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Path identity (Category 3)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Answer "are these two paths the **same file**?" by filesystem identity,
+/// not by string comparison.
+///
+/// String equality on paths is not filesystem identity: two different
+/// strings can name the same file (hardlink, symlink, `.`/`..`, case-fold,
+/// trailing separators), and two equal strings can name different files
+/// across mounts. Where a *safety/scoping* decision turns on "same file",
+/// compare the OS identity instead:
+///
+/// - **Unix:** `(st_dev, st_ino)` from `MetadataExt`.
+/// - **Windows:** the volume serial + file index from
+///   `BY_HANDLE_FILE_INFORMATION` (via `std::os::windows::fs::MetadataExt`).
+///
+/// This **follows symlinks** (uses `metadata`, not `symlink_metadata`): it
+/// answers "do these resolve to the same file", which is the question a
+/// scoping/identity check actually has.
+///
+/// # Errors
+///
+/// Returns an error if either path cannot be `stat`'d (e.g. missing).
+pub fn paths_identical(first: &Path, second: &Path) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta_a = std::fs::metadata(first)?;
+        let meta_b = std::fs::metadata(second)?;
+        Ok(meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino())
+    }
+    #[cfg(windows)]
+    {
+        // Windows file identity is `(dwVolumeSerialNumber, nFileIndex)` from
+        // `BY_HANDLE_FILE_INFORMATION`. The `std::os::windows::fs::MetadataExt`
+        // accessors for these (`volume_serial_number` / `file_index`) are
+        // still unstable (rust-lang/rust#63010, `windows_by_handle`), so a
+        // stable implementation must go through `GetFileInformationByHandle`
+        // directly. That FFI is deferred until a caller actually needs
+        // same-file identity on Windows (the WI-3.1 audit found the
+        // drive-scoping path uses the typed `DriveLetter`, not this helper).
+        // Until then, be explicit rather than silently wrong.
+        let _: (&Path, &Path) = (first, second);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "paths_identical: Windows file-identity comparison not yet implemented \
+             (needs stable GetFileInformationByHandle FFI; no caller requires it yet)",
+        ))
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -489,3 +791,7 @@ where
     let _guard = FileLock::acquire(lock_path, kind, timeout)?;
     func()
 }
+
+#[cfg(test)]
+#[path = "fs/tests.rs"]
+mod tests;

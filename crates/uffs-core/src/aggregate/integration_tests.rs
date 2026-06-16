@@ -844,3 +844,62 @@ fn s3f4_nested_rollup_drive_with_terms_type() {
         "sub_buckets total count should equal drive bucket count"
     );
 }
+
+// ── Regression: ext filter absent on the drive must match NOTHING ──
+//
+// 2026-06-11, found live by the bench suite's count-vs-file-sink cross-check:
+// `uffs *.dll --drive G --count` returned G's TOTAL record count (15,162 —
+// every record on the drive) because `resolve_ext_ids(["dll"])` on a drive
+// that never interned `dll` returns an empty vec, which the aggregate filter
+// read as "no extension filter". An unresolvable extension filter matches
+// nothing.
+
+#[test]
+fn count_with_extension_absent_on_drive_is_zero() {
+    let drive = build_agg_test_drive();
+    let specs = vec![AggregateSpec::new(AggregateKind::Count)];
+
+    // Control: an extension present on the drive counts exactly its files.
+    let present = AggregateFilter {
+        extensions: vec!["rs".to_owned()],
+        ..AggregateFilter::default()
+    };
+    let output = run_aggregate_with_filters(
+        &[&drive],
+        &specs,
+        &FinalizeOptions::default(),
+        None,
+        &present,
+    )
+    .expect("count with present extension");
+    assert!(
+        matches!(
+            output.response.results[0].data,
+            AggregateResultData::Count { value: 3 }
+        ),
+        "3 .rs files expected; got {:?}",
+        output.response.results[0].data
+    );
+
+    // Bug case: an extension the drive has never interned → ZERO, not all.
+    let absent = AggregateFilter {
+        extensions: vec!["dll".to_owned()],
+        ..AggregateFilter::default()
+    };
+    let absent_output = run_aggregate_with_filters(
+        &[&drive],
+        &specs,
+        &FinalizeOptions::default(),
+        None,
+        &absent,
+    )
+    .expect("count with absent extension");
+    assert!(
+        matches!(
+            absent_output.response.results[0].data,
+            AggregateResultData::Count { value: 0 }
+        ),
+        "no .dll files exist — count must be 0, not the drive total; got {:?}",
+        absent_output.response.results[0].data
+    );
+}

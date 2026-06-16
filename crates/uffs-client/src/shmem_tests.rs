@@ -78,6 +78,9 @@ fn sample_row(name: &str) -> SearchRow {
         descendants: 0,
         treesize: 1024,
         tree_allocated: 0,
+        malformed: false,
+        malformed_path: false,
+        name_hex: None,
     }
 }
 

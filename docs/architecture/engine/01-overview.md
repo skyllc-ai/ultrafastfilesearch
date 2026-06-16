@@ -337,7 +337,7 @@ For 2M files: ~448 MB for records + ~46 MB for names ≈ **~500 MB total**.
 
 ## Performance Summary
 
-### Benchmarks (v0.5.4 baseline — 25.9M Records, 7 Drives; v0.5.66 current)
+### Benchmarks (v0.5.4 baseline — 25.9M Records, 7 Drives; v0.5.120 current)
 
 **v0.5.4 historical (retained for per-drive context):**
 
@@ -348,7 +348,7 @@ For 2M files: ~448 MB for records + ~46 MB for names ≈ **~500 MB total**.
 | HOT (`*`) | 163 ms | 27 ms | 54 ms |
 | HOT (targeted) | 9–10 ms | 9 ms | 10 ms |
 
-**v0.5.66 current (7-drive ALL; [`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt`](../../benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt)):**
+**v0.5.66 capture (7-drive ALL; [`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt`](../../benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt)):**
 
 | Phase            | ALL drives            | Notes |
 |------------------|----------------------:|-------|
@@ -357,16 +357,26 @@ For 2M files: ~448 MB for records + ~46 MB for names ≈ **~500 MB total**.
 | HOT (`*` top-100)| **1 112 ms** CLI e2e  | 1 081 ms daemon-side — regression target, see Phase 5 #2 |
 | HOT (targeted)   | **29–32 ms** CLI e2e  | **0–3 ms daemon-side** (unchanged from v0.5.4) |
 
+**v0.5.120 current (cross-tool capture, C/D/F/G; [`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](../../benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv)):**
+targeted queries are **17–39 ms CLI e2e** single-drive (every v0.5.66
+cell improved, median −33%), and UFFS wins **30/30 head-to-head cells
+vs Everything** at p50, median ratio **0.36×** — see the
+[current canonical report](../../benchmarks/2026-06-v0.5.120-vs-everything.md).
+COLD/WARM were not re-captured on v0.5.120; the v0.5.66 figures above
+remain the latest phase measurements.
+
 Daemon-side targeted latency is unchanged from v0.5.4 — the CLI e2e
-gap is the Phase 1+ thin-client cold-spawn floor (~28 ms on Windows).
+gap is the Phase 1+ thin-client cold-spawn floor (~17–28 ms on Windows).
 The `*` fullscan regression is tracked as the top bounded-heap target
-in [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §7 (internal engineering detail) and [`docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md) §Known regressions (public summary).
+in [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §7 (internal engineering detail) and [`docs/benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md) §Known regressions (public summary).
 
 HOT in-memory scan throughput: **167 million records/second** when
-not materialising rows.  End-to-end throughput with disk write-out
-at 26 M records is **1.72 M records/second** ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:1263-1278`](../../benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt)).
+not materialising rows.  End-to-end throughput with disk write-out is
+**1.95 M records/second** on v0.5.120 (23.3 M rows → CSV in 12.0 s across
+all 7 volumes; 2.11 M rec/s on the 4-drive subset; v0.5.66 measured
+1.72 M rec/s at 26 M records).
 Targeted queries: **0–3 ms daemon-side** even at 100 M records
-(v0.5.4 synthetic-clone data; not re-verified on v0.5.66).
+(v0.5.4 synthetic-clone data; not re-verified since).
 
 ### Why UFFS is Fast
 

@@ -45,6 +45,7 @@ use super::{
     CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, PatchSink, SaveReason,
 };
 
+mod backoff;
 mod basics;
 mod integration;
 mod save_log_message;
@@ -168,6 +169,12 @@ struct RecordingSink {
     /// Phase 7-C surface — lets tests assert the threshold state
     /// machine fires the right reason at the right time.
     save_calls: Mutex<Vec<(uffs_mft::platform::DriveLetter, SaveReason)>>,
+    /// One entry per `trigger_save()` call: the `cursor` argument.
+    /// The loop hands its read position to the sink here; the sink
+    /// (production `RegistryPatchSink`) persists it in lockstep with
+    /// a successful body save.  Lets the loop-level tests assert the
+    /// cursor reaches the sink without coupling to persistence.
+    save_cursors: Mutex<Vec<u64>>,
     /// One entry per `journal_wrapped()` call: `letter`.
     /// Phase 7-D surface — lets tests assert the wrap-detection
     /// state machine fires when `journal_id` changes between
@@ -184,6 +191,7 @@ impl RecordingSink {
         Self {
             calls: Mutex::new(Vec::new()),
             save_calls: Mutex::new(Vec::new()),
+            save_cursors: Mutex::new(Vec::new()),
             wrap_calls: Mutex::new(Vec::new()),
             accept_outcome: Mutex::new(true),
         }
@@ -197,6 +205,10 @@ impl RecordingSink {
         lock_or_recover(&self.save_calls).clone()
     }
 
+    fn save_cursors(&self) -> Vec<u64> {
+        lock_or_recover(&self.save_cursors).clone()
+    }
+
     fn wrap_calls(&self) -> Vec<uffs_mft::platform::DriveLetter> {
         lock_or_recover(&self.wrap_calls).clone()
     }
@@ -208,8 +220,14 @@ impl PatchSink for RecordingSink {
         *lock_or_recover(&self.accept_outcome)
     }
 
-    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason) {
+    fn trigger_save(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: SaveReason,
+        cursor: u64,
+    ) {
         lock_or_recover(&self.save_calls).push((letter, reason));
+        lock_or_recover(&self.save_cursors).push(cursor);
     }
 
     fn journal_wrapped(&self, letter: uffs_mft::platform::DriveLetter) {

@@ -94,7 +94,7 @@ impl MftQuery {
     /// Returns an error if query execution fails.
     pub fn collect_streaming(self) -> Result<DataFrame> {
         self.lazy
-            .with_new_streaming(true)
+            .with_streaming(true)
             .collect()
             .map_err(CoreError::from)
     }

@@ -59,8 +59,18 @@ pub struct MftIndex {
     pub records: Vec<FileRecord>,
     /// FRS → record index lookup (O(1) access).
     pub frs_to_idx: Vec<u32>,
-    /// All filenames concatenated into one allocation.
-    pub names: String,
+    /// All filenames concatenated into one allocation, stored as **WTF-8
+    /// bytes** (not a `String`).
+    ///
+    /// NTFS names are UTF-16 with no well-formedness guarantee — unpaired
+    /// surrogates are legal on disk. Holding the *raw* bytes (WTF-8: UTF-8 for
+    /// well-formed names, plus the surrogate-bearing remainder encoded
+    /// byte-faithfully) makes every real on-disk name retainable and findable
+    /// — so a file cannot hide from search behind an ill-formed name
+    /// (WI-4.4, Category 4). Access via [`MftIndex::get_name`] (a lossy `&str`
+    /// view for display, U+FFFD-rendered) or [`MftIndex::get_name_bytes`] (the
+    /// lossless bytes, used by the byte-native search/trigram path).
+    pub names: Vec<u8>,
     /// Overflow hard-link entries.
     pub links: Vec<LinkInfo>,
     /// Overflow stream entries.
@@ -103,7 +113,7 @@ impl Default for MftIndex {
             volume: DriveLetter::C,
             records: Vec::new(),
             frs_to_idx: Vec::new(),
-            names: String::new(),
+            names: Vec::new(),
             links: Vec::new(),
             streams: Vec::new(),
             internal_streams: Vec::new(),

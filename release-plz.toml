@@ -76,22 +76,29 @@
 #   WARN Package `uffs-security@*.*.*` not found
 #   ... (12 crates, all "not found")
 #
-# `git_only = true` flips release-plz into a tag-based baseline mode: it
-# scans `git tag` output for tags matching `git_tag_name` (set below to
-# `v{{ version }}` to match the existing UFFS tag scheme), picks the
-# latest semver-ordered tag, checks out that tag's worktree, and uses its
-# Cargo.toml + file content as the baseline.  Required while crates.io is
-# empty.
+# HISTORY — `git_only = true` (R4, 2026-04-25 → 2026-06-10): tag-based
+# baseline mode.  release-plz scanned `git tag` for `v*`, checked out the
+# latest tag's worktree, and used its content as the baseline.  Required
+# while crates.io was empty — but it carried a fatal side effect found in
+# the 2026-06-09 active runs (run #79 + 3 retries): git-only mode
+# hardcodes `cargo package --allow-dirty --workspace` inside that
+# worktree, packaging ALL members regardless of the `release = false`
+# blocks below.  Never-publish crates with versioned internal deps
+# (`uffs-broker` → `uffs-broker-protocol`) can never resolve from the
+# crates.io index, so the step can never succeed — catch-22 confirmed
+# locally (versioned dep → "no matching package found"; versionless →
+# "all dependencies must have a version requirement").
 #
-# Forward-compat note for R8:
-#
-#   When R8 publishes the first crate to crates.io, `git_only = true` and
-#   `publish = true` cannot both be true on the same package — release-plz
-#   refuses that combination by design (see release-plz docs §git_only).
-#   The R8 PR will either (a) flip `git_only = false` workspace-wide once
-#   ≥1 crate is published, or (b) carry per-package `git_only` overrides
-#   for the remaining unpublished crates during the staggered rollout.
-git_only = true
+# CURRENT — `git_only = false` (post-R8, 2026-06-10): registry baseline.
+# The R8 bootstrap published `uffs-time` + `uffs-text` v0.5.120, so
+# release-plz now downloads the published .crate files and diffs local
+# packages against them — exactly the forward-compat flip the R4 note
+# here always planned.  The broken worktree `cargo package --workspace`
+# step is never invoked in this mode (verified locally on 0.3.157:
+# update downloads uffs-text 0.5.120, exits 0, proposes bumps only when
+# the published crates' files change).  The 15 non-published members
+# stay out of scope via their `release = false` blocks below.
+git_only = false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tag & GitHub Release naming (R4 — workspace style)
@@ -343,23 +350,36 @@ pr_branch_prefix = "release-plz-"
 #         because release-plz's hardcoded `cargo package -p` baseline
 #         step trips on the polars chrono mismatch unless every chain
 #         member is excluded from iteration (R6→R8 deviation, 2026-05-08).
-#     (b) Explicit-`publish = false` crates (`uffs-security`, `uffs-broker`,
-#         `uffs-broker-protocol`, `uffs-diag`) — auto-skipped by release-
-#         plz following cargo's convention.  No `[[package]]` block needed.
-#         Rationale per crate:
+#     (b) Other never-publish crates (`uffs-security`, `uffs-broker`,
+#         `uffs-broker-protocol`, `uffs-diag`, `uffs-bench`) — these ALSO
+#         need an explicit `release = false` block below.  CORRECTION
+#         (2026-06-09, release-plz active run #79): the earlier assumption
+#         that a `publish = false` crate is "auto-skipped by release-plz
+#         following cargo's convention" is WRONG.  `publish = false` only
+#         blocks the crates.io UPLOAD step; release-plz still iterates the
+#         crate for version-bump + changelog + tag, and its baseline
+#         `cargo package` step runs on it.  That step fails for any crate
+#         with a versioned path-dep on an unpublished workspace member
+#         (`uffs-broker` → `uffs-broker-protocol`; `uffs-diag` → `uffs-mft`
+#         + `uffs-polars`) with "no matching package ... found, location
+#         searched: crates.io index".  Only `release = false` removes a
+#         crate from release-plz's iteration.  Rationale per crate:
 #           uffs-security     UFFS-internals dressed as a generic crate
 #                              — see crate manifest comment
 #           uffs-broker       Windows `[[bin]]` only; standalone install
 #                              is meaningless without the daemon pairing
 #           uffs-broker-protocol  1-RTT wire protocol nobody else speaks
 #           uffs-diag         developer diagnostic tooling
+#           uffs-bench        benchmark-suite orchestrator (internal only)
 #
-#   Internal CI tools (3) — `release = false` below as the surgical
+#   Internal CI tools (4) — `release = false` below as the surgical
 #   release-plz-specific exclusion (their `publish = false` is the
-#   actual `cargo publish` block):
+#   actual `cargo publish` block, but see the (b) correction above —
+#   it does NOT exclude them from release-plz iteration on its own):
 #     scripts/ci-pipeline      (uffs-ci-pipeline)
 #     scripts/ci/gen-hooks     (uffs-gen-hooks)
 #     scripts/ci/gen-workflow  (uffs-gen-workflow)
+#     scripts/ci/manifest-audit (uffs-manifest-audit)
 #
 #   Out of band (1) — separate cargo workspace, release-plz never
 #   sees it; listed here for completeness:
@@ -400,6 +420,10 @@ release = false
 name = "uffs-gen-workflow"
 release = false
 
+[[package]]
+name = "uffs-manifest-audit"
+release = false
+
 # ─── Publishable crates (R4) ─ share the workspace-root CHANGELOG.md ─
 #
 # Order matches the workspace dep graph (leaves → roots) so the file
@@ -426,12 +450,13 @@ release = false
 #       • Reserve-name-only crates (`uffs-core`, `uffs-daemon` —
 #         deferred publish decision per the 2026-05-14 scrub).
 #
-# Crates with `publish = false` in their own Cargo.toml (`uffs-polars`,
-# `uffs-format`, `uffs-security`, `uffs-broker`, `uffs-broker-protocol`,
-# `uffs-diag`) are auto-skipped by release-plz following cargo's
-# convention — no `[[package]]` block needed for them.  Only crates
-# that EITHER are publish-ready OR need the explicit `release = false`
-# release-plz-specific knob appear below.
+# Every other workspace member needs an explicit `release = false`
+# block — `publish = false` alone does NOT remove a crate from
+# release-plz's iteration (it only blocks the crates.io upload).  See
+# the (b) correction note above (release-plz active run #79, 2026-06-09).
+# Without these blocks release-plz runs `cargo package` on the crate and
+# fails whenever it carries a versioned path-dep on an unpublished
+# workspace member.
 
 [[package]]
 name = "uffs-time"
@@ -477,4 +502,37 @@ release = false
 
 [[package]]
 name = "uffs-cli"
+release = false
+
+# ─── Never-publish internal crates (run #79 fix, 2026-06-09) ────────
+#
+# These were previously assumed to be "auto-skipped because
+# `publish = false`" (see the corrected (b) note above), but release-plz
+# active run #79 proved otherwise: it packaged `uffs-broker` and failed
+# with "no matching package named `uffs-broker-protocol` found, location
+# searched: crates.io index" because `uffs-broker`'s versioned path-dep
+# on the unpublished `uffs-broker-protocol` forces a registry lookup
+# during `cargo package`.  `uffs-diag` hits the same wall via its
+# `uffs-mft` + `uffs-polars` deps.  Excluding all five from release-plz
+# iteration leaves exactly the two publish-ready crates (`uffs-time`,
+# `uffs-text`) in scope — matching the 2026-05-14 scrub's "ready today"
+# set.
+[[package]]
+name = "uffs-broker"
+release = false
+
+[[package]]
+name = "uffs-broker-protocol"
+release = false
+
+[[package]]
+name = "uffs-security"
+release = false
+
+[[package]]
+name = "uffs-diag"
+release = false
+
+[[package]]
+name = "uffs-bench"
 release = false

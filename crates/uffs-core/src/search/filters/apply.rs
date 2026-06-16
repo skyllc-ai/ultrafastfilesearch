@@ -4,6 +4,7 @@
 //! Filter application logic: retain/reject rows against `SearchFilters`.
 
 use super::super::backend::DisplayRow;
+use super::super::derived::is_system_name;
 use super::super::tree::name_matches;
 use super::{
     SearchFilters, extension_matches_filter, extract_extension_after_dot, lowercase_into,
@@ -37,10 +38,19 @@ pub(crate) fn row_passes_filters(
     if filters.is_empty() {
         return true;
     }
-    if filters.hide_system && row.name().starts_with('$') {
+    if filters.hide_system && is_system_name(row.name()) {
         return false;
     }
     if filters.hide_ads && row.name().contains(':') {
+        return false;
+    }
+    // WI-4.4: malformed-name toggle for the DisplayRow paths (Path/PathOnly
+    // tree-walk and the regex/trigram post-filter pass). The `malformed` bit
+    // is precomputed against the lossless name bytes in `make_display_row`, so
+    // we read the carrier here rather than re-deriving from the lossy `path`.
+    if let Some(want) = filters.malformed
+        && row.malformed != want
+    {
         return false;
     }
     if let Some(min) = filters.min_size

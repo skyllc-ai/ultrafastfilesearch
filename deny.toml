@@ -16,10 +16,10 @@
 # Deny all vulnerabilities
 version = 2
 ignore = [
-    # bincode is unmaintained but is a transitive dependency of Polars (polars-utils)
-    # No action required from our side - Polars team will handle migration
-    # See: https://rustsec.org/advisories/RUSTSEC-2025-0141
-    "RUSTSEC-2025-0141",
+  # bincode is unmaintained but is a transitive dependency of Polars (polars-utils)
+  # No action required from our side - Polars team will handle migration
+  # See: https://rustsec.org/advisories/RUSTSEC-2025-0141
+  "RUSTSEC-2025-0141",
 ]
 
 [licenses]
@@ -27,24 +27,24 @@ ignore = [
 version = 2
 confidence-threshold = 0.8
 allow = [
-    # Core permissive licenses
-    "MIT",
-    "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "0BSD",              # Zero-clause BSD (adler2) - public domain equivalent
-    "Unlicense",         # Public domain equivalent (aho-corasick, memchr, walkdir, etc.)
+  # Core permissive licenses
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "0BSD",                           # Zero-clause BSD (adler2) - public domain equivalent
+  "Unlicense",                      # Public domain equivalent (aho-corasick, memchr, walkdir, etc.)
 
-    # Weak copyleft licenses (file-level, compatible with commercial use)
-    "MPL-2.0",           # Mozilla Public License 2.0 (colored, our own crates)
-    "LGPL-2.1-or-later", # GNU Lesser GPL 2.1+ (r-efi) - weak copyleft, acceptable
+  # Weak copyleft licenses (file-level, compatible with commercial use)
+  "MPL-2.0",           # Mozilla Public License 2.0 (colored, our own crates)
+  "LGPL-2.1-or-later", # GNU Lesser GPL 2.1+ (r-efi) - weak copyleft, acceptable
 
-    # Special purpose licenses required by dependencies
-    "Zlib",              # zlib License (foldhash, bytemuck)
-    "Unicode-3.0",       # Unicode License v3 (unicode-ident)
-    "BSL-1.0",           # Boost Software License 1.0 (xxhash-rust, ryu)
+  # Special purpose licenses required by dependencies
+  "Zlib",        # zlib License (foldhash, bytemuck)
+  "Unicode-3.0", # Unicode License v3 (unicode-ident)
+  "BSL-1.0",     # Boost Software License 1.0 (xxhash-rust, ryu)
 ]
 
 # License exceptions for specific crates
@@ -65,32 +65,32 @@ wildcards = "allow"
 # These are transitive dependencies with semver-incompatible version requirements
 # that we cannot control - they come from Polars and other large dependencies
 skip-tree = [
-    # windows-sys and related crates bump versions frequently, duplicates are unavoidable
-    # Polars and other deps pin different versions of the Windows ecosystem
-    { crate = "windows-sys", reason = "foundational Windows crate, bumps too frequently" },
-    { crate = "windows", reason = "foundational Windows crate, version fragmentation" },
+  # windows-sys and related crates bump versions frequently, duplicates are unavoidable
+  # Polars and other deps pin different versions of the Windows ecosystem
+  { crate = "windows-sys", reason = "foundational Windows crate, bumps too frequently" },
+  { crate = "windows", reason = "foundational Windows crate, version fragmentation" },
 
-    # hashbrown/foldhash are foundational hash crates with version churn
-    # hashbrown 0.15 uses foldhash 0.1, hashbrown 0.16 uses foldhash 0.2
-    { crate = "hashbrown@0.15", reason = "foundational hash crate, version churn" },
-    { crate = "foldhash@0.1", reason = "hashbrown 0.15 uses foldhash 0.1" },
+  # hashbrown/foldhash are foundational hash crates with version churn
+  # hashbrown 0.15 uses foldhash 0.1, hashbrown 0.16 uses foldhash 0.2
+  { crate = "hashbrown@0.15", reason = "foundational hash crate, version churn" },
+  { crate = "foldhash@0.1", reason = "hashbrown 0.15 uses foldhash 0.1" },
 
-    # getrandom has version fragmentation (0.2 vs 0.3)
-    # ring and other crypto crates pin to 0.2.x
-    { crate = "getrandom@0.2", reason = "ring and other crates pin to 0.2.x" },
+  # getrandom has version fragmentation (0.2 vs 0.3)
+  # ring and other crypto crates pin to 0.2.x
+  { crate = "getrandom@0.2", reason = "ring and other crates pin to 0.2.x" },
 
-    # itertools has version fragmentation (0.13 vs 0.14)
-    { crate = "itertools@0.13", reason = "various deps pin to itertools 0.13, some use 0.14" },
+  # itertools has version fragmentation (0.13 vs 0.14)
+  { crate = "itertools@0.13", reason = "various deps pin to itertools 0.13, some use 0.14" },
 
-    # thiserror has version fragmentation (1.x vs 2.x)
-    { crate = "thiserror@1", reason = "transitive deps use thiserror 1.x, some use 2.x" },
-    { crate = "thiserror-impl@1", reason = "follows thiserror 1.x vs 2.x split" },
+  # thiserror has version fragmentation (1.x vs 2.x)
+  { crate = "thiserror@1", reason = "transitive deps use thiserror 1.x, some use 2.x" },
+  { crate = "thiserror-impl@1", reason = "follows thiserror 1.x vs 2.x split" },
 
-    # signal-hook has version fragmentation (0.3 vs 0.4)
-    { crate = "signal-hook@0.3", reason = "crossterm pins to 0.3.x, others use 0.4.x" },
+  # signal-hook has version fragmentation (0.3 vs 0.4)
+  { crate = "signal-hook@0.3", reason = "crossterm pins to 0.3.x, others use 0.4.x" },
 
-    # getrandom version fragmentation from polars transitive deps
-    { crate = "getrandom@0.3", reason = "polars deps use different versions" },
+  # getrandom version fragmentation from polars transitive deps
+  { crate = "getrandom@0.3", reason = "polars deps use different versions" },
 ]
 
 [sources]
@@ -98,4 +98,5 @@ skip-tree = [
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/pola-rs/polars"]
+# No git sources: Polars now comes from crates.io (see crates/uffs-polars).
+allow-git = []

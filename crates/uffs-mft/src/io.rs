@@ -25,7 +25,10 @@ mod chunking;
 mod extent_map;
 mod fixup;
 mod merger;
-mod parser;
+// `pub(crate)` so the instrumented name decoder (`parser::unified::
+// decode_name_u16`, WI-4.1) is reachable from the sibling `parse/` and
+// `usn/` modules that decode NTFS names — one decoder, one lossy tally.
+pub(crate) mod parser;
 // readers module available on all platforms (contains ChaosMftReader for
 // offline MFT)
 pub mod readers;

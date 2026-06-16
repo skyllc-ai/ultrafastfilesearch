@@ -8,6 +8,18 @@
 
 use core::fmt::Write as _;
 
+/// Format the scan-stats header line shared by the aggregate and facet
+/// tools, e.g. `"(12815626 scanned in 3ms)"`.
+///
+/// Mirrors the phrasing of the `uffs_search` text header so every
+/// daemon-query tool reports its measured query time the same way —
+/// agents can quote it directly instead of digging it out of the JSON
+/// block.
+#[must_use]
+pub fn format_scan_header(records_scanned: usize, duration_ms: u64) -> String {
+    format!("({records_scanned} scanned in {duration_ms}ms)")
+}
+
 /// Format aggregate results as a compact human-readable summary.
 #[must_use]
 pub fn format_aggregate_summary(results: &[uffs_client::protocol::AggregateResultWire]) -> String {

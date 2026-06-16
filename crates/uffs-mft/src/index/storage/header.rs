@@ -24,7 +24,7 @@ const INDEX_MAGIC: &[u8; 8] = b"UFFSIDX\0";
 /// - v12: `build_epoch` (Unix µs) in header for cache staleness detection
 /// - v13: timestamps stored as raw FILETIME (100-ns ticks since 1601-01-01)
 ///   instead of Unix microseconds — matches C++ baseline semantics
-const INDEX_VERSION: u32 = 13;
+const INDEX_VERSION: u32 = 14;
 
 /// Persistent index header stored at the beginning of the index file.
 #[derive(Debug, Clone)]
@@ -96,9 +96,12 @@ impl IndexHeader {
         if &self.magic != INDEX_MAGIC {
             return Err("Invalid index file magic");
         }
-        // Accept version 3 through the latest supported format revision.
-        if self.version < 3 || self.version > INDEX_VERSION {
-            return Err("Unsupported index version");
+        // v14 is a names-format break (WI-4.4): names are now stored as raw
+        // WTF-8 bytes rather than guaranteed-UTF-8, so a pre-v14 cache must be
+        // rebuilt from the MFT rather than reinterpreted. Reject anything
+        // below v14; the caller's rebuild path writes a fresh v14 cache.
+        if self.version < 14 || self.version > INDEX_VERSION {
+            return Err("Unsupported index version (pre-v14 caches rebuild for WI-4.4 names)");
         }
         Ok(())
     }

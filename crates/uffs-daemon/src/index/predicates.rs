@@ -94,7 +94,12 @@ impl IndexManager {
                 | FieldId::DirectoryFlag
                 | FieldId::RecallOnOpen
                 | FieldId::RecallOnDataAccess
-                | FieldId::ParityAttributes => false,
+                | FieldId::ParityAttributes
+                // WI-4.4: `malformed_path` is derived (needs the resolved
+                // parent chain) → always post-filter; `name_hex` is
+                // projection-only and never appears as a predicate.
+                | FieldId::MalformedPath
+                | FieldId::NameHex => false,
                 // Length predicates are compiled into hot-path min/max filters.
                 FieldId::NameLength | FieldId::PathLength => {
                     matches!(
@@ -105,6 +110,13 @@ impl IndexManager {
                             | SearchPredicateOp::Lt
                             | SearchPredicateOp::Eq
                     ) && matches!(predicate.value, SearchPredicateValue::U64(_))
+                }
+                // WI-4.4: `malformed` (leaf) compiles into the hot-path
+                // `SearchFilters.malformed` toggle (Eq/Ne over a bool), so it
+                // keeps the `--limit` fast path.
+                FieldId::Malformed => {
+                    matches!(predicate.op, SearchPredicateOp::Eq | SearchPredicateOp::Ne)
+                        && matches!(predicate.value, SearchPredicateValue::Bool(_))
                 }
             };
             !compiled_to_hot_path
@@ -393,8 +405,40 @@ impl IndexManager {
                         }
                     }
                 }
+                // ── WI-4.4 malformed (leaf) → hot-path bool toggle ─────
+                FieldId::Malformed => Self::compile_malformed(filters, predicate),
                 _ => {}
             }
+        }
+    }
+
+    /// Compile a `malformed` predicate into the hot-path
+    /// [`SearchFilters::malformed`] toggle. `Eq true` / `Ne false` keep
+    /// malformed names; `Eq false` / `Ne true` keep well-formed names. Any
+    /// non-bool value or non-eq operator is ignored (the predicate then falls
+    /// to the post-filter, which is a correct no-op for this field).
+    const fn compile_malformed(filters: &mut SearchFilters, predicate: &SearchPredicate) {
+        let SearchPredicateValue::Bool(want) = predicate.value else {
+            return;
+        };
+        match predicate.op {
+            SearchPredicateOp::Eq => filters.malformed = Some(want),
+            SearchPredicateOp::Ne => filters.malformed = Some(!want),
+            // All other operators are meaningless for a boolean toggle.
+            SearchPredicateOp::Lt
+            | SearchPredicateOp::Lte
+            | SearchPredicateOp::Gt
+            | SearchPredicateOp::Gte
+            | SearchPredicateOp::In
+            | SearchPredicateOp::NotIn
+            | SearchPredicateOp::HasAll
+            | SearchPredicateOp::HasAny
+            | SearchPredicateOp::HasNone
+            | SearchPredicateOp::Match
+            | SearchPredicateOp::NotMatch
+            | SearchPredicateOp::Contains
+            | SearchPredicateOp::StartsWith
+            | SearchPredicateOp::EndsWith => {}
         }
     }
 
@@ -464,6 +508,16 @@ impl IndexManager {
             }
             FieldId::NameLength => Self::match_u64(row.name().chars().count() as u64, predicate),
             FieldId::PathLength => Self::match_u64(row.path.chars().count() as u64, predicate),
+            // ── WI-4.4 forensic fields ──────────────────────────────
+            // `malformed` is normally compiled to the hot path; this arm is the
+            // fallback when it is combined with another post-filter predicate.
+            // `malformed_path` is always evaluated here (it is Derived). Both
+            // read the carrier bools precomputed against the lossless bytes —
+            // never recomputed from the lossy `path`. `name_hex` is not
+            // filterable, so any predicate on it is a no-op (matches all).
+            FieldId::Malformed => Self::match_bool(row.malformed, predicate),
+            FieldId::MalformedPath => Self::match_bool(row.malformed_path, predicate),
+            FieldId::NameHex => true,
         }
     }
 

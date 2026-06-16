@@ -125,7 +125,12 @@ impl ParallelMftReader {
                       through many downstream uses without improving semantics."
         )]
         let concurrency = concurrency.unwrap_or_else(|| {
-            if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
+            if matches!(
+                self.drive_type,
+                crate::platform::DriveType::Hdd
+                    | crate::platform::DriveType::Removable
+                    | crate::platform::DriveType::Virtual
+            ) {
                 crate::platform::DriveType::optimal_concurrency_for_hdd(
                     self.extent_map.extent_count(),
                 )

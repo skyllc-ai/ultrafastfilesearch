@@ -64,7 +64,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use uffs_mft::usn::FileChange;
 
-use super::journal_loop::{PatchSink, SaveReason};
+use super::journal_loop::{CursorStore, PatchSink, SaveReason};
 use crate::index::IndexManager;
 
 /// Cross-task message from a sync sink callback to the async applier.
@@ -90,6 +90,12 @@ enum ApplyMsg {
         /// triggers when the drive saw no churn since the last save
         /// (the surgical-patch path short-circuits to a no-op).
         changes: Vec<FileChange>,
+        /// The journal loop's read position at this save tick.  The
+        /// applier persists it via the cursor store **only when the
+        /// compact-cache body save actually succeeds**, keeping the
+        /// on-disk cursor in lockstep with the on-disk body (a parked
+        /// shard's save is a no-op, so its cursor must not advance).
+        cursor: u64,
     },
     /// `journal_wrapped` callback — the journal head reset so any
     /// pending events are stale; the applier discards them in the
@@ -188,10 +194,16 @@ impl RegistryPatchSink {
     ///
     /// See `docs/dev/baseline/2026-05-19/phase_10_backpressure_audit.md`
     /// (local) for the full per-site verdict.
-    pub(crate) fn spawn_with_applier(idx: &Arc<IndexManager>) -> (Arc<Self>, JoinHandle<()>) {
+    pub(crate) fn spawn_with_applier(
+        idx: &Arc<IndexManager>,
+        cursor_store: Arc<dyn CursorStore>,
+    ) -> (Arc<Self>, JoinHandle<()>) {
         let (apply_tx, apply_rx) = mpsc::unbounded_channel();
         let weak = Arc::downgrade(idx);
-        let handle = tokio::spawn(applier_task(apply_rx, weak));
+        // The cursor store lives on the applier task (it persists the
+        // cursor in lockstep with a successful body save); the sink
+        // itself only forwards the cursor inside `ApplyMsg::Save`.
+        let handle = tokio::spawn(applier_task(apply_rx, weak, cursor_store));
         (
             Arc::new(Self {
                 apply_tx,
@@ -252,7 +264,12 @@ impl PatchSink for RegistryPatchSink {
         true
     }
 
-    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason) {
+    fn trigger_save(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: SaveReason,
+        cursor: u64,
+    ) {
         // Drain the per-letter buffer in one swoop so the applier
         // sees a snapshot of all events accumulated since the
         // previous save.  An empty drained Vec is forwarded as-is
@@ -265,6 +282,7 @@ impl PatchSink for RegistryPatchSink {
             letter,
             reason,
             changes: drained,
+            cursor,
         });
     }
 
@@ -291,7 +309,11 @@ impl PatchSink for RegistryPatchSink {
 ///    `Weak::upgrade()` returns `None`, the loop returns immediately on the
 ///    next message even if more are pending (correctness: the daemon is
 ///    shutting down, no point applying more refreshes).
-async fn applier_task(mut rx: mpsc::UnboundedReceiver<ApplyMsg>, idx_weak: Weak<IndexManager>) {
+async fn applier_task(
+    mut rx: mpsc::UnboundedReceiver<ApplyMsg>,
+    idx_weak: Weak<IndexManager>,
+    cursor_store: Arc<dyn CursorStore>,
+) {
     while let Some(msg) = rx.recv().await {
         let Some(idx_strong) = idx_weak.upgrade() else {
             tracing::debug!(
@@ -300,7 +322,7 @@ async fn applier_task(mut rx: mpsc::UnboundedReceiver<ApplyMsg>, idx_weak: Weak<
             );
             return;
         };
-        dispatch_msg(&idx_strong, msg).await;
+        dispatch_msg(&idx_strong, cursor_store.as_ref(), msg).await;
     }
     tracing::debug!(
         target: "shard.journal",
@@ -316,12 +338,13 @@ async fn applier_task(mut rx: mpsc::UnboundedReceiver<ApplyMsg>, idx_weak: Weak<
 /// also keeps the `Weak::upgrade` lifecycle decision in the parent
 /// (visible at the recv-loop level) and the per-variant dispatch
 /// in this helper (focused, easy to extend).
-async fn dispatch_msg(idx: &Arc<IndexManager>, msg: ApplyMsg) {
+async fn dispatch_msg(idx: &Arc<IndexManager>, cursor_store: &dyn CursorStore, msg: ApplyMsg) {
     match msg {
         ApplyMsg::Save {
             letter,
             reason,
             changes,
+            cursor,
         } => {
             let reason_str = save_reason_str(reason);
             // Phase 8 surgical-patch path: hand the drained per-letter
@@ -329,7 +352,16 @@ async fn dispatch_msg(idx: &Arc<IndexManager>, msg: ApplyMsg) {
             // which clones the Warm body, applies the patch, swaps
             // the new Arc into the registry, and persists the patched
             // body via `save_compact_cache_background`.
-            let _applied = idx.handle_journal_save(letter, reason_str, changes).await;
+            let applied = idx.handle_journal_save(letter, reason_str, changes).await;
+            // Persist the cursor in lockstep with the body save: only
+            // when the save actually happened (`applied`).  A parked
+            // shard returns `false` here, so its on-disk cursor stays
+            // pinned to the last real body save and the startup
+            // warm-load guard can never strand a delta past the
+            // persisted body.  See `cache::guarded_load`.
+            if applied {
+                cursor_store.store(letter, cursor);
+            }
         }
         ApplyMsg::Wrap { letter } => {
             // Wrap stays on the Phase-7 full-reload path.  The
@@ -355,379 +387,4 @@ const fn save_reason_str(reason: SaveReason) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Construct a fresh [`IndexManager`] suitable for sink lifecycle
-    /// tests.  No drives loaded — the applier exits cleanly when
-    /// the strong-Arc drops, regardless of whether refresh messages
-    /// were drained, so tests don't need a populated registry.
-    fn fresh_index_manager() -> Arc<IndexManager> {
-        let (event_tx, _event_rx) = crate::events::event_channel();
-        Arc::new(IndexManager::new(
-            None,
-            event_tx,
-            Arc::new(crate::config::Config::default()),
-        ))
-    }
-
-    /// Construct a [`FileChange`] fixture with a unique FRS for
-    /// per-event identification.  Fields other than `frs` use
-    /// `FileChange::default()` because the sink doesn't inspect them
-    /// — only `IndexManager::handle_journal_save` does (covered in
-    /// `cache::shard::tests` and the patch end-to-end suite).
-    ///
-    /// Takes a raw `u64` because FRS values are most naturally
-    /// written as integer literals in test fixtures; lifts to the
-    /// typed `Frs` at this single construction boundary so the rest
-    /// of the test surface keeps the typed contract.
-    fn make_change(frs: u64) -> FileChange {
-        FileChange {
-            frs: frs.into(),
-            ..FileChange::default()
-        }
-    }
-
-    /// Snapshot the per-letter pending buffer's event FRS sequence,
-    /// dropping the `lock_pending()` guard before returning so the
-    /// caller's assertions don't hold the mutex (satisfies
-    /// `clippy::significant_drop_tightening` in tests).
-    ///
-    /// Demotes typed `Frs` → raw `u64` at the snapshot boundary so
-    /// assertion literals stay as integer arrays.
-    fn pending_frs_for_letter(
-        sink: &RegistryPatchSink,
-        letter: uffs_mft::platform::DriveLetter,
-    ) -> Option<Vec<u64>> {
-        let guard = sink.lock_pending();
-        guard
-            .get(&letter)
-            .map(|buf| buf.iter().map(|change| change.frs.raw()).collect())
-    }
-
-    /// Pin: `accept` appends to the per-letter pending buffer and
-    /// does NOT enqueue a message on the applier channel.
-    #[tokio::test]
-    async fn accept_buffers_changes_without_enqueueing() {
-        let (sink, mut rx) = RegistryPatchSink::new_for_test();
-
-        let accepted = sink.accept(uffs_mft::platform::DriveLetter::C, &[
-            make_change(100),
-            make_change(101),
-        ]);
-        assert!(accepted, "accept must return true optimistically");
-
-        // The pending buffer holds the two events for letter 'C'.
-        let buf = pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C)
-            .expect("accept must populate pending buffer for 'C'");
-        assert_eq!(
-            buf,
-            [100, 101],
-            "accept must preserve event order in the buffer",
-        );
-
-        // Channel is empty: accept did not enqueue.
-        assert!(
-            rx.try_recv().is_err(),
-            "accept must NOT enqueue an ApplyMsg",
-        );
-    }
-
-    /// Pin: a sequence of `accept` calls for the same letter
-    /// accumulates into the same buffer — no per-call drain or
-    /// truncation.
-    #[tokio::test]
-    async fn multiple_accepts_accumulate_in_pending() {
-        let (sink, _rx) = RegistryPatchSink::new_for_test();
-
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(1)]);
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[
-            make_change(2),
-            make_change(3),
-        ]);
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(4)]);
-
-        let buf = pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C)
-            .expect("buffer for 'C' must exist");
-        assert_eq!(
-            buf,
-            [1, 2, 3, 4],
-            "consecutive accepts must accumulate in send order",
-        );
-    }
-
-    /// Pin: `trigger_save` drains the pending buffer for `letter`
-    /// and ships it inside `ApplyMsg::Save { changes }`.  The buffer
-    /// for `letter` is cleared after the drain.
-    #[tokio::test]
-    async fn trigger_save_drains_pending_into_save_message() {
-        let (sink, mut rx) = RegistryPatchSink::new_for_test();
-
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[
-            make_change(10),
-            make_change(11),
-        ]);
-        sink.trigger_save(
-            uffs_mft::platform::DriveLetter::C,
-            SaveReason::EventsExceeded,
-        );
-
-        let ApplyMsg::Save {
-            letter,
-            reason,
-            changes,
-        } = rx.try_recv().expect("trigger_save must enqueue Save")
-        else {
-            panic!("expected ApplyMsg::Save, got Wrap");
-        };
-        assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
-        assert!(matches!(reason, SaveReason::EventsExceeded));
-        assert_eq!(
-            changes
-                .iter()
-                .map(|change| change.frs.raw())
-                .collect::<Vec<_>>(),
-            [10, 11],
-            "Save must carry the buffered changes in send order",
-        );
-
-        // Pending buffer for 'C' is gone after the drain.
-        assert!(
-            pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C).is_none(),
-            "trigger_save must remove the per-letter pending entry",
-        );
-    }
-
-    /// Pin: `trigger_save` on a letter with no prior `accept` still
-    /// emits `ApplyMsg::Save { changes: [] }`.  The applier's
-    /// empty-batch fast path then short-circuits to a no-op.
-    #[tokio::test]
-    async fn trigger_save_with_no_pending_sends_empty_changes() {
-        let (sink, mut rx) = RegistryPatchSink::new_for_test();
-
-        sink.trigger_save(uffs_mft::platform::DriveLetter::Z, SaveReason::AgeElapsed);
-
-        let ApplyMsg::Save {
-            letter,
-            reason,
-            changes,
-        } = rx.try_recv().expect("trigger_save must enqueue Save")
-        else {
-            panic!("expected ApplyMsg::Save, got Wrap");
-        };
-        assert_eq!(letter, uffs_mft::platform::DriveLetter::Z);
-        assert!(matches!(reason, SaveReason::AgeElapsed));
-        assert!(
-            changes.is_empty(),
-            "Save must carry an empty Vec when no events were buffered",
-        );
-    }
-
-    /// Pin: `journal_wrapped` clears the pending buffer for the
-    /// letter and emits `ApplyMsg::Wrap`.  A subsequent
-    /// `trigger_save` then sees an empty buffer (no replay of the
-    /// stale events past the wrap).
-    #[tokio::test]
-    async fn journal_wrapped_discards_pending_buffer_and_sends_wrap() {
-        let (sink, mut rx) = RegistryPatchSink::new_for_test();
-
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[
-            make_change(5),
-            make_change(6),
-        ]);
-        sink.journal_wrapped(uffs_mft::platform::DriveLetter::C);
-
-        let ApplyMsg::Wrap { letter } = rx.try_recv().expect("journal_wrapped must enqueue Wrap")
-        else {
-            panic!("expected ApplyMsg::Wrap, got Save");
-        };
-        assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
-
-        assert!(
-            pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C).is_none(),
-            "journal_wrapped must discard the per-letter pending entry",
-        );
-
-        // A subsequent trigger_save must see an empty buffer.
-        sink.trigger_save(uffs_mft::platform::DriveLetter::C, SaveReason::AgeElapsed);
-        let ApplyMsg::Save {
-            changes: post_wrap_changes,
-            ..
-        } = rx.try_recv().expect("trigger_save must enqueue Save")
-        else {
-            panic!("expected ApplyMsg::Save after wrap, got another Wrap");
-        };
-        assert!(
-            post_wrap_changes.is_empty(),
-            "post-wrap trigger_save must drain to empty (stale events discarded)",
-        );
-    }
-
-    /// Pin: per-letter buffers are independent.  Accepting events on
-    /// 'C' must not leak into 'D's buffer or pending state.
-    #[tokio::test]
-    async fn pending_buffers_are_per_letter() {
-        let (sink, mut rx) = RegistryPatchSink::new_for_test();
-
-        sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(1)]);
-        sink.accept(uffs_mft::platform::DriveLetter::D, &[
-            make_change(2),
-            make_change(3),
-        ]);
-
-        // Drain 'C' first — should NOT include any of 'D's events.
-        sink.trigger_save(
-            uffs_mft::platform::DriveLetter::C,
-            SaveReason::EventsExceeded,
-        );
-        let ApplyMsg::Save {
-            letter: c_letter,
-            changes: c_changes,
-            ..
-        } = rx.try_recv().expect("Save for 'C'")
-        else {
-            panic!("expected ApplyMsg::Save for 'C'");
-        };
-        assert_eq!(c_letter, uffs_mft::platform::DriveLetter::C);
-        assert_eq!(
-            c_changes
-                .iter()
-                .map(|change| change.frs.raw())
-                .collect::<Vec<_>>(),
-            [1],
-        );
-
-        // 'D's buffer must still hold its events.
-        sink.trigger_save(
-            uffs_mft::platform::DriveLetter::D,
-            SaveReason::EventsExceeded,
-        );
-        let ApplyMsg::Save {
-            letter: d_letter,
-            changes: d_changes,
-            ..
-        } = rx.try_recv().expect("Save for 'D'")
-        else {
-            panic!("expected ApplyMsg::Save for 'D'");
-        };
-        assert_eq!(d_letter, uffs_mft::platform::DriveLetter::D);
-        assert_eq!(
-            d_changes
-                .iter()
-                .map(|change| change.frs.raw())
-                .collect::<Vec<_>>(),
-            [2, 3],
-            "'D's buffer must be preserved across 'C's drain",
-        );
-    }
-
-    /// Drop all `Arc<RegistryPatchSink>` instances → the sender side
-    /// of the channel is dropped → the applier's `rx.recv().await`
-    /// returns `None` → the task exits cleanly.  Pins the graceful-
-    /// shutdown shape used when the daemon's load task tears down
-    /// without dropping `IndexManager` first.
-    #[tokio::test]
-    async fn applier_exits_when_sink_dropped() {
-        let idx = fresh_index_manager();
-        let (sink, applier) = RegistryPatchSink::spawn_with_applier(&idx);
-
-        // Sanity: applier is still running before we drop the sink.
-        assert!(!applier.is_finished());
-
-        drop(sink);
-
-        // Should converge within the test deadline; in practice
-        // it's <1 ms on Mac (single context-switch).
-        let join_result = tokio::time::timeout(core::time::Duration::from_secs(2), applier).await;
-        assert!(
-            join_result.is_ok(),
-            "applier must exit within 2 s of last sender dropping",
-        );
-        join_result
-            .expect("timeout deadline must not elapse")
-            .expect("applier must not panic");
-    }
-
-    /// Drop the last `Arc<IndexManager>` → the applier's
-    /// `Weak::upgrade()` returns `None` on the next message →
-    /// the task exits cleanly.  Pins the graceful-shutdown shape
-    /// used when the daemon's main lifecycle drops the index before
-    /// the load task observes the sink-side drop.
-    #[tokio::test]
-    async fn applier_exits_when_index_manager_dropped() {
-        let idx = fresh_index_manager();
-        let (sink, applier) = RegistryPatchSink::spawn_with_applier(&idx);
-
-        drop(idx);
-        // Send one message so the applier wakes up, observes the
-        // dropped Weak, and exits.  Without this the applier blocks
-        // on `recv().await` forever (no Weak-watch primitive in tokio).
-        sink.trigger_save(
-            uffs_mft::platform::DriveLetter::C,
-            SaveReason::EventsExceeded,
-        );
-
-        let join_result = tokio::time::timeout(core::time::Duration::from_secs(2), applier).await;
-        assert!(
-            join_result.is_ok(),
-            "applier must exit within 2 s of IndexManager Arc dropping + one wake message",
-        );
-        join_result
-            .expect("timeout deadline must not elapse")
-            .expect("applier must not panic");
-    }
-
-    /// Pin that `save_reason_str` produces stable diagnostic strings.
-    /// These strings are surfaced in the production tracing target
-    /// `shard.journal` and consumed by operator runbooks — drift
-    /// would silently break grep-based monitoring, so the round-trip
-    /// is asserted directly.
-    #[test]
-    fn save_reason_str_maps_each_variant() {
-        assert_eq!(
-            save_reason_str(SaveReason::EventsExceeded),
-            "events-exceeded"
-        );
-        assert_eq!(save_reason_str(SaveReason::AgeElapsed), "age-elapsed");
-    }
-
-    /// Pin the multi-message FIFO ordering contract: a sink that
-    /// buffers many messages before the applier can drain them all
-    /// must process them in send order.  Out-of-order applies don't
-    /// corrupt (each per-letter `handle_journal_save` is independent),
-    /// but the FIFO contract is a regression-net for any future
-    /// change that swaps `mpsc::unbounded_channel` for an unordered
-    /// surface.
-    #[tokio::test]
-    async fn applier_drains_in_fifo_order() {
-        let idx = fresh_index_manager();
-        let (sink, applier) = RegistryPatchSink::spawn_with_applier(&idx);
-
-        // Burst-send 5 trigger_save calls without prior `accept`.
-        // Each one drains an empty pending buffer and ships
-        // `ApplyMsg::Save { changes: [] }`; the applier's empty-batch
-        // fast path in `handle_journal_save` short-circuits to a
-        // debug-log no-op.  The test verifies the applier processes
-        // all 5 in order before the sink's drop closes the channel.
-        for letter in [
-            uffs_mft::platform::DriveLetter::C,
-            uffs_mft::platform::DriveLetter::D,
-            uffs_mft::platform::DriveLetter::E,
-            uffs_mft::platform::DriveLetter::F,
-            uffs_mft::platform::DriveLetter::G,
-        ] {
-            sink.trigger_save(letter, SaveReason::EventsExceeded);
-        }
-
-        // Drop the sink → applier drains remaining messages → exits.
-        drop(sink);
-        let join_result = tokio::time::timeout(core::time::Duration::from_secs(5), applier).await;
-        assert!(
-            join_result.is_ok(),
-            "applier must finish draining within 5 s (5 empty-batch no-ops, no real I/O)",
-        );
-        join_result
-            .expect("timeout deadline must not elapse")
-            .expect("applier must not panic");
-    }
-}
+mod tests;

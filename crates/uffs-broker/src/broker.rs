@@ -22,6 +22,54 @@
 #[cfg(windows)]
 use uffs_broker_protocol::{HandleRequest, HandleResponse, PIPE_NAME, RESPONSE_WIRE_LEN};
 
+// Windows Service registration helpers, split out to keep this file under the
+// 800-LOC ceiling (see `broker/service.rs`).
+#[path = "broker/service.rs"]
+mod service;
+#[cfg(windows)]
+use service::{install_service, uninstall_service};
+
+// Client process-handle acquisition + identity verification (WI-8.1), split
+// out to keep this file under the 800-LOC ceiling. See
+// `broker/process_handle.rs`.
+#[path = "broker/process_handle.rs"]
+mod process_handle;
+#[cfg(windows)]
+use process_handle::{OwnedProcessHandle, query_process_image_name, verify_client_handle};
+// S5.2 Authenticode verification (WinVerifyTrust + per-image cache). The single
+// implementation now lives in `uffs_security::authenticode`, shared with the
+// self-updater (DRY) instead of a broker-local copy.
+#[cfg(windows)]
+use uffs_security::authenticode::verify_authenticode;
+
+// `Send`-safe RAII handle wrapper (SBB-2) — lets a connected pipe instance move
+// into a per-connection worker thread (FU-5). See `broker/owned_handle.rs`.
+#[path = "broker/owned_handle.rs"]
+mod owned_handle;
+#[cfg(windows)]
+use owned_handle::OwnedHandle;
+
+// Named-pipe creation + SDDL security descriptor, split out to keep this file
+// under the 800-LOC ceiling. See `broker/pipe.rs`.
+#[path = "broker/pipe.rs"]
+mod pipe;
+#[cfg(windows)]
+use pipe::create_broker_pipe;
+
+/// Per-drive rate-limit state (`drive → last grant time`), shared across the
+/// FU-5 per-connection worker threads behind a `Mutex`.
+#[cfg(windows)]
+type RateLimit = std::sync::Mutex<std::collections::HashMap<char, std::time::Instant>>;
+
+/// Maximum concurrent named-pipe instances the broker serves (FU-5).
+///
+/// One instance is always listening in the accept loop; the rest can be
+/// in-flight on worker threads.  Bounded (not `PIPE_UNLIMITED_INSTANCES`) so a
+/// flood of clients can't exhaust threads/handles — excess clients simply wait
+/// for a free instance.
+#[cfg(windows)]
+const MAX_PIPE_INSTANCES: u32 = 16;
+
 /// Run the broker (called from main).
 ///
 /// Scope is `pub(crate)` because `broker` is a private module of the
@@ -45,8 +93,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
         return run_foreground();
     }
 
-    print_usage();
-    Ok(())
+    // No recognised flag: this is how the Service Control Manager launches the
+    // service at boot.  Hand control to the dispatcher; when run interactively
+    // (no SCM) it falls back to printing usage (FU-1).
+    service::run_as_service()
 }
 
 /// Print CLI usage help to stderr.
@@ -112,17 +162,66 @@ fn warn_if_not_elevated() {
 /// - S5.5: Read-only handles only (enforced in `handle_pipe_request`)
 #[cfg(windows)]
 fn serve_pipe_requests() -> anyhow::Result<()> {
-    tracing::info!(pipe = PIPE_NAME, "Listening for handle requests");
+    use alloc::sync::Arc;
+    use core::time::Duration;
 
-    // S5.4: Rate limiter — tracks last request time per drive letter
-    let mut rate_limit: std::collections::HashMap<char, std::time::Instant> =
-        std::collections::HashMap::new();
+    tracing::info!(
+        pipe = PIPE_NAME,
+        max_instances = MAX_PIPE_INSTANCES,
+        "Listening for handle requests"
+    );
+
+    // S5.4: rate-limit state, shared across per-connection workers.
+    let rate_limit: Arc<RateLimit> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    // Only the very first instance gets FILE_FLAG_FIRST_PIPE_INSTANCE; the rest
+    // must omit it or CreateNamedPipeW fails ERROR_ACCESS_DENIED against it.
+    let mut first_instance = true;
 
     loop {
-        let pipe = create_broker_pipe()?;
-        wait_for_client(pipe)?;
-        handle_one_connection(pipe, &mut rate_limit);
-        disconnect_and_close(pipe);
+        // FU-1: exit cleanly when the service control handler requests a stop.
+        if service::stop_requested() {
+            return Ok(());
+        }
+
+        // Create the next listening instance.  If all instances are busy this
+        // fails transiently — back off briefly and retry rather than exit.
+        let pipe = match create_broker_pipe(first_instance) {
+            Ok(pipe) => {
+                first_instance = false;
+                pipe
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "pipe instance unavailable; retrying shortly");
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+        };
+        if let Err(err) = wait_for_client(pipe) {
+            tracing::warn!(error = %err, "wait_for_client failed; dropping instance");
+            disconnect_pipe(pipe);
+            close_pipe(pipe);
+            continue;
+        }
+
+        // FU-1: a connection arriving after a stop was requested is the control
+        // handler's wake-up `CreateFile` — drop it and exit.
+        if service::stop_requested() {
+            disconnect_pipe(pipe);
+            close_pipe(pipe);
+            return Ok(());
+        }
+
+        // Hand the connected instance to a worker and immediately loop to
+        // create the next listener, so there's always an instance accepting.
+        let owned = OwnedHandle::new(pipe);
+        let worker_rate_limit = Arc::clone(&rate_limit);
+        std::thread::spawn(move || {
+            handle_one_connection(owned.raw(), &worker_rate_limit);
+            disconnect_pipe(owned.raw());
+            // `owned` drops here → CloseHandle frees the pipe instance, even if
+            // `handle_one_connection` panicked.
+        });
     }
 }
 
@@ -133,31 +232,48 @@ fn serve_pipe_requests() -> anyhow::Result<()> {
 /// GRANTED / FAILED) inside this function so the caller only needs to
 /// disconnect and loop.
 #[cfg(windows)]
-fn handle_one_connection(
-    pipe: windows::Win32::Foundation::HANDLE,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
-) {
+fn handle_one_connection(pipe: windows::Win32::Foundation::HANDLE, rate_limit: &RateLimit) {
     let Some(pid) = get_pipe_client_pid(pipe) else {
         audit_log("REJECTED", 0, None, None, "could not determine client PID");
         tracing::warn!("Could not determine client PID — rejecting");
         return;
     };
 
-    let exe_path = get_client_exe_path(pid);
-    if !check_client_identity(pid, exe_path.as_deref()) {
+    // WI-8.1: open the client process exactly ONCE here. The same handle is
+    // used to read the image name, make the identity decision, AND serve as
+    // the `DuplicateHandle` target — so a PID-reuse race cannot redirect the
+    // grant to a different (unverified) process between verify and duplicate.
+    let Some(client_process) = OwnedProcessHandle::open_client(pid) else {
+        audit_log("REJECTED", pid, None, None, "could not open client process");
+        tracing::warn!(pid, "Could not open client process — rejecting");
+        return;
+    };
+
+    // Read the exe path from the SAME handle we just opened (not a fresh
+    // PID→handle resolution). The identity decision uses the lossless path
+    // inside `verify_client_handle`; this `String` form is for the audit log
+    // only (display), so `to_string_lossy` is acceptable here.
+    let exe_path: Option<String> =
+        query_process_image_name(client_process.raw()).map(|os| os.to_string_lossy().into_owned());
+    if !check_client_identity(&client_process, pid, exe_path.as_deref()) {
         return;
     }
 
-    process_drive_request(pipe, pid, exe_path.as_deref(), rate_limit);
+    process_drive_request(pipe, &client_process, pid, exe_path.as_deref(), rate_limit);
 }
 
-/// Verify the client's identity (`verify_client` whitelist + Authenticode
-/// signature check).  Emits the appropriate REJECTED audit log on failure.
+/// Verify the client's identity (`verify_client_handle` name allowlist +
+/// Authenticode signature check).  Emits the appropriate REJECTED audit log on
+/// failure.
+///
+/// Takes the already-open `client_process` handle (WI-8.1) and verifies the
+/// image name read from **that** handle — the same handle the grant will
+/// duplicate into — rather than re-resolving the PID.
 ///
 /// Returns `true` when identity is confirmed, `false` otherwise.
 #[cfg(windows)]
-fn check_client_identity(pid: u32, exe: Option<&str>) -> bool {
-    if !verify_client(pid) {
+fn check_client_identity(client_process: &OwnedProcessHandle, pid: u32, exe: Option<&str>) -> bool {
+    if !verify_client_handle(client_process.raw()) {
         audit_log("REJECTED", pid, exe, None, "identity verification failed");
         tracing::warn!(pid, "Rejected broker client — not uffsd");
         return false;
@@ -186,11 +302,12 @@ fn check_client_identity(pid: u32, exe: Option<&str>) -> bool {
 #[cfg(windows)]
 fn process_drive_request(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     pid: u32,
     exe: Option<&str>,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
+    rate_limit: &RateLimit,
 ) {
-    match handle_pipe_request_with_rate_limit(pipe, pid, rate_limit) {
+    match handle_pipe_request_with_rate_limit(pipe, client_process, pid, rate_limit) {
         Ok(drive) => {
             audit_log("GRANTED", pid, exe, Some(drive), "handle issued");
         }
@@ -205,8 +322,9 @@ fn process_drive_request(
 #[cfg(windows)]
 fn handle_pipe_request_with_rate_limit(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     client_pid: u32,
-    rate_limit: &mut std::collections::HashMap<char, std::time::Instant>,
+    rate_limit: &RateLimit,
 ) -> anyhow::Result<char> {
     // Peek at the 1-byte request via the shared protocol parser.
     // `HandleRequest::parse` rejects non-ASCII bytes and non-alphabetic
@@ -224,88 +342,30 @@ fn handle_pipe_request_with_rate_limit(
         }
     };
 
-    // S5.4: Rate limit — 1 request per drive per 10 seconds
+    // S5.4: Rate limit — 1 request per drive per 10 seconds.  Decide under the
+    // lock (recovering a poisoned mutex), then act without holding it so no
+    // pipe I/O happens while the shared map is locked.
     let now = std::time::Instant::now();
-    if let Some(last) = rate_limit.get(&drive_letter)
-        && now.duration_since(*last).as_secs() < 10
-    {
+    let rate_limited = {
+        let mut guard = rate_limit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let limited = guard
+            .get(&drive_letter)
+            .is_some_and(|last| now.duration_since(*last).as_secs() < 10);
+        if !limited {
+            guard.insert(drive_letter, now);
+        }
+        limited
+    };
+    if rate_limited {
         write_pipe(pipe, &HandleResponse::error().encode())?;
         anyhow::bail!("Rate limited: drive {drive_letter} requested too recently");
     }
-    rate_limit.insert(drive_letter, now);
 
     // Delegate to actual handle brokering (drive letter already read)
-    handle_pipe_request_inner(pipe, client_pid, drive_letter)?;
+    handle_pipe_request_inner(pipe, client_process, client_pid, drive_letter)?;
     Ok(drive_letter)
-}
-
-/// S5.2: Verify Authenticode signature of client executable.
-#[cfg(windows)]
-fn verify_authenticode(exe_path: &str) -> bool {
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &format!(
-                "(Get-AuthenticodeSignature '{}').Status",
-                exe_path.replace('\'', "''")
-            ),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
-
-    match output {
-        Ok(out) => {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-            // Accept Valid and NotSigned (dev builds)
-            // Reject HashMismatch (tampered)
-            status != "HashMismatch"
-        }
-        Err(_) => true, // PowerShell not available — allow (graceful degradation)
-    }
-}
-
-/// Get the exe path for a PID (for audit logging).
-#[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "Win32 process-image-name query requires unsafe FFI"
-)]
-fn get_client_exe_path(pid: u32) -> Option<String> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
-
-    // SAFETY: OpenProcess is a read-only query with
-    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns an Error (caught by
-    // ok()?), not a dangling handle.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let mut buf = vec![0_u16; 4096];
-    let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    // SAFETY: `handle` is a valid open process handle; `buf` is a fixed 4096-wide
-    // allocation; `size` is an owned u32 whose address is exclusive to this call.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT(0),
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &raw mut size,
-        )
-    };
-    // SAFETY: `handle` was obtained from OpenProcess above and is no longer needed.
-    if let Err(close_err) = unsafe { CloseHandle(handle) } {
-        tracing::debug!(err = ?close_err, "CloseHandle failed in get_client_exe_path");
-    }
-    if result.is_err() || size == 0 {
-        return None;
-    }
-    // u32→usize lossless on 64-bit; use get() to satisfy indexing_slicing.
-    let len = size as usize;
-    buf.get(..len).map(String::from_utf16_lossy)
 }
 
 /// S5.3: Audit log entry to tracing (and Windows Event Log if available).
@@ -325,107 +385,7 @@ fn audit_log(action: &str, pid: u32, exe: Option<&str>, drive: Option<char>, det
     // Future: also write to Windows Event Log via ReportEventW
 }
 
-// ── Windows Service Install/Uninstall ───────────────────────────────────
-
-/// Register the broker as a Windows Service via `sc create`.
-///
-/// Writes a one-line result to stdout — this is a CLI admin command whose
-/// user-facing output is its only observable product, so `println!` is the
-/// idiomatic sink rather than the `tracing` subscriber used by the
-/// long-running service modes.
-#[cfg(windows)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI admin command — stdout is the user-visible result channel"
-)]
-fn install_service() -> anyhow::Result<()> {
-    let exe = std::env::current_exe()?;
-    let output = std::process::Command::new("sc")
-        .args([
-            "create",
-            "UffsAccessBroker",
-            &format!("binPath= \"{}\"", exe.display()),
-            "start=",
-            "demand",
-            "DisplayName=",
-            "UFFS Access Broker",
-        ])
-        .output()?;
-
-    if output.status.success() {
-        println!("Service installed. Start with: sc start UffsAccessBroker");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Install failed: {stderr}");
-    }
-    Ok(())
-}
-
-/// Deregister the broker Windows Service via `sc delete`.
-///
-/// See [`install_service`] for why stdout is the output channel.
-#[cfg(windows)]
-#[expect(
-    clippy::print_stdout,
-    reason = "CLI admin command — stdout is the user-visible result channel"
-)]
-fn uninstall_service() -> anyhow::Result<()> {
-    let output = std::process::Command::new("sc")
-        .args(["delete", "UffsAccessBroker"])
-        .output()?;
-
-    if output.status.success() {
-        println!("Service uninstalled.");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Uninstall failed: {stderr}");
-    }
-    Ok(())
-}
-
 // ── D7.3: Named Pipe Operations ─────────────────────────────────────────
-
-/// Create a named pipe with owner-only access.
-#[cfg(windows)]
-#[expect(unsafe_code, reason = "CreateNamedPipeW is an FFI call")]
-fn create_broker_pipe() -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
-    use std::os::windows::ffi::OsStrExt as _;
-
-    use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
-    use windows::Win32::System::Pipes::{
-        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
-    };
-    use windows::core::PCWSTR;
-
-    let pipe_name: Vec<u16> = std::ffi::OsStr::new(PIPE_NAME)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    // SAFETY: `pipe_name` is a NUL-terminated UTF-16 buffer owned for the
-    // duration of this call; all other arguments are plain integers or None.
-    let handle = unsafe {
-        CreateNamedPipeW(
-            PCWSTR(pipe_name.as_ptr()),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,    // max instances
-            1024, // out buffer
-            1024, // in buffer
-            0,    // default timeout
-            None, // default security (owner-only for elevated process)
-        )
-    };
-
-    if handle.is_invalid() {
-        anyhow::bail!(
-            "CreateNamedPipeW failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-
-    Ok(handle)
-}
 
 /// Wait for a client to connect to the pipe.
 #[cfg(windows)]
@@ -447,14 +407,11 @@ fn wait_for_client(pipe: windows::Win32::Foundation::HANDLE) -> anyhow::Result<(
     Ok(())
 }
 
-/// Disconnect client and close pipe handle.
+/// Disconnect any connected client from a pipe instance (the handle itself is
+/// closed separately — by [`close_pipe`] or the worker's [`OwnedHandle`] drop).
 #[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "DisconnectNamedPipe + CloseHandle are FFI calls"
-)]
-fn disconnect_and_close(pipe: windows::Win32::Foundation::HANDLE) {
-    use windows::Win32::Foundation::CloseHandle;
+#[expect(unsafe_code, reason = "DisconnectNamedPipe is an FFI call")]
+fn disconnect_pipe(pipe: windows::Win32::Foundation::HANDLE) {
     use windows::Win32::System::Pipes::DisconnectNamedPipe;
 
     // SAFETY: `pipe` is a valid HANDLE created by create_broker_pipe; the
@@ -462,6 +419,16 @@ fn disconnect_and_close(pipe: windows::Win32::Foundation::HANDLE) {
     if let Err(err) = unsafe { DisconnectNamedPipe(pipe) } {
         tracing::debug!(err = ?err, "DisconnectNamedPipe failed (may be already disconnected)");
     }
+}
+
+/// Close a pipe instance handle.  Used on the accept-loop error path where the
+/// instance isn't wrapped in an [`OwnedHandle`]; the worker path closes via the
+/// `OwnedHandle` drop instead.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "CloseHandle is an FFI call")]
+fn close_pipe(pipe: windows::Win32::Foundation::HANDLE) {
+    use windows::Win32::Foundation::CloseHandle;
+
     // SAFETY: `pipe` is about to be discarded; CloseHandle releases its OS
     // kernel-object reference.  Failure is logged but non-fatal.
     if let Err(err) = unsafe { CloseHandle(pipe) } {
@@ -486,66 +453,6 @@ fn get_pipe_client_pid(pipe: windows::Win32::Foundation::HANDLE) -> Option<u32> 
     (result.is_ok() && pid != 0).then_some(pid)
 }
 
-/// Verify that a client process is a legitimate uffs-daemon.
-#[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "Win32 process-image-name query requires unsafe FFI"
-)]
-fn verify_client(pid: u32) -> bool {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-        QueryFullProcessImageNameW,
-    };
-
-    // SAFETY: OpenProcess is a read-only query with
-    // PROCESS_QUERY_LIMITED_INFORMATION; failure returns Err (handled by the
-    // let-else) rather than an invalid handle.
-    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
-        return false;
-    };
-
-    let mut buf = vec![0_u16; 4096];
-    let mut size = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    // SAFETY: `handle` is a valid open process handle; `buf` is a 4096-wide
-    // owned allocation; `size` is a stack-owned u32 accessed exclusively here.
-    let result = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT(0),
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &raw mut size,
-        )
-    };
-    // SAFETY: `handle` came from OpenProcess above and is no longer used.
-    if let Err(close_err) = unsafe { CloseHandle(handle) } {
-        tracing::debug!(err = ?close_err, "CloseHandle failed in verify_client");
-    }
-
-    if result.is_err() || size == 0 {
-        return false;
-    }
-    // u32→usize lossless on 64-bit; get() keeps us out of indexing_slicing.
-    let len = size as usize;
-    let Some(slice) = buf.get(..len) else {
-        return false;
-    };
-    let exe_name = String::from_utf16_lossy(slice);
-
-    let name = std::path::Path::new(&exe_name)
-        .file_name()
-        .and_then(|file_name| file_name.to_str())
-        .unwrap_or("");
-
-    name == "uffsd"
-        || name == "uffsd.exe"
-        || name == "uffs-daemon.exe"
-        || name == "uffs-daemon"
-        || name.starts_with("uffs-daemon")
-        || name.starts_with("uffs_daemon")
-}
-
 // ── D7.5: Handle Brokering ──────────────────────────────────────────────
 
 /// Open the NTFS volume for a drive letter with read-only backup semantics.
@@ -553,8 +460,8 @@ fn verify_client(pid: u32) -> bool {
 #[expect(unsafe_code, reason = "CreateFileW is an FFI call")]
 fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
+        FILE_GENERIC_READ, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
     let volume_path = format!("\\\\.\\{drive_letter}:");
@@ -562,6 +469,12 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
 
     // SAFETY: `wide_path` is a NUL-terminated UTF-16 buffer owned for the
     // duration of this call; all other arguments are plain integers or None.
+    //
+    // The handle is duplicated into the (non-elevated) daemon, which reads
+    // the MFT through it via overlapped/IOCP I/O — so it must be opened
+    // `FILE_FLAG_OVERLAPPED` (and `SEQUENTIAL_SCAN`, matching the reader's
+    // direct-open flags in `uffs-mft::VolumeHandle`).  Without OVERLAPPED the
+    // daemon's IOCP reads on the vended handle fail.
     let create_file_result = unsafe {
         CreateFileW(
             windows::core::PCWSTR(wide_path.as_ptr()),
@@ -569,7 +482,7 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
             None,
         )
     };
@@ -578,49 +491,44 @@ fn open_volume_read_only(drive_letter: char) -> anyhow::Result<windows::Win32::F
 
 /// Duplicate `volume_handle` into the client process with read-only access.
 ///
-/// The caller retains ownership of `volume_handle` and is responsible for
-/// closing it; this function only opens / closes the transient client-process
-/// handle it needs for the `DuplicateHandle` call.
+/// **WI-8.1:** the duplicate target is the **same** `client_process` handle
+/// that was verified in `check_client_identity` — passed in by the caller, not
+/// re-opened from the PID. This closes the verify-then-reopen race: there is no
+/// window in which a recycled PID could point the grant at a different process.
+///
+/// The caller retains ownership of both `volume_handle` and `client_process`.
 #[cfg(windows)]
 #[expect(
     unsafe_code,
-    reason = "OpenProcess + GetCurrentProcess + DuplicateHandle + CloseHandle are FFI calls"
+    reason = "GetCurrentProcess + DuplicateHandle are FFI calls"
 )]
 fn duplicate_volume_handle_to_client(
     volume_handle: windows::Win32::Foundation::HANDLE,
-    client_pid: u32,
+    client_process: &OwnedProcessHandle,
 ) -> anyhow::Result<windows::Win32::Foundation::HANDLE> {
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
-
-    // SAFETY: `client_pid` is an integer; OpenProcess returns Err on invalid PID.
-    let client_process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, client_pid) }
-        .map_err(|err| anyhow::anyhow!("OpenProcess for client {client_pid} failed: {err}"))?;
+    use windows::Win32::System::Threading::GetCurrentProcess;
 
     // SAFETY: GetCurrentProcess is a Win32 pseudo-handle getter (never fails).
     let current_process = unsafe { GetCurrentProcess() };
 
     let mut client_handle = HANDLE::default();
-    // SAFETY: `current_process`, `volume_handle`, and `client_process` are all
-    // valid handles; `client_handle` is a stack-owned HANDLE passed via
+    // SAFETY: `current_process`, `volume_handle`, and `client_process.raw()`
+    // are all valid handles (the client handle is kept alive by the caller's
+    // `OwnedProcessHandle`); `client_handle` is a stack-owned HANDLE passed via
     // exclusive &raw mut.
     let dup_ok = unsafe {
         windows::Win32::Foundation::DuplicateHandle(
             current_process,
             volume_handle,
-            client_process,
+            client_process.raw(),
             &raw mut client_handle,
             FILE_GENERIC_READ.0,
             false,
             windows::Win32::Foundation::DUPLICATE_HANDLE_OPTIONS(0),
         )
     };
-
-    // SAFETY: `client_process` came from OpenProcess above; we're done with it.
-    if let Err(close_err) = unsafe { CloseHandle(client_process) } {
-        tracing::debug!(err = ?close_err, "CloseHandle(client_process) failed after dup");
-    }
 
     dup_ok.map_err(|err| anyhow::anyhow!("DuplicateHandle failed: {err}"))?;
     Ok(client_handle)
@@ -653,6 +561,7 @@ fn write_success_response(
 #[expect(unsafe_code, reason = "CloseHandle is an FFI call")]
 fn handle_pipe_request_inner(
     pipe: windows::Win32::Foundation::HANDLE,
+    client_process: &OwnedProcessHandle,
     client_pid: u32,
     drive_letter: char,
 ) -> anyhow::Result<()> {
@@ -668,7 +577,7 @@ fn handle_pipe_request_inner(
         }
     };
 
-    let dup_result = duplicate_volume_handle_to_client(volume_handle, client_pid);
+    let dup_result = duplicate_volume_handle_to_client(volume_handle, client_process);
 
     // Close our copy of the volume handle regardless of whether the duplicate
     // succeeded — the client has its own handle now, or the whole request

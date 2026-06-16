@@ -54,9 +54,14 @@ updates:
     open-pull-requests-limit: 5
     reviewers:
       - "githubrobbi"
+    # NOTE: only `dependencies` here. The `ci` *label* was removed because
+    # it does not exist in the repo, so Dependabot emitted a "label could
+    # not be found: ci" warning on every github-actions PR. The CI nature
+    # is already conveyed by the `ci(deps):` commit-message prefix below;
+    # the missing label added no value. (Re-add it here only if you first
+    # create the label via `gh label create ci`.)
     labels:
       - "dependencies"
-      - "ci"
     commit-message:
       prefix: "ci"
       include: "scope"

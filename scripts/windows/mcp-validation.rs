@@ -166,11 +166,23 @@ fn parse_args() -> ScriptArgs {
 }
 // ── MCP Session ─────────────────────────────────────────────────────────────
 
-// No per-request or per-test timeout — matches API/CLI harnesses, which
-// simply wait for the daemon.  Slow tests show up in the timing
-// summary; a genuinely hung daemon is an operator-visible problem
-// (Ctrl+C), not something the harness should mask with an arbitrary
-// budget.
+/// Per-request response budget.
+///
+/// **Why a timeout (changed from the original "wait forever"):** if the MCP
+/// server receives a request but never writes a matching-`id` response line
+/// *and* never closes its stdout, the reader thread stays alive (blocked on
+/// the next line) and so never clears the `pending` entry — leaving the
+/// caller's `recv()` blocked indefinitely. Because tests run on a worker pool,
+/// one such stuck request hangs the whole run at the final thread `join()`,
+/// with no indication of *which* request stalled (observed intermittently on
+/// the `mcp run` stdio path). A bounded wait turns that silent, unkillable
+/// hang into a single failed test that names the exact method + id, so the
+/// underlying MCP-server bug is diagnosable instead of masked.
+///
+/// The budget is generous (a cold daemon index build dominates the slowest
+/// legitimate calls) so it never trips on a merely-slow-but-progressing
+/// request — only on a response that is genuinely never coming.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One persistent MCP stdio session that safely multiplexes many
 /// concurrent JSON-RPC requests over a single child process.
@@ -305,9 +317,29 @@ impl McpSession {
     /// held only for the duration of `writeln!` + `flush` — never
     /// across a response wait.
     fn write_line(&self, line: &str) -> Result<()> {
+        // Frame the whole request — payload + the single `\n` line terminator —
+        // as ONE byte buffer and commit it with `write_all`, rather than
+        // `writeln!`.
+        //
+        // **Why (root cause of the intermittent 2/5 hang):** `writeln!` routes
+        // through `Write::write_fmt`, which may issue several underlying
+        // `write` calls and does **not** guarantee `write_all` semantics on a
+        // short write — on Windows `ChildStdin` (a synchronous anonymous pipe)
+        // under the 24-worker blast, a partial write returned `Ok` after
+        // committing only part of a line, silently dropping the rest. The MCP
+        // server then never saw that request at all (confirmed via its rmcp
+        // trace: in a failing run it received request ids 2–259 *except* the
+        // exact 3 that "timed out", with zero parse errors). `write_all` loops
+        // until every byte is committed, so one request == one atomic,
+        // fully-delivered line.
+        let mut buf = Vec::with_capacity(line.len().saturating_add(1));
+        buf.extend_from_slice(line.as_bytes());
+        buf.push(b'\n');
+
         let mut guard = self.stdin.lock().expect("stdin mutex poisoned");
         let si = guard.as_mut().context("stdin closed")?;
-        writeln!(si, "{line}")?;
+        si.write_all(&buf)
+            .with_context(|| format!("short/failed write of {}-byte request line", buf.len()))?;
         si.flush()?;
         Ok(())
     }
@@ -315,10 +347,12 @@ impl McpSession {
     /// Send a JSON-RPC request and wait for the matching response.
     ///
     /// Registers the pending entry **before** writing so the reader
-    /// cannot deliver a response before the caller is registered.  No
-    /// timeout — matches the API/CLI harnesses.  A dead reader thread
-    /// drops the sender and `recv()` returns `Disconnected`, which we
-    /// surface as the captured reader error.
+    /// cannot deliver a response before the caller is registered.  Waits
+    /// up to [`REQUEST_TIMEOUT`]: a dead reader thread drops the sender and
+    /// the wait returns `Disconnected` (surfaced as the captured reader
+    /// error); a server that simply never answers trips the timeout and
+    /// fails this one request naming the method + id, instead of hanging
+    /// the whole run.
     fn request(&self, method: &str, params: Option<Value>) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = sync_channel::<Value>(1);
@@ -344,9 +378,35 @@ impl McpSession {
             return Err(err);
         }
 
-        match rx.recv() {
+        match rx.recv_timeout(REQUEST_TIMEOUT) {
             Ok(resp) => Ok(resp),
-            Err(mpsc::RecvError) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No matching-id response arrived within the budget while the
+                // reader is still alive (stdout did not close). Reclaim the
+                // pending slot so a late response is dropped rather than
+                // mis-delivered, and fail loudly naming the exact method + id.
+                //
+                // **Self-check / regression hint:** this previously fired when
+                // a request *line* was silently lost on the harness→server
+                // stdin pipe (see `write_line`). If this recurs, first confirm
+                // whether the MCP server ever *received* this id — enable its
+                // trace (`UFFS_LOG=rmcp=trace`, `UFFS_LOG_FILE=…`) and grep for
+                // `received request id=<id>`. Absent ⇒ a write-side loss
+                // regressed; present-without-`response message` ⇒ a genuine
+                // server-side handler stall.
+                let _ = self
+                    .pending
+                    .lock()
+                    .expect("pending map poisoned")
+                    .remove(&id);
+                Err(anyhow::anyhow!(
+                    "MCP request timed out after {}s with no response: method={method} id={id} \
+                     (if reproducible, check the MCP rmcp trace for `received request id={id}` — \
+                     absent ⇒ request line lost on stdin write; present ⇒ server-side stall)",
+                    REQUEST_TIMEOUT.as_secs()
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let reason = self
                     .reader_error
                     .lock()

@@ -32,6 +32,7 @@ pub(crate) mod background_io;
 pub(crate) mod body_loader;
 pub(crate) mod cache_cleaner;
 pub(crate) mod cursor_store;
+pub(crate) mod guarded_load;
 pub(crate) mod journal_loop;
 pub(crate) mod journal_sink;
 pub(crate) mod policy;

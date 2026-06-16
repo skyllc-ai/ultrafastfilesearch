@@ -63,6 +63,146 @@ pub fn resolve_path_cached(
     resolve_path_inner(drive, record_idx, volume_prefix, Some(dir_cache))
 }
 
+/// Cache of "is this directory's resolved path ill-formed?", keyed by record
+/// index, parallel to [`DirCache`].
+///
+/// Kept separate so the existing string cache (and its many users) is
+/// untouched; both caches are consulted/filled in the same parent-chain walk by
+/// [`resolve_path_cached_with_malformed`], so the malformed bit stays coherent
+/// with the cached prefix even when the walk stops early at a cached ancestor.
+pub type MalformedCache = FxHashMap<u32, bool>;
+
+/// Construct a [`MalformedCache`] with the given capacity.
+#[must_use]
+pub(crate) fn malformed_cache_with_capacity(capacity: usize) -> MalformedCache {
+    MalformedCache::with_capacity_and_hasher(capacity, FxBuildHasher)
+}
+
+/// Resolve a record's full path, also reporting the WI-4.4 `malformed_path`
+/// bit.
+///
+/// `malformed_path` is `true` when any component of the resolved path
+/// (including the leaf) is ill-formed UTF-16 — its true bytes are not valid
+/// UTF-8 (an unpaired surrogate).
+///
+/// Uses the same `dir_cache` as [`resolve_path_cached`] for the path string and
+/// a parallel `mal_cache` for the per-directory malformed bit, so the extra
+/// cost over plain resolution is one `from_utf8` validation per *newly walked*
+/// component (cached ancestors contribute their stored bit for free).
+#[must_use]
+pub fn resolve_path_cached_with_malformed(
+    drive: &DriveCompactIndex,
+    record_idx: usize,
+    volume_prefix: &str,
+    dir_cache: &mut DirCache,
+    mal_cache: &mut MalformedCache,
+) -> (String, bool) {
+    let mut chain: Vec<usize> = Vec::with_capacity(8);
+    let mut current_idx = record_idx;
+    let mut depth = 0_u32;
+    let mut cache_hit_prefix: Option<String> = None;
+    // Malformed bit contributed by the cached ancestor (above the walk stop).
+    let mut cache_hit_malformed = false;
+
+    loop {
+        if depth > 256 {
+            break; // Prevent infinite loops
+        }
+        if let Some(cached) = dir_cache.get(&uffs_mft::len_to_u32(current_idx)) {
+            cache_hit_prefix = Some(cached.clone());
+            // The string cache and malformed cache are filled together, so a
+            // string hit implies a malformed-bit hit; default to `false` only
+            // defensively if the two ever diverge.
+            cache_hit_malformed = mal_cache
+                .get(&uffs_mft::len_to_u32(current_idx))
+                .copied()
+                .unwrap_or(false);
+            break;
+        }
+
+        let Some(record) = drive.records.get(current_idx) else {
+            break;
+        };
+
+        // Emptiness is judged on the LOSSLESS bytes, not the lossy `&str`:
+        // an ill-formed (surrogate) directory name has a non-empty byte form
+        // but an empty `&str` view, and must NOT be treated as a chain
+        // terminator — otherwise a crooked directory would truncate the path
+        // (and hide the malformity) of everything beneath it.
+        let bytes = record.name_bytes(&drive.names);
+        if bytes.is_empty() || bytes == b"." {
+            break;
+        }
+
+        chain.push(current_idx);
+
+        let parent = record.parent_idx;
+        if parent == u32::MAX {
+            break;
+        }
+        current_idx = parent as usize;
+        depth += 1;
+    }
+
+    let prefix = cache_hit_prefix.as_deref().unwrap_or(volume_prefix);
+    let suffix_len: usize = chain
+        .iter()
+        .filter_map(|&idx| {
+            let rec = drive.records.get(idx)?;
+            let bytes = rec.name_bytes(&drive.names);
+            if bytes.is_empty() || bytes == b"." {
+                None
+            } else {
+                // `name()` (lossy) is what is pushed into the displayed path;
+                // reserve for its length, which may differ from `bytes.len()`.
+                Some(1 + rec.name(&drive.names).len())
+            }
+        })
+        .sum();
+
+    let mut path = String::with_capacity(prefix.len() + suffix_len);
+    path.push_str(prefix);
+    // Accumulate malformity, seeded with the cached-ancestor contribution, and
+    // fill both caches as we build each progressively longer directory prefix.
+    let mut malformed = cache_hit_malformed;
+    let mut dir_path = String::from(prefix);
+    let mut dir_malformed = cache_hit_malformed;
+    for &idx in chain.iter().rev() {
+        let Some(rec) = drive.records.get(idx) else {
+            continue;
+        };
+        let bytes = rec.name_bytes(&drive.names);
+        if bytes.is_empty() || bytes == b"." {
+            continue;
+        }
+        // The single byte-level check: the lossless name bytes are not UTF-8.
+        let component_malformed = core::str::from_utf8(bytes).is_err();
+        malformed |= component_malformed;
+        // Displayed component is the lossy view (ill-formed → empty segment),
+        // but the path STRUCTURE and the malformed bit reflect the true name.
+        let name = rec.name(&drive.names);
+
+        if !path.ends_with('\\') && !path.is_empty() {
+            path.push('\\');
+        }
+        path.push_str(name);
+
+        // Build the cacheable directory prefix + malformed bit in lockstep.
+        if !dir_path.ends_with('\\') && !dir_path.is_empty() {
+            dir_path.push('\\');
+        }
+        dir_path.push_str(name);
+        dir_malformed |= component_malformed;
+        if rec.is_directory() {
+            let key = uffs_mft::len_to_u32(idx);
+            dir_cache.entry(key).or_insert_with(|| dir_path.clone());
+            mal_cache.entry(key).or_insert(dir_malformed);
+        }
+    }
+
+    (path, malformed)
+}
+
 /// Shared implementation for cached and uncached path resolution.
 fn resolve_path_inner(
     drive: &DriveCompactIndex,
@@ -171,6 +311,38 @@ fn resolve_path_inner(
 #[must_use]
 pub(crate) fn is_path_pattern(pattern: &str) -> bool {
     pattern.contains('\\') || pattern.contains('/')
+}
+
+/// Returns `Some(prefix)` if the pattern is a simple prefix query (e.g.,
+/// `win*`).
+///
+/// A prefix query:
+/// - Ends with `*`
+/// - Contains no other wildcards (`*`, `?`) before the trailing `*`
+/// - Contains no path separators
+/// - Is at least 3 characters (for trigram effectiveness)
+///
+/// The 3-char minimum is what makes the trigram pre-filter worthwhile: the
+/// trigram index keys on 3-byte windows, so a 1–2 char prefix would still
+/// require a full scan. Below the floor we fall through to the regular
+/// `search_compact_drive` path instead.
+#[must_use]
+pub fn is_prefix_pattern(pattern: &str) -> Option<&str> {
+    // Must end with exactly one trailing `*`.
+    let prefix = pattern.strip_suffix('*')?;
+
+    // Must have content and be at least 3 chars (for trigram).
+    if prefix.len() < 3 {
+        return None;
+    }
+
+    // Must not contain other wildcards or path separators.
+    if prefix.contains('*') || prefix.contains('?') || prefix.contains('\\') || prefix.contains('/')
+    {
+        return None;
+    }
+
+    Some(prefix)
 }
 
 /// Search using tree traversal for path patterns like `\photos\*.jpg`.
@@ -438,11 +610,10 @@ pub(crate) fn segment_matches(name: &str, segment: &str) -> bool {
 }
 
 /// Iterative glob matching: `*` matches any sequence, `?` matches one byte.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "all index accesses are bounds-checked by the while/if conditions"
-)]
-fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
+// `const fn` index accesses are bounds-checked by the surrounding
+// `while` / `if` conditions and validated at compile time, so the
+// `indexing_slicing` lint does not fire here.
+const fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
     let mut ti = 0_usize;
     let mut pi = 0_usize;
     let mut last_star_p = usize::MAX;
@@ -470,4 +641,43 @@ fn glob_match(text: &[u8], pattern: &[u8]) -> bool {
     }
 
     pi == pattern.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_prefix_pattern;
+
+    #[test]
+    fn prefix_accepts_simple_trailing_star() {
+        assert_eq!(is_prefix_pattern("win*"), Some("win"));
+        assert_eq!(is_prefix_pattern("kernel*"), Some("kernel"));
+    }
+
+    #[test]
+    fn prefix_rejects_short_prefix_below_trigram_floor() {
+        // < 3 chars: trigram index can't accelerate, so not a prefix query.
+        assert_eq!(is_prefix_pattern("ab*"), None);
+        assert_eq!(is_prefix_pattern("a*"), None);
+        assert_eq!(is_prefix_pattern("*"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_missing_trailing_star() {
+        // No trailing `*` => exact/substring, not a prefix query.
+        assert_eq!(is_prefix_pattern("windows"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_interior_wildcards() {
+        // A second wildcard before the trailing `*` is a glob, not a prefix.
+        assert_eq!(is_prefix_pattern("wi*n*"), None);
+        assert_eq!(is_prefix_pattern("w?n*"), None);
+    }
+
+    #[test]
+    fn prefix_rejects_path_separators() {
+        // Path-anchored patterns route through the tree walker instead.
+        assert_eq!(is_prefix_pattern("C:\\Win*"), None);
+        assert_eq!(is_prefix_pattern("dir/sub*"), None);
+    }
 }

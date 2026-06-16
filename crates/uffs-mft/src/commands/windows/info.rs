@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Volume information and discovery command handlers.
+//! `info` command handler — volume and `$MFT` diagnostics for one drive.
 //!
-//! These commands print human-readable volume / drive metadata to stdout,
-//! convert byte counters into KB/MB/percent for display, and use `Debug`
-//! formatting for opaque diagnostic enums.  The lint exemptions below capture
-//! those CLI-specific patterns; library code never inherits them.
+//! Prints human-readable volume metadata to stdout, converts byte counters
+//! into KB/MB/percent for display, and uses `Debug` formatting for opaque
+//! diagnostic enums.  The lint exemptions below capture those CLI-specific
+//! patterns; library code never inherits them.  The sibling `super::drives`
+//! module handles multi-drive discovery.
 #![expect(
     clippy::print_stdout,
     reason = "intentional user-facing CLI volume info output"
@@ -28,11 +29,11 @@
 )]
 
 use anyhow::{Context as _, Result};
-use tracing::info;
 use uffs_mft::{MftReader, bytes_to_mb_f64, u64_to_f64, usize_to_u64};
 
 use super::shared::drive_type_label;
-use crate::display::{format_bytes, format_duration, format_number_commas, truncate_string};
+use crate::cli::OutputFormat;
+use crate::display::{format_bytes, format_duration, format_number_commas};
 
 /// `info` CLI command — print MFT and volume diagnostics for `drive`.
 ///
@@ -45,6 +46,7 @@ pub(crate) async fn cmd_info(
     deep: bool,
     no_bitmap: bool,
     unique: bool,
+    format: OutputFormat,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -52,7 +54,7 @@ pub(crate) async fn cmd_info(
     use uffs_mft::platform::{VolumeHandle, detect_drive_type};
 
     let start_time = Instant::now();
-    info!(
+    debug!(
         drive = %drive,
         deep,
         no_bitmap,
@@ -90,7 +92,7 @@ pub(crate) async fn cmd_info(
         (u64_to_f64(vol_data.mft_valid_data_length) / u64_to_f64(volume_size_bytes)) * 100.0;
 
     // Log detailed metrics
-    info!(
+    debug!(
         drive = %drive,
         bytes_per_sector = vol_data.bytes_per_sector,
         bytes_per_cluster = vol_data.bytes_per_cluster,
@@ -98,14 +100,14 @@ pub(crate) async fn cmd_info(
         "📐 Volume geometry"
     );
 
-    info!(
+    debug!(
         drive = %drive,
         total_clusters = vol_data.total_clusters,
         volume_size_gb = format!("{:.2}", volume_size_gb),
         "💾 Volume capacity"
     );
 
-    info!(
+    debug!(
         drive = %drive,
         mft_start_lcn = vol_data.mft_start_lcn,
         mft_valid_length = vol_data.mft_valid_data_length,
@@ -123,7 +125,7 @@ pub(crate) async fn cmd_info(
         is_fragmented = extent_count > 1;
 
         if is_fragmented {
-            info!(
+            debug!(
                 drive = %drive,
                 extent_count,
                 "⚠️  MFT is fragmented across multiple extents"
@@ -143,7 +145,7 @@ pub(crate) async fn cmd_info(
                 );
             }
         } else {
-            info!(
+            debug!(
                 drive = %drive,
                 "✅ MFT is contiguous (single extent)"
             );
@@ -159,7 +161,7 @@ pub(crate) async fn cmd_info(
         free_records = record_count.saturating_sub(in_use_records);
         utilization = (u64_to_f64(in_use_records) / u64_to_f64(record_count)) * 100.0;
 
-        info!(
+        debug!(
             drive = %drive,
             in_use_records,
             free_records,
@@ -180,6 +182,41 @@ pub(crate) async fn cmd_info(
     }
 
     let elapsed = start_time.elapsed();
+
+    // Machine / compact consumers get the lightweight metadata summary and skip
+    // the rich human report (and the expensive `--deep` full-MFT scan below).
+    if matches!(format, OutputFormat::Json | OutputFormat::Table) {
+        let report = InfoReport {
+            drive: drive.to_string(),
+            drive_type: drive_type_str.to_owned(),
+            deep,
+            bytes_per_sector: u64::from(vol_data.bytes_per_sector),
+            bytes_per_cluster: u64::from(vol_data.bytes_per_cluster),
+            bytes_per_record: u64::from(vol_data.bytes_per_file_record_segment),
+            total_clusters: vol_data.total_clusters,
+            volume_size_bytes,
+            used_bytes: used_space_bytes,
+            free_bytes: free_space_bytes,
+            free_pct: free_percentage,
+            mft_start_lcn: vol_data.mft_start_lcn,
+            mft_size_bytes: vol_data.mft_valid_data_length,
+            mft_pct_of_volume: mft_percentage,
+            total_records: record_count,
+            in_use_records,
+            free_records,
+            utilization_pct: utilization,
+            extent_count: usize_to_u64(extent_count),
+            fragmented: is_fragmented,
+            warnings: warnings.clone(),
+            elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        };
+        if matches!(format, OutputFormat::Json) {
+            print_info_json(&report)?;
+        } else {
+            print_info_table(&report);
+        }
+        return Ok(());
+    }
 
     // Print human-readable summary
     println!("═══════════════════════════════════════════════════════════════");
@@ -537,218 +574,132 @@ pub(crate) async fn cmd_info(
     Ok(())
 }
 
-/// Per-drive summary used by [`cmd_drives`] to lay out the per-drive table.
+/// Lightweight `info` summary for `--format json` / `--format table`.
+///
+/// Captures the metadata-only metrics (no full-MFT scan); field names are
+/// stable JSON keys, byte counters keep a `_bytes` suffix.
 #[cfg(windows)]
-struct DriveInfo {
-    /// Drive letter (e.g. `C`, `D`).
-    letter: uffs_mft::platform::DriveLetter,
-    /// `true` when this drive hosts the running OS.
-    is_boot: bool,
-    /// Volume label as reported by `GetVolumeInformationW`.
-    label: String,
-    /// Human-readable drive type (`SSD`, `HDD`, `NVMe`, ...).
+#[derive(serde::Serialize)]
+struct InfoReport {
+    /// Drive letter (e.g. `"C"`).
+    drive: String,
+    /// Storage kind: `"NVMe"`, `"SSD"`, `"HDD"`, or `"Unknown"`.
     drive_type: String,
+    /// Whether a `--deep` scan was requested (deep stats are not in this view).
+    deep: bool,
+    /// Volume sector size in bytes.
+    bytes_per_sector: u64,
+    /// Volume cluster size in bytes.
+    bytes_per_cluster: u64,
+    /// `$MFT` file-record-segment size in bytes.
+    bytes_per_record: u64,
+    /// Total clusters on the volume.
+    total_clusters: u64,
     /// Total volume capacity in bytes.
-    total_size: u64,
-    /// Free space in bytes (per Win32 disk-free-space query).
-    free_space: u64,
-    /// Used space in bytes (`total_size - free_space`).
-    used_space: u64,
-    /// Used capacity percentage in `[0.0, 100.0]`.
-    used_pct: f64,
-    /// Size of the `$MFT` file in bytes.
-    mft_size: u64,
-    /// Number of allocated MFT records on this volume.
-    mft_records: u64,
+    volume_size_bytes: u64,
+    /// Used capacity in bytes.
+    used_bytes: u64,
+    /// Free capacity in bytes.
+    free_bytes: u64,
+    /// Free capacity percentage in `[0, 100]`.
+    free_pct: f64,
+    /// Starting LCN of the `$MFT`.
+    mft_start_lcn: u64,
+    /// `$MFT` valid data length in bytes.
+    mft_size_bytes: u64,
+    /// `$MFT` size as a percentage of the volume.
+    mft_pct_of_volume: f64,
+    /// Total allocated MFT records (size / record size).
+    total_records: u64,
+    /// In-use records per the `$MFT::$BITMAP`.
+    in_use_records: u64,
+    /// Free records per the `$MFT::$BITMAP`.
+    free_records: u64,
+    /// MFT utilization percentage in `[0, 100]`.
+    utilization_pct: f64,
+    /// `$MFT` fragment (extent) count.
+    extent_count: u64,
+    /// Whether the `$MFT` spans more than one extent.
+    fragmented: bool,
+    /// Metadata-only health warnings.
+    warnings: Vec<String>,
+    /// Probe wall-clock duration in milliseconds.
+    elapsed_ms: u64,
 }
 
-/// `drives` CLI command — list every NTFS drive on this system with its
-/// label, size, free space, and `$MFT` statistics.
+/// Emit the lightweight `info` summary as pretty-printed JSON on stdout.
+///
+/// # Errors
+/// Returns an error only if JSON serialisation fails (effectively never).
 #[cfg(windows)]
-pub(crate) async fn cmd_drives() -> Result<()> {
-    use tracing::debug;
-    use uffs_mft::platform::{VolumeHandle, detect_drive_type, detect_ntfs_drives, is_boot_drive};
-
-    info!("🔍 Detecting NTFS drives...");
-
-    let drives = detect_ntfs_drives();
-
-    if drives.is_empty() {
-        info!("❌ No NTFS drives found");
-        println!("No NTFS drives found.");
-    } else {
-        info!(
-            count = drives.len(),
-            "✅ Found {} NTFS drive(s)",
-            drives.len()
-        );
-
-        let mut drive_infos: Vec<DriveInfo> = Vec::new();
-
-        for drive in &drives {
-            // Detect drive type
-            let drive_type = detect_drive_type(*drive);
-            let drive_type_str = drive_type_label(drive_type, "???");
-
-            // Get volume label
-            let label = get_volume_label(*drive).unwrap_or_default();
-
-            // Try to get volume info for each drive
-            if let Ok(handle) = VolumeHandle::open(*drive) {
-                let vol_data = handle.volume_data();
-                let total_size = vol_data.total_clusters * u64::from(vol_data.bytes_per_cluster);
-                let free_space = vol_data.free_clusters * u64::from(vol_data.bytes_per_cluster);
-                let used_space = total_size.saturating_sub(free_space);
-                let used_pct = if total_size > 0 {
-                    (u64_to_f64(used_space) / u64_to_f64(total_size)) * 100.0
-                } else {
-                    0.0
-                };
-                let mft_size = vol_data.mft_valid_data_length;
-                let mft_records = mft_size / u64::from(vol_data.bytes_per_file_record_segment);
-
-                debug!(
-                    drive = %drive,
-                    label = %label,
-                    drive_type = drive_type_str,
-                    total_size,
-                    free_space,
-                    mft_records,
-                    "📁 Drive details"
-                );
-
-                drive_infos.push(DriveInfo {
-                    letter: *drive,
-                    is_boot: is_boot_drive(*drive),
-                    label,
-                    drive_type: drive_type_str.to_owned(),
-                    total_size,
-                    free_space,
-                    used_space,
-                    used_pct,
-                    mft_size,
-                    mft_records,
-                });
-            }
-        }
-
-        // Print table header
-        println!();
-        println!(
-            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
-        );
-        println!("                                    NTFS DRIVES SUMMARY");
-        println!(
-            "═══════════════════════════════════════════════════════════════════════════════════════════════════"
-        );
-        println!();
-        println!(
-            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>7} {:>10} {:>12}",
-            "Drive", "Label", "Type", "Size", "Used", "Free", "Used%", "MFT Size", "MFT Records"
-        );
-        println!(
-            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
-            "", "", "", "", "", "", "", "", ""
-        );
-
-        // Print each drive (* = boot/system drive)
-        for info in &drive_infos {
-            let drive_col = if info.is_boot {
-                format!("{}:*", info.letter)
-            } else {
-                format!("{}:", info.letter)
-            };
-            println!(
-                "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
-                drive_col,
-                truncate_string(&info.label, 16),
-                info.drive_type,
-                format_bytes(info.total_size),
-                format_bytes(info.used_space),
-                format_bytes(info.free_space),
-                info.used_pct,
-                format_bytes(info.mft_size),
-                format_number_commas(info.mft_records),
-            );
-        }
-
-        // Print totals
-        let total_size: u64 = drive_infos.iter().map(|d| d.total_size).sum();
-        let total_used: u64 = drive_infos.iter().map(|d| d.used_space).sum();
-        let total_free: u64 = drive_infos.iter().map(|d| d.free_space).sum();
-        let total_mft: u64 = drive_infos.iter().map(|d| d.mft_size).sum();
-        let total_records: u64 = drive_infos.iter().map(|d| d.mft_records).sum();
-        let total_used_pct = if total_size > 0 {
-            (u64_to_f64(total_used) / u64_to_f64(total_size)) * 100.0
-        } else {
-            0.0
-        };
-
-        println!(
-            "{:-<6} {:-<16} {:-<5} {:->10} {:->10} {:->10} {:->7} {:->10} {:->12}",
-            "", "", "", "", "", "", "", "", ""
-        );
-        println!(
-            "{:<6} {:<16} {:<5} {:>10} {:>10} {:>10} {:>6.1}% {:>10} {:>12}",
-            "TOTAL",
-            format!("({} drives)", drive_infos.len()),
-            "",
-            format_bytes(total_size),
-            format_bytes(total_used),
-            format_bytes(total_free),
-            total_used_pct,
-            format_bytes(total_mft),
-            format_number_commas(total_records),
-        );
-        println!();
-        println!("  * = boot/system drive");
-        println!();
-    }
-
+fn print_info_json(report: &InfoReport) -> Result<()> {
+    let json = serde_json::to_string_pretty(report).context("serialising info to JSON")?;
+    println!("{json}");
     Ok(())
 }
 
-/// Look up the volume label for `drive` via `GetVolumeInformationW`.
+/// Print the lightweight `info` summary as a complete aligned key/value table.
 ///
-/// Returns `None` if the call fails or the volume has no label set.
+/// Carries the same metadata as the human report (volume geometry + MFT
+/// structure), just in a flat parseable layout — no section banners.
 #[cfg(windows)]
-#[expect(
-    unsafe_code,
-    reason = "required for windows ffi call to GetVolumeInformationW"
-)]
-fn get_volume_label(drive: uffs_mft::platform::DriveLetter) -> Option<String> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt as _;
-
-    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
-    use windows::core::PCWSTR;
-
-    let root_path: Vec<u16> = format!("{drive}:\\")
-        .encode_utf16()
-        .chain(core::iter::once(0))
-        .collect();
-
-    let mut volume_name_buf = [0_u16; 261];
-
-    // SAFETY: `root_path` is a NUL-terminated UTF-16 buffer kept alive for the
-    // call duration; `volume_name_buf` is a writable 261-element stack buffer
-    // matching the Win32 maximum volume-name length; the remaining four
-    // optional out-parameters are documented as accepting `None`.
-    let result = unsafe {
-        GetVolumeInformationW(
-            PCWSTR::from_raw(root_path.as_ptr()),
-            Some(&mut volume_name_buf),
-            None,
-            None,
-            None,
-            None,
-        )
+fn print_info_table(report: &InfoReport) {
+    let frag = if report.fragmented {
+        format!("{} extents (fragmented)", report.extent_count)
+    } else {
+        format!("{} extent (contiguous)", report.extent_count)
     };
-
-    result.is_ok().then(|| {
-        let len = volume_name_buf.iter().position(|&c| c == 0).unwrap_or(0);
-        let name_slice = volume_name_buf.get(..len).unwrap_or(&[]);
-        let label = OsString::from_wide(name_slice);
-        label.to_string_lossy().to_string()
-    })
+    let rows: [(&str, String); 17] = [
+        (
+            "Drive",
+            format!("{}: ({})", report.drive, report.drive_type),
+        ),
+        (
+            "Bytes per sector",
+            format_number_commas(report.bytes_per_sector),
+        ),
+        (
+            "Bytes per cluster",
+            format_number_commas(report.bytes_per_cluster),
+        ),
+        (
+            "Bytes per MFT record",
+            format_number_commas(report.bytes_per_record),
+        ),
+        (
+            "Total clusters",
+            format_number_commas(report.total_clusters),
+        ),
+        ("Volume size", format_bytes(report.volume_size_bytes)),
+        ("Used", format_bytes(report.used_bytes)),
+        (
+            "Free",
+            format!(
+                "{} ({:.1}%)",
+                format_bytes(report.free_bytes),
+                report.free_pct
+            ),
+        ),
+        ("MFT start LCN", format_number_commas(report.mft_start_lcn)),
+        ("MFT size", format_bytes(report.mft_size_bytes)),
+        (
+            "MFT % of volume",
+            format!("{:.3}%", report.mft_pct_of_volume),
+        ),
+        ("Total records", format_number_commas(report.total_records)),
+        (
+            "In-use records",
+            format_number_commas(report.in_use_records),
+        ),
+        ("Free records", format_number_commas(report.free_records)),
+        ("Utilization", format!("{:.1}%", report.utilization_pct)),
+        ("Fragmentation", frag),
+        ("Probe time", format!("{} ms", report.elapsed_ms)),
+    ];
+    for (key, value) in &rows {
+        println!("{key:<22} {value}");
+    }
+    for warning in &report.warnings {
+        println!("⚠️  {warning}");
+    }
 }

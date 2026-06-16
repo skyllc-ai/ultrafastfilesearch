@@ -195,13 +195,14 @@ workspace release-cadence policy (release-automation §R5).
 The workspace ships `multiple-versions = "warn"` (not `"deny"`)
 deliberately.  Three reasons:
 
-1. **Polars commit pinning.**  `crates/uffs-polars` consumes a git-rev
-   pin of `pola-rs/polars` (see `crates/uffs-polars/Cargo.toml`); each
-   bump rotates which foundational crates land at which version
-   (hashbrown 0.15→0.17, foldhash 0.1→0.2, getrandom 0.2→0.4).  A
-   `deny`-level multiple-versions ban would force a skip-tree entry on
-   every polars bump — a maintenance hazard the warn-level posture
-   sidesteps cleanly.
+1. **Polars dependency churn.**  `crates/uffs-polars` consumes a
+   crates.io SemVer dependency on `polars` (see
+   `crates/uffs-polars/Cargo.toml`); each bump rotates which
+   foundational crates land at which version (hashbrown 0.15→0.17,
+   foldhash 0.1→0.2, getrandom 0.2→0.4).  A `deny`-level
+   multiple-versions ban would force a skip-tree entry on every polars
+   bump — a maintenance hazard the warn-level posture sidesteps
+   cleanly.
 2. **RustCrypto family fragmentation.**  `aes-gcm 0.10` pulls
    `crypto-common 0.1` + `cpufeatures 0.2` while `sha2 0.11` pulls
    `crypto-common 0.2` + `cpufeatures 0.3`.  Aligning these requires a

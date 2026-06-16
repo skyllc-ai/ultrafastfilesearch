@@ -14,6 +14,10 @@ The search box supports real-time search-as-you-type, multiple pattern
 syntaxes, search mode toggles, and full text-editing capabilities. Results
 update live as you type.
 
+![UFFS TUI: launch against a hot daemon, type a query, and browse real NTFS results live](../../assets/demo/uffs-tui.gif)
+
+> *Launch, type, and browse real NTFS results live against a hot daemon. Recorded against the real binary (see the [demo kit](../../scripts/dev/demo/README.md)).*
+
 ---
 
 ## 1. Search Patterns

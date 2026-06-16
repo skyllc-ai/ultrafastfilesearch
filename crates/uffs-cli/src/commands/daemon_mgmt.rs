@@ -13,10 +13,68 @@ use crate::commands::{daemon_load, daemon_tiering};
 
 /// Execute a daemon management action.
 ///
+/// Every command that mutates daemon state (stop, kill, restart, load,
+/// preload, hibernate, forget) requires an elevated shell:
+/// - **Windows**: Administrator (UAC-elevated) token.
+/// - **Unix** (Linux, macOS, …): effective user ID 0 (root / sudo).
+///
+/// `uffsd` runs with elevated privileges to read raw filesystem data;
+/// a non-privileged caller must not stop or restart it — doing so would
+/// kill the running daemon with no safe path to bring it back.
+///
+/// Read-only queries (`status`, `stats`, `status_drives`) are always
+/// permitted without elevation.  `daemon start --elevate` is also
+/// permitted on Windows; it opts in to an explicit UAC prompt.
+///
 /// # Errors
 ///
-/// Returns an error if the operation fails.
+/// Returns an error if the operation fails, or if a mutating command is
+/// attempted from a non-elevated shell.
 pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
+    // Elevation gate — checked here, once, before any action is dispatched,
+    // so no individual subcommand handler can accidentally bypass it.
+    {
+        let is_read_only_or_uac_start = matches!(
+            action,
+            DaemonAction::Status
+                | DaemonAction::Stats
+                | DaemonAction::StatusDrives
+                | DaemonAction::Start { elevate: true, .. }
+        );
+        if !is_read_only_or_uac_start && !uffs_mft::is_elevated() {
+            #[cfg(windows)]
+            anyhow::bail!(
+                "Daemon management commands require an elevated (Administrator) shell.\n\n\
+                 uffsd runs with admin privileges to read the NTFS Master File Table.\n\
+                 A non-elevated process must not stop or restart it — doing so would\n\
+                 kill the running daemon with no way to bring it back.\n\n\
+                 To run this command, pick one:\n\
+                 \x20 1. Relaunch PowerShell / cmd as Administrator\n\
+                 \x20    (right-click \u{2192} \"Run as administrator\"), then retry.\n\
+                 \x20 2. For `daemon start`, add --elevate to get a UAC prompt:\n\
+                 \x20      uffs daemon start --elevate\n\
+                 \x20 3. Install the broker service (one-time setup, no future UAC):\n\
+                 \x20      uffs-broker --install"
+            );
+            #[cfg(unix)]
+            anyhow::bail!(
+                "Daemon management commands require root privileges.\n\n\
+                 uffsd runs as root to read raw filesystem data.\n\
+                 A non-root process must not stop or restart it — doing so would\n\
+                 kill the running daemon with no way to bring it back.\n\n\
+                 To run this command, prefix it with sudo:\n\
+                 \x20  sudo uffs daemon <subcommand>"
+            );
+            // Fallback for platforms that are neither Windows nor Unix
+            // (e.g. WASM, bare-metal targets — should not arise in practice).
+            #[cfg(not(any(windows, unix)))]
+            anyhow::bail!(
+                "Daemon management commands require elevated privileges.\n\
+                 Please run this command as a privileged user."
+            );
+        }
+    }
+
     match action {
         DaemonAction::Start {
             mft_file,
@@ -64,7 +122,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 #[expect(
     clippy::use_debug,
-    reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
+    reason = "[diag] spawn-chain dump — gated behind --log-level debug/trace"
 )]
 fn daemon_start(
     mft_files: &[std::path::PathBuf],
@@ -81,27 +139,24 @@ fn daemon_start(
         return Ok(());
     }
 
-    // [diag] Show what the CLI received before building spawn args.
-    println!(
-        "[diag] daemon_start: drives={drives:?}  log_level={log_level:?}  log_file={log_file:?}"
-    );
-
     // Build spawn args — forward raw, let daemon handle discovery.
-    let mut spawn_args = Vec::new();
+    // Use `OsString` so non-UTF-8 / WTF-8 paths survive losslessly to the
+    // spawned daemon's argv (WI-4.2).
+    let mut spawn_args: Vec<std::ffi::OsString> = Vec::new();
     if let Some(dir) = data_dir {
-        spawn_args.push("--data-dir".to_owned());
-        spawn_args.push(dir.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--data-dir"));
+        spawn_args.push(dir.as_os_str().to_os_string());
     }
     for mft_path in mft_files {
-        spawn_args.push("--mft-file".to_owned());
-        spawn_args.push(mft_path.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--mft-file"));
+        spawn_args.push(mft_path.as_os_str().to_os_string());
     }
     for letter in drives {
-        spawn_args.push("--drive".to_owned());
-        spawn_args.push(letter.to_string());
+        spawn_args.push(std::ffi::OsString::from("--drive"));
+        spawn_args.push(std::ffi::OsString::from(letter.to_string()));
     }
     if no_cache {
-        spawn_args.push("--no-cache".to_owned());
+        spawn_args.push(std::ffi::OsString::from("--no-cache"));
     }
 
     // ── Env-var forwarding ────────────────────────────────────────────────
@@ -135,8 +190,8 @@ fn daemon_start(
         log_level.to_owned()
     };
     if effective_log_level != "info" {
-        spawn_args.push("--log-level".to_owned());
-        spawn_args.push(effective_log_level.clone());
+        spawn_args.push(std::ffi::OsString::from("--log-level"));
+        spawn_args.push(std::ffi::OsString::from(effective_log_level.clone()));
     }
 
     // Effective log file: CLI arg wins; fall back to $UFFS_LOG_DIR/uffsd.log.
@@ -152,17 +207,26 @@ fn daemon_start(
         .map(std::path::Path::to_path_buf)
         .or(derived_log_file);
     if let Some(path) = &effective_log_file {
-        spawn_args.push("--log-file".to_owned());
-        spawn_args.push(path.to_string_lossy().into_owned());
+        spawn_args.push(std::ffi::OsString::from("--log-file"));
+        spawn_args.push(path.as_os_str().to_os_string());
     }
 
-    // [diag] Print every diagnostic variable so we can trace the full chain.
-    println!("[diag] env  RUST_LOG    = {env_rust_log:?}");
-    println!("[diag] env  UFFS_LOG    = {env_uffs_log:?}");
-    println!("[diag] env  UFFS_LOG_DIR= {env_uffs_log_dir:?}");
-    println!("[diag] eff  log_level   = {effective_log_level:?}");
-    println!("[diag] eff  log_file    = {effective_log_file:?}");
-    println!("[diag] full spawn_args  = {spawn_args:?}");
+    // [diag] Spawn-chain dump for tracing elevation/env-forwarding issues.
+    // Gated behind an explicit debug/trace log level: on the default
+    // `daemon start` happy path users see clean output, not internals
+    // (2026-06-12 fresh-VM dry run flagged the unconditional version as
+    // looking like leftover debug logging).
+    if matches!(effective_log_level.as_str(), "debug" | "trace") {
+        println!(
+            "[diag] daemon_start: drives={drives:?}  log_level={log_level:?}  log_file={log_file:?}"
+        );
+        println!("[diag] env  RUST_LOG    = {env_rust_log:?}");
+        println!("[diag] env  UFFS_LOG    = {env_uffs_log:?}");
+        println!("[diag] env  UFFS_LOG_DIR= {env_uffs_log_dir:?}");
+        println!("[diag] eff  log_level   = {effective_log_level:?}");
+        println!("[diag] eff  log_file    = {effective_log_file:?}");
+        println!("[diag] full spawn_args  = {spawn_args:?}");
+    }
 
     if !cfg!(windows) && spawn_args.is_empty() {
         anyhow::bail!(
@@ -509,11 +573,11 @@ fn daemon_restart() -> Result<()> {
             .drives()
             .with_context(|| "Failed to query drives before restart")?;
 
-        let mut args = Vec::new();
+        let mut args: Vec<std::ffi::OsString> = Vec::new();
         for dr in &drives_resp.drives {
             if let Some(path) = dr.source.strip_prefix("file:") {
-                args.push("--mft-file".to_owned());
-                args.push(path.to_owned());
+                args.push(std::ffi::OsString::from("--mft-file"));
+                args.push(std::ffi::OsString::from(path));
             }
         }
 
@@ -541,7 +605,7 @@ fn daemon_restart() -> Result<()> {
         "Restarting daemon with {} data source(s)...",
         spawn_args
             .iter()
-            .filter(|arg| *arg == "--mft-file" || *arg == "--data-dir")
+            .filter(|arg| arg.as_os_str() == "--mft-file" || arg.as_os_str() == "--data-dir")
             .count()
     );
 

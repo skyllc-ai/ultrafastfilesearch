@@ -22,6 +22,12 @@ mod bitmap;
 /// workspace with a `#[repr(transparent)]` newtype that canonicalises
 /// case and rejects non-ASCII-letter input at the parse boundary.
 pub mod drive_letter;
+/// Drive-prefix splitting for search patterns.
+///
+/// The single canonical parser shared by the CLI parse layer and the
+/// daemon dispatch safety net, so both agree on what a leading `X:`
+/// means.
+pub mod drive_pattern;
 mod extents;
 /// Logical Cluster Number newtype — signed cluster identifier used
 /// by `FSCTL_GET_RETRIEVAL_POINTERS` and the on-disk data-run decoder.
@@ -31,6 +37,11 @@ mod extents;
 /// detection through [`Lcn::is_hole`] / [`Lcn::is_zero`] instead of
 /// open-coded `< 0` / `== 0` checks at every call site.
 pub mod lcn;
+/// Native Windows process introspection for the self-update detector.
+///
+/// Image path + pid enumeration — keeps the `unsafe` FFI out of `uffs-cli`.
+#[cfg(windows)]
+pub mod process;
 mod system;
 /// `$UpCase` table reading from live NTFS volume.
 pub mod upcase;
@@ -39,11 +50,15 @@ mod volume;
 
 pub use bitmap::MftBitmap;
 pub use drive_letter::{DriveLetter, DriveLetterError};
+pub use drive_pattern::split_drive_prefix;
 pub use extents::MftExtent;
 pub use lcn::Lcn;
 // Export DriveType unconditionally (needed for tests), but Windows-specific functions only on
 // Windows
 pub use system::DriveType;
+// Elevation check — available on all platforms (Windows: UAC token check;
+// Unix: geteuid() == 0).  Both the daemon CLI gate and uffs-daemon use this.
+pub use system::is_elevated;
 // is_volume_read_only — Windows-only (non-Windows stub was removed because
 // every caller in this crate is #[cfg(windows)]-gated).  Consumed by the
 // uffs-mft bin (commands/windows/incremental.rs) via the external-style
@@ -54,16 +69,20 @@ pub use system::is_volume_read_only;
 pub(crate) use system::u32_size_of;
 // System memory query — available on all platforms
 pub use system::{SystemMemory, query_system_memory};
-// Public API surface — consumed cross-crate (uffs-daemon), by the
-// uffs-mft bin (commands/) via `uffs_mft::platform::*` external-style
+// Windows-specific public API surface — consumed cross-crate (uffs-daemon),
+// by the uffs-mft bin (commands/) via `uffs_mft::platform::*` external-style
 // paths, and as platform utility helpers (infer_drive_from_path,
 // volume_root_path are stable public API restored from the Phase 2.5
 // demotion in commit 1529cb162).
 #[cfg(windows)]
 pub use system::{
     detect_boot_drive, detect_drive_type, detect_ntfs_drives, infer_drive_from_path, is_boot_drive,
-    is_elevated, volume_root_path,
+    volume_root_path,
 };
+// Crate-internal: the USN journal open (FU-2b) and `$MFT` extent read (FU-3)
+// adopt the same broker volume handle the MFT read uses.
+#[cfg(windows)]
+pub(crate) use volume::try_adopt_broker_handle;
 #[cfg(windows)]
 pub(crate) use volume::{
     IOCP_WAIT_COMPLETION_DEADLINE, IOCP_WAIT_POLL_INTERVAL_MS, WAIT_TIMEOUT_ERROR_CODE,
@@ -73,7 +92,7 @@ pub(crate) use volume::{
 // `VolumeHandle::volume_data()` returns `&NtfsVolumeData` so the latter
 // must be at least as public as the former.
 #[cfg(windows)]
-pub use volume::{NtfsVolumeData, VolumeHandle};
+pub use volume::{NtfsVolumeData, VolumeHandle, register_broker_handle};
 
 #[cfg(test)]
 #[cfg(windows)]
@@ -161,6 +180,28 @@ mod tests {
         assert_eq!(drive_type.prefetch_buffers(), 2);
         assert!(!drive_type.is_high_performance());
         assert!(!drive_type.benefits_from_parallel_parsing());
+    }
+
+    #[test]
+    fn removable_and_virtual_take_conservative_hdd_profile() {
+        // Removable (USB / SD / MMC) and Virtual (VHD / RAM-backed): the bus or
+        // the opaque backing medium is the bottleneck, so both mirror the HDD
+        // profile — small chunks, few buffers, low concurrency, and never
+        // high-performance or parallel-parse-friendly.
+        for drive_type in [DriveType::Removable, DriveType::Virtual] {
+            assert_eq!(
+                drive_type.optimal_concurrency(),
+                DriveType::Hdd.optimal_concurrency()
+            );
+            assert_eq!(
+                drive_type.optimal_io_size(),
+                DriveType::Hdd.optimal_io_size()
+            );
+            assert_eq!(drive_type.optimal_chunk_size(), 1024 * 1024);
+            assert_eq!(drive_type.prefetch_buffers(), 2);
+            assert!(!drive_type.is_high_performance());
+            assert!(!drive_type.benefits_from_parallel_parsing());
+        }
     }
 
     #[test]

@@ -9,8 +9,12 @@ benchmark and profiling scripts.
 > head-to-head against Everything and the UFFS C++ reference, see the
 > [**benchmark hub**](../benchmarks/) — specifically the current
 > canonical report
-> [`2026-04-v0.5.66-vs-everything-and-cpp.md`](../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md).
-> This page focuses on UFFS's own per-drive and per-phase numbers.
+> [`2026-06-v0.5.120-vs-everything.md`](../benchmarks/2026-06-v0.5.120-vs-everything.md)
+> (the April v0.5.66 snapshot is
+> [archived](../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md)).
+> This page focuses on UFFS's own per-drive and per-phase numbers; the
+> deep-dive sections below are dated forensic captures and carry their
+> version tags.
 
 > **See also:** [Advanced Diagnostics](advanced-diagnostics.md) ·
 > [Daemon](daemon.md) · [Cache & Data Sources](cache-and-data.md) ·
@@ -59,7 +63,7 @@ A benchmark is only useful if readers can see both the fastest successful run an
 | SATA HDD | WD 8 TB × 2 (WDC WD82PURZ, M: and S:) |
 | USB storage | SanDisk Extreme 58 GB USB stick (G:) |
 | Power profile | AMD Ryzen High Performance |
-| UFFS version | 0.5.62 / 0.5.64 (documented tables pinned to v0.5.4 until a re-bench refreshes them — see §5a for current cross-tool numbers) |
+| UFFS version | 0.5.120 (latest cross-tool + full-scan-export captures; older per-phase tables carry their version tags — see §5a for current cross-tool numbers) |
 
 ### Drives Under Test
 
@@ -94,7 +98,7 @@ Delete cache files            Cache files stay on disk      Index in memory
 Read raw MFT from disk        Deserialize .iocp cache       Query directly
 Parse → build index           → build index                 ↓
 Write .iocp cache             ↓                             Results
-↓                             Results                       (29 ms–1.1 s CLI e2e)
+↓                             Results                       (17 ms–1.1 s CLI e2e)
 Results
 (seconds to minutes)          (~0.6–6.9 s)
 ```
@@ -183,7 +187,8 @@ yet — they are expected to scale proportionally.
 > latency is unchanged (0–3 ms), but CLI end-to-end now has a ~28 ms
 > Windows process-creation floor that v0.5.4 did not report (the
 > Phase 1 thin-client shaved the cold-spawn from ~50 ms to ~28 ms;
-> per-process startup now dominates sub-30 ms queries).  The
+> per-process startup now dominates sub-30 ms queries).  On v0.5.120
+> that floor has dropped further to **17–18 ms** (see §5a).  The
 > `*` top-100 path has separately regressed from 163 ms to 1 112 ms
 > and is tracked as Phase 5 target #2 (bounded-heap top-N) — see
 > [cross-tool benchmark analysis](../research/cross-tool-benchmark-analysis.md) §7.
@@ -217,40 +222,44 @@ for each drive.  The Cold→Hot ratio is the primary performance metric.
 
 ---
 
-## 5a  Cross-Tool vs Everything (v0.5.66, C+D apples-to-apples)
+## 5a  Cross-Tool vs Everything (v0.5.120, C+D apples-to-apples)
 
-After Phase 4 (regex-ext + parallel path_only) shipped in v0.5.66,
-UFFS wins **12/12 cells at p50** against Everything on the
-apples-to-apples C+D benchmark — including the new `ext_regex_alt`
-row. Source: [`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt:580-625`](../benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt) (n=30, HOT, file sink).
+On v0.5.120 UFFS wins **30/30 cells at p50** against Everything
+(1.4.1.1032) across C/D/F/G and the combined index — median ratio
+**0.36× (~2.8× faster)**. The C+D subset below is the apples-to-apples
+continuation of the series this page has tracked since v0.5.66.
+Source: [`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](../benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) (n=10, HOT, file sink); full four-drive table in the
+[current canonical report](../benchmarks/2026-06-v0.5.120-vs-everything.md).
 
 | Drive | Pattern         | UFFS p50 | ES p50 | UFFS/ES | Rows    |
 |-------|-----------------|---------:|-------:|--------:|--------:|
-| C:    | exact           |    31 ms |  73 ms | **0.42×** |      26 |
-| C:    | prefix          |    99 ms |  97 ms | 1.02×¹    |  34 273 |
-| C:    | ext_rare        |    29 ms |  59 ms | **0.49×** |       0 |
-| C:    | ext_dll         |    97 ms | 229 ms | **0.42×** | 167 212 |
-| C:    | **ext_regex_alt** | **40 ms** | 76 ms | **0.53×** |  15 559 |
-| C:    | substring       |    67 ms | 105 ms | **0.64×** |  26 692 |
-| D:    | exact           |    30 ms |  65 ms | **0.46×** |       3 |
-| D:    | prefix          |    52 ms |  69 ms | **0.75×** |   8 732 |
-| D:    | ext_rare        |    30 ms |  60 ms | **0.50×** |      11 |
-| D:    | ext_dll         |    48 ms | 111 ms | **0.43×** |  44 529 |
-| D:    | **ext_regex_alt** | **39 ms** | 75 ms | **0.52×** |  10 438 |
-| D:    | substring       |    55 ms |  83 ms | **0.66×** |  12 458 |
+| C:    | exact           |    20 ms |  69 ms | **0.29×** |      30 |
+| C:    | prefix          |    80 ms | 102 ms | **0.78×**¹ |  38 285 |
+| C:    | ext_rare        |    19 ms |  59 ms | **0.32×** |       1 |
+| C:    | ext_dll         |    96 ms | 237 ms | **0.41×** | 166 684 |
+| C:    | **ext_regex_alt** | **30 ms** | 82 ms | **0.37×** |  18 085 |
+| C:    | substring       |    39 ms | 105 ms | **0.37×** |  25 320 |
+| D:    | exact           |    20 ms |  67 ms | **0.30×** |       3 |
+| D:    | prefix          |    39 ms |  75 ms | **0.52×** |   8 732 |
+| D:    | ext_rare        |    19 ms |  61 ms | **0.31×** |      11 |
+| D:    | ext_dll         |    37 ms | 117 ms | **0.32×** |  44 529 |
+| D:    | **ext_regex_alt** | **26 ms** | 74 ms | **0.35×** |  10 438 |
+| D:    | substring       |    35 ms |  85 ms | **0.41×** |  12 458 |
 
-¹ `C:prefix` is a **UFFS win once measured properly**: the forensic
-100-round interleaved run in `Output_cache_newest:310-412` shows
-UFFS 94.5 ms vs ES 95.7 ms (0.99×).  The 30-round 99/97 ms above is
-sampling noise.  Full table in the cross-tool analysis doc — UFFS
-actually wins **12/12** cells at p50.
+¹ `C:prefix` was a statistical tie in every snapshot through v0.5.66
+(99 ms vs 97 ms); on v0.5.120 it is a clear win.
 
-Median ratio **0.51× (UFFS ~1.96× faster)**.  Full analysis in
+Every one of these 12 cells improved over the
+[archived v0.5.66 snapshot](../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md)
+— median **−33%** (substring C: 67 → 39 ms) — while Everything's own
+numbers held roughly flat. Historical v0.5.66 table and analysis in
 [cross-tool benchmark analysis](../research/cross-tool-benchmark-analysis.md).
 
-> **Note:** The ~28 ms UFFS floor on every small-result cell is the
-> Windows CLI process-creation tax measured in
-> `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/research/perf-phase2-measurement-plan.md` (Null-binary matrix
+> **Note:** The 17–20 ms UFFS floor on every small-result cell is the
+> Windows CLI process-creation + pipe tax — exposed directly by the
+> G-drive empty-result cells in the same v0.5.120 capture (17–18 ms
+> p50 for zero rows).  It was ~28 ms on v0.5.66 (measured in
+> `@/Users/rnio/Private/Github/UltraFastFileSearch/docs/research/perf-phase2-measurement-plan.md`, Null-binary matrix
 > refresh).  The daemon itself responds in 0–3 ms on targeted queries.
 
 ---
@@ -346,7 +355,8 @@ The `--profile` flag breaks down where time is spent inside the daemon.
 > `*system32*`) skip the full scan and return in **0–3 ms daemon-side**
 > on v0.5.66 — **unchanged from v0.5.4**.  The `*` in-memory scan rate
 > is still ~167 M rec/s when not materialising; end-to-end CSV export
-> at 26 M rows is **1.72 M rec/s** (see §7).
+> of the full estate is **≈ 1.95 M rec/s on v0.5.120** (23.3 M rows in
+> 12.0 s; was 1.72 M rec/s on v0.5.66 — see §7).
 
 ### Per-Drive Profile (Cold Start)
 
@@ -368,9 +378,31 @@ The `--profile` flag breaks down where time is spent inside the daemon.
 ## 7  Bulk Retrieval Throughput
 
 Bulk retrieval measures how fast UFFS can export large result sets.
-Two output modes are tested: shell pipe (stdout) and direct file write (`--out-dir`).
 
-### CSV Export — Live Drives (7 drives, 25.9M records, `--out-dir`)
+### Full-Scan CSV Export — v0.5.120 current (all 7 drives, `*` → file, HOT, p50, n=10)
+
+Source: [`docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv`](../benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv)
+(`--hide-system --hide-ads`, end-to-end through the daemon pipe):
+
+| Drive | Wall (p50) | Rows written | Throughput |
+|-------|-----------:|-------------:|-----------:|
+| C: | 1.59 s | 3,295,508 | 2.08 M rows/s |
+| D: | 2.26 s | 4,772,519 | 2.11 M rows/s |
+| E: | 1.44 s | 2,928,074 | 2.03 M rows/s |
+| F: | 0.93 s | 2,124,007 | 2.29 M rows/s |
+| G: | 0.03 s | 15,126 | — (floor-bound) |
+| M: | 0.84 s | 1,908,750 | 2.28 M rows/s |
+| S: | 3.83 s | 8,278,062 | 2.16 M rows/s |
+| **All 7** | **11.98 s** | **23,322,046** | **≈ 1.95 M rows/s** |
+
+The complete estate streams to CSV in **12.0 s** — the largest single
+drive (S:, 8.3 M rows) exports in **3.83 s**, where the v0.5.4 harness
+below measured 25.6 s for the same drive (~6× improvement).
+
+### CSV Export Tiers — v0.5.4 historical (7 drives, 25.9M records, `--out-dir`)
+
+Kept for the tier-scaling shape; absolute rates are superseded by the
+v0.5.120 table above.
 
 | Tier | Rows | Avg Time | Rows/sec |
 |------|-----:|---------:|---------:|
@@ -381,15 +413,17 @@ Two output modes are tested: shell pipe (stdout) and direct file write (`--out-d
 | 1M | 1,000,001 | 3.4 s | 292k/s |
 | ALL (per-drive) | 8.3M | 25.6 s | **326k/s** |
 
-### Pipe vs Direct File Write
+### Pipe vs Direct File Write (v0.5.4 historical)
 
 | Mode | 8.3M rows | Rows/sec | Relative |
 |------|----------:|---------:|---------:|
 | Pipe (stdout) | 68 s | 122k/s | 1.0× |
 | `--out-dir` | 25.6 s | 323k/s | **2.6×** |
 
-> **Recommendation:** For exports exceeding ~100k rows, use `--out-dir`
-> to bypass the shell pipe bottleneck.
+> **Recommendation:** For exports exceeding ~100k rows, write to a file
+> (`--out` / `--out-dir`) to bypass the shell pipe bottleneck.  The
+> direct-write advantage still holds on the current pipeline; absolute
+> rates are the v0.5.120 table above.
 
 ### CSV vs JSON
 
@@ -549,12 +583,16 @@ C++ baseline runs warm:
 > **Context:** The C++ times are warm (OS has cached MFT pages); the
 > Rust times are cold (MFT read from disk + full parse + cache write).
 > With the daemon running (HOT), Rust answers the same queries in
-> **29–32 ms CLI end-to-end for targeted queries** (all 7 drives, v0.5.66 —
-> daemon-side 0–3 ms + ~28 ms cold-spawn tax).  Unfiltered `*` with
+> **17–39 ms CLI end-to-end for targeted single-drive queries** (v0.5.120;
+> v0.5.66 measured 29–32 ms — daemon-side 0–3 ms + the Windows
+> cold-spawn tax).  Unfiltered `*` with
 > `--limit 100` is 1 112 ms CLI e2e on v0.5.66 (was 163 ms on v0.5.4
-> — regression tracked in the cross-tool doc).
+> — regression tracked in the archived cross-tool doc; not re-measured
+> since).
 > The C++ tool re-reads the MFT on every invocation; the Rust daemon
-> never needs to re-read after the initial cold build.
+> never needs to re-read after the initial cold build — on v0.5.120 that
+> gap measures **180×–3 400× for targeted queries** (see the
+> [current canonical report](../benchmarks/2026-06-v0.5.120-vs-everything.md)).
 
 ---
 

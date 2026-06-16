@@ -140,7 +140,10 @@ impl SortKeyNeeds {
             | FieldId::RecallOnDataAccess
             | FieldId::Attributes
             | FieldId::AttributeValue
-            | FieldId::ParityAttributes => 0,
+            | FieldId::ParityAttributes
+            | FieldId::Malformed
+            | FieldId::MalformedPath
+            | FieldId::NameHex => 0,
         }
     }
 
@@ -343,10 +346,21 @@ fn compare_numeric_column(
                 .cmp(&b_set)
                 .then_with(|| row_a.name().cmp(row_b.name()))
         }
+        // WI-4.4 forensic bool columns — backed by precomputed row fields, not
+        // an attribute-flag mask. Same flag-sort semantics (name tiebreaker).
+        FieldId::Malformed => row_a
+            .malformed
+            .cmp(&row_b.malformed)
+            .then_with(|| row_a.name().cmp(row_b.name())),
+        FieldId::MalformedPath => row_a
+            .malformed_path
+            .cmp(&row_b.malformed_path)
+            .then_with(|| row_a.name().cmp(row_b.name())),
         // String-based columns never reach this function — the caller's
         // `is_strict_numeric` guard excludes them.  Return `Equal` as a
         // defensive default (the name tiebreaker in `sort_rows_numeric_fast`
-        // will then provide the ordering).
+        // will then provide the ordering).  `NameHex` is a non-sortable
+        // projection column and lands here too.
         FieldId::Name
         | FieldId::Path
         | FieldId::PathOnly
@@ -354,7 +368,8 @@ fn compare_numeric_column(
         | FieldId::Type
         | FieldId::Attributes
         | FieldId::AttributeValue
-        | FieldId::ParityAttributes => core::cmp::Ordering::Equal,
+        | FieldId::ParityAttributes
+        | FieldId::NameHex => core::cmp::Ordering::Equal,
     }
 }
 
@@ -614,11 +629,23 @@ fn compare_by_column(
                 .then_with(|| key_a.name.cmp(&key_b.name))
                 .then_with(|| row_a.name().cmp(row_b.name()))
         }
-        // ── Remaining non-sortable fields: name tiebreaker ──
+        // ── WI-4.4 forensic bool columns: precomputed row fields ──
+        FieldId::Malformed => row_a
+            .malformed
+            .cmp(&row_b.malformed)
+            .then_with(|| key_a.name.cmp(&key_b.name))
+            .then_with(|| row_a.name().cmp(row_b.name())),
+        FieldId::MalformedPath => row_a
+            .malformed_path
+            .cmp(&row_b.malformed_path)
+            .then_with(|| key_a.name.cmp(&key_b.name))
+            .then_with(|| row_a.name().cmp(row_b.name())),
+        // ── Remaining non-sortable fields: name tiebreaker (incl. NameHex) ──
         FieldId::Name
         | FieldId::Attributes
         | FieldId::AttributeValue
-        | FieldId::ParityAttributes => key_a
+        | FieldId::ParityAttributes
+        | FieldId::NameHex => key_a
             .name
             .cmp(&key_b.name)
             .then_with(|| row_a.name().cmp(row_b.name())),
@@ -672,7 +699,10 @@ pub(crate) const fn field_to_attr_bit(field: FieldId) -> u32 {
         | FieldId::Bulkiness
         | FieldId::ParityAttributes
         | FieldId::NameLength
-        | FieldId::PathLength => 0,
+        | FieldId::PathLength
+        | FieldId::Malformed
+        | FieldId::MalformedPath
+        | FieldId::NameHex => 0,
     }
 }
 

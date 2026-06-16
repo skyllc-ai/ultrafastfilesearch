@@ -32,8 +32,9 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
             deep,
             no_bitmap,
             unique,
-        } => windows::cmd_info(drive, deep, no_bitmap, unique).await,
-        Commands::Drives => windows::cmd_drives().await,
+            format,
+        } => windows::cmd_info(drive, deep, no_bitmap, unique, format).await,
+        Commands::Drives { format } => windows::cmd_drives(format).await,
         Commands::Bench {
             drive,
             json,
@@ -190,7 +191,7 @@ pub(crate) async fn dispatch_command(command: Commands) -> Result<()> {
         ),
         Commands::Read { .. }
         | Commands::Info { .. }
-        | Commands::Drives
+        | Commands::Drives { .. }
         | Commands::Bench { .. }
         | Commands::BenchAll { .. }
         | Commands::BitmapDiag { .. }

@@ -8,6 +8,10 @@ host — Claude Desktop, Cursor, Windsurf, Augment, Codeium, or your own
 tooling — can search, aggregate, and inspect files through UFFS with zero
 setup beyond a single config line.
 
+![Claude using the UFFS MCP server to find the largest video files and summarize storage by file type](../../assets/demo/uffs-mcp-claude.gif)
+
+> *Claude querying real NTFS data through the UFFS MCP server — deterministic search underneath, MCP on top. Recorded against the real endpoint with unedited timings (see the [demo kit](../../scripts/dev/demo/README.md)).*
+
 ## How It Works
 
 ```

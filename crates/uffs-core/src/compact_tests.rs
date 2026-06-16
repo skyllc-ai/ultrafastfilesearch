@@ -572,3 +572,206 @@ fn ads_on_directory_strips_directory_flag() {
         "ADS flags must match parent directory flags (raw NTFS parity)"
     );
 }
+
+// ── WI-4.4: a crooked (surrogate-named) file cannot hide from the search
+//    layer. Build the compact/search index from an MftIndex holding an
+//    ill-formed name and prove it is enumerated and byte-recoverable. ──
+
+/// WTF-8 of `evil` + lone-high-surrogate(U+D800) + `.exe`
+/// (`0xD800` → 3-byte WTF-8 `ED A0 80`). Not valid UTF-8.
+const CROOKED_NAME_WTF8: &[u8] = &[
+    b'e', b'v', b'i', b'l', 0xED, 0xA0, 0x80, b'.', b'e', b'x', b'e',
+];
+
+/// Like `push_name`, but stores raw WTF-8 bytes (the lossless ingestion path)
+/// for an ill-formed NTFS name.
+fn push_name_bytes(index: &mut MftIndex, bytes: &[u8]) -> IndexNameRef {
+    let offset = index.add_name_bytes(bytes);
+    let len = u16::try_from(bytes.len()).expect("test name too long");
+    // Ill-formed → not ASCII, no extension (the `.exe` here is decorative).
+    IndexNameRef::new(offset, len, false, 0)
+}
+
+#[test]
+fn crooked_surrogate_name_is_visible_in_compact_index() {
+    let mut idx = fixture_index();
+
+    // Plant a file whose name contains an unpaired surrogate under root.
+    let crooked = push_name_bytes(&mut idx, CROOKED_NAME_WTF8);
+    let rec = idx.get_or_create(909.into());
+    rec.first_name.name = crooked;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
+    rec.first_stream.size = SizeInfo {
+        length: 1337,
+        allocated: 1536,
+    };
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+
+    // The crooked file must appear in the compact index — found by its TRUE
+    // bytes via the lossless `name_bytes` accessor. This is the "cannot hide"
+    // guarantee: a malicious ill-formed name is still enumerated.
+    let found = drive
+        .records
+        .iter()
+        .find(|cr| cr.name_bytes(&drive.names) == CROOKED_NAME_WTF8)
+        .expect(
+            "crooked surrogate-named file must be present + byte-recoverable in the search index",
+        );
+
+    assert_eq!(
+        found.size, 1337,
+        "the crooked file's metadata transfers too"
+    );
+    // Its lossy &str view is empty (not valid UTF-8) — display degrades, but
+    // the file is NOT hidden (it is enumerated above).
+    assert_eq!(found.name(&drive.names), "");
+    // And the true bytes carry no U+FFFD replacement — nothing was lost.
+    assert!(
+        !found
+            .name_bytes(&drive.names)
+            .windows(3)
+            .any(|win| win == [0xEF, 0xBF, 0xBD]),
+        "the search index must hold the true bytes, not a lossy replacement"
+    );
+}
+
+// ── WI-4.4: forensic facts on the resolved DisplayRow ────────────────────
+//   A CLEAN-named file living under a CROOKED (surrogate-named) directory:
+//   its own leaf is well-formed (malformed=false) but its PATH is poisoned
+//   (malformed_path=true). This is the "clean file under a crooked dir is
+//   still flagged" guarantee, and it exercises the real search → resolve →
+//   row-forensics path end to end.
+
+#[test]
+fn clean_child_under_crooked_dir_is_path_malformed_not_leaf_malformed() {
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
+
+    // Root.
+    let root_name = push_name(&mut idx, ".");
+    let root = idx.get_or_create(ROOT_FRS.into());
+    root.stdinfo.set_directory(true);
+    root.first_name.name = root_name;
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    // A directory whose NAME is ill-formed (lone surrogate), under root.
+    let crooked_dir = push_name_bytes(&mut idx, CROOKED_NAME_WTF8);
+    let dir = idx.get_or_create(500.into());
+    dir.stdinfo.set_directory(true);
+    dir.first_name.name = crooked_dir;
+    dir.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    // A CLEAN-named child file under the crooked directory.
+    let child_name = push_name(&mut idx, "report.txt");
+    let child = idx.get_or_create(501.into());
+    child.first_name.name = child_name;
+    child.first_name.parent_frs = Into::into(500);
+    child.first_stream.size = SizeInfo {
+        length: 42,
+        allocated: 64,
+    };
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+
+    // Match-all enumeration through the real search/resolve/forensics path.
+    let drives = vec![drive];
+    let mut filters = crate::search::filters::SearchFilters::default();
+    let (rows, _) = crate::search::query::collect_global_top_n(
+        &drives,
+        100,
+        crate::search::field::FieldId::Name,
+        false,
+        crate::search::backend::FilterMode::All,
+        &mut filters,
+    );
+
+    // The CLEAN child: leaf well-formed, but PATH malformed (ancestor crooked).
+    let child_row = rows
+        .iter()
+        .find(|row| row.name() == "report.txt")
+        .expect("clean-named child must be enumerated");
+    assert!(
+        !child_row.malformed,
+        "the child's own leaf name is well-formed"
+    );
+    assert!(
+        child_row.malformed_path,
+        "a clean file under a crooked directory must be flagged malformed_path"
+    );
+    // A clean leaf carries no name_hex evidence (only ill-formed leaves do).
+    assert!(child_row.name_hex.is_none());
+
+    // The crooked DIRECTORY itself: leaf malformed + name_hex evidence present.
+    // Its lossy `&str` view is empty, so match it by its true bytes via name_hex.
+    let dir_row = rows
+        .iter()
+        .find(|row| row.malformed)
+        .expect("the crooked directory must itself be enumerated and flagged");
+    assert!(dir_row.malformed_path);
+    assert_eq!(
+        dir_row.name_hex.as_deref(),
+        Some("6576696ceda0802e657865"),
+        "name_hex is the lowercase hex of the true WTF-8 bytes of `evil<D800>.exe`"
+    );
+}
+
+// ── is_ntfs_metafile_name: exact-allowlist classifier ──────────────
+//
+// 2026-06-11: `--hide-system` used to hide every name starting with `$`,
+// which wrongly suppressed ordinary `$`-prefixed files that Everything (and
+// every file manager) displays — `$Recycle.Bin`, `$PatchCache`, and the
+// WinSxS `$$_*.cdf-ms` filemaps.  The classifier now matches only the fixed
+// set of reserved NTFS metafiles.
+
+#[test]
+fn metafile_name_matches_reserved_set_case_insensitively() {
+    for name in [
+        "$MFT",
+        "$MFTMirr",
+        "$LogFile",
+        "$Volume",
+        "$AttrDef",
+        "$Bitmap",
+        "$Boot",
+        "$BadClus",
+        "$Secure",
+        "$UpCase",
+        "$Extend",
+        "$ObjId",
+        "$Quota",
+        "$Reparse",
+        "$UsnJrnl",
+        "$RmMetadata",
+        "$Repair",
+        "$Txf",
+    ] {
+        assert!(
+            is_ntfs_metafile_name(name),
+            "{name} is a reserved NTFS metafile and must classify as one"
+        );
+    }
+    // NTFS is case-insensitive; canonical casing varies in the wild.
+    assert!(is_ntfs_metafile_name("$mft"));
+    assert!(is_ntfs_metafile_name("$BADCLUS"));
+}
+
+#[test]
+fn metafile_name_rejects_ordinary_dollar_files() {
+    for name in [
+        "$Recycle.Bin",
+        "$PatchCache",
+        "$WinREAgent",
+        "$secret.dbt",
+        // WinSxS filemaps — the concrete files the old filter wrongly hid.
+        "$$_diagnostics_system_windowsmediaplayerconfiguration_537e287f.cdf-ms",
+        "$MFTfoo", // prefix of a metafile name, but not an exact match
+        "normal.txt",
+        "config",
+        "",
+    ] {
+        assert!(
+            !is_ntfs_metafile_name(name),
+            "{name:?} is an ordinary file and must NOT classify as a metafile"
+        );
+    }
+}

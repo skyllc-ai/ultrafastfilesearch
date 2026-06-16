@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release-plz — DEFERRED (manual-only, 2026-05-08)
+# Release-plz — ACTIVE (registry-baseline mode, re-enabled 2026-06-10)
 #
-# Phase R4 of `docs/architecture/release-automation-plan.md`, currently
-# dormant pending an upstream-polars compat release.  See the DEFERRAL
-# NOTICE below for the full root-cause and re-enable trail.
+# Phase R4 of `docs/architecture/release-automation-plan.md`.  Runs on
+# every push to `main`.  The DEFERRAL NOTICE below (2026-05-08,
+# polars/chrono) is HISTORICAL: that root cause and its successor
+# (git-only worktree packaging, 2026-06-09) are both resolved — see the
+# trigger comment above the `on:` block for the resolution trail.
 #
 # ─── DEFERRAL NOTICE (2026-05-08) ───────────────────────────────────────
 #
-# The `push: branches: [main]` auto-trigger is commented out below.  The
-# workflow runs ONLY on `workflow_dispatch` (manual `gh workflow run`
-# from the maintainer).  Reason:
+# HISTORICAL — resolved 2026-06-10 (see "Re-enable checklist" below).
+# At the time, the push auto-trigger was commented out and the workflow
+# ran ONLY on `workflow_dispatch` (manual `gh workflow run` from the
+# maintainer).  Reason:
 #
 #   release-plz `git_only = true` mode hardcodes
 #       cargo package --allow-dirty --workspace
@@ -68,7 +71,15 @@
 #   4. once merged, the maintainer pushes a signed `vX.Y.Z` tag
 #      which fires `release.yml` to build + upload binaries.
 #
-# Re-enable when the chrono conflict goes away:
+# Re-enable checklist (SUPERSEDED 2026-06-10): the chrono conflict was
+# resolved by polars 0.54.4 on crates.io, but the 2026-06-09 re-activation
+# then failed one layer deeper — git-only mode's hardcoded worktree
+# `cargo package --workspace` (see the trigger comment above `on:`).
+# The terminal fix took a different route than the items below:
+# `git_only = false` in `release-plz.toml` (registry-baseline mode,
+# unlocked by the R8 bootstrap publish of uffs-time + uffs-text
+# v0.5.120) skips that packaging step entirely.  Items kept for
+# historical context:
 #
 #   1. Verify `cargo package -p uffs-polars --allow-dirty` succeeds
 #      locally (it should once polars upstream ships).
@@ -216,27 +227,70 @@
 #   • https://release-plz.ieni.dev/docs/usage/release
 #   • https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml
 
-name: "💤 Release-plz (deferred — manual-only)"
+name: "🚀 Release-plz"
 
 on:
-  # ─── push trigger DISABLED 2026-05-08 — see DEFERRAL NOTICE above ───
-  # Workflow run 25583934251 on commit d3a1adc1d (R6 → R8 Path A merged)
-  # confirmed that release-plz's hardcoded `cargo package --workspace`
-  # trips the polars-arrow chrono ≤0.4.41 vs workspace 0.4.44 conflict
-  # regardless of `release = false` / `publish = false` flags.  Until
-  # polars upstream ships a chrono-compatible release this workflow is
-  # manual-only.  Uncomment the `push:` block below to re-enable.
-  # push:
+  # ─── RE-ENABLED 2026-06-10 (post-R8 registry-baseline flip) ──────────
+  # History of this trigger:
+  #
+  #   • 2026-06-09: activated prematurely.  Polars 0.54.4 resolved the
+  #     chrono conflict (first blocker) but release-plz's git_only mode
+  #     hardcodes `cargo package --allow-dirty --workspace` in the
+  #     latest-tag worktree, which fails on the never-publish crates'
+  #     versioned internal deps (uffs-broker -> uffs-broker-protocol:
+  #     "no matching package found, location searched: crates.io
+  #     index").  NOT fixable by `release = false` / `publish = false`
+  #     config (both ignored by that hardcoded step, confirmed on CLI
+  #     0.3.158 run #79 AND re-confirmed locally on 0.3.157,
+  #     2026-06-10) — never-publish crates will NEVER resolve from the
+  #     registry, so git-only mode can never work here.  Trigger was
+  #     commented out after 4 consecutive failures.
+  #
+  #   • 2026-06-10: R8 bootstrap published uffs-time + uffs-text
+  #     v0.5.120 to crates.io, unlocking the registry-baseline mode
+  #     that `release-plz.toml`'s git_only comment block always planned
+  #     to flip to post-R8.  `git_only = false` makes release-plz diff
+  #     local packages against the DOWNLOADED .crate files instead of
+  #     packaging the tag worktree — the broken `cargo package
+  #     --workspace` step is never invoked.  Verified locally:
+  #     `release-plz update` downloads uffs-text 0.5.120 as baseline,
+  #     exits 0, proposes bumps only when the published crates' files
+  #     change.  See issue #241 (publish-day umbrella).
+  #
+  #   • 2026-06-10 (Path B): push trigger DISABLED again — but this time
+  #     by design, not because of a bug.  release-plz "proposes bumps only
+  #     when the published crates' files change" (the line above) is
+  #     exactly the limitation that makes it the WRONG driver for binary
+  #     releases: a change to uffs-cli/core/daemon/… never bumps anything.
+  #     Under Path B, BINARY releases are cut manually and on-demand via
+  #     `just release-pr` + `just release-tag` (the sole owner of the
+  #     lockstep workspace version), and release-plz is demoted to a
+  #     manual, workflow_dispatch-only helper for the 2 leaf libs.  A
+  #     normal merge to `main` intentionally triggers no release.  See
+  #     `docs/architecture/release-automation-plan.md` §8 (Path B row) and
+  #     `just/build.just` `release-pr` / `release-tag`.
+  #
+  # push:                # ← Path B: disabled by design (manual releases)
   #   branches: [main]
-  # Manual `gh workflow run release-plz.yml` for the maintainer to spot-
-  # check what release-plz proposes (e.g. on a temporary branch where
-  # the polars rev is updated, ahead of formally re-enabling the push
-  # trigger).
   workflow_dispatch:
 
 # Default to ZERO permissions; each job grants only what it needs.
 # Matches the release-plz repo's own workflow shape.
 permissions: {}
+
+env:
+  # sccache is configured for local dev via .cargo/config.toml
+  # (`rustc-wrapper = "sccache"`); the GitHub-hosted runners don't
+  # have it installed, so release-plz's internal `cargo package`
+  # invocation dies with "could not execute process `sccache ...`
+  # (never executed)".  An empty RUSTC_WRAPPER defeats the config
+  # value without touching .cargo/config.toml (which would hurt
+  # local dev UX).  Mirrors the same guard in pr-fast.yml.
+  RUSTC_WRAPPER: ""
+  # Match local policy (.cargo/config.toml sets `incremental = false`)
+  # so green-locally ↔ green-in-CI, and so sccache's CARGO_INCREMENTAL
+  # refusal can't resurface here.
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # ────────────────────────────────────────────────────────────────
@@ -301,7 +355,7 @@ jobs:
         # Pinned to commit SHA of the v0.5.128 tag (resolved 2026-05-08)
         # for supply-chain hygiene.  Bump alongside other action pins
         # via the standard Dependabot or manual-refresh process.
-        uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release-pr
           config: release-plz.toml
@@ -327,6 +381,12 @@ jobs:
     permissions:
       contents: write
 
+    # Exposed for the `crates-io-publish` job below: publish only fires
+    # when this run actually cut a release (version bump merged), never
+    # on the no-op pushes where release-plz detects nothing to do.
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+
     steps:
       - name: Checkout repository (full history for tag analysis)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -347,7 +407,8 @@ jobs:
         # release PR — release-plz detects this internally.  So this
         # job runs on every push but only does work when the PR
         # actually merged.
-        uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
+        id: release-plz
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release
           config: release-plz.toml
@@ -357,3 +418,128 @@ jobs:
           # comment block at the top of this file.  Adding this env
           # var is the SECOND of TWO layers that must change to
           # enable publishing; both flip in R8.
+
+      # R4/R5: Bridge to release.yml — release-plz creates tags via GITHUB_TOKEN
+      # which doesn't trigger downstream workflows (GitHub anti-loop policy).
+      # Explicitly dispatch release.yml to build binaries.
+      - name: Trigger release.yml for binary builds
+        if: steps.release-plz.outputs.releases_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Releases created: ${{ steps.release-plz.outputs.releases }}"
+          for release in ${{ steps.release-plz.outputs.releases }}; do
+            tag=$(echo "$release" | jq -r '.tag')
+            gh workflow run release.yml --ref main \
+              -f version="$tag" \
+              -f triggered_by="release-plz[$tag]"
+          done
+
+  # ─────────────────────────────────────────────────────────────────
+  # R7: OIDC Trusted Publishing scaffolding (crates.io)
+  # ─────────────────────────────────────────────────────────────────
+  #
+  # Phase R7 — OIDC trusted publisher scaffolding.  This job is gated
+  # by the repo variable `ENABLE_CRATES_IO_PUBLISH` (unset → dormant)
+  # until Phase R8 (first dress rehearsal).  It sets up the OIDC token
+  # exchange with crates.io for passwordless, short-lived credentials.
+  #
+  # A repo-variable gate is used instead of a literal `if: false` for
+  # two reasons: (1) actionlint rejects constant `if:` conditions, and
+  # (2) it makes R8 activation a one-click Settings → Variables toggle
+  # rather than a workflow edit + PR cycle.  The gate is a genuine
+  # dormancy switch, NOT a lint-suppression hack — the job still never
+  # runs until the maintainer deliberately sets the variable.
+  #
+  # The OIDC auth + publish steps below are now wired (R8 bootstrap
+  # complete: uffs-time + uffs-text published manually with a token on
+  # 2026-06-10).  Activating this automated path requires only:
+  #   1. Configure crates.io crate-level trusted publishers (web UI)
+  #      — Workflow filename `release-plz.yml`, Environment
+  #        `crates.io-publish` (must match `environment:` below exactly)
+  #   2. Create the `crates.io-publish` environment with required
+  #      reviewers (manual approval gate for each published version)
+  #   3. Set repo variable `ENABLE_CRATES_IO_PUBLISH = true`
+  #      (Settings → Secrets and variables → Actions → Variables)
+  #
+  # OIDC replaces the legacy `CARGO_REGISTRY_TOKEN` secret entirely —
+  # no long-lived token is ever stored once trusted publishing is on.
+  #
+  # See: docs/architecture/release-automation-plan.md §Phase R7/R8
+  #
+  crates-io-publish:
+    name: crates.io / OIDC publish (R7 scaffolding)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: release-plz-release
+
+    # Two gates, both required:
+    #   1. Repo variable ENABLE_CRATES_IO_PUBLISH=true — the R9 master
+    #      switch (unset / any-other-value keeps the job dormant).
+    #   2. releases_created — `release-plz-release` runs on EVERY push
+    #      to main and no-ops internally when HEAD isn't a release-PR
+    #      merge; without this gate the publish job would fire (and
+    #      page the environment reviewer) on every push, then fail
+    #      republishing the already-live version.
+    if: ${{ vars.ENABLE_CRATES_IO_PUBLISH == 'true' && needs.release-plz-release.outputs.releases_created == 'true' }}
+
+    environment: crates.io-publish
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC token exchange with crates.io
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust (nightly toolchain)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: crates-io-publish
+
+      # OIDC debug — verify token is available before attempting publish
+      - name: Verify OIDC token availability
+        run: |
+          echo "OIDC token endpoint: $ACTIONS_ID_TOKEN_REQUEST_URL"
+          echo "OIDC request token available: ${{ secrets.ACTIONS_ID_TOKEN_REQUEST_TOKEN != '' }}"
+
+      # Mint a short-lived crates.io token via OIDC trusted publishing.
+      # No long-lived CARGO_REGISTRY_TOKEN secret is ever stored — the
+      # token is exchanged at runtime against the trusted-publisher
+      # registrations on crates.io (one per publishable crate, bound to
+      # this workflow filename + the `crates.io-publish` environment).
+      - name: Authenticate with crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+
+      # Publish the publishable crates, dependency-ordered.  The set is
+      # derived from `cargo metadata` (publish != []) so it adapts as
+      # more crates flip to publishable — today this is exactly
+      # uffs-time + uffs-text (both dependency-free leaves, any order).
+      #
+      # `cargo publish` is a no-op-error if the version already exists,
+      # so in steady state release-plz bumps the version first; this job
+      # then publishes the freshly bumped version.  `--locked` enforces
+      # the committed Cargo.lock.  `--no-verify` is intentionally NOT
+      # used — we want the pre-upload build to catch packaging errors.
+      - name: Publish to crates.io (OIDC, dependency-ordered)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t crates < <(
+            cargo metadata --no-deps --format-version 1 \
+              | jq -r '.packages[] | select(.publish != []) | .name' \
+              | sort
+          )
+          echo "Publishable crates: ${crates[*]}"
+          for crate in "${crates[@]}"; do
+            echo "::group::cargo publish -p ${crate}"
+            cargo publish -p "${crate}" --locked
+            echo "::endgroup::"
+          done

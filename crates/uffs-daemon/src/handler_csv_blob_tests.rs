@@ -75,6 +75,9 @@ fn sample_row(
         descendants: 0,
         treesize: size,
         tree_allocated: size,
+        malformed: false,
+        malformed_path: false,
+        name_hex: None,
     }
 }
 

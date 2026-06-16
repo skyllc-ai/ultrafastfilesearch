@@ -209,7 +209,7 @@ use tracing::info;
 /// # Field discipline (Phase 3b §3.4)
 ///
 /// Both fields are `pub` because this is a **configuration DTO**.
-/// `daemon_spawn_args` is a forwarded `Vec<String>` (no invariants to
+/// `daemon_spawn_args` is a forwarded `Vec<OsString>` (no invariants to
 /// protect); `idle_timeout_secs == 0` is the documented sentinel for
 /// "no timeout" and is validated at the call site, not in a setter.
 ///
@@ -226,7 +226,7 @@ use tracing::info;
 pub struct McpConfig {
     /// Extra CLI args forwarded to `uffs daemon run` when auto-starting
     /// (e.g. `["--data-dir", "/path"]`).
-    pub daemon_spawn_args: Vec<String>,
+    pub daemon_spawn_args: Vec<std::ffi::OsString>,
     /// Idle timeout in seconds.  The MCP server will auto-exit if no
     /// MCP messages are received within this period.  `0` = no timeout.
     pub idle_timeout_secs: u64,

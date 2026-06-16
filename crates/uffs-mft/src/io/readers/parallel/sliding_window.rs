@@ -68,7 +68,12 @@ impl ParallelMftReader {
 
         // Use adaptive concurrency and I/O size based on drive type (M2 optimization)
         // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
-        let concurrency = if matches!(self.drive_type, crate::platform::DriveType::Hdd) {
+        let concurrency = if matches!(
+            self.drive_type,
+            crate::platform::DriveType::Hdd
+                | crate::platform::DriveType::Removable
+                | crate::platform::DriveType::Virtual
+        ) {
             crate::platform::DriveType::optimal_concurrency_for_hdd(self.extent_map.extent_count())
         } else {
             self.drive_type.optimal_concurrency()

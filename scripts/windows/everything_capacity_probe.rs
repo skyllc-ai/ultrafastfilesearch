@@ -75,6 +75,30 @@ const ES_TIMEOUT_MULTIPLIER: u32 = 3;
 // Locators
 // ---------------------------------------------------------------------------
 
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and the other bench scripts so every tool
+/// writes under ONE tree.  Precedence: `$UFFS_BENCH_DIR` >
+/// `%LOCALAPPDATA%\uffs-bench` > `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.
+fn shared_bench_root() -> PathBuf {
+    if let Some(v) = env::var_os("UFFS_BENCH_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Some(v) = env::var_os("LOCALAPPDATA") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("uffs-bench");
+        }
+    }
+    let base = env::var_os("XDG_CACHE_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").unwrap_or_else(|| ".".into())).join(".cache")
+        });
+    base.join("uffs-bench")
+}
+
 fn find_exe(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|p| p.exists()).cloned()
 }
@@ -466,7 +490,11 @@ fn main() {
     // Prepare log buffer
     let ts = chrono_timestamp();
     let log_name = format!("everything_probe_{ts}.log");
-    let log_path = PathBuf::from("scripts").join("windows").join(&log_name);
+    // Write the probe log under the shared bench tree — NOT into the tracked
+    // scripts/windows/ source dir (where it used to land and dirty the repo).
+    let log_dir = shared_bench_root().join("everything-probe");
+    let _ = fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(&log_name);
     let mut log = String::new();
     let _ = writeln!(log, "Everything Capacity Probe — {ts}");
     let _ = writeln!(log, "Drives: {:?}", drives);

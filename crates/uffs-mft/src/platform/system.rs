@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Windows privilege, path, and drive-classification helpers.
+//! Platform privilege, path, and drive-classification helpers.
+//!
+//! Covers Windows (UAC token, drive-type detection, volume enumeration) and
+//! Unix (geteuid-based elevation check, memory query).
+//!
+//! Exception: single cross-platform module covering Windows Win32 FFI
+//! (privilege checking, volume detection, drive classification) and Unix stubs
+//! (geteuid, /proc/meminfo, sysctl).  Splitting by OS would require duplicating
+//! shared types (`DriveType`, `SystemMemory`) or a separate types module,
+//! adding more files for a marginal line-count benefit.
 
 #[cfg(windows)]
 use core::mem::size_of;
@@ -47,9 +56,15 @@ use super::drive_letter::DriveLetter;
 #[cfg(windows)]
 use super::volume::HandleGuard;
 
-/// Checks if the current process has Administrator privileges.
+/// Checks if the current process is running with elevated privileges.
 ///
-/// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE`.
+/// - **Windows**: returns `true` when the process token carries the
+///   Administrator elevation flag (UAC-checked via `GetTokenInformation`).
+/// - **Unix** (Linux, macOS, …): returns `true` when the effective user ID is 0
+///   (root / sudo).
+///
+/// MFT reading requires Administrator privileges or `SE_BACKUP_PRIVILEGE` on
+/// Windows and root on Unix.
 #[cfg(windows)]
 #[must_use]
 #[expect(
@@ -90,6 +105,19 @@ pub fn is_elevated() -> bool {
     };
 
     result.is_ok() && elevation.TokenIsElevated != 0
+}
+
+/// Unix implementation: elevated iff the effective user ID is 0 (root/sudo).
+#[cfg(unix)]
+#[must_use]
+#[expect(
+    unsafe_code,
+    reason = "FFI: POSIX geteuid() — defined to be safe but the libc binding is unsafe"
+)]
+pub fn is_elevated() -> bool {
+    // SAFETY: `geteuid()` is always safe to call: it has no preconditions,
+    // never fails, and is signal-safe per POSIX.
+    unsafe { libc::geteuid() == 0 }
 }
 
 /// Returns the path to the volume root (e.g., "C:\").
@@ -223,6 +251,10 @@ fn is_ntfs_volume(drive_letter: DriveLetter) -> bool {
         return false;
     }
 
+    // AUDIT-OK(bytes): decodes the Windows filesystem TYPE label (e.g. "NTFS")
+    // for an `== "NTFS"` check — not an NTFS filename. A lossy decode could
+    // only fail the equality (fail-safe: treat as not-NTFS), never corrupt a
+    // stored name, so the instrumented name decoder does not apply here.
     let fs_name_raw = String::from_utf16_lossy(&fs_name_buffer);
     let fs_name = fs_name_raw.trim_end_matches('\0');
 
@@ -275,6 +307,12 @@ pub enum DriveType {
     Ssd,
     /// Hard Disk Drive (rotational, seek time matters).
     Hdd,
+    /// Removable / external media — USB, SD, or MMC. The bus, not the media,
+    /// is the bottleneck, so it takes the conservative (HDD-like) I/O profile.
+    Removable,
+    /// Virtual disk — VHD/VHDX or a file/RAM-backed virtual volume. The backing
+    /// medium is opaque, so it takes the conservative (HDD-like) I/O profile.
+    Virtual,
     /// Unknown drive type (assume HDD for safety).
     Unknown,
 }
@@ -286,7 +324,7 @@ impl DriveType {
         match self {
             Self::Nvme => 4 * 1024 * 1024,
             Self::Ssd => 2 * 1024 * 1024,
-            Self::Hdd | Self::Unknown => 1024 * 1024,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 1024 * 1024,
         }
     }
 
@@ -296,7 +334,7 @@ impl DriveType {
         match self {
             Self::Nvme => 8,
             Self::Ssd => 4,
-            Self::Hdd | Self::Unknown => 2,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 2,
         }
     }
 
@@ -306,7 +344,7 @@ impl DriveType {
         match self {
             Self::Nvme => 32,
             Self::Ssd => 8,
-            Self::Hdd | Self::Unknown => 4,
+            Self::Hdd | Self::Removable | Self::Virtual | Self::Unknown => 4,
         }
     }
 
@@ -341,7 +379,8 @@ impl DriveType {
     }
 }
 
-/// Detects whether a drive is `NVMe`, SSD, or HDD.
+/// Detects whether a drive is `NVMe`, SSD, HDD, removable (USB / SD / MMC), or
+/// virtual (VHD / file- or RAM-backed).
 #[cfg(windows)]
 #[must_use]
 #[expect(
@@ -363,6 +402,13 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
     const PROPERTY_STANDARD_QUERY: u32 = 0;
     const BUS_TYPE_NVME: u32 = 17;
+    // Removable / external buses (STORAGE_BUS_TYPE): USB, SD, MMC. The bus is
+    // the bottleneck, so these all classify as `DriveType::Removable`.
+    const BUS_TYPE_USB: u32 = 7;
+    const BUS_TYPE_SD: u32 = 12;
+    const BUS_TYPE_MMC: u32 = 13;
+    const BUS_TYPE_VIRTUAL: u32 = 14;
+    const BUS_TYPE_FILE_BACKED_VIRTUAL: u32 = 15;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET: usize = 28;
     const STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_END: usize =
         STORAGE_DEVICE_DESCRIPTOR_BUS_TYPE_OFFSET + size_of::<u32>();
@@ -408,7 +454,7 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     let drive_classification = {
         let _handle_guard = HandleGuard(drive_handle);
 
-        let is_nvme = {
+        let bus_type: Option<u32> = {
             let query = StoragePropertyQuery {
                 property_id: STORAGE_DEVICE_PROPERTY,
                 query_type: PROPERTY_STANDARD_QUERY,
@@ -450,14 +496,18 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
                     )
                     .and_then(|bytes| <[u8; size_of::<u32>()]>::try_from(bytes).ok())
                     .map(u32::from_le_bytes)
-                    == Some(BUS_TYPE_NVME)
             } else {
-                false
+                None
             }
         };
 
-        if is_nvme {
-            return DriveType::Nvme;
+        // Bus type settles NVMe and removable media directly; everything else
+        // (SATA/SAS/RAID/…) falls through to the seek-penalty SSD-vs-HDD probe.
+        match bus_type {
+            Some(BUS_TYPE_NVME) => return DriveType::Nvme,
+            Some(BUS_TYPE_USB | BUS_TYPE_SD | BUS_TYPE_MMC) => return DriveType::Removable,
+            Some(BUS_TYPE_VIRTUAL | BUS_TYPE_FILE_BACKED_VIRTUAL) => return DriveType::Virtual,
+            _ => {}
         }
 
         let query = StoragePropertyQuery {
@@ -501,7 +551,7 @@ pub fn detect_drive_type(drive_letter: DriveLetter) -> DriveType {
     };
 
     let result = drive_classification.unwrap_or_else(|| detect_drive_type_via_trim(drive_letter));
-    tracing::info!(
+    tracing::debug!(
         drive = %drive_letter,
         detected = ?result,
         seek_penalty_query = ?drive_classification,
@@ -702,11 +752,16 @@ fn query_memory_macos() -> Option<SystemMemory> {
         .arg("hw.memsize")
         .output()
         .ok()?;
+    // AUDIT-OK(bytes): sysctl memsize for a stats display; the following
+    // .parse().ok()? already fails closed on any non-numeric/garbage byte.
+    // (WI-4.3 follow-up)
     let total_str = String::from_utf8_lossy(&total_out.stdout);
     let total_bytes: u64 = total_str.trim().parse().ok()?;
 
     // Available: vm_stat → parse "Pages free" and "Pages inactive"
     let vm_out = Command::new("vm_stat").output().ok()?;
+    // AUDIT-OK(bytes): vm_stat output parsed line-by-line for a stats display;
+    // each field parse fails closed. (WI-4.3 follow-up)
     let vm_str = String::from_utf8_lossy(&vm_out.stdout);
 
     // First line: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"

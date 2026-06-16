@@ -39,11 +39,11 @@ use crate::exec::{
     execute_step_with_tracking,
 };
 use crate::git_ops::{count_unpushed_commits, git_commit, git_push};
-use crate::version::{get_current_version, increment_version, update_polars_git};
+use crate::version::{bump_workspace_version, get_current_version};
 use crate::workflow::{
     ALL_STEPS, STEP_CLEAN_ARTIFACTS, STEP_COVERAGE_TESTS, STEP_FORMAT_CHECK, STEP_FORMAT_CODE,
-    STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC,
-    STEP_UPDATE_POLARS, STEP_VERSION_INCREMENT, WorkflowPhase, WorkflowState,
+    STEP_GIT_COMMIT, STEP_GIT_PUSH, STEP_PARALLEL_VALIDATION, STEP_TOOLCHAIN_SYNC, WorkflowPhase,
+    WorkflowState,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -407,11 +407,34 @@ pub(crate) async fn run_enhanced_phase1(
         "🚀 Using safe parallel optimization: format → compile → parallel(doc tests + linting)"
     );
 
+    // ── Tree-hash invalidation ──
+    // A resumed `just ship` skips a validation step only when the code it
+    // validated is byte-identical.  If the working tree changed since Phase 1
+    // last passed (you edited a tracked file or committed between runs), the
+    // cached "completed" flags for the code-dependent steps are invalidated so
+    // they re-run on the new code.  An unchanged tree (e.g. resuming after a
+    // Phase-2 push failure) keeps the fast skip.  The authoritative gate is
+    // still the uncacheable PR CI; this closes the local "passed step skipped
+    // after a code edit" gap.
+    let fingerprint = working_tree_fingerprint();
+    if state.validated_fingerprint != fingerprint {
+        if !state.validated_fingerprint.is_empty() {
+            println!(
+                "{}",
+                "↻ Working tree changed since last validation — re-running Phase 1 checks".yellow()
+            );
+        }
+        for step in [
+            STEP_FORMAT_CODE,
+            STEP_COVERAGE_TESTS,
+            STEP_PARALLEL_VALIDATION,
+            STEP_FORMAT_CHECK,
+        ] {
+            state.invalidate_step(step)?;
+        }
+    }
+
     tracked_toolchain_step(state, ctx).await?;
-    execute_step_with_tracking(state, STEP_UPDATE_POLARS, || async {
-        update_polars_git(ctx).await
-    })
-    .await?;
 
     println!("{}", "📋 Stage 1: Sequential Prerequisites".yellow().bold());
 
@@ -436,6 +459,13 @@ pub(crate) async fn run_enhanced_phase1(
     tracked_parallel_validation_step(state, ctx).await?;
     tracked_format_check_step(state, ctx).await?;
 
+    // Record the (post-`cargo fmt`) tree this Phase-1 run validated, so a
+    // resume on an unchanged tree skips the checks and any later edit re-runs
+    // them.  Recomputed here (not reused from the top) because `03-format-code`
+    // may have rewritten files.
+    state.validated_fingerprint = working_tree_fingerprint();
+    state.save()?;
+
     println!(
         "{}",
         "✅ PHASE 1 COMPLETE - All testing and validation passed!"
@@ -443,6 +473,32 @@ pub(crate) async fn run_enhanced_phase1(
             .bold()
     );
     Ok(())
+}
+
+/// Fingerprint of the working tree that validation actually sees: the `HEAD`
+/// commit plus the full diff of tracked changes against it.  A new commit or
+/// any edit to a tracked file changes the hash; a brand-new *untracked* file
+/// is the one gap, and the uncacheable PR CI still covers it.
+///
+/// Uses `DefaultHasher` (fixed-key `SipHash` — deterministic across processes,
+/// unlike `HashMap`'s randomized state); non-cryptographic but ample for
+/// change detection.  On any `git` error the components default to empty, which
+/// simply makes the fingerprint conservative (more likely to differ → re-run).
+fn working_tree_fingerprint() -> String {
+    use core::hash::{Hash as _, Hasher as _};
+
+    fn git(args: &[&str]) -> Vec<u8> {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .map(|out| out.stdout)
+            .unwrap_or_default()
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    git(&["rev-parse", "HEAD"]).hash(&mut hasher);
+    git(&["diff", "HEAD"]).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Phase 2 of the ship pipeline: version bump + commit + push + open
@@ -462,33 +518,35 @@ pub(crate) async fn run_enhanced_phase2(
 ) -> Result<()> {
     println!(
         "{}",
-        "📦 PHASE 2: Version Increment + Release PR".blue().bold()
+        "📦 PHASE 2: version bump → commit → release PR"
+            .blue()
+            .bold()
     );
 
-    // Step 07: Version increment
-    execute_step_with_tracking(state, STEP_VERSION_INCREMENT, || async {
-        increment_version().await
-    })
-    .await?;
-
+    // Version increment (Path B, 2026-06-10): restored after R5 retired it.
+    // release-plz only versions the 2 publishable leaf libs — it cannot drive
+    // binary releases — so the lockstep workspace bump happens HERE, at the end
+    // of `just ship`, gated behind the resumable `version_incremented` flag so a
+    // re-run after a mid-ship failure never double-bumps.  Default level: patch.
     if !state.version_incremented {
+        bump_workspace_version("patch").context("Failed to bump workspace version")?;
         state.version_incremented = true;
-        let new_version = get_current_version().context("Failed to get updated version")?;
+        let new_version = get_current_version().context("Failed to read bumped version")?;
+        println!("🔖 Bumped workspace version → v{new_version}");
         state.current_version = new_version;
         state.save()?;
     }
 
-    // Step 10: Git commit (signed version-bump commit on the working
-    // branch).
+    // Step 10: Git commit (signed commit on the working branch).
     execute_step_with_tracking(state, STEP_GIT_COMMIT, || async { git_commit(ctx).await }).await?;
 
     // Step 11: Git push -- opens release/vX.Y.Z PR with auto-merge
     // queued.
     //
     // Binaries are NOT built here.  Once the PR merges to main,
-    // `auto-tag-release.yml` tags the commit and invokes
-    // `release.yml`, which produces the reproducible cross-platform
-    // binaries on GitHub-hosted runners.
+    // release-plz creates the tag and dispatches `release.yml`,
+    // which produces the reproducible cross-platform binaries on
+    // GitHub-hosted runners.
     //
     // Phase 6 resumable-push fix (docs/architecture/dev-flow.md §
     // 5.1 / dev-flow-implementation-plan.md § 6.3): if the developer
@@ -546,10 +604,22 @@ fn load_or_reset_ship_state(ctx: &PipelineContext) -> Result<WorkflowState> {
             .context("Failed to save fresh workflow state")?;
         Ok(new_state)
     } else {
-        Ok(WorkflowState::load().unwrap_or_else(|_| {
-            let current_version = get_current_version().unwrap_or_else(|_| "unknown".to_owned());
-            WorkflowState::new_workflow(current_version)
-        }))
+        let loaded = WorkflowState::load().ok();
+        // A COMPLETED cycle must not be "resumed": its steps are all marked
+        // done and `version_incremented` is set, so resuming would skip both
+        // Phase 1 validation AND the Phase 2 version bump — the next release
+        // would commit nothing.  `is_resumable()` already excludes Completed,
+        // so a finished state starts a fresh cycle.  (`--fresh` is still the
+        // explicit reset; this just stops a stale terminal state from wedging
+        // the next `just ship`.)
+        match loaded {
+            Some(state) if state.phase != WorkflowPhase::Completed => Ok(state),
+            _ => {
+                let current_version =
+                    get_current_version().unwrap_or_else(|_| "unknown".to_owned());
+                Ok(WorkflowState::new_workflow(current_version))
+            }
+        }
     }
 }
 
@@ -705,7 +775,22 @@ pub(crate) async fn run_ship_pipeline(ctx: &PipelineContext) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CleanDecision, CleanMode, decide_clean};
+    use super::{CleanDecision, CleanMode, decide_clean, working_tree_fingerprint};
+
+    #[test]
+    fn tree_fingerprint_is_deterministic_and_nonempty() {
+        // Two back-to-back calls observe the same working tree, so they MUST
+        // agree — if the fingerprint were unstable, every `just ship` would
+        // needlessly re-run all of Phase 1.  16 hex chars (u64) is the shape.
+        let first = working_tree_fingerprint();
+        let second = working_tree_fingerprint();
+        assert_eq!(
+            first, second,
+            "fingerprint must be stable for an unchanged tree"
+        );
+        assert_eq!(first.len(), 16, "fingerprint is the 16-hex-char u64 hash");
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
 
     #[test]
     fn force_mode_always_cleans() {

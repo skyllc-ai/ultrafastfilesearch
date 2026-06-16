@@ -11,10 +11,11 @@
 //! 800-LOC ceiling once the v0.5.36 UAC work added the elevation
 //! entry points.
 
+use std::ffi::OsString;
 use std::path::Path;
 
 /// Log daemon spawn details (exe path, existence, command args).
-pub(crate) fn log_spawn_details(uffs_exe: &Path, cmd_args: &[&str]) {
+pub(crate) fn log_spawn_details(uffs_exe: &Path, cmd_args: &[OsString]) {
     tracing::debug!(
         uffs_exe = %uffs_exe.display(),
         uffs_exe_exists = uffs_exe.exists(),

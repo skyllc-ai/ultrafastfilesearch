@@ -63,9 +63,9 @@ use rayon::prelude::*;
 use super::super::backend::{self, DisplayRow, FilterMode, PhaseTimings};
 use super::super::field::FieldId;
 use super::super::filters::{SearchFilters, row_passes_filters};
-use super::super::tree::{self, DirCache};
+use super::super::tree::{self, DirCache, MalformedCache};
 use super::numeric_top_n::sort_indices_by_name;
-use super::{make_display_row, passes_filter_mode, stack_volume_prefix};
+use super::{make_display_row, passes_filter_mode, row_forensics, stack_volume_prefix};
 use crate::compact::DriveCompactIndex;
 
 /// Target chunk size for parallel path resolution inside
@@ -161,6 +161,7 @@ pub(super) fn collect_path_only_sorted_top_n<D: AsRef<DriveCompactIndex> + Sync>
         let mut vp_buf = [0_u8; 4];
         let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
         let mut dir_cache = tree::dir_cache_with_capacity(256);
+        let mut mal_cache = tree::malformed_cache_with_capacity(256);
 
         // Roots = records whose parent is `u32::MAX` (typically the
         // drive root "." at FRS 5, though stray orphans are possible).
@@ -183,6 +184,7 @@ pub(super) fn collect_path_only_sorted_top_n<D: AsRef<DriveCompactIndex> + Sync>
                 &fold,
                 &mut fold_buf,
                 &mut dir_cache,
+                &mut mal_cache,
                 filter_mode,
                 search_filters,
                 &mut output,
@@ -196,6 +198,7 @@ pub(super) fn collect_path_only_sorted_top_n<D: AsRef<DriveCompactIndex> + Sync>
                 &fold,
                 &mut fold_buf,
                 &mut dir_cache,
+                &mut mal_cache,
                 filter_mode,
                 search_filters,
                 &mut output,
@@ -215,7 +218,7 @@ pub(super) fn collect_path_only_sorted_top_n<D: AsRef<DriveCompactIndex> + Sync>
 /// siblings — depth-first recursion in name-ASC.
 #[expect(
     clippy::too_many_arguments,
-    reason = "shared state between walk and emit: drive, roots, fold, filters, output"
+    reason = "shared walk/emit state incl. the parallel dir + malformed caches"
 )]
 fn walk_drive_asc(
     drive: &DriveCompactIndex,
@@ -225,6 +228,7 @@ fn walk_drive_asc(
     fold: &uffs_text::case_fold::CaseFold,
     fold_buf: &mut Vec<u8>,
     dir_cache: &mut DirCache,
+    mal_cache: &mut MalformedCache,
     filter_mode: FilterMode,
     search_filters: &SearchFilters,
     output: &mut Vec<DisplayRow>,
@@ -244,6 +248,7 @@ fn walk_drive_asc(
             fold,
             fold_buf,
             dir_cache,
+            mal_cache,
             output,
         );
     }
@@ -284,6 +289,7 @@ fn walk_drive_asc(
                 fold,
                 fold_buf,
                 dir_cache,
+                mal_cache,
                 output,
             );
         }
@@ -321,7 +327,7 @@ enum DescTask {
 /// to encode the "recurse-then-emit" phase ordering.
 #[expect(
     clippy::too_many_arguments,
-    reason = "shared state between walk and emit: drive, roots, fold, filters, output"
+    reason = "shared walk/emit state incl. the parallel dir + malformed caches"
 )]
 fn walk_drive_desc(
     drive: &DriveCompactIndex,
@@ -331,6 +337,7 @@ fn walk_drive_desc(
     fold: &uffs_text::case_fold::CaseFold,
     fold_buf: &mut Vec<u8>,
     dir_cache: &mut DirCache,
+    mal_cache: &mut MalformedCache,
     filter_mode: FilterMode,
     search_filters: &SearchFilters,
     output: &mut Vec<DisplayRow>,
@@ -370,6 +377,7 @@ fn walk_drive_desc(
                     fold,
                     fold_buf,
                     dir_cache,
+                    mal_cache,
                     output,
                 );
             }
@@ -408,7 +416,7 @@ fn walk_drive_desc(
 /// skipped silently — they carry no user-visible content.
 #[expect(
     clippy::too_many_arguments,
-    reason = "borrowed per-walk state: volume_prefix, fold, fold_buf, dir_cache, output"
+    reason = "borrowed per-walk state: volume_prefix, fold, fold_buf, dir/malformed caches, output"
 )]
 fn emit_if_passes(
     drive: &DriveCompactIndex,
@@ -419,6 +427,7 @@ fn emit_if_passes(
     fold: &uffs_text::case_fold::CaseFold,
     fold_buf: &mut Vec<u8>,
     dir_cache: &mut DirCache,
+    mal_cache: &mut MalformedCache,
     output: &mut Vec<DisplayRow>,
 ) -> bool {
     let Some(rec) = drive.records.get(idx as usize) else {
@@ -431,8 +440,15 @@ fn emit_if_passes(
     if !passes_filter_mode(rec.is_directory(), filter_mode) {
         return false;
     }
-    let path = tree::resolve_path_cached(drive, idx as usize, volume_prefix, dir_cache);
-    let row = make_display_row(idx, drive.letter, rec, name, path);
+    let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+        drive,
+        idx as usize,
+        volume_prefix,
+        dir_cache,
+        mal_cache,
+    );
+    let forensics = row_forensics(rec, &drive.names, path_malformed);
+    let row = make_display_row(idx, drive.letter, rec, name, path, forensics);
     if !row_passes_filters(&row, search_filters, fold, fold_buf) {
         return false;
     }
@@ -530,7 +546,7 @@ fn collect_path_only_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 if matches!(filter_mode, FilterMode::FilesOnly) && rec.is_directory() {
                     continue;
                 }
-                if hide_system && rec.is_system_metafile() {
+                if hide_system && rec.is_system_metafile(&drive.names) {
                     continue;
                 }
                 if hide_ads {
@@ -569,6 +585,8 @@ fn collect_path_only_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
         .map(|chunk| {
             let mut local_caches: std::collections::HashMap<u16, DirCache> =
                 std::collections::HashMap::new();
+            let mut local_mal_caches: std::collections::HashMap<u16, MalformedCache> =
+                std::collections::HashMap::new();
             let mut local_rows: Vec<DisplayRow> = Vec::with_capacity(chunk.len());
             let mut local_candidates: u64 = 0;
             for &(drive_idx, rec_idx) in chunk {
@@ -588,8 +606,25 @@ fn collect_path_only_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                 let cache = local_caches
                     .entry(drive_idx)
                     .or_insert_with(|| tree::dir_cache_with_capacity(256));
-                let path = tree::resolve_path_cached(drive, rec_idx as usize, volume_prefix, cache);
-                local_rows.push(make_display_row(rec_idx, drive.letter, rec, name, path));
+                let mal_cache = local_mal_caches
+                    .entry(drive_idx)
+                    .or_insert_with(|| tree::malformed_cache_with_capacity(256));
+                let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
+                    drive,
+                    rec_idx as usize,
+                    volume_prefix,
+                    cache,
+                    mal_cache,
+                );
+                let forensics = row_forensics(rec, &drive.names, path_malformed);
+                local_rows.push(make_display_row(
+                    rec_idx,
+                    drive.letter,
+                    rec,
+                    name,
+                    path,
+                    forensics,
+                ));
                 local_candidates += 1;
             }
             let local_cache_entries: u64 =

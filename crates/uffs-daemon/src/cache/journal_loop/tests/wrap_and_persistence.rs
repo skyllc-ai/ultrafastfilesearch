@@ -7,9 +7,13 @@
 //!
 //! * **Cursor seeded at spawn** — `cursor_store.load(letter)` is the first
 //!   poll's cursor argument when the store has a pre-loaded value.
-//! * **Cursor persisted on save** — the loop calls `cursor_store.store(letter,
-//!   cursor)` at the same time as `trigger_save` so on-disk cursor and on-disk
-//!   body advance together.
+//! * **Cursor handed to the sink on save** — the loop passes its read position
+//!   into `PatchSink::trigger_save(letter, reason, cursor)`.  The loop itself
+//!   no longer persists the cursor on save; the production sink
+//!   (`RegistryPatchSink`) persists it **in lockstep with a successful
+//!   compact-cache body save** (a parked shard's save is a no-op, so its cursor
+//!   must not advance on disk).  The sink-side lockstep is pinned in
+//!   `cache::journal_sink` tests.
 //! * **Wrap detected via `journal_id` change** — a different `journal_id`
 //!   between two successive non-zero polls fires `sink.journal_wrapped(letter)`
 //!   and the wrap-tick's changes are NOT applied via `accept`.
@@ -64,7 +68,7 @@ async fn cursor_loaded_from_store_at_spawn() {
 }
 
 #[tokio::test]
-async fn cursor_persisted_on_save_trigger() {
+async fn cursor_handed_to_sink_on_save_trigger() {
     let source = Arc::new(FakeJournalSource::new());
     let sink = Arc::new(RecordingSink::new());
     let cursor_store = Arc::new(FakeCursorStore::new());
@@ -105,11 +109,22 @@ async fn cursor_persisted_on_save_trigger() {
         converged,
         "save did not fire within {CONVERGENCE_DEADLINE:?}"
     );
+    // The loop hands its read position (100) to the sink's
+    // `trigger_save` so the sink can persist it in lockstep with the
+    // body save.
+    let save_cursors = sink.save_cursors();
+    assert!(
+        save_cursors.contains(&100),
+        "cursor 100 must be handed to the sink's trigger_save; got {save_cursors:?}"
+    );
+    // The loop itself must NOT persist the cursor on save — that
+    // responsibility moved to the sink so a parked shard's no-op
+    // save can't advance the on-disk cursor past the on-disk body.
     let log = cursor_store.store_log();
     assert!(
-        log.iter()
+        !log.iter()
             .any(|&(letter, cursor)| letter == uffs_mft::platform::DriveLetter::C && cursor == 100),
-        "cursor 100 must be persisted alongside the save trigger; log = {log:?}"
+        "loop must not persist the save cursor directly; log = {log:?}"
     );
 }
 

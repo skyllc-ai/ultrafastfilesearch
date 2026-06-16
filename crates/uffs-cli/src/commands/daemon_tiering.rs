@@ -98,10 +98,9 @@ pub(crate) fn daemon_hibernate(drives: &[uffs_mft::platform::DriveLetter]) -> Re
 ///
 /// ```bash
 /// $ uffs daemon preload C D --pin-minutes 60
-/// Daemon preloaded:
-///   Promoted to Hot:   C, D
-///   Already Hot:       (none)
-///   Pin expires at:    1700001800000 (Unix-millis)
+/// Daemon preloaded (60-min pin):
+///   Promoted to Hot:  C, D
+///   Pin expires at:   in 60m
 /// ```
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn daemon_preload(
@@ -125,14 +124,16 @@ pub(crate) fn daemon_preload(
         "  Promoted to Hot:  {}",
         format_drive_list(&response.promoted)
     );
-    println!(
-        "  Already Hot:      {}",
-        format_drive_list(&response.already_hot)
-    );
+    if !response.already_hot.is_empty() {
+        println!(
+            "  Already Hot:      {}",
+            format_drive_list(&response.already_hot)
+        );
+    }
     if response.pin_until_unix_ms > 0 {
         println!(
-            "  Pin expires at:   {} (Unix-millis)",
-            response.pin_until_unix_ms
+            "  Pin expires at:   {}",
+            format_ms_until(response.pin_until_unix_ms)
         );
     }
     if !response.errors.is_empty() {
@@ -231,11 +232,11 @@ pub(crate) fn daemon_forget(drives: &[uffs_mft::platform::DriveLetter], force: b
 ///
 /// ```bash
 /// $ uffs daemon status_drives
-/// DRIVE  TIER    RESIDENT     QPM   LAST QUERY (ms)   PIN UNTIL (ms)   PROMOTIONS
-/// C      hot     1.20 GiB   45.30   1700000000000     1700001800000              3
-/// D      warm    843 MiB     2.10   1699999940000     -                          0
-/// E      parked  12 MiB      0.00   1699999600000     -                          1
-/// F      cold    0 B         0.00   -                 -                          0
+/// DRIVE  TIER    RESIDENT     QPM   LAST QUERY        PIN UNTIL        PROMOTIONS
+/// C      hot     1.20 GiB   45.30   3m ago            in 57m                    3
+/// D      warm    843 MiB     2.10   4m ago            -                         0
+/// E      parked  12 MiB      0.00   8m ago            -                         1
+/// F      cold    0 B         0.00   -                 -                         0
 /// ```
 ///
 /// The `PROMOTIONS` column surfaces the cumulative `Cold → Hot`
@@ -287,7 +288,7 @@ pub(crate) fn daemon_status_drives() -> Result<()> {
 
     println!(
         "{:<6} {:<7} {:<10} {:<7} {:<17} {:<16} {:>10}",
-        "DRIVE", "TIER", "RESIDENT", "QPM", "LAST QUERY (ms)", "PIN UNTIL (ms)", "PROMOTIONS",
+        "DRIVE", "TIER", "RESIDENT", "QPM", "LAST QUERY", "PIN UNTIL", "PROMOTIONS",
     );
     for drive in &response.drives {
         print_status_drive_row(drive);
@@ -309,12 +310,12 @@ pub(crate) fn daemon_status_drives() -> Result<()> {
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_status_drive_row(drive: &DriveTierStatus) {
     let last_query = if drive.last_query_at_ms > 0 {
-        drive.last_query_at_ms.to_string()
+        format_ms_ago(drive.last_query_at_ms)
     } else {
         "-".to_owned()
     };
     let pin_until = if drive.pin_until_unix_ms > 0 {
-        drive.pin_until_unix_ms.to_string()
+        format_ms_until(drive.pin_until_unix_ms)
     } else {
         "-".to_owned()
     };
@@ -353,6 +354,64 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} KiB", bytes / KIB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+/// Format a Unix-millisecond timestamp as a human-readable elapsed string
+/// relative to now (e.g. `"just now"`, `"5s ago"`, `"3m ago"`, `"2h ago"`).
+///
+/// Used for the `LAST QUERY` column in [`daemon_status_drives`].  A
+/// clock-read failure falls back to `"?"` so the operator always sees
+/// *something* rather than a panic or a raw millisecond value.
+fn format_ms_ago(unix_ms: i64) -> String {
+    let now_ms: i64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|dur| i64::try_from(dur.as_millis()).ok())
+        .unwrap_or(0);
+    let secs = now_ms.saturating_sub(unix_ms) / 1_000;
+    if secs < 5 {
+        "just now".to_owned()
+    } else if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+/// Format a Unix-millisecond future timestamp as a human-readable countdown
+/// (e.g. `"in 60m"`, `"in 2h 30m"`, `"expired"`).
+///
+/// Used for the `PIN UNTIL` column in [`daemon_status_drives`] and for the
+/// `Pin expires at:` line in [`daemon_preload`].  An already-expired pin or
+/// a clock-read failure renders as `"expired"`.
+fn format_ms_until(unix_ms: i64) -> String {
+    let now_ms: i64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|dur| i64::try_from(dur.as_millis()).ok())
+        .unwrap_or(0);
+    let diff = unix_ms.saturating_sub(now_ms);
+    if diff <= 0 {
+        return "expired".to_owned();
+    }
+    let secs = diff / 1_000;
+    if secs < 60 {
+        format!("in {secs}s")
+    } else if secs < 3_600 {
+        format!("in {}m", secs / 60)
+    } else {
+        let hours = secs / 3_600;
+        let mins = (secs % 3_600) / 60;
+        if mins == 0 {
+            format!("in {hours}h")
+        } else {
+            format!("in {hours}h {mins}m")
+        }
     }
 }
 

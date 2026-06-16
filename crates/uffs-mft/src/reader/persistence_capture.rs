@@ -57,9 +57,10 @@ impl MftReader {
         let drive_type = detect_drive_type(self.volume);
         let chunk_size = match drive_type {
             crate::platform::DriveType::Nvme | crate::platform::DriveType::Ssd => 8 * 1024 * 1024,
-            crate::platform::DriveType::Hdd | crate::platform::DriveType::Unknown => {
-                4 * 1024 * 1024
-            }
+            crate::platform::DriveType::Hdd
+            | crate::platform::DriveType::Removable
+            | crate::platform::DriveType::Virtual
+            | crate::platform::DriveType::Unknown => 4 * 1024 * 1024,
         };
 
         let chunks = generate_read_chunks(&extent_map, None, chunk_size);

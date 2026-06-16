@@ -3,7 +3,7 @@
 
 //! Filtering methods for `MftQuery`.
 
-use uffs_polars::{col, lit};
+use uffs_polars::{NamedFrom as _, PlSmallStr, Series, col, lit};
 
 use super::MftQuery;
 
@@ -44,17 +44,30 @@ impl MftQuery {
         }
     }
 
-    /// Hide system files (files starting with `$`).
+    /// Hide reserved NTFS metafiles (`$MFT`, `$LogFile`, `$Bitmap`, the
+    /// `$Extend` family, …).
     ///
-    /// This filters out NTFS system files like `$MFT`, `$Bitmap`,
-    /// `$Recycle.Bin`, etc. These files have names starting with `$` which
-    /// is not a valid character for user-created files on Windows.
+    /// Only the fixed set of reserved names from
+    /// [`crate::compact::is_ntfs_metafile_name`] is removed (matched
+    /// case-insensitively).  Ordinary `$`-prefixed files — `$Recycle.Bin`,
+    /// `$PatchCache`, the `WinSxS` `$$_*.cdf-ms` filemaps — are real
+    /// user-visible files (Everything and Explorer show them) and are KEPT.
+    /// A plain `name.starts_with('$')` filter wrongly hid all of those.
     #[must_use]
     pub fn hide_system_files(self) -> Self {
+        let lower: Vec<String> = crate::compact::NTFS_METAFILE_NAMES
+            .iter()
+            .map(|name| name.to_lowercase())
+            .collect();
+        let series = Series::new(PlSmallStr::EMPTY, &lower);
         Self {
-            lazy: self
-                .lazy
-                .filter(col("name").str().starts_with(lit("$")).not()),
+            lazy: self.lazy.filter(
+                col("name")
+                    .str()
+                    .to_lowercase()
+                    .is_in(lit(series).implode(true), false)
+                    .not(),
+            ),
         }
     }
 
@@ -87,11 +100,15 @@ impl MftQuery {
         }
     }
 
-    /// Hide both system files (`$`-prefixed) and metadata records (FRS < 16).
+    /// Hide reserved NTFS metafiles, by both record position and name.
     ///
-    /// This provides full legacy-output parity by excluding:
-    /// 1. NTFS metadata records (FRS 0-15)
-    /// 2. System files with `$` prefix (like `$Extend` subdirectories)
+    /// 1. [`hide_metadata_records`](Self::hide_metadata_records) — drops the
+    ///    FRS 0-15 reserved records (keeps root FRS 5).
+    /// 2. [`hide_system_files`](Self::hide_system_files) — drops any record
+    ///    whose name is a reserved metafile (`$MFT`, `$Extend`, …).
+    ///
+    /// Ordinary `$`-prefixed files (`$Recycle.Bin`, `WinSxS` `$$_*.cdf-ms`) are
+    /// NOT hidden by either step.
     #[must_use]
     pub fn hide_system(self) -> Self {
         self.hide_metadata_records().hide_system_files()

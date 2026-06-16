@@ -72,5 +72,8 @@ pub const fn field_id_to_format_column(col: OutputColumn) -> FmtColumn {
         OutputColumn::ParityAttributes => FmtColumn::ParityAttributes,
         OutputColumn::NameLength => FmtColumn::NameLength,
         OutputColumn::PathLength => FmtColumn::PathLength,
+        OutputColumn::Malformed => FmtColumn::Malformed,
+        OutputColumn::MalformedPath => FmtColumn::MalformedPath,
+        OutputColumn::NameHex => FmtColumn::NameHex,
     }
 }

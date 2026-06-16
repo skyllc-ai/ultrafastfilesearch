@@ -157,8 +157,21 @@ impl KnownExceptions {
         // Adding an entry here requires the crate to actually have a
         // `README.md` alongside its `Cargo.toml` — cargo will emit a
         // packaging error otherwise.
-        let readme_override_ok: BTreeSet<&'static str> =
-            ["uffs-text", "uffs-time"].into_iter().collect();
+        //
+        // All 6 crates of the publishable subset carry their own
+        // `README.md` (#237 + #239) and the explicit override silences
+        // the cosmetic `cargo package` warning about `../../README.md`
+        // being outside the package — see issue #240.
+        let readme_override_ok: BTreeSet<&'static str> = [
+            "uffs-cli",
+            "uffs-client",
+            "uffs-mcp",
+            "uffs-mft",
+            "uffs-text",
+            "uffs-time",
+        ]
+        .into_iter()
+        .collect();
 
         // Per-crate `keywords` + `categories` override allow-list.
         // The four library crates listed below ship a public surface
@@ -838,17 +851,30 @@ workspace = true
 
     #[test]
     fn readme_override_on_allowlisted_crate_is_suppressed() {
-        // `uffs-time` is on the allow-list and uses the conventional
-        // `readme = "README.md"` same-name pattern — must not fire.
+        // Every crate in the 6-member publishable subset is on the
+        // allow-list and uses the conventional `readme = "README.md"`
+        // same-name pattern — none must fire.  Iterating the whole set
+        // (not just `uffs-time`) guards against a future regression
+        // that silently drops one crate from `readme_override_ok`.
         let text = MEMBER_CLEAN.replace("readme.workspace = true", "readme = \"README.md\"");
         let m = parse_member(&text).unwrap();
-        let d = disc("crates/uffs-time/Cargo.toml", &m);
         let exc = KnownExceptions::new();
-        let findings = audit_metadata_fields(&d, "uffs-time", &exc);
-        assert!(
-            findings.is_empty(),
-            "allow-listed readme override should be suppressed; got: {findings:?}"
-        );
+        for id in [
+            "uffs-cli",
+            "uffs-client",
+            "uffs-mcp",
+            "uffs-mft",
+            "uffs-text",
+            "uffs-time",
+        ] {
+            let path = format!("crates/{id}/Cargo.toml");
+            let d = disc(&path, &m);
+            let findings = audit_metadata_fields(&d, id, &exc);
+            assert!(
+                !findings.iter().any(|f| f.detail.contains("`readme`")),
+                "allow-listed readme override should be suppressed for `{id}`; got: {findings:?}"
+            );
+        }
     }
 
     #[test]

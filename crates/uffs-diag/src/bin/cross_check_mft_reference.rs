@@ -234,7 +234,7 @@ fn summarize_directory_agreement(df: &DataFrame) -> Result<()> {
             .context("base_file_record_segment is not UInt64-compatible")?;
 
         let bools: BooleanChunked = base_seg
-            .into_iter()
+            .iter()
             .map(|opt_v| opt_v == Some(0))
             .collect::<BooleanChunked>()
             .with_name("is_base_record_parquet".into());
@@ -310,7 +310,7 @@ fn print_focus_frs(df: &DataFrame, frs_values: &[u64]) -> Result<()> {
             .context("Column 'frs' is not UInt64")?;
 
         let mask: BooleanChunked = frs_col
-            .into_iter()
+            .iter()
             .map(|opt_v| opt_v.map(|value| value == target))
             .collect();
 
@@ -463,7 +463,7 @@ fn filter_by_u64_eq(df: &DataFrame, column: &str, target: u64) -> Result<DataFra
         .context("Failed to obtain UInt64 view after cast")?;
 
     let mask: BooleanChunked = values
-        .into_iter()
+        .iter()
         .map(|opt_v| opt_v.map(|value| value == target))
         .collect();
 

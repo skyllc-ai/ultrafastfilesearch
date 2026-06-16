@@ -653,6 +653,17 @@ jobs:
               fi
             done
 
+            # Broker service — Windows normal/full tiers only.  The CLI's
+            # elevation help advertises `uffs-broker --install` as the
+            # "one-time setup, no future UAC" path; the 2026-06-12 fresh-VM
+            # dry run found the binary missing from the winget zip, making
+            # that advice a dead end.  Non-Windows builds are a no-op stub,
+            # so they stay out of the mac/linux bundles.
+            if [[ "$OS" == "windows-latest" && "$tier" != "min" \
+                  && -f "${BINDIR}/uffs-broker${EXT}" ]]; then
+              cp "${BINDIR}/uffs-broker${EXT}" "$stage/"
+            fi
+
             # Demo TUI — every tier, renamed to a clean `uffs-tui` command.
             if [[ -n "$DEMO_BIN" && -f "$DEMO_BIN" ]]; then
               cp "$DEMO_BIN" "$stage/uffs-tui${EXT}"

@@ -27,8 +27,8 @@
 //! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for status payload + log preludes.  CARGO semver class. |
 //! | `RUST_LOG` | `string` | `info` | `tracing-subscriber` filter directive; consulted in `main` when `UFFS_LOG` is unset.  STANDARD semver class (tracing convention). |
 //! | `UFFS_LOG` | `string` | `info` | UFFS-specific log level override for the daemon binary.  INTERNAL semver class. |
-//! | `UFFS_HOT_TO_WARM_IDLE_SECS` | `int` (seconds) | `60` | Cache tier `Hot → Warm` transition timer override (via `HOT_TO_WARM_IDLE_ENV` const indirection).  INTERNAL semver class. |
-//! | `UFFS_WARM_TO_PARKED_IDLE_SECS` | `int` (seconds) | `300` (5 min) | Cache tier `Warm → Parked` transition timer override (via `WARM_TO_PARKED_IDLE_ENV` const indirection).  INTERNAL semver class. |
+//! | `UFFS_HOT_TO_WARM_IDLE_SECS` | `int` (seconds) | `600` (10 min) | Cache tier `Hot → Warm` transition timer override (via `HOT_TO_WARM_IDLE_ENV` const indirection).  INTERNAL semver class. |
+//! | `UFFS_WARM_TO_PARKED_IDLE_SECS` | `int` (seconds) | `1_800` (30 min) | Cache tier `Warm → Parked` transition timer override (via `WARM_TO_PARKED_IDLE_ENV` const indirection).  INTERNAL semver class. |
 //! | `UFFS_PARKED_TO_COLD_IDLE_SECS` | `int` (seconds) | `86_400` (24 h) | Cache tier `Parked → Cold` transition timer override (via `PARKED_TO_COLD_IDLE_ENV` const indirection).  INTERNAL semver class. |
 //! | `UFFS_USN_REFRESH_INTERVAL_SECS` | `int` (seconds) | `300` (5 min) | USN journal refresh interval override (via `USN_REFRESH_INTERVAL_ENV` const indirection).  INTERNAL semver class. |
 //! | `UFFS_SEARCH_MAX_CONCURRENCY` | `int` (search permits) | auto: `max(2, cpus × 26 / (drives × 10))` | Overrides the auto-tuned search-permit target for `(cpus, drives)` topology (via `index::DriveIndex::SEARCH_CONCURRENCY_ENV` const indirection).  INTERNAL semver class. |
@@ -247,7 +247,6 @@ fn spawn_load_task(
     no_cache: bool,
     load_lifecycle: lifecycle::LifecycleHandle,
 ) -> tokio::task::JoinHandle<()> {
-    let broker_is_available = broker_client::broker_available();
     tokio::spawn(async move {
         tracing::info!(mft_files = mft_files.len(), drives = ?drives, "Load task starting");
         if !mft_files.is_empty() {
@@ -258,18 +257,7 @@ fn spawn_load_task(
         // Live-MFT scanning is Windows-only; on every other platform the
         // load task is fully covered by `load_from_data_dir` above.
         #[cfg(windows)]
-        load_live_drives_if_windows(
-            &load_index,
-            &drives,
-            no_cache,
-            &load_lifecycle,
-            broker_is_available,
-        )
-        .await;
-        if broker_is_available {
-            let _handle_result =
-                broker_client::request_volume_handle(uffs_mft::platform::DriveLetter::C);
-        }
+        load_live_drives_if_windows(&load_index, &drives, no_cache, &load_lifecycle).await;
         tracing::info!("Load task completed");
 
         // Latch the load phase as complete: from this point on, a daemon
@@ -303,19 +291,47 @@ async fn load_live_drives_if_windows(
     drives: &[uffs_mft::platform::DriveLetter],
     no_cache: bool,
     load_lifecycle: &lifecycle::LifecycleHandle,
-    broker_is_available: bool,
 ) {
     if drives.is_empty() {
         return;
     }
-    if broker_is_available {
-        warm_up_broker_handles(drives);
-    }
+    warm_up_broker_handles_unless_elevated(drives);
     tracing::info!(drives = ?drives, "Loading live drives...");
     load_index
         .load_live_drives(drives, no_cache, load_lifecycle)
         .await;
     tracing::info!("Live drives loaded");
+}
+
+/// Run the broker warm-up only when the daemon is **not** already elevated.
+///
+/// Gate on the daemon's OWN elevation, not on a broker probe.  An elevated
+/// daemon opens volumes directly (`CreateFileW`), so a broker request would be
+/// a futile per-drive pipe-open + WARN.  Crucially, `is_elevated()` is a token
+/// query — it does NOT touch the broker pipe, so it has none of the race the
+/// removed `broker_available()` probe had (that probe connected to and consumed
+/// the broker's single pipe instance, starving the real request; 2026-06-13 VM
+/// finding).  When NOT elevated, the handle request itself is the authoritative
+/// broker-presence test: it succeeds when a broker is serving and fails fast
+/// (WARN + direct-open fallback) when not.
+///
+/// Extracted from `load_live_drives_if_windows` so that caller stays under the
+/// `cognitive_complexity` ceiling.
+#[cfg(windows)]
+fn warm_up_broker_handles_unless_elevated(drives: &[uffs_mft::platform::DriveLetter]) {
+    if uffs_mft::is_elevated() {
+        tracing::debug!(
+            pid = std::process::id(),
+            "Daemon is elevated — skipping broker warm-up (direct volume open)"
+        );
+        return;
+    }
+    tracing::info!(
+        pid = std::process::id(),
+        drive_count = drives.len(),
+        "Daemon not elevated — attempting broker warm-up"
+    );
+    warm_up_broker_handles(drives);
 }
 
 /// Best-effort broker pre-warm: ask the elevated broker for a volume
@@ -324,16 +340,29 @@ async fn load_live_drives_if_windows(
 /// ignored — the direct-open path takes over transparently.
 #[cfg(windows)]
 fn warm_up_broker_handles(drives: &[uffs_mft::platform::DriveLetter]) {
+    tracing::info!(
+        daemon_pid = std::process::id(),
+        drives = ?drives,
+        "warm_up_broker_handles: requesting volume handles from the Access Broker"
+    );
     for &drive_letter in drives {
         match broker_client::request_volume_handle(drive_letter) {
             Ok(handle) => {
-                tracing::info!(drive = %drive_letter, handle, "Got broker handle");
+                // Deposit the broker's (elevated, overlapped) volume handle in
+                // the uffs-mft registry; the subsequent `VolumeHandle::open`
+                // for this drive adopts it instead of calling `CreateFileW`
+                // (which a non-elevated daemon can't do).  This is what makes
+                // the broker path actually load the MFT — previously the
+                // handle was fetched and dropped, so the reader fell back to a
+                // direct open and failed with access-denied.
+                uffs_mft::register_broker_handle(drive_letter, handle);
+                tracing::info!(drive = %drive_letter, handle, "Registered broker volume handle");
             }
             Err(broker_err) => {
-                tracing::debug!(
+                tracing::warn!(
                     drive = %drive_letter,
                     error = %broker_err,
-                    "Broker unavailable, using direct access"
+                    "Access Broker handle request FAILED — falling back to direct (elevated) open"
                 );
             }
         }
@@ -525,19 +554,25 @@ async fn spawn_journal_loops_for_warm_shards(
     };
     use cache::journal_sink::RegistryPatchSink;
 
-    let (sink, applier_handle) = RegistryPatchSink::spawn_with_applier(idx);
-    let sink_dyn: Arc<dyn PatchSink> = sink;
-
     // Cursor-store choice: Windows persists per-drive cursors next
     // to the compact cache; Mac/Linux uses the always-zero
     // NullCursorStore (no journal → no cursor → fall back to
     // "start from journal head" semantics, which is the correct
     // no-op on those platforms).
+    //
+    // Shared with the applier: the sink persists each loop's cursor
+    // in lockstep with a successful compact-cache body save (the
+    // loops only seed from it and reset it on wrap), so the on-disk
+    // cursor never outruns the on-disk body.  See `journal_sink`.
     let cursor_store: Arc<dyn CursorStore> = if cfg!(windows) {
         Arc::new(DiskCursorStore::new(uffs_mft::cache::cache_dir()))
     } else {
         Arc::new(NullCursorStore)
     };
+
+    let (sink, applier_handle) =
+        RegistryPatchSink::spawn_with_applier(idx, Arc::clone(&cursor_store));
+    let sink_dyn: Arc<dyn PatchSink> = sink;
 
     let config = JournalLoopConfig::default();
     let letters = idx.loaded_drive_letters().await;

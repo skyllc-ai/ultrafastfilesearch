@@ -37,12 +37,28 @@ pub enum PatternType {
 
 ### Parsing Rules
 
+The leading `X:` drive prefix is split off by the single canonical
+`uffs_mft::platform::split_drive_prefix` (shared by the CLI parse layer
+and the daemon dispatch safety net). The drive becomes a filter and the
+**drive-relative** remainder becomes the pattern; any leading path
+separator is trimmed, so a single trailing segment collapses to a name
+pattern while multi-segment bodies stay path-anchored.
+
 ```
-Input: "c:/pro*"
-  → drive=Some('C'), pattern="/pro*", type=Glob, is_path=true
+Input: "c:"  /  "c:\"  /  "c:/"
+  → drive=Some('C'), pattern="*", type=Glob, is_path=false   (everything on C)
+
+Input: "c:/pro*"  /  "c:\pro*"  /  "c:pro*"
+  → drive=Some('C'), pattern="pro*", type=Glob, is_path=false
+
+Input: "c:\proj\*.rs"
+  → drive=Some('C'), pattern="proj\*.rs", type=Glob, is_path=true  (tree walk, scoped to C)
 
 Input: "*.rs"
   → drive=None, pattern="*.rs", type=Glob, is_path=false
+
+Input: "\proj\*.rs"
+  → drive=None, pattern="\proj\*.rs", type=Glob, is_path=true  (tree walk, all drives)
 
 Input: ">C:\\Temp.*\.txt"
   → drive=None, pattern="C:\\Temp.*\.txt", type=Regex, is_path=true

@@ -17,14 +17,17 @@
 # bundled uffs-tui demo) carries over automatically with no manifest
 # authoring on our side.
 #
-# ── uffs-tui alias contract ──────────────────────────────────────────
+# ── nested-alias seed contract ───────────────────────────────────────
 # komac PRESERVES NestedInstallerFiles across version bumps but does NOT
-# auto-add executables it finds in the zip.  The `uffs-tui` alias must be
-# SEEDED into the manifest ONCE — into the auto-generated PR for the first
-# release whose uffs-windows-x64.zip actually contains uffs-tui.exe — after
-# which every auto-release carries all five aliases forward.  Procedure +
-# idempotent patcher: packaging/winget/README.md and
-# scripts/dev/winget_add_tui_alias.sh.
+# auto-add executables it finds in the zip.  Each binary bundled beyond
+# the founding four (uffs/uffsd/uffsmcp/uffs-mft) — currently uffs-tui
+# and uffs-broker — must be SEEDED into the manifest ONCE, into the
+# auto-generated PR for the first release whose uffs-windows-x64.zip
+# actually contains it; thereafter komac carries it forward.  Canonical
+# alias list + idempotent seeder: packaging/winget/nested-aliases.yaml,
+# scripts/dev/winget_seed_aliases.sh (see packaging/winget/README.md).
+# NOTE: uffs-broker shipped in the zip at v0.5.122 but is NOT yet seeded
+# in the manifest — do it on the next SkyLLC.UFFS winget PR.
 #
 # ── Required secret ──────────────────────────────────────────────────
 # `WINGET_TOKEN` — a **classic** Personal Access Token with the

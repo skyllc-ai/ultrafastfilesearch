@@ -28,8 +28,11 @@ pub struct MftIndexFragment {
     pub records: Vec<FileRecord>,
     /// FRS → record index lookup (local to this fragment)
     pub frs_to_idx: Vec<u32>,
-    /// Filenames concatenated (local buffer)
-    pub names: String,
+    /// Filenames concatenated (local buffer), stored as **WTF-8 bytes** so
+    /// ill-formed (surrogate-bearing) NTFS names survive the parallel-parse
+    /// path losslessly and merge byte-faithfully into the final `MftIndex`
+    /// `names` buffer (WI-4.4).
+    pub names: Vec<u8>,
     /// Overflow hard link entries
     pub links: Vec<LinkInfo>,
     /// Overflow stream entries
@@ -50,7 +53,7 @@ impl MftIndexFragment {
         Self {
             records: Vec::with_capacity(record_capacity),
             frs_to_idx: Vec::with_capacity(record_capacity),
-            names: String::with_capacity(record_capacity * 20), // ~20 chars avg
+            names: Vec::with_capacity(record_capacity * 20), // ~20 bytes avg
             links: Vec::new(),
             streams: Vec::new(),
             internal_streams: Vec::new(),
@@ -106,10 +109,19 @@ impl MftIndexFragment {
         }
     }
 
-    /// Add a filename to the names buffer, return the offset.
+    /// Add a filename to the names buffer, return the byte offset.
+    ///
+    /// Convenience for valid-`&str` names; delegates to
+    /// [`Self::add_name_bytes`].
     pub fn add_name(&mut self, name: &str) -> u32 {
+        self.add_name_bytes(name.as_bytes())
+    }
+
+    /// Add a filename's **raw bytes** (WTF-8) to the names buffer, return the
+    /// byte offset. Lossless path for ill-formed NTFS names (WI-4.4).
+    pub fn add_name_bytes(&mut self, name: &[u8]) -> u32 {
         let offset = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
-        self.names.push_str(name);
+        self.names.extend_from_slice(name);
         offset
     }
 

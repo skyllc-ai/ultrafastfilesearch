@@ -151,7 +151,7 @@ const COMPACT_MAGIC: &[u8; 8] = b"UFFSCOM\0";
 ///   10 caches are rejected at the header check so the daemon does a fresh MFT
 ///   rebuild and writes a v10 cache; carrying them forward with an empty
 ///   `frs_to_compact` would silently disable the surgical-patch path.
-const COMPACT_VERSION: u16 = 10;
+const COMPACT_VERSION: u16 = 11;
 
 mod filters_io;
 pub mod parked;
@@ -901,13 +901,17 @@ fn parse_compact_header(data: &[u8]) -> Result<(u64, usize, u16), &'static str> 
         .get(8..10)
         .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
         .map_or(0, u16::from_le_bytes);
-    if version < 10 {
-        // Phase 8 cache-format break: v < 10 caches don't carry the
-        // `frs_to_compact` mapping, so the surgical patch path
-        // (`apply_usn_patch`) can't operate on them.  Reject here
-        // and let the caller's full-MFT-rebuild fallback write a
-        // fresh v10 cache.
-        return Err("stale compact version (v<10 → rebuild for Phase 8 frs_to_compact)");
+    if version < 11 {
+        // Two cache-format breaks gate the v11 floor:
+        //   • Phase 8 (v10): added the `frs_to_compact` mapping the surgical
+        //     USN patch path needs.
+        //   • WI-4.4 (v11): the names blob is now raw WTF-8 (ill-formed NTFS
+        //     names retained byte-faithfully) rather than guaranteed UTF-8.
+        // Either way a pre-v11 cache must be rebuilt from the MFT; the
+        // caller's full-rebuild fallback then writes a fresh v11 cache.
+        return Err(
+            "stale compact version (v<11 → rebuild for WI-4.4 WTF-8 names / Phase 8 frs_to_compact)",
+        );
     }
     if version > COMPACT_VERSION {
         return Err("unsupported compact version (future)");

@@ -14,6 +14,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Windows Access Broker: non-elevated search with no UAC prompts
+
+`uffs-broker --install` (one-time, from an elevated shell) registers a small
+`LocalSystem` Windows service that vends elevated NTFS volume handles to the
+non-elevated daemon over a named pipe. After that, **every `uffs` search reads
+the live MFT with no UAC prompt**, surviving reboots — removing the
+"elevate every session" friction that Windows file-search tools normally carry.
+The service verifies the client is the UFFS daemon (name allow-list +
+Authenticode) before granting any handle, and is removed cleanly with
+`uffs-broker --uninstall`.
+
+On the non-elevated path this reaches full parity with an elevated read:
+
+- **Complete MFT index, including fragmented MFTs** — the extent map is
+  bootstrapped from the `$MFT` record's own run list when the file can't be
+  opened directly.
+- **Incremental USN-journal refresh** through the brokered handle (no more
+  full rebuild on every refresh), with a backoff so an unavailable journal
+  never floods the log.
+- **In-process Authenticode verification** (`WinVerifyTrust`) replacing a
+  per-request PowerShell spawn — faster, and no dependency on PowerShell.
+- **Concurrent multi-instance pipe** and a real Windows service lifecycle
+  (install / auto-start on boot / graceful `sc stop` / uninstall).
+
+### Performance — bounded live-drive load fan-out
+
+Loading many drives at once is now capped at roughly the CPU-core count, so a
+large estate (≈25+ drives) no longer fans out into a memory / I-O / thread
+spike during startup. Small estates (drives ≤ cores) load fully in parallel
+exactly as before — no change for typical setups.
+
 ### Fixed — ship pipeline: force `cargo clean` after a `rustc` toolchain bump
 
 `just ship` step `00-toolchain-ensure` can bump the pinned nightly, but
@@ -803,7 +834,7 @@ hunting for the wrong things.
 
 Plan §1 goal-4 ("no regression on CLI hot path vs the v0.5.35
 baseline") verified end-to-end on the Windows 7-drive reference
-box.  Current v0.5.109 (post-Phase-8 tiered architecture) is
+box.  Current v0.5.120 (post-Phase-8 tiered architecture) is
 **universally faster** than v0.5.35 across every benchmarked
 pattern, with the largest result set (`*.dll`, 44 529 rows)
 showing a **2.7× speedup**:
@@ -811,7 +842,7 @@ showing a **2.7× speedup**:
 ```
 Drive D, 7.07 M records, 30 rounds, HOT phase, p50 / p95 wall_ms:
 
-                              v0.5.35      v0.5.109       Δ p50
+                              v0.5.35      v0.5.120       Δ p50
     exact      (3 rows)       20 / 23   →  18 / 19      −10 %
     prefix     (8 732)        46 / 50   →  40 / 46      −13 %
     ext_rare   (11)           18 / 20   →  17 / 18       −6 %
@@ -987,7 +1018,7 @@ log-message renames fail CI before reaching another 24-h soak.
   2026-05-13.  No new operator-surface features land on `main`
   until v0.6.0 ships.
 
-## [0.5.109] - 2026-05-08
+## [0.5.120] - 2026-05-08
 
 > **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
 > reached a published GitHub Release: the `release.yml` finalize step hit
@@ -996,7 +1027,7 @@ log-message renames fail CI before reaching another 24-h soak.
 > partial release was deleted, the tag name became permanently locked by
 > GitHub's *immutable releases* feature (the pre-receive hook refuses any
 > future ref creation under that name even after a clean delete).  The
-> public release sequence therefore jumps `v0.5.90 → v0.5.109`; all
+> public release sequence therefore jumps `v0.5.90 → v0.5.120`; all
 > intended v0.5.91 changes are rolled forward into this release.
 
 ### Fixed

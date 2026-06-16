@@ -1,0 +1,284 @@
+{
+  "_comment": "Machine-readable extract of the CURRENT canonical benchmark report — the numbers UFFS has published. The bench suite (uffs-bench Stage 4 assembly) compares each new run's cross-tool cells against these and renders the '## vs baseline' section in REPORT-DRAFT.md. Refresh this file as part of promoting a new canonical report into docs/benchmarks/ (see runbook.md). G: is a 15K-record removable test volume whose targeted cells have zero matches (pure dispatch overhead). Full-scan cells for E/M/S and the 7-drive combined scope come from the dedicated UFFS-only all-drives capture (raw/2026-06-v0.5.120_full-scan-all-drives.csv).",
+  "report": "2026-06-v0.5.120-vs-everything.md",
+  "measured": "2026-06-11",
+  "uffs_version": "0.5.120",
+  "es_version": "1.4.1.1032",
+  "phase": "hot",
+  "sink": "file",
+  "cells": [
+    {
+      "drive": "C",
+      "pattern": "exact",
+      "uffs_p50_ms": 20,
+      "es_p50_ms": 69,
+      "rows": 30
+    },
+    {
+      "drive": "C",
+      "pattern": "prefix",
+      "uffs_p50_ms": 80,
+      "es_p50_ms": 102,
+      "rows": 38285
+    },
+    {
+      "drive": "C",
+      "pattern": "ext_rare",
+      "uffs_p50_ms": 19,
+      "es_p50_ms": 59,
+      "rows": 1
+    },
+    {
+      "drive": "C",
+      "pattern": "ext_dll",
+      "uffs_p50_ms": 96,
+      "es_p50_ms": 237,
+      "rows": 166684
+    },
+    {
+      "drive": "C",
+      "pattern": "ext_regex_alt",
+      "uffs_p50_ms": 30,
+      "es_p50_ms": 82,
+      "rows": 18085
+    },
+    {
+      "drive": "C",
+      "pattern": "substring",
+      "uffs_p50_ms": 39,
+      "es_p50_ms": 105,
+      "rows": 25320
+    },
+    {
+      "drive": "D",
+      "pattern": "exact",
+      "uffs_p50_ms": 20,
+      "es_p50_ms": 67,
+      "rows": 3
+    },
+    {
+      "drive": "D",
+      "pattern": "prefix",
+      "uffs_p50_ms": 39,
+      "es_p50_ms": 75,
+      "rows": 8732
+    },
+    {
+      "drive": "D",
+      "pattern": "ext_rare",
+      "uffs_p50_ms": 19,
+      "es_p50_ms": 61,
+      "rows": 11
+    },
+    {
+      "drive": "D",
+      "pattern": "ext_dll",
+      "uffs_p50_ms": 37,
+      "es_p50_ms": 117,
+      "rows": 44529
+    },
+    {
+      "drive": "D",
+      "pattern": "ext_regex_alt",
+      "uffs_p50_ms": 26,
+      "es_p50_ms": 74,
+      "rows": 10438
+    },
+    {
+      "drive": "D",
+      "pattern": "substring",
+      "uffs_p50_ms": 35,
+      "es_p50_ms": 85,
+      "rows": 12458
+    },
+    {
+      "drive": "F",
+      "pattern": "exact",
+      "uffs_p50_ms": 19,
+      "es_p50_ms": 62,
+      "rows": 30
+    },
+    {
+      "drive": "F",
+      "pattern": "prefix",
+      "uffs_p50_ms": 59,
+      "es_p50_ms": 94,
+      "rows": 30087
+    },
+    {
+      "drive": "F",
+      "pattern": "ext_rare",
+      "uffs_p50_ms": 19,
+      "es_p50_ms": 60,
+      "rows": 14
+    },
+    {
+      "drive": "F",
+      "pattern": "ext_dll",
+      "uffs_p50_ms": 87,
+      "es_p50_ms": 221,
+      "rows": 152584
+    },
+    {
+      "drive": "F",
+      "pattern": "ext_regex_alt",
+      "uffs_p50_ms": 26,
+      "es_p50_ms": 73,
+      "rows": 10839
+    },
+    {
+      "drive": "F",
+      "pattern": "substring",
+      "uffs_p50_ms": 35,
+      "es_p50_ms": 91,
+      "rows": 18756
+    },
+    {
+      "drive": "G",
+      "pattern": "exact",
+      "uffs_p50_ms": 17,
+      "es_p50_ms": 61,
+      "rows": 0
+    },
+    {
+      "drive": "G",
+      "pattern": "prefix",
+      "uffs_p50_ms": 18,
+      "es_p50_ms": 58,
+      "rows": 0
+    },
+    {
+      "drive": "G",
+      "pattern": "ext_rare",
+      "uffs_p50_ms": 18,
+      "es_p50_ms": 56,
+      "rows": 0
+    },
+    {
+      "drive": "G",
+      "pattern": "ext_dll",
+      "uffs_p50_ms": 18,
+      "es_p50_ms": 57,
+      "rows": 0
+    },
+    {
+      "drive": "G",
+      "pattern": "ext_regex_alt",
+      "uffs_p50_ms": 17,
+      "es_p50_ms": 59,
+      "rows": 0
+    },
+    {
+      "drive": "G",
+      "pattern": "substring",
+      "uffs_p50_ms": 17,
+      "es_p50_ms": 57,
+      "rows": 0
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "exact",
+      "uffs_p50_ms": 21,
+      "es_p50_ms": 73,
+      "rows": 63
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "prefix",
+      "uffs_p50_ms": 108,
+      "es_p50_ms": 139,
+      "rows": 77104
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "ext_rare",
+      "uffs_p50_ms": 20,
+      "es_p50_ms": 42,
+      "rows": 26
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "ext_dll",
+      "uffs_p50_ms": 181,
+      "es_p50_ms": 456,
+      "rows": 363797
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "ext_regex_alt",
+      "uffs_p50_ms": 43,
+      "es_p50_ms": 91,
+      "rows": 39362
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "substring",
+      "uffs_p50_ms": 69,
+      "es_p50_ms": 154,
+      "rows": 56534
+    },
+    {
+      "drive": "C",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 1561,
+      "es_p50_ms": null,
+      "rows": 3295681
+    },
+    {
+      "drive": "D",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 2308,
+      "es_p50_ms": null,
+      "rows": 4772520
+    },
+    {
+      "drive": "F",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 957,
+      "es_p50_ms": null,
+      "rows": 2124007
+    },
+    {
+      "drive": "G",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 24,
+      "es_p50_ms": null,
+      "rows": 15126
+    },
+    {
+      "drive": "C+D+F+G",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 4833,
+      "es_p50_ms": null,
+      "rows": 10207863
+    },
+    {
+      "drive": "E",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 1439,
+      "es_p50_ms": null,
+      "rows": 2928074
+    },
+    {
+      "drive": "M",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 836,
+      "es_p50_ms": null,
+      "rows": 1908750
+    },
+    {
+      "drive": "S",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 3828,
+      "es_p50_ms": null,
+      "rows": 8278062
+    },
+    {
+      "drive": "C+D+E+F+G+M+S",
+      "pattern": "full_scan",
+      "uffs_p50_ms": 11980,
+      "es_p50_ms": null,
+      "rows": 23322046
+    }
+  ]
+}

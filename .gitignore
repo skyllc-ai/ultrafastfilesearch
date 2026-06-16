@@ -34,15 +34,8 @@ target/
 # =============================================================================
 # Build artifacts & generated binaries
 # =============================================================================
-# `build/` holds generated artifacts (workflow state, logs) that must stay
-# out of git, EXCEPT the bespoke version-bump rust-script which is invoked
-# by `just ship` (see `just/build.just`, `just/dev.just`,
-# `scripts/ci-pipeline/src/version.rs`).  That script is the single source of
-# truth for workspace version bumps until release-plz takes over in Phase R5
-# of `docs/architecture/release-automation-plan.md` — at which point the
-# script is deleted and this exception line goes with it.
-build/*
-!build/update_all_versions.rs
+# Build artifacts directory — all generated files stay out of git.
+build/
 *.rlib
 *.bin
 # `*.bin` is meant to keep transient generated blobs out of git, but the
@@ -96,7 +89,10 @@ dist/
 .idea/
 .vscode/
 .ai/
-.claude/
+# Claude Code: local state stays ignored, but the project hook config that
+# blocks gate-bypass flags is tracked and shared (scripts/hooks/claude_no_bypass.sh).
+.claude/*
+!.claude/settings.json
 .qodo/
 .reuse/
 .windsurf/
@@ -150,10 +146,37 @@ metadata.json
 !/docs/benchmarks/**
 
 # =============================================================================
+# Local benchmark artifacts (never commit run output)
+# =============================================================================
+# Bench artifacts are consolidated under $UFFS_BENCH_DIR (default: a temp dir);
+# these root-anchored rules are a defensive guard against stray in-repo writes
+# from older bench runs / scripts.  Root-anchored (leading `/`) so they never
+# touch the tracked `/docs/benchmarks/` hub above.
+/benchmarks/
+/out/bench/
+/uffs_bench_out.csv
+/bench_uffs_*.csv
+/bench_cpp_*.csv
+/bench_es_*.csv
+
+# =============================================================================
 # Local-only spec/prompt files
 # =============================================================================
 /prompts/
 INTENT_PROMPT.md
 INTENT_PROMPT_V2.md
-INTENT_SPEC_FAANG_CORE_INFRA.mdconsole
+INTENT_SPEC_FAANG_CORE_INFRA.md
+
+# Stray cargo/script `console` artifacts (a 2025 append lost its newline and
+# merged this pattern into the .md line above, so it never matched; restored)
+console
 crates/uffs-cli/console
+
+# =============================================================================
+# Demo video cuts (scripts/dev/demo/*-video.tape outputs) are upload
+# artifacts for YouTube/LinkedIn/X — never committed.  GIF variants in
+# assets/demo/ remain the only tracked demo media.
+# =============================================================================
+uffs-cli-video.mp4
+uffs-tui-video.mp4
+uffs-mcp-claude-video.mp4

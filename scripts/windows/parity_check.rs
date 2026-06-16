@@ -7,6 +7,7 @@
 //!   rust-script scripts/windows/parity_check.rs D [E F] [--bin-dir DIR] [--sample N]
 //!   rust-script scripts/windows/parity_check.rs C --pattern "*.txt"
 //!   rust-script scripts/windows/parity_check.rs C --pattern ">C:\\Users\\.*\.(jpg|png)"
+//!
 //! ```cargo
 //! [dependencies]
 //! sha2 = "0.10"
@@ -39,6 +40,7 @@ fn parse_args() -> Config {
     let mut drives = vec![]; let mut bin = home().join("bin"); let mut sample = 30usize;
     let mut pattern = "*".to_string();
     let mut name_only = false;
+    let mut out_dir: Option<PathBuf> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -46,16 +48,37 @@ fn parse_args() -> Config {
             "--sample" => { i += 1; sample = args[i].parse().unwrap_or(30); }
             "--pattern" => { i += 1; pattern = args[i].clone(); }
             "--name-only" => { name_only = true; }
+            "--out-dir" | "--paths" => { i += 1; out_dir = Some(PathBuf::from(&args[i])); }
             a if !a.starts_with('-') => drives.push(a.to_uppercase()),
             _ => {}
         }
         i += 1;
     }
-    if drives.is_empty() { eprintln!("Usage: parity_check.rs <DRIVE> [--pattern PAT] [--name-only] [--bin-dir DIR] [--sample N]"); std::process::exit(1); }
-    Config { drives, pattern, name_only, cpp: bin.join("uffs.com"), rust: bin.join("uffs.exe"), sample, out: env::current_dir().unwrap() }
+    if drives.is_empty() { eprintln!("Usage: parity_check.rs <DRIVE> [--pattern PAT] [--name-only] [--bin-dir DIR] [--sample N] [--out-dir DIR]"); std::process::exit(1); }
+    // Explicit --out-dir wins; otherwise land under the shared bench tree's
+    // `parity/` namespace (NOT the cwd).
+    let out = out_dir.unwrap_or_else(|| shared_bench_root().join("parity"));
+    fs::create_dir_all(&out).ok();
+    Config { drives, pattern, name_only, cpp: bin.join("uffs.com"), rust: bin.join("uffs.exe"), sample, out }
 }
 
 fn home() -> PathBuf { env::var_os("USERPROFILE").or(env::var_os("HOME")).map(PathBuf::from).unwrap_or(".".into()) }
+
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and the other bench scripts so every tool
+/// writes under ONE tree.  Precedence: `$UFFS_BENCH_DIR` >
+/// `%LOCALAPPDATA%\uffs-bench` > `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.
+fn shared_bench_root() -> PathBuf {
+    if let Some(v) = env::var_os("UFFS_BENCH_DIR") {
+        if !v.is_empty() { return PathBuf::from(v); }
+    }
+    if let Some(v) = env::var_os("LOCALAPPDATA") {
+        if !v.is_empty() { return PathBuf::from(v).join("uffs-bench"); }
+    }
+    let base = env::var_os("XDG_CACHE_HOME").filter(|s| !s.is_empty()).map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".cache"));
+    base.join("uffs-bench")
+}
 fn ts() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
 fn flush() { std::io::stdout().flush().ok(); }
 

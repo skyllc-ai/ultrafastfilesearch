@@ -1,0 +1,78 @@
+# ============================================================================
+# uffs-bench: Robust Benchmark-Suite Orchestrator
+# ============================================================================
+# Workspace-only tool crate that drives the reproducible benchmark flow
+# described in `docs/benchmarks/robust-benchmark-flow-execution-plan.md` and
+# its implementation guide.
+#
+# Guiding principle: "no crumb left behind" — every host-state mutation is
+# snapshotted, executed, then restored, with the restore registered BEFORE the
+# mutation (Drop-guarded so it fires on early return / panic).  All side effects
+# go through the `Host` trait so the whole orchestrator is unit-testable with a
+# `MockHost` on any OS, in the same `cargo nextest` lane as `just go`.
+#
+# This crate currently lands Phase P1 (the hygiene / UX / state spine):
+#   host · restore · gate · state · tooling · fingerprint · bundle
+# Measurement stages (P2–P9) build on this foundation.
+# ============================================================================
+
+[package]
+name = "uffs-bench"
+description = "Robust, reproducible benchmark-suite orchestrator for UFFS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation.workspace = true
+
+# Workspace-only orchestration tool — never published to crates.io.  Inherits
+# the workspace default `publish = false` (per the root manifest's publish
+# policy) rather than declaring its own, keeping the root the single source of
+# truth.  Distinct from the 5-crate publishable subset.
+publish.workspace = true
+
+# Phase R6 docs.rs build configuration — preserved for workspace-uniform
+# manifest shape (manifest-audit invariant 3.15).  This crate is
+# `publish = false`, so docs.rs never builds it; the block is inert but keeps
+# the member manifest consistent with every other workspace member.  The
+# orchestrator drives Windows-only competitor tooling in later phases, so the
+# target set mirrors `uffs-diag`.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[dependencies]
+# Error handling for the crate-level error type.
+thiserror.workspace = true
+
+# State file + tooling/decision records are serialized to `bundle/state.json`.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+# Content hashing: step `input_hash` (resume engine) + host fingerprint diff.
+sha2.workspace = true
+hex.workspace = true
+
+# Timestamps recorded in the state file and on every step/acquisition.
+chrono.workspace = true
+
+# CLI entry point (`main.rs`): mode/flag parsing for the orchestrator binary.
+clap = { workspace = true, features = ["derive", "env", "wrap_help"] }
+
+# Parse the pinned-competitor manifest (`scripts/windows/competitors.toml`).
+toml.workspace = true
+
+[dev-dependencies]
+# Real-filesystem round-trip tests for `SystemHost` (MockHost tests need no FS).
+tempfile.workspace = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints (inherit from workspace)
+# ─────────────────────────────────────────────────────────────────────────────
+[lints]
+workspace = true

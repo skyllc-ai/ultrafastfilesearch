@@ -24,7 +24,7 @@ use crate::error::ClientError;
 ///
 /// Propagates spawn failures from [`spawn_daemon`].
 pub(crate) fn auto_start_daemon(
-    spawn_args: &[String],
+    spawn_args: &[std::ffi::OsString],
     policy: ElevationPolicy,
 ) -> Result<Option<crate::daemon_child::DaemonChildHandle>, ClientError> {
     let pid_path = pid_file_path();
@@ -44,8 +44,7 @@ pub(crate) fn auto_start_daemon(
     }
 
     let daemon_exe = find_daemon_exe();
-    let str_args: Vec<&str> = spawn_args.iter().map(String::as_str).collect();
-    let handle = spawn_daemon(&daemon_exe, &str_args, policy)?;
+    let handle = spawn_daemon(&daemon_exe, spawn_args, policy)?;
     Ok(Some(handle))
 }
 
@@ -86,6 +85,9 @@ fn is_process_alive(pid: u32) -> bool {
             .stderr(std::process::Stdio::null())
             .output()
             .is_ok_and(|output| {
+                // AUDIT-OK(bytes): daemon-identity probe via substring match; a lossy
+                // decode can only FAIL the match → treat as 'not the daemon' (fail-safe
+                // reconnect), never a false positive. (WI-4.3 follow-up)
                 let text = String::from_utf8_lossy(&output.stdout);
                 // tasklist prints  "uffsd.exe  <PID> ..." when the process matches.
                 // Verify both the PID and the executable name.
@@ -113,6 +115,9 @@ fn is_daemon_process(pid: u32) -> bool {
         .stderr(std::process::Stdio::null())
         .output()
         .is_ok_and(|output| {
+            // AUDIT-OK(bytes): daemon-identity probe via substring match; a lossy
+            // decode can only FAIL the match → treat as 'not the daemon' (fail-safe
+            // reconnect), never a false positive. (WI-4.3 follow-up)
             let comm = String::from_utf8_lossy(&output.stdout);
             // `ps -o comm=` prints the executable path or basename.
             // Match if any path component is "uffsd".

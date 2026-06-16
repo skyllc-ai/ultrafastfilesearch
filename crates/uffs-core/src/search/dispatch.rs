@@ -16,9 +16,10 @@
 //!    `uffs_client::protocol::cli_args::into_search_params`.  Direct JSON-RPC
 //!    `search` callers and library users that build `SearchParams` manually
 //!    skip the parse-time layer; these catch the two rewrites at dispatch time
-//!    so every entry point lands on the same hot paths.  `is_pure_ext_glob` and
-//!    `parse_bare_drive_prefix` are internal helpers consumed by
-//!    `apply_dispatch_safety_nets` — kept private to this module.
+//!    so every entry point lands on the same hot paths.  `is_pure_ext_glob` is
+//!    an internal helper consumed by `apply_dispatch_safety_nets`; the
+//!    drive-prefix split is the shared `uffs_mft::platform::split_drive_prefix`
+//!    (same primitive the CLI parse layer uses, so both agree).
 //!
 //! 2. **Per-branch dispatchers** ([`dispatch_match_all`], [`dispatch_regex`],
 //!    [`dispatch_trigram_or_tree`]) — the three leaf dispatch paths +
@@ -167,39 +168,6 @@ fn extract_extensions_from_regex(pattern: &str) -> Option<Vec<String>> {
         .then_some(exts)
 }
 
-/// Parse a bare drive-letter prefix from a pattern.
-///
-/// Returns `Some((letter_upper, rest))` when the pattern matches
-/// `<letter>:<rest>` where `<letter>` is a single ASCII alphabetic
-/// character and `<rest>` is non-empty and does NOT start with `\` or
-/// `/` (path-anchored forms like `C:\*.dll` must keep routing through
-/// the tree walker).
-///
-/// Used by the search-dispatch safety net: if a caller (e.g. direct
-/// JSON-RPC `search` method) supplies `pattern="C:*.dll"` with an
-/// empty `drives_filter`, we can still narrow the search to drive `C`
-/// and (via the ext-glob follow-up) route through the `ExtensionIndex`.
-///
-/// Mirror of `uffs_client::protocol::cli_args::parse_bare_drive_prefix` —
-/// keep the two in sync.  See that function's doc for the full
-/// acceptance matrix.
-fn parse_bare_drive_prefix(pattern: &str) -> Option<(uffs_mft::platform::DriveLetter, &str)> {
-    let bytes = pattern.as_bytes();
-    let letter = *bytes.first()?;
-    if !letter.is_ascii_alphabetic() {
-        return None;
-    }
-    if *bytes.get(1)? != b':' {
-        return None;
-    }
-    let rest = pattern.get(2..)?;
-    if rest.is_empty() || rest.starts_with(['\\', '/']) {
-        return None;
-    }
-    let dl = uffs_mft::platform::DriveLetter::parse(letter as char).ok()?;
-    Some((dl, rest))
-}
-
 /// Apply dispatch-time pattern-rewrite safety nets, in canonical order.
 ///
 /// Mirrors the parse-time rewrites in
@@ -213,9 +181,12 @@ fn parse_bare_drive_prefix(pattern: &str) -> Option<(uffs_mft::platform::DriveLe
 ///
 /// 1. `<letter>:<rest>` → `drives_filter = [<letter>]`, `pattern = <rest>`.
 ///    Only fires when the caller's `drives_filter_empty` and not `match_path`.
-///    Path-anchored forms (`C:\*.dll`) are excluded by
-///    `parse_bare_drive_prefix`.  The promoted letter is pushed into
-///    `drive_buf` (which the caller uses as backing storage for a
+///    Delegates to `uffs_mft::platform::split_drive_prefix`, so the bare
+///    (`C:`), drive-root (`C:\`), and path-anchored (`C:\Users\*.pdf`) forms
+///    are all handled — the drive-relative remainder (`*` for the bare forms)
+///    becomes the new pattern and downstream classification routes it to
+///    match-all / name / tree as appropriate.  The promoted letter is pushed
+///    into `drive_buf` (which the caller uses as backing storage for a
 ///    `&[DriveLetter]` slice that lives for the rest of the dispatch).
 ///
 /// 2. `*.<ext>` → `pattern = "*"`, `extensions += [<ext_lower>]`. Only fires
@@ -238,7 +209,7 @@ fn parse_bare_drive_prefix(pattern: &str) -> Option<(uffs_mft::platform::DriveLe
 /// `drive=C` + `ext=dll` + match-all — exactly the shape the
 /// `numeric_top_n::ext_fast_path` expects.  Rewrite #3 does not
 /// compose with rewrite #1 because regex patterns start with `>` (not
-/// a drive letter), so `parse_bare_drive_prefix` rejects them; path
+/// a drive letter), so `split_drive_prefix` rejects them; path
 /// anchors inside the regex (`>C:\\Users\\.*\.dll$`) stay on the regex
 /// scan path by design — the ext-index would widen the match to all
 /// `.dll` files drive-wide.
@@ -252,7 +223,7 @@ pub(super) fn apply_dispatch_safety_nets(
 ) {
     if drives_filter_empty
         && !match_path
-        && let Some((letter, rest)) = parse_bare_drive_prefix(pattern)
+        && let Some((letter, rest)) = uffs_mft::platform::split_drive_prefix(pattern)
     {
         tracing::debug!(
             original_pattern = *pattern,
@@ -378,18 +349,20 @@ pub(super) fn dispatch_regex(
     Some(rows)
 }
 
-/// Dispatch the default branch: tree-walk for path patterns, trigram
-/// for name patterns, both fanned across drives then filtered + sorted
-/// + truncated.
+/// Dispatch the default branch: tree-walk for path patterns, trigram-
+/// accelerated prefix scan for prefix patterns (`win*`), trigram for the
+/// remaining name patterns — all fanned across drives then filtered +
+/// sorted + truncated.
 #[expect(clippy::too_many_arguments, reason = "single call site, flat args")]
 #[expect(
     clippy::fn_params_excessive_bools,
-    reason = "the four bools (is_path / case_sensitive / whole_word / match_path) are orthogonal runtime switches, each controlling a distinct aspect of trigram vs tree matching; bundling them into an enum would lose that orthogonality"
+    reason = "the bools (is_path / is_prefix / case_sensitive / whole_word / match_path) are orthogonal runtime switches, each controlling a distinct aspect of trigram vs tree matching; bundling them into an enum would lose that orthogonality"
 )]
 pub(super) fn dispatch_trigram_or_tree(
     active_drives: &[&DriveCompactIndex],
     needle: &str,
     is_path: bool,
+    is_prefix: bool,
     case_sensitive: bool,
     whole_word: bool,
     match_path: bool,
@@ -405,6 +378,30 @@ pub(super) fn dispatch_trigram_or_tree(
         .map(|drive| {
             if is_path {
                 super::query::search_compact_drive_tree(drive, needle, limit)
+            } else if is_prefix {
+                // `is_prefix` was validated upstream via `is_prefix_pattern`;
+                // re-extract the prefix and fall back to the generic scan if
+                // the (should-be-impossible) re-validation ever fails.
+                super::tree::is_prefix_pattern(needle).map_or_else(
+                    || {
+                        super::query::search_compact_drive(
+                            drive,
+                            needle,
+                            limit,
+                            case_sensitive,
+                            whole_word,
+                            match_path,
+                        )
+                    },
+                    |prefix| {
+                        super::query::search_compact_drive_prefix(
+                            drive,
+                            prefix,
+                            limit,
+                            case_sensitive,
+                        )
+                    },
+                )
             } else {
                 super::query::search_compact_drive(
                     drive,
@@ -427,10 +424,15 @@ pub(super) fn dispatch_trigram_or_tree(
 
 /// Pick the `cache_profile` `mode` tracing label for the chosen
 /// dispatch branch.  Pure function — no side effects.
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "the four bools are independent runtime dispatch flags; bundling into an enum would lose orthogonality and not improve clarity"
+)]
 pub(super) const fn pick_mode_label(
     is_match_all: bool,
     is_regex: bool,
     is_path: bool,
+    is_prefix: bool,
 ) -> &'static str {
     if is_match_all {
         "match-all"
@@ -438,6 +440,8 @@ pub(super) const fn pick_mode_label(
         "regex"
     } else if is_path {
         "tree"
+    } else if is_prefix {
+        "prefix"
     } else {
         "trigram"
     }
@@ -635,5 +639,68 @@ mod tests {
             vec!["exe".to_owned()],
             "explicit --ext filter must stay untouched"
         );
+    }
+
+    // ── apply_dispatch_safety_nets (drive-prefix branch) ───────────
+
+    #[test]
+    fn safety_net_bare_drive_promotes_to_match_all() {
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("C:", &mut filters);
+        assert_eq!(pat, "*", "bare `C:` becomes match-all on drive C");
+        assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+
+    #[test]
+    fn safety_net_drive_root_promotes_to_match_all() {
+        for raw in ["C:\\", "C:/"] {
+            let mut filters = SearchFilters::default();
+            let (pat, drives) = run_safety_nets(raw, &mut filters);
+            assert_eq!(pat, "*", "`{raw}` becomes match-all on drive C");
+            assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+        }
+    }
+
+    #[test]
+    fn safety_net_drive_plus_name_keeps_name_body() {
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("C:report", &mut filters);
+        assert_eq!(pat, "report");
+        assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+
+    #[test]
+    fn safety_net_drive_root_single_segment_collapses_to_name() {
+        // `C:\report` must behave identically to `C:report`.
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("C:\\report", &mut filters);
+        assert_eq!(pat, "report");
+        assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+
+    #[test]
+    fn safety_net_drive_plus_glob_segment_promotes_to_ext() {
+        // `C:\*.pdf` → drive C + (via ext-glob compose) pattern="*" + ext=pdf.
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("C:\\*.pdf", &mut filters);
+        assert_eq!(pat, "*");
+        assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+        assert_eq!(filters.extensions, vec!["pdf".to_owned()]);
+    }
+
+    #[test]
+    fn safety_net_drive_plus_multi_segment_keeps_tree_body() {
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("C:\\report\\*", &mut filters);
+        assert_eq!(pat, "report\\*", "multi-segment stays a tree path");
+        assert_eq!(drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+
+    #[test]
+    fn safety_net_leaves_no_drive_path_pattern_alone() {
+        let mut filters = SearchFilters::default();
+        let (pat, drives) = run_safety_nets("\\rnio\\*", &mut filters);
+        assert_eq!(pat, "\\rnio\\*", "no drive prefix → untouched");
+        assert!(drives.is_empty());
     }
 }

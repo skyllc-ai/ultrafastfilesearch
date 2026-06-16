@@ -79,7 +79,8 @@ impl MftReader {
                     records = index.len(),
                     "📦 Cache HIT - checking for USN updates"
                 );
-                self.apply_usn_updates_to_fresh_index(index, header).await
+                self.apply_usn_updates_to_fresh_index(index, header, age_seconds)
+                    .await
             }
             CacheStatus::Stale { age_seconds } => {
                 tracing::debug!(drive = %drive, "[TRIP] reader::read_index_cached -> CACHE_STALE path");
@@ -103,6 +104,12 @@ impl MftReader {
     /// [`Self::read_and_cache_index`] when the journal has been recreated or
     /// has wrapped past our checkpoint.
     ///
+    /// `age_seconds` is the cache file's age as reported by
+    /// [`crate::cache::check_cache_status`]; it drives the no-journal
+    /// resilience decision: when the drive's USN journal is unavailable a
+    /// cache older than [`crate::reader::usn_apply::no_journal_max_age_secs`]
+    /// is rebuilt rather than served stale.
+    ///
     /// Extracted from [`Self::read_index_cached`] so each function stays
     /// under the cyclomatic / line-count caps.
     #[cfg(windows)]
@@ -110,11 +117,12 @@ impl MftReader {
         &self,
         mut index: crate::index::MftIndex,
         header: crate::index::IndexHeader,
+        age_seconds: u64,
     ) -> Result<crate::index::MftIndex> {
         use tracing::warn;
 
         use crate::platform::VolumeHandle;
-        use crate::reader::usn_apply::{UsnDecision, classify_usn_state};
+        use crate::reader::usn_apply::{UsnDecision, classify_usn_state, classify_without_journal};
         use crate::usn::query_usn_journal;
 
         let drive = self.volume;
@@ -135,9 +143,12 @@ impl MftReader {
                 warn!(
                     drive = %drive,
                     error = %err,
-                    "⚠️ USN Journal unavailable - using cached index as-is"
+                    "⚠️ USN Journal unavailable - evaluating cache age"
                 );
-                return Ok(index);
+                return match classify_without_journal(drive, age_seconds) {
+                    UsnDecision::Rebuild => self.read_and_cache_index().await,
+                    UsnDecision::UseCached | UsnDecision::Apply { .. } => Ok(index),
+                };
             }
         };
 

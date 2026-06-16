@@ -1,0 +1,86 @@
+[
+  {
+    "drive": "C",
+    "boot": true,
+    "label": "BOOT 990",
+    "drive_type": "NVMe",
+    "total_bytes": 1676799836160,
+    "used_bytes": 1443015032832,
+    "free_bytes": 233784803328,
+    "used_pct": 86.0576797369336,
+    "mft_size_bytes": 4768137216,
+    "mft_records": 4656384
+  },
+  {
+    "drive": "D",
+    "boot": false,
+    "label": "DATA",
+    "drive_type": "HDD",
+    "total_bytes": 8001427599360,
+    "used_bytes": 5124338667520,
+    "free_bytes": 2877088931840,
+    "used_pct": 64.04280491058712,
+    "mft_size_bytes": 5035261952,
+    "mft_records": 4917248
+  },
+  {
+    "drive": "E",
+    "boot": false,
+    "label": "Software",
+    "drive_type": "HDD",
+    "total_bytes": 1000202039296,
+    "used_bytes": 997194219520,
+    "free_bytes": 3007819776,
+    "used_pct": 99.6992787799036,
+    "mft_size_bytes": 3034578944,
+    "mft_records": 2963456
+  },
+  {
+    "drive": "F",
+    "boot": false,
+    "label": "BOOT 980",
+    "drive_type": "NVMe",
+    "total_bytes": 918905880576,
+    "used_bytes": 712986853376,
+    "free_bytes": 205919027200,
+    "used_pct": 77.59084672840234,
+    "mft_size_bytes": 4768137216,
+    "mft_records": 4656384
+  },
+  {
+    "drive": "G",
+    "boot": false,
+    "label": "NTFS_16_GB",
+    "drive_type": "Removable",
+    "total_bytes": 15804112896,
+    "used_bytes": 609714176,
+    "free_bytes": 15194398720,
+    "used_pct": 3.8579462195206027,
+    "mft_size_bytes": 20709376,
+    "mft_records": 20224
+  },
+  {
+    "drive": "M",
+    "boot": false,
+    "label": "Movies",
+    "drive_type": "HDD",
+    "total_bytes": 4000650883072,
+    "used_bytes": 3996461830144,
+    "free_bytes": 4189052928,
+    "used_pct": 99.89529071517525,
+    "mft_size_bytes": 2555904000,
+    "mft_records": 2496000
+  },
+  {
+    "drive": "S",
+    "boot": false,
+    "label": "Storage",
+    "drive_type": "HDD",
+    "total_bytes": 8001545039872,
+    "used_bytes": 7998185267200,
+    "free_bytes": 3359772672,
+    "used_pct": 99.95801095094437,
+    "mft_size_bytes": 12040798208,
+    "mft_records": 11758592
+  }
+]

@@ -1,0 +1,262 @@
+
+==============================================================================================================
+  UFFS per-drive parity benchmark  —  2026-06-12 00:13:48 UTC
+==============================================================================================================
+
+  uffs.exe     : C:\Users\rnio\bin\uffs.exe
+  uffs.exe src : %USERPROFILE%\bin (C:\Users\rnio\bin\uffs.exe)
+  uffs.com     : C:\Users\rnio\bin\uffs.com
+  uffs.com src : %USERPROFILE%\bin (C:\Users\rnio\bin\uffs.com)
+  drives       : C, D, F, G
+  rounds/drive : 10
+  purge-cache  : false
+  cache dir    : C:\Users\rnio\AppData\Local\uffs\cache
+
+  uffs 0.5.120
+  uffs.com 1.0.0
+
+==============================================================================================================
+  Phase 0a: kill + restart daemon  [C, D, F, G]
+==============================================================================================================
+
+  Killing daemon …
+  Daemon restarted with requested drives.
+
+==============================================================================================================
+  Phase 0b: daemon warm-up — 3 priming passes
+==============================================================================================================
+
+  Pass 1 = COLD load (MFT read / cache hit + await_ready)
+  Pass 2 = WARM (first HOT query, JIT structures built)
+  Pass 3 = HOT  (fully primed, steady-state latency)
+  Running `uffs '*' --limit 1 --profile`  ×3 …
+    [pass 1 — COLD]  wall = 0.09 s   daemon = 73 ms
+    [pass 2 — WARM]  wall = 0.07 s   daemon = 53 ms
+    [pass 3 — HOT ]  wall = 0.07 s   daemon = 52 ms
+  await_ready (pass 1) = 0 ms   total_records = 12,815,480
+  Mode: COLD — daemon restarted (on-disk cache retained for faster load)
+
+==============================================================================================================
+  Drive C:  — 10 round(s) per tool
+==============================================================================================================
+
+  [Rust HOT 1/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1358 ms   daemon = 800 ms   rows = 3,510,125
+  [Rust HOT 2/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1382 ms   daemon = 814 ms   rows = 3,510,125
+  [Rust HOT 3/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1411 ms   daemon = 791 ms   rows = 3,510,125
+  [Rust HOT 4/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1625 ms   daemon = 888 ms   rows = 3,510,125
+  [Rust HOT 5/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1700 ms   daemon = 910 ms   rows = 3,510,125
+  [Rust HOT 6/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1635 ms   daemon = 983 ms   rows = 3,510,125
+  [Rust HOT 7/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1350 ms   daemon = 797 ms   rows = 3,510,125
+  [Rust HOT 8/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1488 ms   daemon = 936 ms   rows = 3,510,125
+  [Rust HOT 9/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1647 ms   daemon = 1073 ms   rows = 3,510,125
+  [Rust HOT 10/10]  uffs.exe '*' --drive C --out <tmp> --columns Path --profile
+    -> wall = 1521 ms   daemon = 797 ms   rows = 3,510,125
+  [C++ MFT-reread 1/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 8013 ms   rows = 3,381,649
+  [C++ MFT-reread 2/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7943 ms   rows = 3,381,649
+  [C++ MFT-reread 3/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7782 ms   rows = 3,381,648
+  [C++ MFT-reread 4/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7859 ms   rows = 3,381,648
+  [C++ MFT-reread 5/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7761 ms   rows = 3,381,648
+  [C++ MFT-reread 6/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7809 ms   rows = 3,381,649
+  [C++ MFT-reread 7/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7896 ms   rows = 3,381,647
+  [C++ MFT-reread 8/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7934 ms   rows = 3,381,649
+  [C++ MFT-reread 9/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 8012 ms   rows = 3,381,650
+  [C++ MFT-reread 10/10]  uffs.com '*' --drives=C --columns=path --out=<tmp>
+    -> wall = 7831 ms   rows = 3,381,648
+
+==============================================================================================================
+  Drive D:  — 10 round(s) per tool
+==============================================================================================================
+
+  [Rust HOT 1/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 2834 ms   daemon = 1666 ms   rows = 7,066,011
+  [Rust HOT 2/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 3050 ms   daemon = 1832 ms   rows = 7,066,011
+  [Rust HOT 3/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 2978 ms   daemon = 1915 ms   rows = 7,066,011
+  [Rust HOT 4/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 3120 ms   daemon = 1930 ms   rows = 7,066,011
+  [Rust HOT 5/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 3126 ms   daemon = 1869 ms   rows = 7,066,011
+  [Rust HOT 6/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 2956 ms   daemon = 1798 ms   rows = 7,066,011
+  [Rust HOT 7/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 3113 ms   daemon = 1890 ms   rows = 7,066,011
+  [Rust HOT 8/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 2856 ms   daemon = 1725 ms   rows = 7,066,011
+  [Rust HOT 9/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 2982 ms   daemon = 1955 ms   rows = 7,066,011
+  [Rust HOT 10/10]  uffs.exe '*' --drive D --out <tmp> --columns Path --profile
+    -> wall = 3212 ms   daemon = 2078 ms   rows = 7,066,011
+  [C++ MFT-reread 1/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 32372 ms   rows = 7,065,776
+  [C++ MFT-reread 2/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 32101 ms   rows = 7,065,776
+  [C++ MFT-reread 3/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 31899 ms   rows = 7,065,776
+  [C++ MFT-reread 4/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 31828 ms   rows = 7,065,776
+  [C++ MFT-reread 5/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 31909 ms   rows = 7,065,776
+  [C++ MFT-reread 6/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 32036 ms   rows = 7,065,776
+  [C++ MFT-reread 7/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 31846 ms   rows = 7,065,776
+  [C++ MFT-reread 8/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 32070 ms   rows = 7,065,776
+  [C++ MFT-reread 9/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 32011 ms   rows = 7,065,776
+  [C++ MFT-reread 10/10]  uffs.com '*' --drives=D --columns=path --out=<tmp>
+    -> wall = 31847 ms   rows = 7,065,776
+
+==============================================================================================================
+  Drive F:  — 10 round(s) per tool
+==============================================================================================================
+
+  [Rust HOT 1/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 834 ms   daemon = 488 ms   rows = 2,221,317
+  [Rust HOT 2/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 976 ms   daemon = 622 ms   rows = 2,221,317
+  [Rust HOT 3/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 931 ms   daemon = 571 ms   rows = 2,221,317
+  [Rust HOT 4/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 993 ms   daemon = 645 ms   rows = 2,221,317
+  [Rust HOT 5/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 1011 ms   daemon = 658 ms   rows = 2,221,317
+  [Rust HOT 6/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 955 ms   daemon = 610 ms   rows = 2,221,317
+  [Rust HOT 7/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 935 ms   daemon = 594 ms   rows = 2,221,317
+  [Rust HOT 8/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 944 ms   daemon = 551 ms   rows = 2,221,317
+  [Rust HOT 9/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 956 ms   daemon = 579 ms   rows = 2,221,317
+  [Rust HOT 10/10]  uffs.exe '*' --drive F --out <tmp> --columns Path --profile
+    -> wall = 930 ms   daemon = 554 ms   rows = 2,221,317
+  [C++ MFT-reread 1/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4706 ms   rows = 2,081,229
+  [C++ MFT-reread 2/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4642 ms   rows = 2,081,229
+  [C++ MFT-reread 3/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4653 ms   rows = 2,081,229
+  [C++ MFT-reread 4/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4720 ms   rows = 2,081,229
+  [C++ MFT-reread 5/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4634 ms   rows = 2,081,229
+  [C++ MFT-reread 6/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4710 ms   rows = 2,081,229
+  [C++ MFT-reread 7/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4672 ms   rows = 2,081,229
+  [C++ MFT-reread 8/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4701 ms   rows = 2,081,229
+  [C++ MFT-reread 9/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4732 ms   rows = 2,081,217
+  [C++ MFT-reread 10/10]  uffs.com '*' --drives=F --columns=path --out=<tmp>
+    -> wall = 4673 ms   rows = 2,081,233
+
+==============================================================================================================
+  Drive G:  — 10 round(s) per tool
+==============================================================================================================
+
+  [Rust HOT 1/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 116 ms   daemon = 90 ms   rows = 15,136
+  [Rust HOT 2/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 24 ms   daemon = 4 ms   rows = 15,136
+  [Rust HOT 3/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 27 ms   daemon = 4 ms   rows = 15,136
+  [Rust HOT 4/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 26 ms   daemon = 3 ms   rows = 15,136
+  [Rust HOT 5/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 24 ms   daemon = 3 ms   rows = 15,136
+  [Rust HOT 6/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 24 ms   daemon = 3 ms   rows = 15,136
+  [Rust HOT 7/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 25 ms   daemon = 4 ms   rows = 15,136
+  [Rust HOT 8/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 25 ms   daemon = 4 ms   rows = 15,136
+  [Rust HOT 9/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 24 ms   daemon = 4 ms   rows = 15,136
+  [Rust HOT 10/10]  uffs.exe '*' --drive G --out <tmp> --columns Path --profile
+    -> wall = 24 ms   daemon = 4 ms   rows = 15,136
+  [C++ MFT-reread 1/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 256 ms   rows = 15,124
+  [C++ MFT-reread 2/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 252 ms   rows = 15,124
+  [C++ MFT-reread 3/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 252 ms   rows = 15,124
+  [C++ MFT-reread 4/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 254 ms   rows = 15,124
+  [C++ MFT-reread 5/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 254 ms   rows = 15,124
+  [C++ MFT-reread 6/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 254 ms   rows = 15,124
+  [C++ MFT-reread 7/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 255 ms   rows = 15,124
+  [C++ MFT-reread 8/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 308 ms   rows = 15,124
+  [C++ MFT-reread 9/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 260 ms   rows = 15,124
+  [C++ MFT-reread 10/10]  uffs.com '*' --drives=G --columns=path --out=<tmp>
+    -> wall = 255 ms   rows = 15,124
+
+==============================================================================================================
+  Summary — table 1: per-drive parity (wall-clock p50 over 10 round(s))
+==============================================================================================================
+
+| Drive | C++ (MFT re-read) | Rust (daemon HOT) | Speedup | Rust rows |  C++ rows |
+| ----- | -----------------: | -----------------: | -------: | ---------: | ---------: |
+| C:    |          7,877 ms |          1,504 ms |    5.2x | 3,510,125 | 3,381,649 |
+| D:    |         31,960 ms |          3,016 ms |   10.6x | 7,066,011 | 7,065,776 |
+| F:    |          4,687 ms |            949 ms |    4.9x | 2,221,317 | 2,081,229 |
+| G:    |            254 ms |             24 ms |   10.6x |    15,136 |    15,124 |
+| TOTAL |         44,778 ms |          5,493 ms |    8.2x |         — |         — |
+
+==============================================================================================================
+  Summary — table 2: Rust wall vs daemon breakdown
+==============================================================================================================
+
+| Drive | Rust rows | Rust wall p50 | Rust daemon p50 | CLI overhead |
+| ----- | ---------: | -------------: | ---------------: | ------------: |
+| C:    | 3,510,125 |      1,504 ms |          851 ms |       653 ms |
+| D:    | 7,066,011 |      3,016 ms |        1,879 ms |     1,137 ms |
+| F:    | 2,221,317 |        949 ms |          586 ms |       363 ms |
+| G:    |    15,136 |         24 ms |            4 ms |        20 ms |
+
+  Legend:
+    Rust wall p50    = process wall-clock from spawn to exit (Rust Instant).
+    Rust daemon p50  = daemon-reported search duration (--profile stderr: 'daemon: N ms').
+    CLI overhead     = wall − daemon  (process spawn + IPC round-trip + file write).
+    C++ has no daemon — its wall-clock IS its total cost (full MFT re-read every run).
+    Row counts differ: Rust returns all MFT records; C++ may apply implicit filters.
+
+==============================================================================================================
+  Summary — daemon warm-up (Phase 0b)
+==============================================================================================================
+
+  Pass 1 [COLD ]  wall = 0.09 s   daemon = 73 ms   (daemon load + MFT read / cache hit)
+  Pass 2 [WARM ]  wall = 0.07 s   daemon = 53 ms   (first HOT query — JIT structures built)
+  Pass 3 [HOT  ]  wall = 0.07 s   daemon = 52 ms   (fully primed — steady-state latency)
+  Await ready   : 0 ms   total_records = 12,815,480
+  Mode          : COLD (daemon restarted, on-disk cache retained for faster load)
+
+==============================================================================================================
+  Done
+==============================================================================================================
+

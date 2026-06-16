@@ -34,8 +34,10 @@ use uuid::Uuid;
 
 /// Ensure the pinned nightly (per `rust-toolchain.toml`) is installed.
 pub(crate) const STEP_TOOLCHAIN_SYNC: &str = "00-toolchain-ensure";
-/// Bump the polars git dependency lock to the latest `main` HEAD.
-pub(crate) const STEP_UPDATE_POLARS: &str = "01-update-polars-git";
+// Step 01 (update-polars-git) was removed: Polars is now a plain
+// crates.io SemVer dependency (see crates/uffs-polars/Cargo.toml), so
+// there is no upstream-main HEAD to chase each ship.  Step numbering is
+// preserved to keep in-flight resumable-ship state files compatible.
 /// Clean cached build artefacts to recover from stale incremental state.
 pub(crate) const STEP_CLEAN_ARTIFACTS: &str = "02-clean-artifacts";
 /// Apply `cargo fmt --all` across the workspace.
@@ -46,8 +48,10 @@ pub(crate) const STEP_COVERAGE_TESTS: &str = "04-coverage-tests";
 pub(crate) const STEP_PARALLEL_VALIDATION: &str = "05-parallel-validation";
 /// Verify `cargo fmt` produces zero diff (idempotency check).
 pub(crate) const STEP_FORMAT_CHECK: &str = "06-format-check";
-/// Bump the workspace `[package].version` in root `Cargo.toml`.
-pub(crate) const STEP_VERSION_INCREMENT: &str = "07-version-increment";
+// Step 07 (version-increment) was removed: version bumping now happens
+// automatically via release-plz on the `main` branch after PR merge.
+// Step numbering is preserved to keep in-flight resumable-ship state
+// files compatible.
 // Steps 08 (build-release) and 09 (deploy-binary) were removed: `just
 // ship` no longer produces binaries locally.  The release branch PR
 // (step 11) lands the version bump on main; `auto-tag-release.yml`
@@ -66,13 +70,12 @@ pub(crate) const STEP_GIT_PUSH: &str = "11-git-push";
 /// even when intermediate steps (08-build-release, 09-deploy-binary)
 /// are retired.
 pub(crate) const ALL_STEPS: &[&str] = &[
-    STEP_UPDATE_POLARS,
     STEP_CLEAN_ARTIFACTS,
     STEP_FORMAT_CODE,
     STEP_COVERAGE_TESTS,
     STEP_PARALLEL_VALIDATION,
     STEP_FORMAT_CHECK,
-    STEP_VERSION_INCREMENT,
+    // STEP_VERSION_INCREMENT retired — release-plz handles version bumps
     STEP_GIT_COMMIT,
     STEP_GIT_PUSH,
 ];
@@ -89,6 +92,9 @@ pub(crate) enum WorkflowPhase {
     /// No pipeline in flight.
     Clean,
     /// Phase 2 step 07: bumping `[workspace.package].version`.
+    /// **RETIRED in Phase R5** — version bumping now handled by release-plz.
+    /// Preserved for backwards compatibility with existing resumable-state
+    /// files.
     VersionIncrementing,
     /// Phase 1 test pass (coverage tests + parallel validation).
     Testing,
@@ -144,6 +150,14 @@ pub(crate) struct WorkflowState {
     /// here so Phase 2 re-runs skip the bump after a successful
     /// previous run.
     pub version_incremented: bool,
+
+    /// Working-tree fingerprint that Phase 1 last validated against (HEAD +
+    /// tracked diff, see `ship::working_tree_fingerprint`).  Empty until the
+    /// first validation passes.  On a re-run, if the current fingerprint
+    /// differs, the code-dependent validation steps are invalidated so they
+    /// re-run on the changed code; an unchanged tree keeps the resume speedup.
+    #[serde(default)]
+    pub validated_fingerprint: String,
 
     /// Per-step duration metrics (seconds), keyed by the step id (e.g.
     /// `03-coverage-tests`). Stored in the workflow-state file so you
@@ -250,6 +264,7 @@ impl WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            validated_fingerprint: String::new(),
             step_durations_secs: BTreeMap::new(),
         }
     }
@@ -372,6 +387,7 @@ impl Default for WorkflowState {
             last_error: None,
             step_tracker: StepTracker::default(),
             version_incremented: false,
+            validated_fingerprint: String::new(),
             step_durations_secs: BTreeMap::new(),
         }
     }

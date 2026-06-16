@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! Known UFFS binaries, per-root vicinity enumeration, and on-disk
+//! version probing (Phase A.2 + A.4 of the self-update design).
+//!
+//! A root is updated as a *coherent set*: every UFFS binary present in
+//! it is a target, not only the one that happened to be running. We
+//! never assume a binary is present — we enumerate what is actually on
+//! disk and record each one's `--version`.
+
+use std::path::Path;
+use std::process::Command;
+
+use super::model::BinaryInfo;
+
+/// Logical stems of every UFFS binary the updater knows about. The
+/// platform `.exe` suffix is added by [`exe_file_name`].
+pub(crate) const KNOWN_BINARIES: [&str; 6] = [
+    "uffs",        // CLI
+    "uffsd",       // daemon
+    "uffsmcp",     // MCP server
+    "uffs-broker", // elevated handle broker (Windows service)
+    "uffs-tui",    // interactive TUI (optional)
+    "uffs-mft",    // diagnostics (optional)
+];
+
+/// Append the platform executable suffix to a binary stem
+/// (`uffsd` → `uffsd.exe` on Windows, `uffsd` elsewhere).
+pub(crate) fn exe_file_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// Enumerate the UFFS binaries actually present in `dir`, probing each
+/// one's version. Binaries that are not present are simply absent from
+/// the result (honor-what-is-installed).
+pub(crate) fn enumerate(dir: &Path) -> Vec<BinaryInfo> {
+    KNOWN_BINARIES
+        .iter()
+        .filter_map(|stem| {
+            let path = dir.join(exe_file_name(stem));
+            path.is_file().then(|| BinaryInfo {
+                name: (*stem).to_owned(),
+                version: probe_version(&path),
+            })
+        })
+        .collect()
+}
+
+/// Run `<path> --version` and parse a semantic-version token from its
+/// output. Returns `None` if the binary cannot be launched or no
+/// version token is found.
+pub(crate) fn probe_version(path: &Path) -> Option<String> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.trim().is_empty() {
+        // Some tools print `--version` to stderr; fall back to it.
+        text = String::from_utf8_lossy(&output.stderr).into_owned();
+    }
+    parse_version(&text)
+}
+
+/// Extract the first `MAJOR.MINOR.PATCH` token from arbitrary
+/// `--version` output (e.g. `"uffs 0.6.2"` → `"0.6.2"`).
+///
+/// Kept pure (no I/O) so it is unit-testable without launching a
+/// process.
+pub(crate) fn parse_version(text: &str) -> Option<String> {
+    text.split(|ch: char| ch.is_whitespace() || ch == '(' || ch == ')' || ch == ',')
+        .find_map(|token| {
+            let trimmed = token.trim_start_matches('v');
+            is_dotted_triple(trimmed).then(|| trimmed.to_owned())
+        })
+}
+
+/// Return `true` when `token` looks like `N.N.N` where each `N` is a
+/// non-empty run of ASCII digits.
+fn is_dotted_triple(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(major), Some(minor), Some(patch), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    [major, minor, patch]
+        .iter()
+        .all(|seg| !seg.is_empty() && seg.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KNOWN_BINARIES, parse_version};
+
+    #[test]
+    fn parses_plain_semver() {
+        assert_eq!(parse_version("0.6.2").as_deref(), Some("0.6.2"));
+    }
+
+    #[test]
+    fn parses_named_version_line() {
+        assert_eq!(parse_version("uffs 0.6.2").as_deref(), Some("0.6.2"));
+        assert_eq!(parse_version("uffsd 0.6.10\n").as_deref(), Some("0.6.10"));
+    }
+
+    #[test]
+    fn parses_v_prefixed_and_parenthesised() {
+        assert_eq!(
+            parse_version("uffs v0.6.2 (abc123)").as_deref(),
+            Some("0.6.2")
+        );
+    }
+
+    #[test]
+    fn rejects_non_triples() {
+        assert_eq!(parse_version("uffs"), None);
+        assert_eq!(parse_version("1.2"), None);
+        assert_eq!(parse_version("1.2.3.4"), None);
+        assert_eq!(parse_version("a.b.c"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn known_set_contains_core_and_optional() {
+        for stem in ["uffs", "uffsd", "uffsmcp", "uffs-broker"] {
+            assert!(KNOWN_BINARIES.contains(&stem), "missing core binary {stem}");
+        }
+    }
+}

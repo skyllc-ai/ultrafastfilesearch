@@ -201,20 +201,42 @@ fn sort_by_size_ascending() -> TestResult {
 
 #[test]
 fn hide_system() -> TestResult {
-    // Create df with NTFS system files ($ prefix and low FRS)
+    // Mix of true metafiles, the root, an ordinary `$`-file, and a plain file.
     let df = DataFrame::new_infer_height(vec![
-        Column::new("frs".into(), &[0_u64, 5, 16, 100]),
-        Column::new("name".into(), &["$MFT", ".", "$Extend", "normal.txt"]),
-        Column::new("size".into(), &[100_u64, 0, 200, 300]),
-        Column::new("is_directory".into(), &[false, true, true, false]),
-        Column::new("is_hidden".into(), &[false, false, false, false]),
-        Column::new("is_system".into(), &[true, false, true, false]),
+        Column::new("frs".into(), &[0_u64, 5, 16, 100, 101]),
+        Column::new("name".into(), &[
+            "$MFT",
+            ".",
+            "$Extend",
+            "normal.txt",
+            "$Recycle.Bin",
+        ]),
+        Column::new("size".into(), &[100_u64, 0, 200, 300, 0]),
+        Column::new("is_directory".into(), &[false, true, true, false, true]),
+        Column::new("is_hidden".into(), &[false, false, false, false, false]),
+        Column::new("is_system".into(), &[true, false, true, false, true]),
     ])?;
 
     let result = MftQuery::new(df).hide_system().collect()?;
-    // Should keep: FRS 5 (root ".") and FRS 100 (normal.txt)
-    // Should exclude: FRS 0 ($MFT, metadata), FRS 16 ($Extend, $ prefix)
-    assert_eq!(result.height(), 2);
+    // Keep:    FRS 5 (root "."), FRS 100 (normal.txt), FRS 101 ($Recycle.Bin —
+    //          an ordinary $-file, NOT a metafile).
+    // Exclude: FRS 0 ($MFT, FRS<16 metadata), FRS 16 ($Extend, reserved name).
+    let kept: std::collections::HashSet<String> = result
+        .column("name")?
+        .str()?
+        .iter()
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        kept,
+        [".", "normal.txt", "$Recycle.Bin"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        "hide_system must drop only true metafiles ($MFT, $Extend) and KEEP \
+         the ordinary $-file $Recycle.Bin; got {kept:?}"
+    );
     Ok(())
 }
 

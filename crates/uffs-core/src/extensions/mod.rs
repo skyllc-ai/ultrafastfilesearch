@@ -328,7 +328,7 @@ impl ExtensionIndex {
         let mut index: HashMap<String, Vec<u64>> = HashMap::new();
         let mut total_files = 0;
 
-        for (frs_opt, name_opt) in frs_col.into_iter().zip(name_col) {
+        for (frs_opt, name_opt) in frs_col.iter().zip(name_col.iter()) {
             let Some(frs) = frs_opt else { continue };
             let Some(name) = name_opt else { continue };
 

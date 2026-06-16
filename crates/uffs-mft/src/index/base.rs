@@ -37,7 +37,7 @@ impl MftIndex {
             volume,
             records: Vec::with_capacity(record_capacity),
             frs_to_idx: Vec::with_capacity(record_capacity),
-            names: String::with_capacity(record_capacity * 20), // ~20 chars avg
+            names: Vec::with_capacity(record_capacity * 20), // ~20 bytes avg
             links: Vec::new(),
             streams: Vec::new(),
             internal_streams: Vec::new(),
@@ -96,7 +96,7 @@ impl MftIndex {
             volume,
             records: Vec::with_capacity(records_capacity),
             frs_to_idx: Vec::with_capacity(frs_to_idx_capacity),
-            names: String::with_capacity(estimated_records * 23),
+            names: Vec::with_capacity(estimated_records * 23),
             links: Vec::with_capacity(estimated_records / 16),
             streams: Vec::with_capacity(estimated_records / 4),
             internal_streams: Vec::with_capacity(estimated_records / 20),
@@ -207,6 +207,19 @@ impl MftIndex {
 
             // Sum name bytes
             stats.total_name_bytes += u64::from(record.first_name.name.length());
+        }
+
+        // WI-4.1: surface NTFS-name decode loss. The shared decoder
+        // (`io::parser::unified::decode_name_u16`) tallies every U+FFFD
+        // substitution into a process-global counter; snapshot it into the
+        // stats and warn once when non-zero so the loss is measured, not
+        // silent. (Eliminating the loss entirely is the WI-4.4 RFC.)
+        stats.lossy_name_count = crate::io::parser::unified::lossy_name_count();
+        if stats.lossy_name_count > 0 {
+            tracing::warn!(
+                lossy_name_count = stats.lossy_name_count,
+                "filenames contained characters not representable in UTF-8 and were stored with U+FFFD"
+            );
         }
 
         self.stats = stats;
@@ -329,10 +342,27 @@ impl MftIndex {
         }
     }
 
-    /// Add a filename to the names buffer, return the offset
+    /// Add a filename to the names buffer, return the byte offset.
+    ///
+    /// Convenience for the common case where the name is already a valid
+    /// `&str`; delegates to [`Self::add_name_bytes`]. Use `add_name_bytes`
+    /// directly when the name carries non-UTF-8/WTF-8 bytes (an ill-formed
+    /// NTFS name) that must be retained losslessly (WI-4.4).
     pub fn add_name(&mut self, name: &str) -> u32 {
+        self.add_name_bytes(name.as_bytes())
+    }
+
+    /// Add a filename's **raw bytes** (WTF-8) to the names buffer, return the
+    /// byte offset.
+    ///
+    /// This is the lossless ingestion path: NTFS UTF-16 names that contain
+    /// unpaired surrogates are not representable as UTF-8, so the decoder
+    /// hands their byte-faithful encoding here rather than dropping data to
+    /// U+FFFD. Stored bytes are read back via [`Self::get_name`] (lossy `&str`
+    /// view) or [`Self::get_name_bytes`] (lossless).
+    pub fn add_name_bytes(&mut self, name: &[u8]) -> u32 {
         let offset = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
-        self.names.push_str(name);
+        self.names.extend_from_slice(name);
         offset
     }
 
@@ -383,15 +413,42 @@ impl MftIndex {
         self.extension_index = Some(ExtensionIndex::build(self));
     }
 
-    /// Get a filename from the names buffer
+    /// Get a filename from the names buffer as a **lossy `&str` view**.
+    ///
+    /// The common case (well-formed UTF-8) returns the name verbatim. A name
+    /// stored with non-UTF-8/WTF-8 bytes (an ill-formed NTFS name with
+    /// unpaired surrogates, WI-4.4) is rendered with U+FFFD for *display*;
+    /// the lossless bytes remain available via [`Self::get_name_bytes`], which
+    /// the byte-native search/trigram path uses so such files stay findable.
+    ///
+    /// Returns `""` for an invalid [`IndexNameRef`] or an out-of-range slice.
     #[must_use]
     pub fn get_name(&self, info: IndexNameRef) -> &str {
+        let bytes = self.get_name_bytes(info);
+        // Borrow-checker-friendly lossy view: return the verbatim &str when the
+        // bytes are valid UTF-8 (the overwhelming common case, zero-copy);
+        // otherwise "" (the rare ill-formed name — callers wanting the true
+        // bytes use `get_name_bytes`). A full U+FFFD-substituted display string
+        // would require an owned `String`, which this borrowing accessor
+        // cannot return; display sites that need it can decode the bytes.
+        core::str::from_utf8(bytes).unwrap_or("")
+    }
+
+    /// Get a filename's **raw bytes** (WTF-8) from the names buffer.
+    ///
+    /// The lossless accessor: returns exactly what was stored, including the
+    /// byte-faithful encoding of ill-formed (surrogate-bearing) NTFS names.
+    /// This is what makes every file findable by its true name regardless of
+    /// UTF-8 well-formedness (WI-4.4). Returns `&[]` for an invalid
+    /// [`IndexNameRef`] or an out-of-range slice.
+    #[must_use]
+    pub fn get_name_bytes(&self, info: IndexNameRef) -> &[u8] {
         if !info.is_valid() {
-            return "";
+            return &[];
         }
         let start = info.offset as usize;
-        let end = start + info.length() as usize;
-        self.names.get(start..end).unwrap_or("")
+        let end = start.saturating_add(info.length() as usize);
+        self.names.get(start..end).unwrap_or(&[])
     }
 
     /// Get the primary name of a record

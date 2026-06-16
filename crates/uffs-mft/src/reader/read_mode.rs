@@ -111,9 +111,12 @@ pub(super) const fn dataframe_effective_mode(
 ) -> MftReadMode {
     match mode {
         MftReadMode::Auto => match drive_type {
-            DriveType::Nvme | DriveType::Ssd | DriveType::Hdd | DriveType::Unknown => {
-                MftReadMode::SlidingIocp
-            }
+            DriveType::Nvme
+            | DriveType::Ssd
+            | DriveType::Hdd
+            | DriveType::Removable
+            | DriveType::Virtual
+            | DriveType::Unknown => MftReadMode::SlidingIocp,
         },
         MftReadMode::Parallel
         | MftReadMode::Streaming
@@ -134,9 +137,12 @@ pub(super) const fn dataframe_effective_mode(
 pub(super) const fn index_effective_mode(mode: MftReadMode, drive_type: DriveType) -> MftReadMode {
     match mode {
         MftReadMode::Auto => match drive_type {
-            DriveType::Nvme | DriveType::Ssd | DriveType::Hdd | DriveType::Unknown => {
-                MftReadMode::SlidingIocpInline
-            }
+            DriveType::Nvme
+            | DriveType::Ssd
+            | DriveType::Hdd
+            | DriveType::Removable
+            | DriveType::Virtual
+            | DriveType::Unknown => MftReadMode::SlidingIocpInline,
         },
         MftReadMode::Parallel
         | MftReadMode::Streaming

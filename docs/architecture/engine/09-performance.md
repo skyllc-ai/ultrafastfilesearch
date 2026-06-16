@@ -10,19 +10,41 @@ This document describes the performance characteristics of UFFS, the optimizatio
 
 ---
 
-## Benchmark Results (current: v0.5.66)
+## Benchmark Results (current: v0.5.120)
 
-> **Publication-grade competitive benchmark report:** [`docs/benchmarks/`](../../benchmarks/) — dated snapshots, fairness methodology, archive policy, reproduction scripts. The current canonical report is [`2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md).
+> **Publication-grade competitive benchmark report:** [`docs/benchmarks/`](../../benchmarks/) — dated snapshots, fairness methodology, archive policy, reproduction scripts. The current canonical report is [`2026-06-v0.5.120-vs-everything.md`](../../benchmarks/2026-06-v0.5.120-vs-everything.md).
 >
 > This engineering-reference doc holds the *raw* cross-drive measurements and per-phase diagnostics used internally. For the story-shaped version with fairness rules, competitor positioning, and TL;DR headline numbers, start at the benchmark hub.
 
-Headline cross-tool result on v0.5.66 (from
-[`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt:580-625`](../../benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt), n=30, HOT,
-apples-to-apples C+D scope):
+Headline cross-tool result on v0.5.120 (from
+[`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](../../benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv), n=10, HOT,
+C/D/F/G + combined scope):
 
-**UFFS beats Everything 12/12 at p50**, median ratio **0.51×
-(UFFS ~1.96× faster)**.  Full table and analysis in
-[`docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md`](../../benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md) §Head-to-head 1, with the engineering-detail source at [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §Current State (internal).
+**UFFS beats Everything 30/30 at p50**, median ratio **0.36×
+(UFFS ~2.8× faster)** — every cell published in the v0.5.66 snapshot
+improved, median −33%.  Full table and analysis in
+[`docs/benchmarks/2026-06-v0.5.120-vs-everything.md`](../../benchmarks/2026-06-v0.5.120-vs-everything.md) §Head-to-head; the prior v0.5.66 series lives in the [archived April report](../../benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md) §Head-to-head 1, with the engineering-detail source at [`docs/research/cross-tool-benchmark-analysis.md`](../../research/cross-tool-benchmark-analysis.md) §Current State (internal).
+
+### Full-scan export — v0.5.120, all 7 drives (`*` → CSV file, HOT, p50, n=10)
+
+Source: [`docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv`](../../benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv)
+(`--hide-system --hide-ads`, end-to-end through the daemon pipe):
+
+| Drive | Wall (p50) | Rows written | Throughput |
+|-------|-----------:|-------------:|-----------:|
+| C: | 1.59 s | 3 295 508 | 2.08 M rec/s |
+| D: | 2.26 s | 4 772 519 | 2.11 M rec/s |
+| E: | 1.44 s | 2 928 074 | 2.03 M rec/s |
+| F: | 0.93 s | 2 124 007 | 2.29 M rec/s |
+| G: | 0.03 s | 15 126 | — (USB stick, floor-bound) |
+| M: | 0.84 s | 1 908 750 | 2.28 M rec/s |
+| S: | 3.83 s | 8 278 062 | 2.16 M rec/s |
+| **All 7** | **11.98 s** | **23 322 046** | **≈ 1.95 M rec/s** |
+
+vs the April snapshot (23.4 M rows, 13.6 s): **12% faster wall-clock,
++13% sustained throughput**.  The 4-drive cross-tool capture agrees as a
+consistency check (C+D+F+G combined: 10 207 863 rows in 4.83 s,
+2.11 M rec/s).
 
 7-drive aggregate numbers on v0.5.62 (from
 [`docs/benchmarks/raw/2026-04-v0.5.62_aggregate-baseline.txt:113-479`](../../benchmarks/raw/2026-04-v0.5.62_aggregate-baseline.txt)):
@@ -31,10 +53,14 @@ apples-to-apples C+D scope):
 |--------------------------------------------------|------------:|
 | COLD start (cache deleted, 25.9 M records)       | 68.5 s      |
 | WARM cache restart (25.9 M records)              | **5.7 s**   |
-| Full-scan export `*` → CSV file                  | 13.5 s      |
+| Full-scan export `*` → CSV file                  | 13.5 s ¹    |
 | Aggregation throughput (`by_extension` etc.)     | ~180 ms     |
 | Daemon RSS                                       | 4.99 GB     |
 | Index heap                                       | 4.66 GB     |
+
+¹ Superseded by the v0.5.120 capture above (11.98 s for the same
+estate).  COLD/WARM and aggregation numbers have not been re-measured
+since v0.5.62.
 
 ### Three-Phase Results — v0.5.4 per-drive table (historical)
 
@@ -98,7 +124,24 @@ that 28 ms tax even when the daemon answers in 0–1 ms.  The `*`
 fullscan regression is independent and tracked as Phase 5 target #2
 (bounded-heap top-N).
 
-### Bulk Retrieval Throughput (7 drives, 25.9M records, `--out-dir`, CSV)
+**v0.5.120 cross-tool capture (HOT, file sink, p50, n=10 — source
+[`docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv`](../../benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv)):**
+targeted patterns run **17–96 ms CLI end-to-end per drive** (exact
+17–21 ms, ext_rare 18–20 ms, substring 17–39 ms, prefix 18–80 ms,
+ext_dll 18–96 ms; 4-drive combined up to 181 ms on the 364 K-row
+`*.dll` set).  The G-drive empty-result cells expose the pure
+spawn+pipe floor at **17–18 ms** — down from the ~28–32 ms measured
+on v0.5.66.  Daemon-side latency was not re-instrumented in this
+capture; the 0–3 ms v0.5.66 figures above remain the latest
+daemon-internal measurements.
+
+### Bulk Retrieval Throughput — v0.5.4 tiers (historical)
+
+Current bulk-export performance is the v0.5.120 full-scan table above
+(**≈ 1.95 M rows/s sustained across all 7 drives**, peaks of
+2.29 M rows/s per drive).  The v0.5.4 tier sweep below predates the
+export-pipeline rewrite and is kept for the tier-scaling shape only;
+its absolute numbers are obsolete.
 
 | Tier | Rows | Avg Time | Avg Rows/sec |
 |------|-----:|---------:|-------------:|
@@ -109,8 +152,9 @@ fullscan regression is independent and tracked as Phase 5 target #2
 | 1M | 1,000,001 | 3.4 s | 292k/s |
 | ALL (per-drive) | 8.3M | 25.6 s | **323k/s** |
 
-> **Pipe vs `--out-dir`:** Shell pipe throughput peaks at ~122k rows/s.
-> Using `--out-dir` (direct file write) reaches **323k rows/s** — a **2.6× speedup** on full exports.
+> **Pipe vs `--out-dir` (v0.5.4):** Shell pipe throughput peaked at ~122k rows/s.
+> Using `--out-dir` (direct file write) reached **323k rows/s** — a **2.6× speedup** on full exports.
+> The direct-file-write advantage still holds on the current pipeline; the absolute rates are the v0.5.120 table above.
 
 ### Scale Ceiling (interactive search, `--limit 100`, 30 rounds)
 
@@ -155,10 +199,10 @@ not yet exist in `scripts/dev/` to re-verify on v0.5.66.
 
 - **Scale is the headline** — UFFS keeps **100M+ records across 16 drives** searchable from one daemon.
 - **Cold-start time is storage-bound** — NVMe is parse-bound, while HDD cold runs are dominated by seek time and raw MFT I/O.
-- **Warm restart is the operator win** — the full 25.9M-record searchable state returns in **6.9 s** from serialized cache.
+- **Warm restart is the operator win** — the full 25.9M-record searchable state returns in **5.7 s** from serialized cache (v0.5.62; 6.9 s on v0.5.4).
 - **Hot queries are media-independent** — once the daemon is warm, single-drive end-to-end queries complete in **6–54 ms** depending on drive size (v0.5.4 per-drive table).  Targeted queries on v0.5.4 returned in **9–13 ms** end-to-end; on v0.5.66 they are **29–32 ms** CLI end-to-end with **0–3 ms daemon-side** — the extra ~20 ms comes from the Phase 1+ thin-client spawn floor on Windows (v0.5.4 predates it).
-- **`*` full-scan top-N has regressed from v0.5.4** — the 163 ms all-drive hot number was never re-verified after the Phase 2 sort rewrite; v0.5.66 measures **1 112 ms** CLI-e2e / 1 081 ms daemon-side on the same hardware ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:657`](../../benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt)).  Tracked as Phase 5 target #2 (bounded-heap top-N).
-- **Bulk export peaks at 323k rows/sec** — using direct file output (`--out-dir`), a full 8.3M-record drive exports in ~25 seconds.
+- **`*` full-scan top-N has regressed from v0.5.4** — the 163 ms all-drive hot number was never re-verified after the Phase 2 sort rewrite; v0.5.66 measures **1 112 ms** CLI-e2e / 1 081 ms daemon-side on the same hardware ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:657`](../../benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt)).  Tracked as Phase 5 target #2 (bounded-heap top-N).  (Distinct from full-scan *export*, which has improved — next bullet.)
+- **Bulk export sustains ≈ 1.95 M rows/sec** (v0.5.120) — the complete 23.3 M-row estate streams to CSV in **12.0 s** end-to-end through the daemon pipe; the largest single drive (S:, 8.3 M rows) exports in 3.83 s at 2.16 M rows/s.  This is ~6× the 323k rows/s the v0.5.4 harness measured.
 
 > 📖 **Full benchmark data:** [Performance](../../user-manual/performance.md)
 
@@ -365,8 +409,11 @@ scans.  On v0.5.4 targeted patterns (`*.dll`, `config`, `notepad.exe`)
 returned in **9–13 ms e2e** vs **161 ms** for `*` on all 7 drives; on
 v0.5.66 the same targeted patterns measure **29–69 ms e2e** (28 ms
 CLI spawn tax + 0–42 ms daemon) while `*` is now **1 112 ms** (see
-§Interactive Search above for the full v0.5.66 table).  At 100 M
-records (v0.5.4 only, not re-verified on v0.5.66) `*` took 808 ms
+§Interactive Search above for the full v0.5.66 table); on v0.5.120
+targeted patterns run **17–96 ms e2e per drive** with the spawn floor
+down to 17–18 ms (the `*` top-N shape was not re-measured — the
+v0.5.120 suite times full-scan *export* instead).  At 100 M
+records (v0.5.4 only, not re-verified since) `*` took 808 ms
 but targeted queries stayed at **11–13 ms** daemon-side.
 
 ---
@@ -385,6 +432,6 @@ but targeted queries stayed at **11–13 ms** daemon-side.
 
 ---
 
-*Document Version: 3.0*
-*Last Updated: 2026-04-14*
-*UFFS Version: 0.5.4*
+*Document Version: 3.1*
+*Last Updated: 2026-06-11*
+*UFFS Version: 0.5.120*

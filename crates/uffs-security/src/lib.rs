@@ -47,6 +47,11 @@ pub mod keystore;
 pub mod log_dir;
 pub mod runtime_dir;
 
+/// In-process Authenticode (`WinVerifyTrust`) signature verification —
+/// shared by the Access Broker and the self-updater. Windows-only.
+#[cfg(windows)]
+pub mod authenticode;
+
 /// Windows named-pipe security helpers (DACL, SID resolution, pipe naming).
 ///
 /// Only compiled on Windows.  See [`pipe`] module docs for the security

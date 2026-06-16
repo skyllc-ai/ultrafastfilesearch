@@ -75,10 +75,11 @@ pub struct CompactRecord {
 
     /// First byte of the filename (e.g. `b'$'` for NTFS metafiles).
     ///
-    /// Cached here so that hot-path filters like `--hide-system` (which only
-    /// need to check `name.starts_with('$')`) can avoid touching the names
-    /// arena entirely — turning a random cache-miss into a sequential field
-    /// read from the `CompactRecord` array.
+    /// Cached here as a cheap hot-path *gate*: only `$`-prefixed records can be
+    /// NTFS metafiles, so [`is_system_metafile`](Self::is_system_metafile) can
+    /// reject virtually every record with one sequential field read instead of
+    /// a random cache-miss into the names arena.  The handful of `$`-prefixed
+    /// candidates then pay one arena lookup for the authoritative name check.
     pub name_first_byte: u8,
 
     /// Explicit tail padding for 8-byte struct alignment.
@@ -88,6 +89,61 @@ pub struct CompactRecord {
         reason = "bytemuck Pod requires all fields same visibility"
     )]
     pub _pad: [u8; 1],
+}
+
+/// The fixed set of reserved NTFS metafile names: the `$`-prefixed records at
+/// reserved FRS 0–15 and under the `$Extend` directory.  An NTFS volume can
+/// only ever contain *these* specific metafiles.
+///
+/// Any *other* `$`-prefixed name — `$Recycle.Bin`, `$PatchCache`,
+/// `$WinREAgent`, the `WinSxS` `$$_*.cdf-ms` filemaps, or a user file literally
+/// named `$foo` — is an ordinary file that file managers and tools like
+/// Everything display. Classifying those as metafiles is exactly the bug
+/// `--hide-system` had.
+///
+/// Matched case-insensitively: NTFS itself is case-insensitive, and these
+/// canonical names are occasionally surfaced with varied casing.
+pub(crate) const NTFS_METAFILE_NAMES: &[&str] = &[
+    // Reserved FRS 0–11 (volume root metafiles)
+    "$MFT",
+    "$MFTMirr",
+    "$LogFile",
+    "$Volume",
+    "$AttrDef",
+    "$Bitmap",
+    "$Boot",
+    "$BadClus",
+    "$Secure",
+    "$UpCase",
+    "$Extend",
+    // `$Extend` directory children
+    "$ObjId",
+    "$Quota",
+    "$Reparse",
+    "$UsnJrnl",
+    "$RmMetadata",
+    "$Deleted",
+    // `$Extend\$RmMetadata` children
+    "$Repair",
+    "$Tops",
+    "$TxfLog",
+    "$Txf",
+];
+
+/// Returns whether `name` is one of the reserved `NTFS_METAFILE_NAMES`
+/// (a crate-private allowlist, so no intra-doc link from this public item).
+///
+/// Real metafiles are already excluded from the compact index at build time
+/// (`build_compact_index` drops them via `PathResolver` FRS-validity, not by
+/// name).  This exact-name check is the *authoritative* classifier for the
+/// `--hide-system` filter, so it can never misclassify an ordinary
+/// `$`-prefixed file as a metafile.
+#[must_use]
+#[inline]
+pub fn is_ntfs_metafile_name(name: &str) -> bool {
+    NTFS_METAFILE_NAMES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
 }
 
 impl CompactRecord {
@@ -101,26 +157,50 @@ impl CompactRecord {
         self.flags & Self::DIRECTORY_BIT != 0
     }
 
-    /// Returns `true` if the filename starts with `$` (NTFS system metafile).
+    /// Returns `true` if this record is one of the reserved NTFS metafiles
+    /// (`$MFT`, `$LogFile`, `$Bitmap`, `$Secure`, the `$Extend` family, …).
     ///
-    /// Uses the cached [`name_first_byte`](Self::name_first_byte) field so the
-    /// check is a single byte comparison — no names-arena access required.
+    /// The cached [`name_first_byte`](Self::name_first_byte) field is a cheap
+    /// gate: every metafile name starts with `$`, and `$`-prefixed records are
+    /// a vanishing fraction of an index, so this rejects virtually every record
+    /// with a single byte comparison and only touches the names arena for the
+    /// handful of `$`-prefixed candidates.  The arena lookup is *required* for
+    /// correctness, because an ordinary file may also start with `$`
+    /// (`$Recycle.Bin`, `$PatchCache`, the `WinSxS` `$$_*.cdf-ms` filemaps) —
+    /// those are NOT metafiles and must not be hidden by `--hide-system`.
+    /// See [`is_ntfs_metafile_name`].
     #[inline]
     #[must_use]
-    pub const fn is_system_metafile(self) -> bool {
-        self.name_first_byte == b'$'
+    pub fn is_system_metafile(&self, names: &[u8]) -> bool {
+        self.name_first_byte == b'$' && is_ntfs_metafile_name(self.name(names))
     }
 
-    /// Get the name from a names blob.
+    /// Get the name from a names blob as a **lossy `&str` view**.
+    ///
+    /// Valid-UTF-8 names (the common case) are returned verbatim; an ill-formed
+    /// (surrogate-bearing) name stored as WTF-8 returns `""` for display. Use
+    /// [`Self::name_bytes`] for the lossless bytes that exact/substring search
+    /// matches against, so a file with an ill-formed name stays findable
+    /// (WI-4.4).
     #[inline]
     #[must_use]
     pub fn name<'a>(&self, names: &'a [u8]) -> &'a str {
+        core::str::from_utf8(self.name_bytes(names)).unwrap_or("")
+    }
+
+    /// Get the name's **raw bytes** (WTF-8) from a names blob — the lossless
+    /// accessor.
+    ///
+    /// Returns exactly the stored bytes, including the byte-faithful encoding
+    /// of an ill-formed NTFS name (unpaired surrogates). This is what makes
+    /// every file matchable/findable by its true name regardless of UTF-8
+    /// well-formedness (WI-4.4). Returns `&[]` for an out-of-range slice.
+    #[inline]
+    #[must_use]
+    pub fn name_bytes<'a>(&self, names: &'a [u8]) -> &'a [u8] {
         let start = self.name_offset as usize;
-        let end = start + self.name_len as usize;
-        names
-            .get(start..end)
-            .and_then(|bytes| core::str::from_utf8(bytes).ok())
-            .unwrap_or("")
+        let end = start.saturating_add(self.name_len as usize);
+        names.get(start..end).unwrap_or(&[])
     }
 }
 
@@ -843,7 +923,6 @@ pub fn build_compact_index(
                 path_len: 0,
                 name_first_byte: index
                     .names
-                    .as_bytes()
                     .get(name_ref.offset as usize)
                     .copied()
                     .unwrap_or(0),
@@ -853,7 +932,7 @@ pub fn build_compact_index(
         .collect();
 
     // Phase 2+3: expand hardlinks and ADS (sequential — rare, <1% of records).
-    let mut names = index.names.as_bytes().to_vec();
+    let mut names = index.names.clone();
     let expanded = expand_links_and_ads(index, &resolver, &resolve_parent, &mut names);
     records.extend(expanded);
 

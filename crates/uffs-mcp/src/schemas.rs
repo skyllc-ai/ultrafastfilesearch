@@ -158,6 +158,10 @@ pub(crate) struct AggregateOutput {
 pub(crate) struct FacetValuesOutput {
     /// The field that was faceted.
     pub field: String,
+    /// Total records scanned.
+    pub records_scanned: usize,
+    /// Query execution time in milliseconds.
+    pub duration_ms: u64,
     /// Aggregation result buckets.
     pub aggregations: serde_json::Value,
     /// Opaque cursor for fetching the next page of facet values (null when no

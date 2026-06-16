@@ -916,8 +916,9 @@ fn search_index_explicit_extensions_not_clobbered() {
 //
 //   1. The fast path now fires under `--hide-system --hide-ads` (otherwise the
 //      extension safety-net would not have populated `filters.extensions`).
-//   2. The inline `hide_system` check still excludes `$`-prefixed NTFS
-//      metafiles.
+//   2. The inline `hide_system` check excludes only *true* reserved NTFS
+//      metafiles (exact names like `$MFT`), NOT every `$`-prefixed file — see
+//      `search_index_hide_system_excludes_true_metafiles_only`.
 //   3. The inline `hide_ads` check still excludes names containing `:`
 //      (Alternate Data Streams).
 //
@@ -955,9 +956,12 @@ fn build_dbt_triple_fixture() -> DriveIndex {
     // *name* also contains `:` — exactly the case the inline
     // `hide_ads` check must catch.
     for (frs, name) in [
-        (200_u64, "$secret.dbt"), // system metafile → hide_system must exclude
-        (201, "normal.dbt"),      // plain file     → must survive all filters
-        (202, "stream:ads.dbt"),  // colon in name  → hide_ads must exclude
+        // Ordinary `$`-prefixed file (like `$Recycle.Bin` or a WinSxS
+        // `$$_*.cdf-ms` filemap): NOT a reserved metafile, so `hide_system`
+        // must KEEP it.  Pre-fix the filter wrongly excluded any `$`-name.
+        (200_u64, "$secret.dbt"),
+        (201, "normal.dbt"),     // plain file    → must survive all filters
+        (202, "stream:ads.dbt"), // colon in name → hide_ads must exclude
     ] {
         let off = idx.add_name(name);
         let ext = idx.intern_extension(name);
@@ -978,11 +982,13 @@ fn build_dbt_triple_fixture() -> DriveIndex {
     }
 }
 
-/// Regression pin — 2026-04-19: `*.dbt --hide-system --hide-ads` must
-/// return exactly `normal.dbt`.  Pre-fix this query ran an O(N) scan
-/// and returned all three records, which were only later filtered in
-/// the post-filter pass — paying scan cost proportional to the full
-/// drive record count on every rare-extension query.
+/// Regression pin — 2026-04-19 (perf) + 2026-06-11 (semantics):
+/// `*.dbt --hide-system --hide-ads` must return exactly `$secret.dbt` and
+/// `normal.dbt`.  `hide_ads` removes the colon-named `stream:ads.dbt`;
+/// `hide_system` removes NOTHING here, because `$secret.dbt` is an ordinary
+/// `$`-prefixed file, not a reserved NTFS metafile.  (Pre-perf-fix the query
+/// ran an O(N) scan; pre-semantics-fix `hide_system` wrongly dropped
+/// `$secret.dbt` and the result was just `normal.dbt`.)
 #[test]
 fn search_index_ext_fast_path_honors_hide_system_and_hide_ads() {
     let index = build_dbt_triple_fixture();
@@ -1004,18 +1010,20 @@ fn search_index_ext_fast_path_honors_hide_system_and_hide_ads() {
         vec!["dbt".to_owned()],
         "ext-glob safety net must promote *.dbt → extensions=[dbt]"
     );
+    let names: std::collections::HashSet<String> = result
+        .rows
+        .iter()
+        .map(|row| row.name().to_owned())
+        .collect();
     assert_eq!(
-        result.rows.len(),
-        1,
-        "exactly normal.dbt must survive hide_system + hide_ads + ext filter; got {:?}",
-        result
-            .rows
-            .iter()
-            .map(|row| row.name().to_owned())
-            .collect::<Vec<_>>()
+        names,
+        ["$secret.dbt", "normal.dbt"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        "hide_ads must drop stream:ads.dbt; hide_system must KEEP the ordinary \
+         $-file $secret.dbt; got {names:?}"
     );
-    let row = result.rows.first().expect("asserted non-empty above");
-    assert_eq!(row.name(), "normal.dbt");
 }
 
 /// Regression pin — 2026-04-19: with both hide flags OFF the same
@@ -1056,10 +1064,12 @@ fn search_index_ext_fast_path_returns_all_when_hide_flags_off() {
     );
 }
 
-/// Regression pin — 2026-04-19: `hide_system` alone must only exclude
-/// `$`-prefixed records, not ADS names.
+/// Regression pin — 2026-06-11: `hide_system` must NOT hide ordinary
+/// `$`-prefixed files.  A reserved NTFS metafile is an exact name
+/// (`$MFT`, `$Boot`, …); `$secret.dbt` is just a file that happens to start
+/// with `$`, so all three records survive `hide_system` alone.
 #[test]
-fn search_index_ext_fast_path_hide_system_only_excludes_dollar_prefix() {
+fn search_index_ext_fast_path_hide_system_keeps_ordinary_dollar_files() {
     let index = build_dbt_triple_fixture();
     let mut filters = super::super::filters::SearchFilters {
         hide_system: true,
@@ -1079,12 +1089,81 @@ fn search_index_ext_fast_path_hide_system_only_excludes_dollar_prefix() {
         .map(|row| row.name().to_owned())
         .collect();
     assert!(
-        !names.contains("$secret.dbt"),
-        "hide_system must exclude $secret.dbt; got {names:?}"
+        names.contains("$secret.dbt"),
+        "hide_system must KEEP the ordinary $-file $secret.dbt; got {names:?}"
     );
     assert!(
         names.contains("normal.dbt") && names.contains("stream:ads.dbt"),
-        "hide_system alone must keep non-$ records; got {names:?}"
+        "hide_system alone must keep every non-metafile record; got {names:?}"
+    );
+}
+
+/// Regression pin — 2026-06-11: `hide_system` MUST still exclude *true*
+/// reserved NTFS metafiles (exact names like `$MFT`), while keeping ordinary
+/// `$`-prefixed files.  Built at a non-reserved FRS so the build-time
+/// `PathResolver` metafile filter does not drop `$MFT` before we can test the
+/// runtime filter.
+#[test]
+fn search_index_hide_system_excludes_true_metafiles_only() {
+    use alloc::sync::Arc;
+
+    use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS};
+
+    use crate::compact::build_compact_index;
+
+    let mut idx = MftIndex::new(uffs_mft::platform::DriveLetter::C);
+    let root_off = idx.add_name(".");
+    let root = idx.get_or_create(ROOT_FRS.into());
+    root.stdinfo.set_directory(true);
+    root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    for (frs, name) in [
+        (300_u64, "$MFT"),     // true metafile      → hide_system excludes
+        (301, "$Recycle.Bin"), // ordinary $-dir     → must survive
+        (302, "report.txt"),   // plain file         → must survive
+    ] {
+        let off = idx.add_name(name);
+        let ext = idx.intern_extension(name);
+        let rec = idx.get_or_create(frs.into());
+        rec.first_name.name = IndexNameRef::new(
+            off,
+            u16::try_from(name.len()).expect("name too long"),
+            true,
+            ext,
+        );
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
+        rec.stdinfo.flags = 0x20;
+    }
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+    let index = DriveIndex {
+        drives: vec![Arc::new(drive)],
+    };
+
+    let mut filters = super::super::filters::SearchFilters {
+        hide_system: true,
+        ..super::super::filters::SearchFilters::default()
+    };
+    let result = search_index(
+        &index,
+        SearchRequest::new("*", &mut filters),
+        FieldId::Modified,
+        true,
+        &[],
+    );
+    let names: std::collections::HashSet<String> = result
+        .rows
+        .iter()
+        .map(|row| row.name().to_owned())
+        .collect();
+    assert!(
+        !names.contains("$MFT"),
+        "hide_system must exclude the true metafile $MFT; got {names:?}"
+    );
+    assert!(
+        names.contains("$Recycle.Bin") && names.contains("report.txt"),
+        "hide_system must keep ordinary $-files and plain files; got {names:?}"
     );
 }
 
@@ -1847,32 +1926,40 @@ fn search_index_path_only_sort_respects_limit() {
     );
 }
 
-/// Path-anchored `C:\*.txt` must NOT trigger the drive-prefix safety
-/// net — the tree walker already scopes to the drive root and expects
-/// the full `C:\<glob>` form intact.  We verify non-promotion by
-/// checking that `filters.extensions` stays empty (drive-prefix would
-/// strip to `\*.txt` which is still not a pure ext glob, so this is
-/// an indirect but deterministic observation: the result set must
-/// match what we'd get by running the same pattern with an explicit
-/// `drives_filter=[]` on an unchanged backend).
+/// `C:\*.txt` now scopes to drive C and globs.  The drive prefix is
+/// split off, the single `*.txt` segment collapses to a name glob, and
+/// the ext-glob safety net promotes it to `ext=["txt"]`.  (Previously
+/// the `c:` token was mistaken for a directory segment by the tree
+/// walker and the search returned nothing.)
 #[test]
-fn search_index_drive_prefix_with_separator_not_promoted() {
+fn search_index_drive_root_glob_scopes_drive_and_promotes_ext() {
     let index = build_two_drive_index();
     let mut filters = super::super::filters::SearchFilters::default();
-    let _result = search_index(
+    let result = search_index(
         &index,
         SearchRequest::new("C:\\*.txt", &mut filters),
         FieldId::Modified,
         true,
         &[],
     );
-    // Primary observation: ext-filter must stay empty — neither the
-    // drive-prefix safety net nor the ext-glob safety net should fire
-    // on a path-anchored pattern.
+    assert_eq!(
+        filters.extensions,
+        vec!["txt".to_owned()],
+        "drive-prefix split + ext-glob promotion must fire on C:\\*.txt"
+    );
     assert!(
-        filters.extensions.is_empty(),
-        "path-anchored pattern must not trigger any safety-net promotion; filters.extensions = {:?}",
-        filters.extensions
+        result
+            .rows
+            .iter()
+            .all(|row| row.drive == uffs_mft::platform::DriveLetter::C),
+        "results must be scoped to drive C"
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .any(|row| row.path.ends_with("report.txt")),
+        "C:\\*.txt must find report.txt on drive C"
     );
 }
 

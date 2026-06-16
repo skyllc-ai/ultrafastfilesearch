@@ -1,0 +1,121 @@
+# Intentionally no: Set Shell "pwsh"
+# VHS on Windows starts cmd.exe by default.
+# We manually enter pwsh below to avoid VHS's PowerShell launcher issue.
+
+Set FontSize 20
+Set Width 1920
+Set Height 1080
+Set Padding 24
+Set Theme "Catppuccin Mocha"
+Set TypingSpeed 45ms
+Set PlaybackSpeed 1.0
+
+Output uffs-tui-video.mp4
+
+Hide
+Type "pwsh -NoLogo -NoProfile"
+Enter
+Sleep 1500ms
+Type "function global:prompt { '>' }"
+Enter
+Show
+
+# UltraFastFileSearch (UFFS)
+# Benchmark-honest demo — VIDEO cut.
+#
+# Same shot list and keystrokes as tui-demo-short.tape; only the static
+# card holds and navigation pacing are tightened for feed video
+# (YouTube / LinkedIn / X), where the first payoff must land within
+# ~4 seconds.  GIF variants keep the longer holds.
+#
+# Recorded against the real binary.
+# No edited timings, no synthetic results.
+#
+# Demo environment:
+#   - Hot daemon (pre-warmed)
+#   - Real filesystem data
+#   - Demo edition TUI
+#
+# The demo edition limits result counts and disables exports.
+
+Set TypingSpeed 1ms
+Type "Clear-Host"
+Enter
+
+Set TypingSpeed 1ms
+Type "# ##           ##   ###############   ###############    #############"
+Enter
+Type "# ##           ##   ##                ##               ##             "
+Enter
+Type "# ##           ##   ##                ##               ##             "
+Enter
+Type "# ##           ##   ###########       ###########        ###########  "
+Enter
+Type "# ##           ##   ##                ##                           ## "
+Enter
+Type "# ##           ##   ##                ##                            ##"
+Enter
+Type "# ##           ##   ##                ##               ##           ##"
+Enter
+Type "#   ###########     ##                ##                 ###########  "
+Enter
+Enter
+Type "# UltraFastFileSearch"
+Enter
+Type "# Hot daemon • Real drives • Real timings"
+Enter
+Type "# 25M+ files searchable in seconds"
+Enter
+
+Sleep 2s
+
+Type "Clear-Host"
+Enter
+
+Type "# Story: unzip, run, search"
+Enter
+Type "# No indexing wait. No pre-generated demo data."
+Enter
+Enter
+
+Sleep 1200ms
+
+Type "# Launching the TUI against a hot daemon"
+Enter
+Type "# Real result counts and measured latency remain visible"
+Enter
+
+Sleep 1200ms
+
+Set TypingSpeed 45ms
+Type "uffs_tui.exe --keys windows --reset-history"
+Enter
+
+Sleep 3500ms
+
+# Search interaction
+# (pauses halved vs the GIF cut; keystrokes identical)
+
+Set TypingSpeed 300ms
+Type "Invoice"
+Sleep 2s
+Tab
+Sleep 2s
+Tab
+
+Set TypingSpeed 1s
+Escape
+PageDown 2
+Down 2
+PageUp 2
+Escape
+
+# Browse previously executed searches
+
+Set TypingSpeed 2s
+Down 5
+
+# Exit the application
+
+Ctrl+Q
+Sleep 2s

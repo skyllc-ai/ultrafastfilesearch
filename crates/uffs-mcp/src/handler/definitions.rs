@@ -284,5 +284,7 @@ pub(crate) fn percent_decode_path(encoded: &str) -> String {
         }
         idx += 1;
     }
+    // AUDIT-OK(bytes): final decode of a locally-assembled buffer for display.
+    // (WI-4.3 follow-up)
     String::from_utf8_lossy(&decoded).into_owned()
 }

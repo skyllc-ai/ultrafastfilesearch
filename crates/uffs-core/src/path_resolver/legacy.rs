@@ -118,7 +118,7 @@ impl PathResolver {
         let frs_col = df.column("frs")?.u64()?;
 
         let paths: Vec<String> = frs_col
-            .into_iter()
+            .iter()
             .map(|frs| {
                 frs.map_or_else(
                     || "<null>".to_owned(),

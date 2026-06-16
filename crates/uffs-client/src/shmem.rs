@@ -57,7 +57,13 @@ pub const PATHS_BLOB_SHMEM_THRESHOLD: usize = 512 * 1024;
 const MAGIC: u32 = 0x5346_4655; // b"UFFS" LE
 
 /// Current binary format version (bumped when `ShmemRecord` layout changes).
-const VERSION: u32 = 2;
+///
+/// v3 (WI-4.4): the two former `ShmemRecord` padding bytes now carry the
+/// `malformed` / `malformed_path` forensic bits. Same 88-byte record size;
+/// the bump guards against an old reader interpreting stale padding as flags.
+/// Shmem blobs are transient per-query temp files, so no migration is needed —
+/// a stale blob is simply rejected and regenerated.
+const VERSION: u32 = 3;
 
 // ── On-disk structures ────────────────────────────────────────────────────
 
@@ -91,8 +97,12 @@ pub(crate) struct ShmemRecord {
     drive: u8,
     /// 1 = directory, 0 = file.
     is_directory: u8,
-    /// Padding for alignment.
-    _pad: [u8; 2],
+    /// WI-4.4: 1 = leaf name is ill-formed (not valid UTF-8), else 0.
+    /// Repurposes a former alignment-padding byte — zero size cost.
+    malformed: u8,
+    /// WI-4.4: 1 = some path component is ill-formed, else 0.
+    /// Repurposes the second former padding byte — zero size cost.
+    malformed_path: u8,
     /// Raw NTFS attribute flags.
     flags: u32,
     /// Logical file size.
@@ -208,7 +218,8 @@ pub fn write_search_results(
         records.push(ShmemRecord {
             drive: row.drive.as_byte(),
             is_directory: u8::from(row.is_directory),
-            _pad: [0; 2],
+            malformed: u8::from(row.malformed),
+            malformed_path: u8::from(row.malformed_path),
             flags: row.flags,
             size: row.size,
             allocated: row.allocated,
@@ -391,6 +402,14 @@ pub fn read_search_results(path: &Path) -> io::Result<SearchResponse> {
             descendants: rec.descendants,
             treesize: rec.treesize,
             tree_allocated: rec.tree_allocated,
+            // WI-4.4: the two malformed bits ride in the record's former
+            // padding bytes (zero size cost). `name_hex` is intentionally NOT
+            // carried by the compact shmem record — adding a variable-length
+            // hex region would cost +8 bytes/row on every row for a vanishingly
+            // rare field; it is served via the JSON projection path instead.
+            malformed: rec.malformed != 0,
+            malformed_path: rec.malformed_path != 0,
+            name_hex: None,
         });
     }
 

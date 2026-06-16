@@ -32,6 +32,21 @@ fn arg_val<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     None
 }
 
+/// Default `--format` when the user didn't pass one.
+///
+/// `table` when stdout is an interactive terminal (a human is reading),
+/// `csv` when stdout is piped/redirected or the result goes to a file
+/// via `--out` (a machine is reading) — the convention of modern CLIs
+/// (ripgrep, fd, bat): pretty for eyes, structured for pipes, and no
+/// existing script breaks because pipes keep the CSV default.
+fn default_format(out_is_console: bool) -> &'static str {
+    if out_is_console && uffs_client::stdout_kind::StdoutKind::detect().is_terminal() {
+        "table"
+    } else {
+        "csv"
+    }
+}
+
 /// Write search result rows to console using format extracted from raw
 /// CLI args.
 ///
@@ -42,9 +57,10 @@ fn arg_val<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 ///
 /// Returns an error if writing fails.
 pub fn write_rows(rows: &[serde_json::Value], args: &[String]) -> Result<()> {
+    let out = arg_val(args, "--out").unwrap_or("console");
     let format = arg_val(args, "--format")
         .or_else(|| arg_val(args, "-f"))
-        .unwrap_or("csv");
+        .unwrap_or_else(|| default_format(out == "console"));
     // --parity-compat implies --columns parity (matches legacy OutputConfig
     // behaviour).
     let parity_compat = args.iter().any(|arg| arg == "--parity-compat");
@@ -93,7 +109,6 @@ pub fn write_rows(rows: &[serde_json::Value], args: &[String]) -> Result<()> {
         }
     }
 
-    let out = arg_val(args, "--out").unwrap_or("console");
     let pattern = args.first().map_or("*", String::as_str);
 
     write_native_results(
@@ -124,7 +139,7 @@ pub(crate) fn write_aggregations(
 ) -> Result<()> {
     let format = arg_val(args, "--format")
         .or_else(|| arg_val(args, "-f"))
-        .unwrap_or("csv");
+        .unwrap_or_else(|| default_format(true));
     match format {
         "json" => {
             let json = serde_json::to_string_pretty(aggregations)?;

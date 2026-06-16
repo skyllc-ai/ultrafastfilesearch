@@ -168,7 +168,7 @@ fn fast_add_path_column_parallel() -> TestResult {
     let path_col = result.column("path")?.str()?;
 
     // Check that paths are resolved correctly
-    let paths: Vec<_> = path_col.into_iter().collect();
+    let paths: Vec<_> = path_col.iter().collect();
     assert!(
         paths
             .iter()

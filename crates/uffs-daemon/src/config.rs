@@ -496,8 +496,8 @@ mod tests {
         // fire — the const block is build-time, so its position is
         // purely stylistic relative to the runtime asserts below.
         const _: () = {
-            assert!(crate::cache::policy::HOT_TO_WARM_IDLE_SECS == 60);
-            assert!(crate::cache::policy::WARM_TO_PARKED_IDLE_SECS == 300);
+            assert!(crate::cache::policy::HOT_TO_WARM_IDLE_SECS == 600);
+            assert!(crate::cache::policy::WARM_TO_PARKED_IDLE_SECS == 1_800);
             assert!(crate::cache::policy::PARKED_TO_COLD_IDLE_SECS == 86_400);
             assert!(crate::cache::policy::USN_REFRESH_INTERVAL_SECS == 300);
         };

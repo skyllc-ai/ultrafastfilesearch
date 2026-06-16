@@ -6,36 +6,36 @@
 
 ## Current canonical report
 
-**[2026-04 · v0.5.66 vs Everything and the UFFS C++ reference →](2026-04-v0.5.66-vs-everything-and-cpp.md)**
+**[2026-06 · v0.5.120 vs Everything and the UFFS C++ reference →](2026-06-v0.5.120-vs-everything.md)**
 
-![UFFS v0.5.66 wins 12 of 12 head-to-head cells against Everything at p50](charts/2026-04-v0.5.66/head-to-head-vs-everything.svg)
+![UFFS v0.5.120 wins 30 of 30 head-to-head cells against Everything at p50](charts/2026-06-v0.5.120/head-to-head-vs-everything.svg)
 
-![UFFS Rust v0.5.66 cold-start is 2.6× faster than the UFFS C++ reference warm-disk read](charts/2026-04-v0.5.66/cold-parity-vs-cpp.svg)
+![UFFS daemon HOT vs C++ per-invocation MFT re-read](charts/2026-06-v0.5.120/daemon-hot-vs-cpp.svg)
 
-![Daemon HOT vs per-invocation MFT reread — UFFS 16× faster total](charts/2026-04-v0.5.66/daemon-hot-vs-cpp.svg)
+![Full-scan export: 23.3 M records to CSV in 12.0 s at 1.95 M records per second](charts/2026-06-v0.5.120/full-scan-throughput.svg)
 
-![UFFS daemon memory scales linearly at ~181 MB per million records](charts/2026-04-v0.5.66/memory-scales-linearly.svg)
+Four numbers the report establishes on a Ryzen 9 3900XT (cross-tool: 12.8 M records on C/D/F/G; full-scan: all 7 volumes, 25.9 M records):
 
-![Full-scan export: 26 M records to CSV in 13.6 s at 1.72 M records per second](charts/2026-04-v0.5.66/full-scan-throughput.svg)
+1. **30 / 30 head-to-head cells faster than Everything** at p50 across six pattern classes (exact, prefix, rare-ext, common-ext, regex-alternation, substring) on four drives plus the combined index. Median ratio **0.36× — UFFS is ~2.8× faster**. The historical `C: prefix` statistical tie is gone (80 ms vs 102 ms, 0.78×).
+2. **Every cell published in the previous (v0.5.66) snapshot got faster — median −33%** — while Everything's own numbers held roughly flat. The gap widened, not narrowed.
+3. **Full-scan export is a workload Everything cannot run** (`es.exe` ~2 GB IPC export ceiling): UFFS streams the complete **23.3 M-row** estate (all 7 volumes) to CSV in **12.0 s ≈ 1.95 M records/sec** — the April snapshot scale, 12% faster, +13% throughput.
+4. **180×–3 400× faster than the C++ reference on targeted queries** (daemon HOT vs per-invocation MFT re-read); **6.6×** on combined full-scan — and the combined-drive regex cell DNF'd the C++ tool entirely (> 120 s vs UFFS 43 ms).
 
-Four numbers the report establishes, against 26 million live NTFS records on a Ryzen 9 3900XT:
-
-1. **12 / 12 head-to-head cells faster than Everything** at p50 on drives C + D across six pattern classes (exact, prefix, rare-ext, common-ext, regex-alternation, substring). Median ratio **0.51× — UFFS is ~1.96× faster**.
-2. **UFFS cold-build a 26 M-record index faster than C++ reads the same MFTs with a warm page cache.** 177.4 s vs 457.2 s — **2.6× faster**, while building a persistent compact index + trigram + extension indexes + daemon.
-3. **0–3 ms daemon-side latency for targeted queries** at 26 M records (29–32 ms CLI end-to-end including Windows process-creation cold-spawn).
-4. **16.0× faster than C++ in the honest workflow comparison.** Seven back-to-back `*` queries on different drives: UFFS serves from the daemon in 10.1 s total; C++ pays full MFT re-read cost every invocation and takes 161.0 s.
-
-The report publishes **everything these numbers don't cover too** — a row-count caveat for pathological patterns, two known regressions UFFS is currently slower on than its own v0.5.4 baseline (`*` top-100 and `--sort path`), and what this benchmark explicitly does *not* claim.
+The report publishes **everything these numbers don't cover too** — the zero-match G-drive caveat, the C++ row-count divergences, and what this benchmark explicitly does *not* claim. The two v0.5.66-era known regressions (`*` top-100 and `--sort path` vs the v0.5.4 baseline) remain tracked in the [archived April report](archive/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions); they were not re-measured in this snapshot.
 
 ---
 
 ## How UFFS benchmarks
 
-Four principles, documented in full in [`methodology.md`](methodology.md) (the single-link reply to *"this comparison is rigged because..."*):
+**Ready to run a benchmark cycle?** See the **[operator runbook →](runbook.md)** for prerequisites,
+step-by-step commands, crash recovery, and how to promote results to a canonical report.
+
+Four fairness principles, documented in full in [`methodology.md`](methodology.md) (the single-link
+reply to *"this comparison is rigged because..."*):
 
 - **Separate cold / warm / hot.** Cold build + warm restart + hot query are three different workloads. We measure and publish them separately instead of averaging them into one "startup time" lie.
 - **Separate interactive from bulk.** Targeted-query latency (`notepad.exe`, `*.dll`) and full-scan export (`*` → CSV for 23 M rows) are different workload classes. Different tools win each. We test both.
-- **Publish the failures.** Two v0.5.66 workloads are currently slower than the v0.5.4 baseline. Both are named, measured, rooted-cause, and tracked in the canonical report's §Known regressions.
+- **Publish the failures.** When a workload regresses against our own prior baseline it gets named, measured, root-caused, and tracked (see §Known regressions in the [archived 2026-04 report](archive/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions) for the two v0.5.66-era examples).
 - **Publish the raw data.** Every table above and in the canonical report cites the exact log file and line range. The **curated, verbatim raw captures** live in [`raw/`](raw/) (git-tracked, never edited after commit); all benchmark scripts under [`scripts/windows/`](../../scripts/windows/). Click any citation in the canonical report to land on the actual PowerShell log line that produced the number.
 
 ---
@@ -45,17 +45,13 @@ Four principles, documented in full in [`methodology.md`](methodology.md) (the s
 Elevated PowerShell, repository root, after `cargo build --release`:
 
 ```powershell
-# Cross-tool comparison (UFFS Rust vs UFFS C++ vs Everything, 30 rounds per cell)
-rust-script .\scripts\windows\cross-tool-benchmark.rs `
-    --rounds 30 --tools uffs_rust,uffs_cpp,es --sinks file
-
-# Per-drive Rust vs C++ parity (cold + daemon-HOT, matches §Head-to-head 2 in the canonical report)
-.\scripts\windows\cold-parity-per-drive.ps1 `
-    -Drives C,D,E,F,M,S -PurgeCacheFirst `
-    -OutputFile LOG\my_parity_run.txt
+# The full benchmark suite: drive negotiation (Everything RAM budget), the
+# cross-tool harness (UFFS Rust vs UFFS C++ vs Everything), parity, native
+# full-suite, REPORT-DRAFT.md assembly, and the brand-kit charts.
+just bench-suite --drives C,D,F,G
 ```
 
-Both scripts emit pre-formatted markdown tables at the end that drop straight into a benchmark report file. See [`scripts/windows/cold-parity-per-drive.ps1`](../../scripts/windows/cold-parity-per-drive.ps1) for CLI options.
+The suite writes a dated bundle containing `REPORT-DRAFT.md`, `cross-tool-summary.csv`, the three competition charts, and a `## vs baseline` section comparing the run against this page's current canonical numbers ([`baseline.json`](baseline.json)). Promotion into a canonical report is the reviewed copy-edit of that draft. Individual harnesses remain runnable standalone — see [`scripts/windows/cross-tool-benchmark.rs`](../../scripts/windows/cross-tool-benchmark.rs).
 
 ---
 
@@ -63,7 +59,7 @@ Both scripts emit pre-formatted markdown tables at the end that drop straight in
 
 Frozen snapshots of prior canonical reports, never retroactively edited. See [`archive/README.md`](archive/README.md) for the archive policy.
 
-*Currently empty — the v0.5.66 report above is the first canonical snapshot. Future reports supersede it; this one gets moved to `archive/2026-04-v0.5.66-vs-everything-and-cpp.md` verbatim.*
+- **[2026-04 · v0.5.66 vs Everything and the UFFS C++ reference](archive/2026-04-v0.5.66-vs-everything-and-cpp.md)** — the first canonical snapshot (12/12 cells vs Everything on C+D, median 0.51×; cold-parity and memory-scaling sections; the two tracked regressions). Superseded by the v0.5.120 report above.
 
 ---
 

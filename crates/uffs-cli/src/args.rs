@@ -491,7 +491,8 @@ COMMON OPTIONS:
   --ext <EXT>             Filter by extension(s)
   --type <CATEGORY>       Filter by type: code, picture, video, etc.
   -n, --limit <N>         Max results (0 = unlimited, default: 0)
-  -f, --format <FMT>      Output: csv (default), json, table
+  -f, --format <FMT>      Output: table (default in a terminal), csv (default
+                          when piped/redirected or with --out), json
   --sort <COL>            Sort by column, prefix - for desc
   --out <FILE>            Write to file instead of console
   --columns <COLS>        Columns to output (default: all)

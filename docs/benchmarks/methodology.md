@@ -4,7 +4,7 @@
 
 **Purpose:** the fairness-doctrine rules that govern every benchmark UFFS publishes. Any single number in any canonical report is traceable to the discipline described here. If the discipline fails, the report fails — and we'd rather not publish the report at all than fudge the discipline.
 
-**Primary reference:** [`2026-04-v0.5.66-vs-everything-and-cpp.md`](2026-04-v0.5.66-vs-everything-and-cpp.md) is the current canonical competitive report. This methodology page is the companion — the "here are the rules we played by" document that readers can cite without reading the full 320-line report.
+**Primary reference:** [`2026-06-v0.5.120-vs-everything.md`](2026-06-v0.5.120-vs-everything.md) is the current canonical competitive report (prior snapshots live in [`archive/`](archive/)). This methodology page is the companion — the "here are the rules we played by" document that readers can cite without reading the full report.
 
 ---
 
@@ -119,7 +119,7 @@ Every canonical report documents:
 - **RAM** (e.g. 64 GB)
 - **OS and build** (e.g. Windows 11 Pro 24H2)
 - **Drive topology** (e.g. 7 NTFS volumes, 3 NVMe + 3 SATA HDD + 1 USB stick, specific record counts per drive)
-- **Binary versions** (e.g. UFFS Rust v0.5.66 `2ff76fb45`, UFFS C++ reference commit, Everything 1.5.3.1a)
+- **Binary versions** (e.g. UFFS Rust v0.5.66 `2ff76fb45`, UFFS C++ reference commit, Everything GUI engine 1.4.1.1032 + ES CLI 1.1.0.30 — the pinned versions live in [`scripts/windows/competitors.toml`](../../scripts/windows/competitors.toml). Note: `es.exe` is a thin IPC wrapper; the GUI daemon version determines search behaviour and must be documented alongside the CLI version.)
 - **Elevation state** (both tools run elevated — UFFS needs it for raw MFT read; Everything recommends it for volume enumeration)
 
 This isn't optional boilerplate. When a reader sees a surprising number, the first debugging step is "did they run on the same-ish hardware I have?". Disclosure is what makes that reasoning possible.
@@ -177,8 +177,8 @@ These are not excuses; they're the backlog. Every canonical report re-evaluates 
 
 ## Where to go next
 
-- **The current numbers:** [`2026-04-v0.5.66-vs-everything-and-cpp.md`](2026-04-v0.5.66-vs-everything-and-cpp.md).
-- **The shareable charts:** [`charts/2026-04-v0.5.66/`](charts/2026-04-v0.5.66/).
+- **The current numbers:** [`2026-06-v0.5.120-vs-everything.md`](2026-06-v0.5.120-vs-everything.md).
+- **The shareable charts:** [`charts/2026-06-v0.5.120/`](charts/2026-06-v0.5.120/).
 - **The raw logs that back every number:** [`raw/`](raw/).
 - **The hub overview:** [`README.md`](README.md).
 - **Internal engineering-detail source:** [`docs/research/cross-tool-benchmark-analysis.md`](../research/cross-tool-benchmark-analysis.md) — the forensic version of this document, currently kept internal. If you're reviewing a specific cell and suspect a methodology bug, contact the project and we'll share the relevant engineering-internal context for that cell.

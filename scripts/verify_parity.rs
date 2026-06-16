@@ -455,9 +455,12 @@ fn run_live_mode(args: &[String]) {
         .map(PathBuf::from)
         .or_else(|| find_es_exe());
 
+    // Explicit --out-dir wins; otherwise land under the shared bench tree's
+    // `parity/` namespace (NOT the cwd — keeps parity artifacts off scattered
+    // working dirs and beside the rest of the bench output).
     let out_dir = parse_live_arg(args, "--out-dir")
         .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        .unwrap_or_else(|| shared_bench_root().join("parity"));
 
     let pattern = parse_pattern(args);
     let pipeline = parse_pipeline(args);
@@ -1672,6 +1675,34 @@ fn parse_live_arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// Resolve the consolidated bench-artifact root, mirroring the `_bench-dir`
+/// helper in `just/bench_uffs.just` and `resolve_bench_dir` in
+/// `cross-tool-benchmark.rs` so every bench tool writes under ONE tree.
+///
+/// Precedence: `$UFFS_BENCH_DIR` > `%LOCALAPPDATA%\uffs-bench` >
+/// `$XDG_CACHE_HOME|~/.cache` + `/uffs-bench`.  An explicit `--out-dir` flag
+/// still wins over this (handled at the call site).
+fn shared_bench_root() -> PathBuf {
+    if let Ok(v) = env::var("UFFS_BENCH_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(v) = env::var("LOCALAPPDATA") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("uffs-bench");
+        }
+    }
+    let base = env::var("XDG_CACHE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".into())).join(".cache")
+        });
+    base.join("uffs-bench")
+}
+
 /// Print live mode summary with timing table
 fn print_live_summary(results: &[LiveDriveResult]) {
     println!();
@@ -1886,15 +1917,19 @@ fn verify_single_drive(
 
     println!("  Computing streaming SHA256 + order-independent fingerprints...");
     let t_hash = Instant::now();
-    let golden_stats = compute_streaming_stats(&golden_baseline_file);
+    // The golden baseline (cpp_*.txt) is immutable across reruns, so its hash
+    // is cached in a sidecar keyed on (size, mtime).  Only the regenerated Rust
+    // output is hashed every run.
+    let (golden_stats, golden_cached) = compute_streaming_stats_cached(&golden_baseline_file);
     let rust_stats = compute_streaming_stats(rust_output);
     let hash_elapsed = t_hash.elapsed();
 
     println!(
-        "  Golden baseline: {} ({} lines) [{:.1}s]",
+        "  Golden baseline: {} ({} lines) [{:.1}s{}]",
         golden_stats.ordered_hash,
         golden_stats.line_count,
-        hash_elapsed.as_secs_f64()
+        hash_elapsed.as_secs_f64(),
+        if golden_cached { ", golden cached" } else { "" }
     );
     println!(
         "  Rust output:     {} ({} lines)",
@@ -2391,7 +2426,9 @@ fn print_usage(prog: &str) {
     eprintln!("  --live             Run both C++ and Rust live, compare outputs");
     eprintln!("  --cpp-bin <path>   Path to uffs.com (C++ binary)");
     eprintln!("  --bin <path>       Path to uffs.exe (Rust binary)");
-    eprintln!("  --out-dir <path>   Output directory (default: current dir)");
+    eprintln!("  --out-dir <path>   Output directory.  Default: <bench-root>/parity,");
+    eprintln!("                     where bench-root = $UFFS_BENCH_DIR >");
+    eprintln!("                     %LOCALAPPDATA%\\uffs-bench > ~/.cache/uffs-bench.");
     eprintln!("  --keep             Keep output files after comparison");
     eprintln!("  --name-only        Pass --name-only to Rust binary");
     eprintln!("  --pattern <pat>    Search pattern (default: *)");
@@ -3143,6 +3180,89 @@ fn compute_streaming_stats(path: &Path) -> StreamingFileStats {
         xor_fingerprint: xor_fp,
         sum_fingerprint: sum_fp,
     }
+}
+
+/// File identity used to validate a cached fingerprint: (size_bytes, mtime_nanos).
+fn file_identity(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), mtime_ns))
+}
+
+/// Sidecar path holding the cached streaming stats for a baseline file.
+fn parity_hash_sidecar(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".parityhash");
+    path.with_file_name(name)
+}
+
+/// Load cached `StreamingFileStats` for `path`, but only if the sidecar's
+/// recorded (size, mtime) matches the current file (else the baseline changed).
+fn load_cached_stats(path: &Path, identity: (u64, u128)) -> Option<StreamingFileStats> {
+    let contents = fs::read_to_string(parity_hash_sidecar(path)).ok()?;
+    let (mut size, mut mtime_ns): (Option<u64>, Option<u128>) = (None, None);
+    let (mut ordered_hash, mut line_count): (Option<String>, Option<usize>) = (None, None);
+    let (mut xor_fp, mut sum_fp): (Option<u64>, Option<u128>) = (None, None);
+    for line in contents.lines() {
+        let mut parts = line.splitn(2, ' ');
+        let key = parts.next().unwrap_or("");
+        let val = parts.next().unwrap_or("");
+        match key {
+            "size" => size = val.parse().ok(),
+            "mtime_ns" => mtime_ns = val.parse().ok(),
+            "ordered_hash" => ordered_hash = Some(val.to_string()),
+            "line_count" => line_count = val.parse().ok(),
+            "xor_fingerprint" => xor_fp = val.parse().ok(),
+            "sum_fingerprint" => sum_fp = val.parse().ok(),
+            _ => {}
+        }
+    }
+    if size? != identity.0 || mtime_ns? != identity.1 {
+        return None;
+    }
+    Some(StreamingFileStats {
+        ordered_hash: ordered_hash?,
+        line_count: line_count?,
+        xor_fingerprint: xor_fp?,
+        sum_fingerprint: sum_fp?,
+    })
+}
+
+/// Persist `StreamingFileStats` to the sidecar cache (best-effort; failures
+/// just mean the next run recomputes).
+fn store_cached_stats(path: &Path, identity: (u64, u128), stats: &StreamingFileStats) {
+    let body = format!(
+        "parityhash v1\nsize {}\nmtime_ns {}\nordered_hash {}\nline_count {}\nxor_fingerprint {}\nsum_fingerprint {}\n",
+        identity.0,
+        identity.1,
+        stats.ordered_hash,
+        stats.line_count,
+        stats.xor_fingerprint,
+        stats.sum_fingerprint,
+    );
+    let _ = fs::write(parity_hash_sidecar(path), body);
+}
+
+/// Like `compute_streaming_stats`, but caches the result in a `.parityhash`
+/// sidecar keyed on (size, mtime).  Intended for the immutable golden baseline:
+/// reruns skip rehashing the multi-GB `cpp_*.txt` unless it actually changes.
+/// Returns `(stats, cache_hit)`.
+fn compute_streaming_stats_cached(path: &Path) -> (StreamingFileStats, bool) {
+    let Some(identity) = file_identity(path) else {
+        // Could not stat the file → fall back to an uncached compute.
+        return (compute_streaming_stats(path), false);
+    };
+    if let Some(cached) = load_cached_stats(path, identity) {
+        return (cached, true);
+    }
+    let stats = compute_streaming_stats(path);
+    store_cached_stats(path, identity, &stats);
+    (stats, false)
 }
 
 /// Check if two files have the same lines (order-independent) using streaming stats.

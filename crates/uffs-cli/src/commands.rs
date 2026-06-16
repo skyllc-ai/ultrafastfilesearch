@@ -33,6 +33,8 @@ pub mod search;
 pub mod stats;
 /// Combined `uffs status` command.
 pub(crate) mod system_status;
+/// `uffs update` — self-update detection (Phase A of the self-update design).
+pub(crate) mod update;
 
 /// Render a one-line version summary suitable for `daemon status`,
 /// `daemon stats`, and `uffs status` output.

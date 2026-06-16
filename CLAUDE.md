@@ -58,19 +58,35 @@ This is a Cargo workspace with a strict compilation isolation strategy:
 
 ```
 crates/
-├── uffs-polars/   Polars facade — all other crates depend on this, NOT polars directly.
-│                  Exists solely to cache Polars compilation (~4 min → ~25 sec rebuilds).
-├── uffs-mft/      Core MFT reading library. Windows-only I/O (#[cfg(windows)]).
-│                  Reads raw NTFS MFT → Polars DataFrame. Key types: MftReader, MftIndex.
-├── uffs-core/     Query engine using Polars lazy API. Platform-agnostic.
-│                  Key types: MftQuery (fluent builder), FastPathResolver, IndexSearch.
-├── uffs-cli/      CLI binary (`uffs`). Built on clap. Subcommands: search, index, info, stats.
-└── uffs-diag/     Diagnostic tools (temporarily in workspace members for analysis).
+├── uffs-polars/           Polars facade — all other crates depend on this, NOT polars
+│                          directly. Caches Polars compilation (~4 min → ~25 sec rebuilds).
+├── uffs-broker-protocol/  Cross-platform broker wire-protocol types (1-byte drive request,
+│                          9-byte status+handle response). Pure logic, zero unsafe.
+├── uffs-mft/              Core MFT reading library. Windows-only I/O (#[cfg(windows)]).
+│                          Reads raw NTFS MFT → Polars DataFrame. Key types: MftReader,
+│                          MftIndex, VolumeHandle. Holds the Access Broker handle registry
+│                          (register/try_adopt_broker_handle).
+├── uffs-core/             Query engine using Polars lazy API. Platform-agnostic.
+│                          Key types: MftQuery (builder), FastPathResolver, IndexSearch.
+├── uffs-client/           Client-side daemon connect/spawn + broker-presence probe.
+├── uffs-daemon/           Resident index server (`uffsd`). Loads MFTs, serves clients over
+│                          IPC, runs the per-shard USN journal loop + memory tiering.
+│                          Adopts broker handles for non-elevated MFT reads.
+├── uffs-broker/           Windows-only LocalSystem service (`uffs-broker.exe`). Vends
+│                          elevated, duplicated NTFS volume handles to the non-elevated
+│                          daemon over a named pipe, so searches run with zero UAC. bin-only.
+├── uffs-mcp/              MCP server (`uffsmcp`) exposing UFFS search as model tools.
+├── uffs-cli/              CLI binary (`uffs`). Built on clap. Subcommands: search, index, …
+└── uffs-diag/             Diagnostic tools (temporarily in workspace members for analysis).
 ```
 
+> Support crates (`uffs-security`, `uffs-format`, `uffs-text`, `uffs-time`) and the full
+> layered dependency table live in `docs/architecture/crate-graph.md`.
 > **Note:** `uffs-tui` and `uffs-gui` have moved to the private `uffs-products` repo.
 
-**Dependency graph:** `uffs-polars` ← `uffs-mft` ← `uffs-core` ← `uffs-cli`
+**Dependency graph (read path):** `uffs-polars` ← `uffs-mft` ← `uffs-core` ← `uffs-cli`.
+The service tier sits on top: `uffs-daemon` ← `uffs-core` + `uffs-broker-protocol`;
+`uffs-broker` ← `uffs-broker-protocol` + `uffs-mft`; `uffs-client` ← `uffs-broker-protocol`.
 
 **Never import `polars` directly** — always use `uffs-polars` as the dependency.
 
@@ -92,6 +108,9 @@ Records are parsed with `parse_record_zero_alloc` (thread-local buffers, zero he
 
 ### Fast vs Full Mode
 Default ("fast") skips extension MFT records (~1% of files with many hard links/ADS), giving 15–25% faster reads. `--full` mode merges extension records for complete data.
+
+### Access Broker (Windows — non-elevated MFT reads)
+Reading the live MFT normally needs Administrator. The **Access Broker** (`uffs-broker`, a `LocalSystem` Windows service) lets the daemon run **non-elevated**: the broker opens the volume, `DuplicateHandle`s an elevated, `FILE_FLAG_OVERLAPPED` handle into the daemon over a named pipe (after verifying the client is `uffsd` + Authenticode via `WinVerifyTrust`), and the daemon adopts a duplicate of it for every MFT/USN/`$MFT`-extent read. The handle registry + `try_adopt_broker_handle` live in `uffs-mft::platform::volume`; the daemon warms up handles in `warm_up_broker_handles` only when **not** already elevated. On the broker handle, use overlapped-offset reads (`read_handle_at`), not `SetFilePointerEx` (which has no synchronous file pointer there). One-time setup: `uffs-broker --install` → no UAC on any later search. Full design + the production follow-ups (all landed) are in `docs/architecture/access-broker-followups.md`.
 
 ### Cross-Compilation
 Binaries for Windows are cross-compiled from macOS using `cargo xwin`. The `xwin-dev` profile reduces Polars debug info to stay under COFF archive size limits. See `docs/xwin-msvc-rlib-size-root-cause-and-workarounds.md`.

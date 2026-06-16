@@ -200,6 +200,8 @@ fn is_process_alive(pid: u32) -> bool {
         std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .output()
+            // AUDIT-OK(bytes): tasklist substring PID check; lossy can only fail the
+            // match (fail-safe). (WI-4.3 follow-up)
             .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
     }
 }

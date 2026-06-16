@@ -429,12 +429,7 @@ fn dollar_prefix_files_matched() -> TestResult {
     );
 
     // Verify $I07QSZ8.txt is in the results
-    let matched_names: Vec<&str> = result
-        .column("name")?
-        .str()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let matched_names: Vec<&str> = result.column("name")?.str()?.iter().flatten().collect();
     assert!(
         matched_names.contains(&"$I07QSZ8.txt") || matched_names.contains(&"$i07qsz8.txt"),
         "Should include $I07QSZ8.txt: {matched_names:?}"

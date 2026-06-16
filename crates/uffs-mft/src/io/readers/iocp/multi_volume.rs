@@ -423,7 +423,12 @@ pub fn prepare_volume_state(
     let record_size = u32_as_usize(extent_map.bytes_per_record);
     let total_records = frs_to_usize(extent_map.total_records());
     // For HDD, use extent-aware concurrency (fragmentation affects optimal value)
-    let max_concurrency = if matches!(drive_type, crate::platform::DriveType::Hdd) {
+    let max_concurrency = if matches!(
+        drive_type,
+        crate::platform::DriveType::Hdd
+            | crate::platform::DriveType::Removable
+            | crate::platform::DriveType::Virtual
+    ) {
         crate::platform::DriveType::optimal_concurrency_for_hdd(extent_map.extent_count())
     } else {
         drive_type.optimal_concurrency()

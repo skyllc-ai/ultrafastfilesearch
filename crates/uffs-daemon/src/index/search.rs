@@ -12,16 +12,13 @@
 //! Search execution: query dispatch, profile construction, and drive info.
 
 use core::sync::atomic::Ordering;
-use std::io::Write as _;
 use std::time::Instant;
 
 use uffs_client::protocol::response::{
     DriveProfile, SearchPayload, SearchProfile, SearchResponse, SearchRow,
 };
 use uffs_client::protocol::{SearchFilterMode, SearchParams, SearchResponseMode};
-use uffs_core::search::backend::{
-    DisplayRow, FilterMode, PhaseTimings, SearchRequest, SortSpec, search_index,
-};
+use uffs_core::search::backend::{FilterMode, PhaseTimings, SearchRequest, SortSpec, search_index};
 use uffs_core::search::field::FieldId;
 use uffs_core::search::filters::{SearchFilterParams, SearchFilters};
 
@@ -211,11 +208,12 @@ impl IndexManager {
             max_size: filters.max_size,
         };
 
-        let search_limit = if requires_post_filter || filters.needs_display_row_filter() {
-            None
-        } else {
-            effective_params.limit
-        };
+        let search_limit = resolve_search_limit(
+            requires_post_filter,
+            filters.needs_display_row_filter(),
+            filters.malformed == Some(true),
+            effective_params.limit,
+        );
 
         // ── Execute search on a blocking thread with timeout ────────
         // `search_index` uses rayon `par_iter`, which blocks the current
@@ -359,7 +357,7 @@ impl IndexManager {
             // reuses `filtered_rows` — `spawn_blocking` would force an
             // expensive clone or an `Arc<Vec<DisplayRow>>` refactor.
             let write_result = tokio::task::block_in_place(|| {
-                Self::write_rows_to_file(&filtered_rows, output_path, &output_config)
+                write_rows_to_file(&filtered_rows, output_path, &output_config)
             });
             let write_us = t_write.map_or(0, |ts| ts.elapsed().as_micros());
 
@@ -652,78 +650,34 @@ impl IndexManager {
             drives: drive_profiles,
         }
     }
+}
 
-    // ── Direct file output (OPT-4) ──────────────────────────────────
-
-    /// Write `DisplayRow`s directly to a file, bypassing `SearchRow` and IPC.
-    ///
-    /// Uses the same `OutputConfig::write_display_rows` that the CLI uses,
-    /// so all formatting options (separator, quotes, header, pos/neg,
-    /// columns, timestamps) produce identical output.
-    ///
-    /// Atomic write: writes to a `.uffs.tmp` sibling file, then renames
-    /// to the target after a `BufWriter::flush`.  No `fsync` —
-    /// `--out=<path>` is reproducible search output, so the tmp+rename
-    /// dance protects against partial-file exposure during normal
-    /// writes but power-loss durability is intentionally not provided.
-    /// See the inline comment in the body and §Run 7 C / §Run 8 of
-    /// `docs/research/perf-phase2-measurement-plan.md` for the
-    /// measurement that motivated this trade-off.  Zero rows → no
-    /// file is created.
-    fn write_rows_to_file(
-        rows: &[DisplayRow],
-        path: &str,
-        output_config: &uffs_core::output::OutputConfig,
-    ) -> Result<usize, std::io::Error> {
-        use std::io::BufWriter;
-
-        // Zero results → don't create the file at all.
-        if rows.is_empty() {
-            return Ok(0);
-        }
-
-        let target = std::path::Path::new(path);
-        let tmp_path = target.with_extension("uffs.tmp");
-
-        // Write to temp file — target is untouched until rename.
-        let file = std::fs::File::create(&tmp_path)?;
-        let mut writer = BufWriter::with_capacity(256 * 1024, file);
-
-        let write_result = output_config
-            .write_display_rows(rows, &mut writer)
-            .map_err(std::io::Error::other);
-
-        // On write error, clean up the temp file and propagate.
-        if let Err(err) = write_result {
-            drop(writer);
-            let _cleanup: Result<(), std::io::Error> = std::fs::remove_file(&tmp_path);
-            return Err(err);
-        }
-
-        // Flush the BufWriter and close the underlying file.
-        //
-        // We deliberately skip `sync_all()` here.  `--out=<path>` is
-        // a user-requested export of search results; the data is
-        // reproducible from the MFT index in ~100 ms, so paying a
-        // 5-15 ms `fsync` per query for power-loss durability is not
-        // worth it — a power cut would just leave a 0-byte file and
-        // the user can simply re-run the query.  The atomic
-        // tmp+rename below still prevents partial-file exposure
-        // during normal writes.  See
-        // `docs/research/perf-phase2-measurement-plan.md` §Run 7 C /
-        // §Run 8 for the measurement that motivated dropping the
-        // sync.
-        writer.flush()?;
-        writer
-            .into_inner()
-            .map_err(std::io::IntoInnerError::into_error)?;
-        // The File temporary above is dropped at the semicolon,
-        // closing the OS handle before the rename below.
-
-        // Atomic rename: target appears only with complete data.
-        std::fs::rename(&tmp_path, target)?;
-
-        Ok(rows.len())
+/// Decide the backend scan limit (the cap applied *before* the daemon's
+/// final truncate-to-`user_limit`).
+///
+/// Filters evaluated *after* the per-drive scan must lift the cap
+/// (`None` = unbounded) on name/regex/tree patterns — those branches cap
+/// at `limit` *pattern* matches first, then filter, so a low-hit-rate
+/// filter would under-return.  `requires_post_filter` (wire predicate
+/// matched on the resolved `DisplayRow`) and `needs_display_row_filter`
+/// (path-contains / type) both already do this.
+///
+/// `malformed_positive` (`--malformed`, near-zero hit rate) joins them:
+/// the lift is safe for match-all because `collect_global_top_n_numeric`
+/// filters *before* its bounded top-N heap.  `--well-formed` is NOT
+/// lifted — the lift's `usize::MAX` flips that scan's `use_heap =
+/// limit < 1M` to `false`, so its fallback `Vec` collects every survivor
+/// (~the whole index here → OOM-class); it never under-returns anyway.
+const fn resolve_search_limit(
+    requires_post_filter: bool,
+    needs_display_row_filter: bool,
+    malformed_positive: bool,
+    user_limit: Option<u32>,
+) -> Option<u32> {
+    if requires_post_filter || needs_display_row_filter || malformed_positive {
+        None
+    } else {
+        user_limit
     }
 }
 
@@ -744,6 +698,14 @@ pub(crate) use output_config::build_output_config;
 #[path = "search_predicates.rs"]
 mod predicates;
 use predicates::build_query_predicates;
+
+// The `--out=<path>` file-export writer lives in a sibling file to keep
+// `search.rs` under the 800-line policy ceiling.  It was a `Self`-less
+// associated fn, so the single call site in `search()` above invokes the
+// free function directly.
+#[path = "search_file_sink.rs"]
+mod file_sink;
+use file_sink::write_rows_to_file;
 
 // The inline `tests` module lives in a sibling file to keep `search.rs`
 // under the 800-line policy ceiling.  `#[path]` keeps the test module

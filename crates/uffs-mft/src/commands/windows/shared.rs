@@ -14,6 +14,8 @@ pub(super) const fn drive_type_label(
         uffs_mft::DriveType::Nvme => "NVMe",
         uffs_mft::DriveType::Ssd => "SSD",
         uffs_mft::DriveType::Hdd => "HDD",
+        uffs_mft::DriveType::Removable => "Removable",
+        uffs_mft::DriveType::Virtual => "Virtual",
         uffs_mft::DriveType::Unknown => unknown_label,
     }
 }

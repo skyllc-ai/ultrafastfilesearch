@@ -350,6 +350,19 @@ pub(crate) fn write_display_row_columns(
                 let len = uffs_mft::len_to_u16(row.path.chars().count());
                 buf.push_str(itoa_buf.format(len));
             }
+            // ── WI-4.4 forensic columns ────────────────────────────────
+            // Rendered as 0/1 in their OWN column (like the attribute flags),
+            // never inline with the name. The booleans are precomputed on the
+            // hot path against the lossless name bytes and carried on the row.
+            OutputColumn::Malformed => push_bool(buf, cfg, row.malformed),
+            OutputColumn::MalformedPath => push_bool(buf, cfg, row.malformed_path),
+            OutputColumn::NameHex => {
+                buf.push_str(&cfg.quote);
+                if let Some(hex) = row.name_hex.as_deref() {
+                    buf.push_str(hex);
+                }
+                buf.push_str(&cfg.quote);
+            }
         }
     }
 }
@@ -357,6 +370,16 @@ pub(crate) fn write_display_row_columns(
 /// Append a boolean flag test result.
 pub(crate) fn push_flag(buf: &mut String, cfg: &OutputConfig, flags: u32, mask: u32) {
     if flags & mask != 0 {
+        buf.push_str(&cfg.pos);
+    } else {
+        buf.push_str(&cfg.neg);
+    }
+}
+
+/// Append a precomputed boolean as the configured pos/neg token (mirrors
+/// [`push_flag`] but for a `bool` not backed by an attribute-flag mask).
+pub(crate) fn push_bool(buf: &mut String, cfg: &OutputConfig, value: bool) {
+    if value {
         buf.push_str(&cfg.pos);
     } else {
         buf.push_str(&cfg.neg);

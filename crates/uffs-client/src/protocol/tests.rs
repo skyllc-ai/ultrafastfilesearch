@@ -199,6 +199,9 @@ fn search_response_inline_rows_round_trip() {
             descendants: 0,
             treesize: 0,
             tree_allocated: 0,
+            malformed: false,
+            malformed_path: false,
+            name_hex: None,
         }]),
         total_count: 1,
         records_scanned: 1_000_000,
@@ -239,6 +242,62 @@ fn search_response_inline_rows_round_trip() {
     assert_eq!(parsed.applied_sorts.len(), 1);
     assert_eq!(parsed.applied_projection.len(), 2);
     assert!(parsed.projected_rows.is_some());
+}
+
+/// WI-4.4: `name_hex` is forensic evidence keyed on name validity, not on
+/// column projection — so the DEFAULT `--format json` output (no `--columns`)
+/// carries it for every malformed row and omits it for well-formed ones.
+///
+/// This pins the exact CLI conversion (`serde_json::to_value(&SearchRow)` in
+/// `uffs-cli`'s `main.rs`, then `write_json`): a malformed row's hex must be
+/// present without the caller having to request the `name_hex` column.
+#[test]
+fn search_row_default_json_carries_name_hex_for_malformed_only() {
+    let base = SearchRow {
+        drive: uffs_mft::platform::DriveLetter::G,
+        path: "G:\\corrupted\\file.txt".to_owned(),
+        name: "file.txt".to_owned(),
+        size: 0,
+        is_directory: false,
+        modified: 0,
+        created: 0,
+        accessed: 0,
+        flags: 0x20,
+        allocated: 0,
+        descendants: 0,
+        treesize: 0,
+        tree_allocated: 0,
+        malformed: false,
+        malformed_path: false,
+        name_hex: None,
+    };
+
+    // Well-formed row: no hex evidence, so the key is dropped entirely.
+    let well_formed = serde_json::to_value(&base).expect("SearchRow serialises");
+    assert!(
+        well_formed.get("name_hex").is_none(),
+        "well-formed rows must omit name_hex from default JSON: {well_formed}"
+    );
+
+    // Malformed row (lone-high-surrogate leaf `ED A0 80`): hex must appear in
+    // the default object with no projection requested.
+    let malformed = SearchRow {
+        malformed: true,
+        malformed_path: true,
+        name_hex: Some("eda080".to_owned()),
+        ..base
+    };
+    let value = serde_json::to_value(&malformed).expect("SearchRow serialises");
+    assert_eq!(
+        value.get("name_hex").and_then(serde_json::Value::as_str),
+        Some("eda080"),
+        "malformed rows must carry name_hex in default JSON (no --columns): {value}"
+    );
+    assert_eq!(
+        value.get("malformed").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "malformed flag must also be present by default: {value}"
+    );
 }
 
 /// `SearchResponse` round-trip with the `ShmemBlob` payload.
@@ -1534,22 +1593,22 @@ fn from_cli_args_drive_prefix_with_literal_preserves_pattern() {
     );
 }
 
-/// Path-anchored: `C:\*.dll` keeps the backslash and must NOT trigger
-/// the drive-prefix sugar — the tree walker already scopes to the
-/// drive root and expects the full `C:\<glob>` form intact.
+/// `C:\*.dll` scopes to drive C and globs.  (Previously this returned
+/// nothing: the `c:` token was mistaken for a directory segment by the
+/// tree walker.)  The drive prefix is split off, the single leftover
+/// segment `*.dll` collapses to a name glob, and ext-glob promotion then
+/// rewrites it to `pattern="*"` + `ext="dll"`.
 #[test]
-fn from_cli_args_drive_prefix_with_separator_not_promoted() {
+fn from_cli_args_drive_root_glob_scopes_drive_and_promotes_ext() {
     let args: Vec<String> = vec!["C:\\*.dll".into()];
     let params = SearchParams::from_cli_args(&args).expect("parse");
-    assert!(
-        params.drives.is_empty(),
-        "path-anchored C:\\*.dll must NOT populate drives filter"
-    );
     assert_eq!(
-        params.pattern, "C:\\*.dll",
-        "path-anchored pattern must be preserved verbatim for tree walker"
+        params.drives,
+        vec![uffs_mft::platform::DriveLetter::C],
+        "C:\\*.dll must scope to drive C"
     );
-    assert!(params.ext.is_none());
+    assert_eq!(params.pattern, "*");
+    assert_eq!(params.ext.as_deref(), Some("dll"));
 }
 
 /// Case normalisation: `c:*.log` → drive uppercased to `'C'`, ext
@@ -2019,4 +2078,57 @@ fn hibernate_request_envelope_round_trip() {
         uffs_mft::platform::DriveLetter::C,
         uffs_mft::platform::DriveLetter::D
     ]);
+}
+
+// ── Drive-prefix pattern parsing (split_drive_prefix front door) ───
+//
+// Regression tests for the `C:` / `C:\` / `C:\path` forms that used to
+// fall through to a literal `c:` substring (matching `.heiC:${…}` ADS
+// streams) or to the tree walker's bogus `c:` directory segment.
+
+/// `C:` → drive C + everything (match-all).
+#[test]
+fn from_cli_args_bare_drive_is_match_all_on_drive() {
+    let args: Vec<String> = vec!["C:".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "*");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// `C:\` and `C:/` are identical to `C:` — drive C + match-all.
+#[test]
+fn from_cli_args_drive_root_is_match_all_on_drive() {
+    for raw in ["C:\\", "C:/"] {
+        let args: Vec<String> = vec![raw.into()];
+        let params = SearchParams::from_cli_args(&args).expect("parse");
+        assert_eq!(params.pattern, "*", "`{raw}` → match-all");
+        assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+    }
+}
+
+/// `C:\report` collapses to the same query as `C:report`.
+#[test]
+fn from_cli_args_drive_root_single_segment_matches_bare_drive_name() {
+    let args: Vec<String> = vec!["C:\\report".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "report");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// `C:\report\*` → drive C + tree-walk body `report\*`.
+#[test]
+fn from_cli_args_drive_plus_multi_segment_is_tree_body() {
+    let args: Vec<String> = vec!["C:\\report\\*".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "report\\*");
+    assert_eq!(params.drives, vec![uffs_mft::platform::DriveLetter::C]);
+}
+
+/// No-drive path patterns are untouched and stay un-scoped.
+#[test]
+fn from_cli_args_no_drive_path_pattern_unscoped() {
+    let args: Vec<String> = vec!["\\rnio\\*".into()];
+    let params = SearchParams::from_cli_args(&args).expect("parse");
+    assert_eq!(params.pattern, "\\rnio\\*");
+    assert!(params.drives.is_empty());
 }

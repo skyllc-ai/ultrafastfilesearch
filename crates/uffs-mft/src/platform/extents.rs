@@ -49,6 +49,31 @@ impl MftExtent {
     }
 }
 
+/// Convert NTFS `$DATA` data runs into [`MftExtent`]s, dropping sparse runs.
+///
+/// Used by the non-elevated MFT-extent bootstrap: FRS 0's `$DATA` runlist
+/// describes the MFT's own physical layout, so its runs map directly to the
+/// extent map the kernel's `FSCTL_GET_RETRIEVAL_POINTERS` would return.  Sparse
+/// runs (the MFT has none in practice, but a corrupt record could encode one)
+/// are filtered so seek arithmetic never lands on a hole.  Pure — no I/O / FFI
+/// — so it is unit-tested directly against golden runlists.
+///
+/// `cfg(any(windows, test))`: the only production caller is the Windows
+/// MFT-read path, but the conversion is platform-agnostic and exercised by the
+/// host test below.
+#[cfg(any(windows, test))]
+#[must_use]
+pub(crate) fn data_runs_to_extents(runs: &[crate::ntfs::DataRun]) -> Vec<MftExtent> {
+    runs.iter()
+        .filter(|run| !run.is_sparse())
+        .map(|run| MftExtent {
+            vcn: run.vcn.cast_unsigned(),
+            cluster_count: run.cluster_count,
+            lcn: run.lcn,
+        })
+        .collect()
+}
+
 /// Retrieves the extent map for a file using `FSCTL_GET_RETRIEVAL_POINTERS`.
 #[cfg(windows)]
 #[expect(
@@ -193,7 +218,65 @@ fn parse_retrieval_pointers(buffer: &[u8], size: usize, extents: &mut Vec<MftExt
 #[cfg(test)]
 mod tests {
     use super::super::Lcn;
-    use super::MftExtent;
+    use super::{MftExtent, data_runs_to_extents};
+
+    #[test]
+    fn data_runs_map_to_extents_and_drop_sparse() {
+        use crate::ntfs::DataRun;
+        // Two real MFT fragments with a sparse run between them (the sparse run
+        // must be dropped so the read plan never seeks into a hole).
+        let runs = [
+            DataRun {
+                vcn: 0,
+                cluster_count: 100,
+                lcn: Lcn::new(5_000),
+            },
+            DataRun {
+                vcn: 100,
+                cluster_count: 50,
+                lcn: Lcn::ZERO, // sparse → filtered
+            },
+            DataRun {
+                vcn: 150,
+                cluster_count: 200,
+                lcn: Lcn::new(9_000),
+            },
+        ];
+        assert_eq!(data_runs_to_extents(&runs), vec![
+            MftExtent {
+                vcn: 0,
+                cluster_count: 100,
+                lcn: Lcn::new(5_000),
+            },
+            MftExtent {
+                vcn: 150,
+                cluster_count: 200,
+                lcn: Lcn::new(9_000),
+            },
+        ],);
+    }
+
+    #[test]
+    fn data_runs_single_contiguous_fragment() {
+        use crate::ntfs::DataRun;
+        // The common case: a contiguous MFT is one run → one extent (identity
+        // mapping of the fields).
+        let runs = [DataRun {
+            vcn: 0,
+            cluster_count: 98_752,
+            lcn: Lcn::new(786_432),
+        }];
+        assert_eq!(data_runs_to_extents(&runs), vec![MftExtent {
+            vcn: 0,
+            cluster_count: 98_752,
+            lcn: Lcn::new(786_432),
+        }],);
+    }
+
+    #[test]
+    fn data_runs_empty_yields_no_extents() {
+        assert!(data_runs_to_extents(&[]).is_empty());
+    }
 
     #[test]
     fn byte_offset_returns_zero_for_sparse_extents() {

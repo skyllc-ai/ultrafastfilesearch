@@ -16,9 +16,10 @@
 //! * **Multiple saves fire** \u2014 with `save_threshold_events = BATCH_SIZE +
 //!   (BATCH_SIZE / 2)`, the threshold crosses inside roughly every other batch.
 //!   A 10-batch run produces \u2265 4 saves.
-//! * **Final cursor persists** \u2014 the cursor store's append-only log
-//!   contains the post-final-batch cursor, proving cursor and body advance in
-//!   lockstep all the way through.
+//! * **Final cursor handed to sink** \u2014 the cursor handed to the sink
+//!   advances to the post-final-batch value, proving the loop carries its read
+//!   position forward to the sink (which persists it in lockstep with the body
+//!   save; the sink-side lockstep is pinned in `cache::journal_sink`).
 //! * **Cursor monotonicity** \u2014 across 10+ polls, every cursor passed into
 //!   `JournalSource::poll` is \u2265 the previous one.
 //! * **No false-positive wrap detection** \u2014 with a single stable
@@ -155,18 +156,30 @@ async fn ten_thousand_events_end_to_end() {
         "every save must be for drive 'C'; got {saves:?}"
     );
 
-    // ── Final cursor persisted ──────────────────────────────────────
-    let log = cursor_store.store_log();
+    // ── Final cursor handed to sink ─────────────────────────────────
+    // The loop forwards its read position to the sink on every save;
+    // persistence then happens sink-side in lockstep with the body
+    // save (so the loop itself never writes the cursor store on a
+    // save tick).
+    let save_cursors = sink.save_cursors();
     assert!(
-        !log.is_empty(),
-        "cursor store must have at least one persistence write; got empty log"
+        !save_cursors.is_empty(),
+        "sink must have received at least one save cursor; got empty list"
     );
-    // The largest cursor in the log should match TOTAL_EVENTS (the
-    // final batch's next_cursor).
-    let max_persisted = log.iter().map(|(_, cursor)| *cursor).max().unwrap_or(0);
+    // The largest cursor handed to the sink should match TOTAL_EVENTS
+    // (the final batch's next_cursor).
+    let max_handed = save_cursors.iter().copied().max().unwrap_or(0);
     assert!(
-        max_persisted >= TOTAL_EVENTS as u64,
-        "highest persisted cursor must be ≥ {TOTAL_EVENTS}; got {max_persisted}"
+        max_handed >= TOTAL_EVENTS as u64,
+        "highest cursor handed to the sink must be ≥ {TOTAL_EVENTS}; got {max_handed}"
+    );
+    // The loop must not persist the cursor itself on a save tick —
+    // that moved to the sink so a parked shard's no-op save can't
+    // advance the on-disk cursor past the on-disk body.
+    assert!(
+        cursor_store.store_log().is_empty(),
+        "loop must not write the cursor store on save ticks; got {:?}",
+        cursor_store.store_log(),
     );
 
     // ── Cursor monotonicity ─────────────────────────────────────────

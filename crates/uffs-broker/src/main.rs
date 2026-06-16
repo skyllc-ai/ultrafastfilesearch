@@ -26,21 +26,37 @@
 // in `Cargo.toml`, so they don't even exist as `extern crate`s on
 // non-Windows targets — the bin's non-Windows compilation produces no
 // `unused_crate_dependencies` warnings without any markers.
+
+// The workspace prefers `alloc::` over `std::` for smart pointers (clippy
+// `std_instead_of_alloc`); the broker's FU-5 serve loop uses
+// `alloc::sync::Arc`, so bring the crate into scope (Windows-only, like
+// `broker`).
+#[cfg(windows)]
+extern crate alloc;
+
 #[cfg(windows)]
 mod broker;
 
+#[expect(
+    clippy::print_stderr,
+    reason = "the --install/--uninstall paths run before any tracing subscriber \
+              exists, so tracing::error! is silently dropped (a non-elevated \
+              `--install` failed with NO output). stderr always reaches the operator."
+)]
 fn main() {
     #[cfg(windows)]
     {
         if let Err(run_err) = broker::run() {
-            tracing::error!(%run_err, "uffs-broker fatal error");
+            // `{:#}` prints the full anyhow cause chain (e.g. the `sc`
+            // stderr or the elevation-required message).
+            eprintln!("uffs-broker: {run_err:#}");
             std::process::exit(1);
         }
     }
 
     #[cfg(not(windows))]
     {
-        tracing::error!("uffs-broker is a Windows-only component");
+        eprintln!("uffs-broker is a Windows-only component.");
         std::process::exit(1);
     }
 }

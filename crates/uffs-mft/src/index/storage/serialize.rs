@@ -77,8 +77,9 @@ impl MftIndex {
         // padding compress to nearly zero with zstd.
         buffer.extend_from_slice(bytemuck::cast_slice(&self.records));
 
-        // Names — raw bytes
-        buffer.extend_from_slice(self.names.as_bytes());
+        // Names — raw WTF-8 bytes (already a byte buffer; may contain
+        // non-UTF-8 ill-formed NTFS names, retained losslessly — WI-4.4).
+        buffer.extend_from_slice(&self.names);
 
         // Links — bulk copy (LinkInfo is Pod, 24 bytes each)
         buffer.extend_from_slice(bytemuck::cast_slice(&self.links));

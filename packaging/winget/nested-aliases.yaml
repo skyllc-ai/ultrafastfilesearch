@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2025-2026 SKY, LLC.
+# SPDX-License-Identifier: MPL-2.0
+#
+# Canonical list of WinGet NestedInstallerFiles entries that komac will NOT
+# add on its own.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# winget-releaser (komac) PRESERVES the previous version's
+# NestedInstallerFiles / PortableCommandAlias list across version bumps, but
+# it does NOT scan the zip and auto-add newly-bundled executables. So every
+# binary we add to `uffs-windows-x64.zip` *after* the founding manifest
+# (which seeded uffs / uffsd / uffsmcp / uffs-mft) must be seeded into the
+# manifest exactly ONCE. After that, komac carries it forward forever.
+#
+# This file is the single source of truth for those "extra" aliases.
+# `scripts/dev/winget_seed_aliases.sh` reads it and idempotently inserts any
+# entry missing from a SkyLLC.UFFS installer manifest — so adding a future
+# binary (e.g. uffs-gui) is a one-line edit here, never a code change.
+#
+# RelativeFilePath is rooted at the zip's single top-level directory
+# (`uffs-windows-x64/`), which the min/normal/full tiering leaves unchanged —
+# the winget package always points at the `normal` zip (`uffs-windows-x64.zip`).
+#
+# HARD PRECONDITION: only an entry whose binary is ACTUALLY in the zip may be
+# seeded; seeding an absent file fails the winget install-validation bot.
+# `release.yml` bundles both files below into the Windows normal/full tiers.
+
+- RelativeFilePath: uffs-windows-x64/uffs-tui.exe
+  PortableCommandAlias: uffs-tui
+
+# uffs-broker: elevated handle-broker service. The CLI's elevation help
+# advertises `uffs-broker --install` as the "no future UAC prompts" path;
+# bundled into the zip since v0.5.122 (release.yml), needs this seed on the
+# first winget PR built from that release or later.
+- RelativeFilePath: uffs-windows-x64/uffs-broker.exe
+  PortableCommandAlias: uffs-broker

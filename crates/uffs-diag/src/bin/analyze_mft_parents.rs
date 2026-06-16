@@ -126,12 +126,12 @@ fn analyze_parents(df: &DataFrame) -> Result<()> {
     println!("\nDistinct FRS / parent_frs / dirs:");
 
     let mut frs_set = HashSet::with_capacity(frs_col.len());
-    for frs_value in frs_col.into_iter().flatten() {
+    for frs_value in frs_col.iter().flatten() {
         frs_set.insert(frs_value);
     }
 
     let mut parent_set = BTreeSet::new();
-    for parent_value in parent_col.into_iter().flatten() {
+    for parent_value in parent_col.iter().flatten() {
         // Skip root/sentinel parents (0) if present
         if parent_value != 0 {
             parent_set.insert(parent_value);
@@ -140,7 +140,7 @@ fn analyze_parents(df: &DataFrame) -> Result<()> {
 
     let mut dir_set = HashSet::new();
     if let Some(is_directory_series) = is_dir_col {
-        for (idx, is_directory_opt) in is_directory_series.into_iter().enumerate() {
+        for (idx, is_directory_opt) in is_directory_series.iter().enumerate() {
             if is_directory_opt == Some(true)
                 && let Some(frs) = frs_col.get(idx)
             {
@@ -215,7 +215,7 @@ fn print_missing_parent_details(missing_parents: &[u64], parent_col: &UInt64Chun
     let missing_set: HashSet<u64> = missing_parents.iter().copied().collect();
     let mut child_counts: BTreeMap<u64, u64> = BTreeMap::new();
 
-    for parent_value in parent_col.into_iter().flatten() {
+    for parent_value in parent_col.iter().flatten() {
         if missing_set.contains(&parent_value) {
             *child_counts.entry(parent_value).or_insert(0) += 1;
         }

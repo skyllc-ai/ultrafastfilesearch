@@ -88,6 +88,18 @@ pub enum FieldId {
     NameLength,
     /// Full-path length in characters.
     PathLength,
+    /// Whether this record's own leaf name is ill-formed (not valid UTF-8 —
+    /// an unpaired UTF-16 surrogate). Computed against the lossless name bytes
+    /// (WI-4.4); a forensic flag for names that have no valid UTF-8 form.
+    Malformed,
+    /// Whether ANY component of the record's full resolved path is ill-formed
+    /// (so a clean-named file under a crooked directory is still flagged).
+    /// Superset of [`Self::Malformed`].
+    MalformedPath,
+    /// Hex of the true (WTF-8) leaf-name bytes — the forensic evidence form for
+    /// distinguishing ill-formed names that all display as U+FFFD. Projection
+    /// only; never filtered or sorted.
+    NameHex,
 }
 
 /// Cardinality hint for aggregation planning.
@@ -253,6 +265,9 @@ impl FieldId {
         Self::ParityAttributes,
         Self::NameLength,
         Self::PathLength,
+        Self::Malformed,
+        Self::MalformedPath,
+        Self::NameHex,
     ];
 
     /// Parse a field name or alias into the canonical identifier.
@@ -361,7 +376,10 @@ impl FieldId {
             | Self::RecallOnDataAccess
             | Self::ParityAttributes
             | Self::NameLength
-            | Self::PathLength => None,
+            | Self::PathLength
+            | Self::Malformed
+            | Self::MalformedPath
+            | Self::NameHex => None,
         }
     }
 
@@ -441,7 +459,10 @@ impl FieldId {
             | Self::DirectoryFlag
             | Self::RecallOnOpen
             | Self::RecallOnDataAccess
-            | Self::ParityAttributes => Self::Name,
+            | Self::ParityAttributes
+            | Self::Malformed
+            | Self::MalformedPath
+            | Self::NameHex => Self::Name,
         }
     }
 }

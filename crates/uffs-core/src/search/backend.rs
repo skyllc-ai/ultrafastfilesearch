@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! Search backend types: display rows, sort columns, filter modes, and
-//! multi-drive search orchestration.
+//! Search backend types: sort columns, filter modes, and multi-drive search
+//! orchestration.
 //!
-//! Exception: `file_size_policy` allows this file to exceed 800 LOC.
-//! Rationale: cross-cutting facade — `DisplayRow`, `PhaseTimings`,
-//! `SearchResult`, `FilterMode`, and `MultiDriveBackend` form a
-//! cohesive contract surface referenced by every dispatch path, the
-//! daemon wire layer, and the test harness.  Splitting would
-//! scatter the type definitions across files and break the
-//! single-import convention downstream crates rely on.
+//! The result-row type [`DisplayRow`] lives in the sibling `display_row`
+//! module and is re-exported here, so the single-import convention downstream
+//! crates rely on (`uffs_core::search::backend::DisplayRow`) is preserved.
 
 use alloc::sync::Arc;
 use std::time::Instant;
@@ -26,231 +22,6 @@ use crate::search::field::FieldId;
 
 /// Sentinel: no truncation — return every matching record.
 const UNLIMITED: usize = usize::MAX;
-
-/// A single displayable search result row.
-///
-/// The filename is **not** stored separately — it is derived from the `path`
-/// field using `name_start` (byte offset where the filename begins within
-/// `path`).  This avoids one heap allocation per result row.
-///
-/// `Default` is implemented manually below: [`uffs_mft::platform::DriveLetter`]
-/// has no `Default` impl (it's a validated `A..=Z` newtype with no canonical
-/// zero), but the `sort_rows_with_fold` hot path uses
-/// [`core::mem::take`] to move rows out of a `&mut [DisplayRow]` slice
-/// as part of a Schwartzian decorate/sort/undecorate transform.  The
-/// take leaves a transient placeholder in the slice that's
-/// immediately overwritten by the put-back step, so any consistent
-/// drive letter works for the placeholder.
-#[derive(Debug, Clone)]
-#[expect(
-    clippy::partial_pub_fields,
-    reason = "name_start is private by design — accessed via name() method"
-)]
-pub struct DisplayRow {
-    /// Record index within the compact/cache file.
-    pub record_index: u32,
-    /// Drive letter this result belongs to.
-    pub drive: uffs_mft::platform::DriveLetter,
-    /// Full resolved path (e.g., `C:\Users\file.txt`).
-    pub path: String,
-    /// Byte offset within `path` where the filename begins.
-    ///
-    /// `self.name()` returns `&self.path[name_start..]`.
-    /// Computed once at construction from the last `\` separator.
-    name_start: u32,
-    /// File size in bytes.
-    pub size: u64,
-    /// Whether this is a directory.
-    pub is_directory: bool,
-    /// Last modified time (Unix microseconds).
-    pub modified: i64,
-    /// Creation time (Unix microseconds).
-    pub created: i64,
-    /// Last access time (Unix microseconds).
-    pub accessed: i64,
-    /// Raw NTFS `FILE_ATTRIBUTE_*` flags.
-    pub flags: u32,
-    /// Allocated size on disk in bytes.
-    pub allocated: u64,
-    /// Descendant count (directories only).
-    pub descendants: u32,
-    /// Sum of logical file sizes in entire subtree (directories only).
-    pub treesize: u64,
-    /// Sum of allocated sizes in entire subtree (directories only).
-    pub tree_allocated: u64,
-}
-
-impl DisplayRow {
-    /// Construct a `DisplayRow`, computing `name_start` from the path.
-    #[must_use]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "flat struct — all fields are required, no logical grouping"
-    )]
-    pub fn new(
-        record_index: u32,
-        drive: uffs_mft::platform::DriveLetter,
-        path: String,
-        size: u64,
-        is_directory: bool,
-        modified: i64,
-        created: i64,
-        accessed: i64,
-        flags: u32,
-        allocated: u64,
-        descendants: u32,
-        treesize: u64,
-        tree_allocated: u64,
-    ) -> Self {
-        let name_start = uffs_mft::len_to_u32(path.rfind('\\').map_or(0, |pos| pos + 1));
-        Self {
-            record_index,
-            drive,
-            path,
-            name_start,
-            size,
-            is_directory,
-            modified,
-            created,
-            accessed,
-            flags,
-            allocated,
-            descendants,
-            treesize,
-            tree_allocated,
-        }
-    }
-
-    /// Filename portion of the path (e.g., `file.txt`).
-    ///
-    /// Zero-cost: returns a `&str` slice into the owned `path`.
-    ///
-    /// The `uffs_format::FormatRow::name` trait method forwards to
-    /// this inherent method — keeping the inherent impl named `name`
-    /// (rather than e.g. `file_name`) preserves the accessor's
-    /// ergonomics across the many `uffs-core` call sites that
-    /// predate the trait.  The intentional collision with the trait
-    /// method silences `clippy::same_name_method` here.
-    #[must_use]
-    #[inline]
-    #[expect(
-        clippy::same_name_method,
-        reason = "shared name with the FormatRow trait impl is intentional — see method-level doc"
-    )]
-    pub fn name(&self) -> &str {
-        self.path.get(self.name_start as usize..).unwrap_or("")
-    }
-
-    /// Directory portion of path (up to and including the last `\`).
-    ///
-    /// Uses `name_start` for zero-cost slicing (no `rfind` needed).
-    #[must_use]
-    #[inline]
-    pub fn path_dir(&self) -> &str {
-        self.path
-            .get(..self.name_start as usize)
-            .unwrap_or(&self.path)
-    }
-}
-
-/// Feed `DisplayRow` straight into the shared `uffs-format` writer.
-///
-/// The daemon holds `DisplayRow` directly on the search hot path, so
-/// this impl lets `uffs_format::write_rows::<DisplayRow, _>` run
-/// without an intermediate copy.  Every accessor is O(1) and just
-/// hands back a struct field (or the pre-computed filename slice),
-/// matching the trait's inlineability requirement.
-///
-/// Manual `Default` impl — see the struct doc-comment for why we
-/// don't derive it.  All fields default to their natural zero
-/// (`0`, `String::new()`, `false`) except `drive`, which we set to
-/// [`uffs_mft::platform::DriveLetter::A`] purely as a placeholder for
-/// [`core::mem::take`] in the sort hot path.  Callers never observe
-/// this value: the take is immediately followed by a put-back.
-impl Default for DisplayRow {
-    fn default() -> Self {
-        Self {
-            record_index: 0,
-            drive: uffs_mft::platform::DriveLetter::A,
-            path: String::new(),
-            name_start: 0,
-            size: 0,
-            is_directory: false,
-            modified: 0,
-            created: 0,
-            accessed: 0,
-            flags: 0,
-            allocated: 0,
-            descendants: 0,
-            treesize: 0,
-            tree_allocated: 0,
-        }
-    }
-}
-
-/// The trait method `name()` collides with `DisplayRow::name()` (the
-/// inherent accessor that pre-dates the trait); the trait impl
-/// delegates to the inherent impl so the behaviour is identical.
-/// The `clippy::same_name_method` lint is silenced on the inherent
-/// method above — see its `#[expect]` attribute.
-impl uffs_format::FormatRow for DisplayRow {
-    #[inline]
-    fn drive(&self) -> char {
-        // `uffs-format` is a foundation crate that intentionally
-        // doesn't depend on `uffs-mft`, so the trait surface
-        // stays `char`.  `DriveLetter::as_char` is the canonical
-        // zero-cost conversion to the ASCII letter.
-        self.drive.as_char()
-    }
-    #[inline]
-    fn path(&self) -> &str {
-        &self.path
-    }
-    #[inline]
-    fn name(&self) -> &str {
-        Self::name(self)
-    }
-    #[inline]
-    fn size(&self) -> u64 {
-        self.size
-    }
-    #[inline]
-    fn is_directory(&self) -> bool {
-        self.is_directory
-    }
-    #[inline]
-    fn modified(&self) -> i64 {
-        self.modified
-    }
-    #[inline]
-    fn created(&self) -> i64 {
-        self.created
-    }
-    #[inline]
-    fn accessed(&self) -> i64 {
-        self.accessed
-    }
-    #[inline]
-    fn flags(&self) -> u32 {
-        self.flags
-    }
-    #[inline]
-    fn allocated(&self) -> u64 {
-        self.allocated
-    }
-    #[inline]
-    fn descendants(&self) -> u32 {
-        self.descendants
-    }
-    #[inline]
-    fn treesize(&self) -> u64 {
-        self.treesize
-    }
-    #[inline]
-    fn tree_allocated(&self) -> u64 {
-        self.tree_allocated
-    }
-}
 
 /// Sub-phase wall-clock breakdown inside the `pattern == "*"` pipeline.
 ///
@@ -570,6 +341,10 @@ impl MultiDriveBackend {
             });
         let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
         let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
+        let is_prefix = !is_match_all
+            && !is_regex
+            && !is_path
+            && crate::search::tree::is_prefix_pattern(&needle).is_some();
 
         if is_match_all {
             let (match_all_rows, match_all_timings) = super::query::collect_global_top_n(
@@ -631,6 +406,35 @@ impl MultiDriveBackend {
                     };
                 }
             }
+        } else if is_prefix {
+            // Trigram-accelerated prefix scan (`win*`). `is_prefix` already
+            // proved `is_prefix_pattern` holds, so the strip is infallible.
+            if let Some(prefix) = crate::search::tree::is_prefix_pattern(&needle) {
+                let drive_results: Vec<Vec<DisplayRow>> = self
+                    .drives
+                    .par_iter()
+                    .map(|drive| {
+                        super::query::search_compact_drive_prefix(
+                            drive,
+                            prefix,
+                            limit,
+                            case_sensitive,
+                        )
+                    })
+                    .collect();
+                for drive_rows in drive_results {
+                    rows.extend(drive_rows);
+                }
+                super::filters::apply_filter(&mut rows, filter_mode);
+                super::filters::apply_search_filters(&mut rows, search_filters);
+                sort_rows(
+                    &mut rows,
+                    self.sort_column,
+                    self.sort_desc,
+                    &self.extra_sort_tiers,
+                );
+                rows.truncate(limit);
+            }
         } else {
             let drive_results: Vec<Vec<DisplayRow>> = self
                 .drives
@@ -678,6 +482,8 @@ impl MultiDriveBackend {
             "regex"
         } else if is_path {
             "tree"
+        } else if is_prefix {
+            "prefix"
         } else {
             "trigram"
         };
@@ -833,6 +639,10 @@ pub fn search_index(
         });
     let needle = super::dispatch::fold_needle(case_sensitive, pattern, fold);
     let is_path = !is_match_all && !is_regex && crate::search::tree::is_path_pattern(&needle);
+    let is_prefix = !is_match_all
+        && !is_regex
+        && !is_path
+        && crate::search::tree::is_prefix_pattern(&needle).is_some();
 
     tracing::debug!(
         pattern,
@@ -880,6 +690,7 @@ pub fn search_index(
                 &active_drives,
                 &needle,
                 is_path,
+                is_prefix,
                 case_sensitive,
                 whole_word,
                 match_path,
@@ -896,7 +707,7 @@ pub fn search_index(
 
     let scanned = active_drives.iter().map(|dr| dr.records.len()).sum();
     let wall_ms = start.elapsed().as_millis();
-    let mode = pick_mode_label(is_match_all, is_regex, is_path);
+    let mode = pick_mode_label(is_match_all, is_regex, is_path, is_prefix);
     tracing::debug!(
         target: "cache_profile",
         wall_ms = %wall_ms,
@@ -965,6 +776,7 @@ fn apply_bloom_pre_check(active_drives: &mut Vec<&DriveCompactIndex>, ext_terms:
 // so existing `use uffs_core::search::backend::*;` call sites see no
 // change.
 pub use super::dataframe_convert::{dataframe_to_display_rows, display_rows_to_dataframe};
+pub use super::display_row::DisplayRow;
 pub use super::sorting::{format_sort_spec, parse_sort_spec, sort_rows, sort_rows_with_fold};
 
 #[cfg(test)]

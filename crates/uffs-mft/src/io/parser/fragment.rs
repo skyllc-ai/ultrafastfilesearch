@@ -3,6 +3,17 @@
 
 //! Legacy direct-to-fragment parser bridge.
 //! Preserves the parallel parser surface used before fragment merge.
+//!
+//! # Hardening (WI-5.2)
+//! This module parses **untrusted on-disk bytes**. Every offset/length derived
+//! from those bytes is combined with `checked_add`/`checked_mul` (or
+//! `saturating_*` where overflow is provably unreachable) and every slice into
+//! `data` goes through `.get()` / the `rd_u*` helpers — never `data[a..b]`
+//! indexing. The daemon builds with `panic = "abort"`, so a single parser panic
+//! on a malformed record would be a whole-process denial of service.
+//! `arithmetic_side_effects` is enabled module-wide as a regression guard: any
+//! new raw `+`/`*` on a byte-derived value is a compile error here.
+#![warn(clippy::arithmetic_side_effects)]
 
 use core::mem::size_of;
 
@@ -40,7 +51,11 @@ use crate::ntfs::{
 #[expect(
     clippy::indexing_slicing,
     clippy::missing_asserts_for_indexing,
-    reason = "all slice access is bounds-guarded by while-loop condition and per-access length checks"
+    reason = "the only `[]` indexing that remains is into internal arena vectors \
+              (fragment.links / fragment.streams / fragment.records / fragment.frs_to_idx) \
+              whose indices are produced by this code, not by untrusted on-disk bytes. \
+              All reads of the untrusted `data` slice go through `.get()` / the `rd_u*` \
+              helpers (WI-5.2)"
 )]
 #[expect(deprecated, reason = "deprecated function calling deprecated helper")]
 pub fn parse_record_to_fragment(
@@ -89,8 +104,14 @@ pub fn parse_record_to_fragment(
     // ADS: (stream_name, size, allocated)
     let mut additional_streams: SmallVec<[(String, u64, u64); 4]> = SmallVec::new();
 
-    while offset + size_of::<AttributeRecordHeader>() <= max_offset {
-        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(&data[offset..]) else {
+    while offset
+        .checked_add(size_of::<AttributeRecordHeader>())
+        .is_some_and(|end| end <= max_offset)
+    {
+        let Some(attr_slice) = data.get(offset..) else {
+            break;
+        };
+        let Ok((attr_header, _)) = AttributeRecordHeader::read_from_prefix(attr_slice) else {
             break;
         };
 
@@ -98,19 +119,26 @@ pub fn parse_record_to_fragment(
             break;
         }
 
-        if attr_header.length == 0 || offset + u32_as_usize(attr_header.length) > max_offset {
+        // `offset + length` can overflow on a crafted `length`; checked_add → break.
+        let Some(attr_end) = offset.checked_add(u32_as_usize(attr_header.length)) else {
+            break;
+        };
+        if attr_header.length == 0 || attr_end > max_offset {
             break;
         }
 
         match AttributeType::from_u32(attr_header.type_code) {
             Some(AttributeType::StandardInformation) if attr_header.is_non_resident == 0 => {
-                let value_offset_bytes = &data[offset + 20..offset + 22];
-                let value_offset =
-                    u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
-                let si_offset = offset + value_offset;
-                if si_offset + size_of::<StandardInformation>() <= data.len() {
-                    let Ok((si, _)) = StandardInformation::read_from_prefix(&data[si_offset..])
-                    else {
+                let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
+                // `offset + value_offset` is byte-derived; checked, then re-validated
+                // by the `.get()` below.
+                if let Some(si_offset) = offset.checked_add(value_offset)
+                    && let Some(si_slice) = si_offset
+                        .checked_add(size_of::<StandardInformation>())
+                        .filter(|end| *end <= data.len())
+                        .and_then(|_| data.get(si_offset..))
+                {
+                    let Ok((si, _)) = StandardInformation::read_from_prefix(si_slice) else {
                         break;
                     };
                     let ext =
@@ -124,30 +152,40 @@ pub fn parse_record_to_fragment(
                 }
             }
             Some(AttributeType::FileName) if attr_header.is_non_resident == 0 => {
-                let value_offset_bytes = &data[offset + 20..offset + 22];
-                let value_offset =
-                    u16::from_le_bytes(value_offset_bytes.try_into().unwrap_or([0, 0])) as usize;
-                let fn_offset = offset + value_offset;
-                if fn_offset + size_of::<FileNameAttribute>() <= data.len() {
-                    let Ok((fn_attr, _)) = FileNameAttribute::read_from_prefix(&data[fn_offset..])
-                    else {
+                let value_offset = usize::from(rd_u16(data, offset.saturating_add(20)));
+                // `offset + value_offset` is byte-derived; checked, then re-validated
+                // by the `.get()` below.
+                if let Some(fn_offset) = offset.checked_add(value_offset)
+                    && let Some(fn_slice) = fn_offset
+                        .checked_add(size_of::<FileNameAttribute>())
+                        .filter(|end| *end <= data.len())
+                        .and_then(|_| data.get(fn_offset..))
+                {
+                    let Ok((fn_attr, _)) = FileNameAttribute::read_from_prefix(fn_slice) else {
                         break;
                     };
                     let name_len = usize::from(fn_attr.file_name_length);
-                    let name_bytes_offset = fn_offset + size_of::<FileNameAttribute>();
-                    if name_bytes_offset + name_len * 2 <= data.len() {
-                        let name_bytes = &data[name_bytes_offset..name_bytes_offset + name_len * 2];
+                    let name_bytes_offset =
+                        fn_offset.saturating_add(size_of::<FileNameAttribute>());
+                    // `name_len * 2` (UTF-16) overflows on a crafted length →
+                    // checked_mul/checked_add, then `.get()` bounds the slice.
+                    if let Some(name_bytes) = name_len
+                        .checked_mul(2)
+                        .and_then(|byte_len| name_bytes_offset.checked_add(byte_len))
+                        .and_then(|end| data.get(name_bytes_offset..end))
+                    {
                         let name_u16: Vec<u16> = name_bytes
                             .chunks_exact(2)
                             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                             .collect();
-                        let name = String::from_utf16_lossy(&name_u16);
+                        let name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         let parent_frs = file_reference_to_frs(fn_attr.parent_directory);
                         let namespace = fn_attr.file_name_namespace;
 
                         if namespace != 2 {
                             let parse_idx = name_parse_counter;
-                            name_parse_counter += 1;
+                            // Bounded parse-order counter; saturate to avoid overflow.
+                            name_parse_counter = name_parse_counter.saturating_add(1);
                             let is_better = match namespace {
                                 1 | 3 => true,
                                 0 => primary_name.is_none(),
@@ -174,58 +212,49 @@ pub fn parse_record_to_fragment(
                 let is_primary = if attr_header.is_non_resident == 0 {
                     true // Resident attributes are always primary
                 } else {
-                    let nr_offset = offset + 16;
-                    if nr_offset + 8 <= data.len() {
-                        let lowest_vcn = i64::from_le_bytes(
-                            data[nr_offset..nr_offset + 8].try_into().unwrap_or([0; 8]),
-                        );
-                        lowest_vcn == 0
-                    } else {
-                        false // Can't verify, skip to be safe
-                    }
+                    // `offset + 16` is byte-derived; checked then the `+ 8` field
+                    // bound preserves the original "can't verify, skip" fallback.
+                    // Can't verify → false (skip to be safe).
+                    offset
+                        .checked_add(16)
+                        .filter(|nr| nr.saturating_add(8) <= data.len())
+                        .is_some_and(|nr_offset| rd_u64(data, nr_offset).cast_signed() == 0)
                 };
 
                 if !is_primary {
                     // Skip continuation extents - they don't count as new streams
-                    offset += u32_as_usize(attr_header.length);
+                    // Disk-derived advance; saturate so a crafted length can't overflow.
+                    offset = offset.saturating_add(u32_as_usize(attr_header.length));
                     continue;
                 }
 
                 // Parse $DATA - track both default stream and ADS
                 let name_len = usize::from(attr_header.name_length);
                 let (size, allocated) = if attr_header.is_non_resident != 0 {
-                    let alloc_offset = offset + 40;
-                    let size_offset = offset + 48;
-                    if size_offset + 8 <= data.len() {
-                        let allocated = u64::from_le_bytes(
-                            data[alloc_offset..alloc_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
-                        let size = u64::from_le_bytes(
-                            data[size_offset..size_offset + 8]
-                                .try_into()
-                                .unwrap_or([0; 8]),
-                        );
-                        (size, allocated)
-                    } else {
-                        (0, 0)
-                    }
+                    // `rd_u*` are individually bounds-safe (return 0 OOB); the
+                    // `offset + 48 + 8 <= len` guard preserves the original "both
+                    // fields present" semantics. Offsets via checked/saturating_add.
+                    offset
+                        .checked_add(48)
+                        .filter(|size_off| size_off.saturating_add(8) <= data.len())
+                        .map_or((0, 0), |size_offset| {
+                            let alloc_offset = offset.saturating_add(40);
+                            let allocated = rd_u64(data, alloc_offset);
+                            let size = rd_u64(data, size_offset);
+                            (size, allocated)
+                        })
                 } else {
                     // Resident: value_length at offset 16
                     // Resident files have no clusters allocated - data is stored in MFT record
                     // Resident files have allocated_size=0 (data stored in MFT record)
-                    let len_offset = offset + 16;
-                    if len_offset + 4 <= data.len() {
-                        let len = u64::from(u32::from_le_bytes(
-                            data[len_offset..len_offset + 4]
-                                .try_into()
-                                .unwrap_or([0; 4]),
-                        ));
-                        (len, 0) // allocated_size = 0 for resident files
-                    } else {
-                        (0, 0)
-                    }
+                    // `rd_u32` is bounds-safe; the `+ 4 <= len` guard preserves the
+                    // original "field present" fallback.
+                    offset
+                        .checked_add(16)
+                        .filter(|len_off| len_off.saturating_add(4) <= data.len())
+                        .map_or((0, 0), |len_offset| {
+                            (u64::from(rd_u32(data, len_offset)), 0) // allocated_size = 0 for resident files
+                        })
                 };
 
                 if name_len == 0 {
@@ -234,14 +263,19 @@ pub fn parse_record_to_fragment(
                     default_allocated = allocated;
                 } else {
                     // Alternate Data Stream (ADS)
-                    let name_offset = offset + usize::from(attr_header.name_offset);
-                    if name_offset + name_len * 2 <= data.len() {
-                        let name_bytes = &data[name_offset..name_offset + name_len * 2];
+                    let name_offset = offset.saturating_add(usize::from(attr_header.name_offset));
+                    // `name_len * 2` (UTF-16) overflows on a crafted length →
+                    // checked_mul/checked_add, then `.get()` bounds the slice.
+                    if let Some(name_bytes) = name_len
+                        .checked_mul(2)
+                        .and_then(|byte_len| name_offset.checked_add(byte_len))
+                        .and_then(|end| data.get(name_offset..end))
+                    {
                         let name_u16: SmallVec<[u16; 64]> = name_bytes
                             .chunks_exact(2)
                             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                             .collect();
-                        let stream_name = String::from_utf16_lossy(&name_u16);
+                        let stream_name = crate::io::parser::unified::decode_name_u16(&name_u16).0;
                         // ALL named $DATA streams create regular
                         // stream entries.  Internal ones are filtered from
                         // output by is_internal_windows_stream in the output layer.
@@ -252,7 +286,8 @@ pub fn parse_record_to_fragment(
             _ => {}
         }
 
-        offset += u32_as_usize(attr_header.length);
+        // Disk-derived advance; saturate so a crafted length can't overflow.
+        offset = offset.saturating_add(u32_as_usize(attr_header.length));
     }
 
     // Set directory flag in std_info BEFORE checking for filename
@@ -397,17 +432,17 @@ pub fn parse_record_to_fragment(
     };
 
     // Chain the base record's additional links together
-    for i in 0..link_indices.len().saturating_sub(1) {
-        let current_idx = u32_as_usize(link_indices[i]);
-        let next_idx = link_indices[i + 1];
-        fragment.links[current_idx].next_entry = next_idx;
+    for pair in link_indices.windows(2) {
+        if let [current, next] = *pair {
+            fragment.links[u32_as_usize(current)].next_entry = next;
+        }
     }
 
     // Chain the base record's additional streams together
-    for i in 0..stream_indices.len().saturating_sub(1) {
-        let current_idx = u32_as_usize(stream_indices[i]);
-        let next_idx = stream_indices[i + 1];
-        fragment.streams[current_idx].next_entry = next_idx;
+    for pair in stream_indices.windows(2) {
+        if let [current, next] = *pair {
+            fragment.streams[u32_as_usize(current)].next_entry = next;
+        }
     }
 
     // Now chain base record links, then extension links
@@ -425,29 +460,23 @@ pub fn parse_record_to_fragment(
 
         // Chain: base first_name -> base additional links -> ext first_name -> ext
         // overflow
-        if link_indices.is_empty() {
-            first_name_next_entry = ext_link_idx;
+        if let Some((&head, &last)) = link_indices.first().zip(link_indices.last()) {
+            first_name_next_entry = head;
+            fragment.links[u32_as_usize(last)].next_entry = ext_link_idx;
         } else {
-            first_name_next_entry = link_indices[0];
-            let last_base_link = u32_as_usize(link_indices[link_indices.len() - 1]);
-            fragment.links[last_base_link].next_entry = ext_link_idx;
+            first_name_next_entry = ext_link_idx;
         }
     } else if existing_first_name.next_entry != NO_ENTRY {
         // Extension only had overflow links (no first_name) - chain them
-        if link_indices.is_empty() {
-            first_name_next_entry = existing_first_name.next_entry;
+        if let Some((&head, &last)) = link_indices.first().zip(link_indices.last()) {
+            first_name_next_entry = head;
+            fragment.links[u32_as_usize(last)].next_entry = existing_first_name.next_entry;
         } else {
-            first_name_next_entry = link_indices[0];
-            let last_base_link = u32_as_usize(link_indices[link_indices.len() - 1]);
-            fragment.links[last_base_link].next_entry = existing_first_name.next_entry;
+            first_name_next_entry = existing_first_name.next_entry;
         }
     } else {
         // No extension names - just chain base's additional links
-        if link_indices.is_empty() {
-            first_name_next_entry = NO_ENTRY;
-        } else {
-            first_name_next_entry = link_indices[0];
-        }
+        first_name_next_entry = link_indices.first().copied().unwrap_or(NO_ENTRY);
     }
 
     // Now set first_name.next_entry on the record.
@@ -458,9 +487,10 @@ pub fn parse_record_to_fragment(
 
     // Chain streams: base ADS -> extension ADS (must be done before borrowing
     // record) If base has ADS and extension has ADS, chain them together
-    if !stream_indices.is_empty() && existing_stream_next != NO_ENTRY {
-        let last_base_stream = u32_as_usize(stream_indices[stream_indices.len() - 1]);
-        fragment.streams[last_base_stream].next_entry = existing_stream_next;
+    if existing_stream_next != NO_ENTRY
+        && let Some(&last_base_stream) = stream_indices.last()
+    {
+        fragment.streams[u32_as_usize(last_base_stream)].next_entry = existing_stream_next;
     }
 
     // Now get record and update counts and first_stream chain
@@ -469,7 +499,10 @@ pub fn parse_record_to_fragment(
     // Calculate total name count
     // Base: 1 (first_name) + additional_count
     // Extension: existing_name_count (includes extension's names)
-    rec_for_counts.name_count = 1 + len_to_u16(additional_count) + existing_name_count;
+    // Bounded internal counters; saturate to avoid overflow panic.
+    rec_for_counts.name_count = 1_u16
+        .saturating_add(len_to_u16(additional_count))
+        .saturating_add(existing_name_count);
 
     // Set first_stream.next_entry to chain to base ADS or extension ADS
     if !stream_indices.is_empty() {
@@ -482,7 +515,10 @@ pub fn parse_record_to_fragment(
     // Calculate total stream count
     // Base: 1 (default $DATA) + additional_stream_count
     // Extension: existing_stream_count (ADS from extension records)
-    rec_for_counts.stream_count = 1 + len_to_u16(additional_stream_count) + existing_stream_count;
+    // Bounded internal counters; saturate to avoid overflow panic.
+    rec_for_counts.stream_count = 1_u16
+        .saturating_add(len_to_u16(additional_stream_count))
+        .saturating_add(existing_stream_count);
 
     // Build parent-child relationship for tree metrics computation
     // This is critical for compute_tree_metrics() to work correctly.
@@ -498,7 +534,10 @@ pub fn parse_record_to_fragment(
         let parent_idx = {
             let p_frs_usize = frs_to_usize(p_frs);
             if p_frs_usize >= frag.frs_to_idx.len() {
-                frag.frs_to_idx.resize(p_frs_usize + 1, NO_ENTRY);
+                // `p_frs` is masked to 48 bits, so `+ 1` cannot overflow usize on
+                // 64-bit; saturate defensively to keep arithmetic panic-free.
+                frag.frs_to_idx
+                    .resize(p_frs_usize.saturating_add(1), NO_ENTRY);
             }
             if frag.frs_to_idx[p_frs_usize] == NO_ENTRY {
                 // Create placeholder parent
@@ -591,14 +630,47 @@ fn store_nameless_record(
     };
 
     // Chain ADS streams to first_stream
-    if !stream_indices.is_empty() {
-        for i in 0..stream_indices.len().saturating_sub(1) {
-            let current_idx = u32_as_usize(stream_indices[i]);
-            let next_idx = stream_indices[i + 1];
-            fragment.streams[current_idx].next_entry = next_idx;
+    if let Some(&first_stream_idx) = stream_indices.first() {
+        for pair in stream_indices.windows(2) {
+            if let [current, next] = *pair {
+                fragment.streams[u32_as_usize(current)].next_entry = next;
+            }
         }
         let rec_for_stream = fragment.get_or_create(frs_typed);
-        rec_for_stream.first_stream.next_entry = stream_indices[0];
-        rec_for_stream.stream_count = 1 + len_to_u16(additional_stream_count);
+        rec_for_stream.first_stream.next_entry = first_stream_idx;
+        // Bounded internal counter; saturate to avoid overflow panic.
+        rec_for_stream.stream_count = 1_u16.saturating_add(len_to_u16(additional_stream_count));
     }
+}
+
+// ── Helpers (untrusted-byte readers, WI-5.2) ────────────────────────────────
+
+/// Read a little-endian `u16` from `buf` at `off`, returning 0 if the 2-byte
+/// field is out of bounds.
+#[inline]
+fn rd_u16(buf: &[u8], off: usize) -> u16 {
+    off.checked_add(2)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 2]>::try_from(sl).ok())
+        .map_or(0, u16::from_le_bytes)
+}
+
+/// Read a little-endian `u32` from `buf` at `off`, returning 0 if the 4-byte
+/// field is out of bounds.
+#[inline]
+fn rd_u32(buf: &[u8], off: usize) -> u32 {
+    off.checked_add(4)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 4]>::try_from(sl).ok())
+        .map_or(0, u32::from_le_bytes)
+}
+
+/// Read a little-endian `u64` from `buf` at `off`, returning 0 if the 8-byte
+/// field is out of bounds.
+#[inline]
+fn rd_u64(buf: &[u8], off: usize) -> u64 {
+    off.checked_add(8)
+        .and_then(|end| buf.get(off..end))
+        .and_then(|sl| <[u8; 8]>::try_from(sl).ok())
+        .map_or(0, u64::from_le_bytes)
 }

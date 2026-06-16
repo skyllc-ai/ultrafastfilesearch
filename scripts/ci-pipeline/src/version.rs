@@ -1,32 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-#![expect(
-    clippy::print_stdout,
-    reason = "operational CLI tool — version bump confirmations + tip messages go to stdout (issue #212)"
-)]
-
-//! Version discovery + bump helpers for the UFFS ship pipeline.
+//! Version discovery helpers for the UFFS ship pipeline.
 //!
 //! * [`get_current_version`] — read `[workspace.package].version` out of the
 //!   root `Cargo.toml` (simple whole-file scan).
 //! * [`extract_version_from_cargo_toml`] — same, but strict: only considers the
 //!   `[workspace.package]` section.
-//! * [`increment_version`] — shell out to the `./build/update_all_versions.rs`
-//!   rust-script that actually rewrites the Cargo.toml in place.
-//! * [`version_bump`] — tracked-step wrapper around [`increment_version`] that
-//!   threads through the pipeline's logging / timeout conventions.
-//! * [`update_polars_git`] — pin the polars git dep to the latest upstream
-//!   `main` HEAD (or honour the `rev = "..."` override if present).
-
-use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
-use colored::Colorize as _;
-use tokio::process::Command;
-
-use crate::context::PipelineContext;
-use crate::exec::execute_command;
 
 /// Read the workspace root `Cargo.toml` and return the first
 /// `version = "..."` string found.  Used by the push step to build
@@ -46,6 +28,46 @@ pub(crate) fn get_current_version() -> Result<String> {
         }
     }
     bail!("Could not find version in Cargo.toml")
+}
+
+/// Bump the lockstep `[workspace.package].version` (plus the internal
+/// `[workspace.dependencies]` version requirements and the lockfile) by
+/// `level` — `"patch"`, `"minor"`, or `"major"` — via `cargo set-version`.
+///
+/// This restores the Phase-2 version-increment step retired in R5.  It shells
+/// out to `cargo-edit`'s `set-version` rather than re-implementing semver math
+/// (the ~1430 LOC R5 deleted): `set-version` already handles workspace
+/// inheritance and the internal dep-requirement updates correctly.  `just ship`
+/// is a maintainer-only release command, so requiring `cargo-edit` on the
+/// release machine is acceptable.
+///
+/// # Errors
+///
+/// Returns an error if `cargo set-version` is not installed or the bump fails.
+pub(crate) fn bump_workspace_version(level: &str) -> Result<()> {
+    let available = std::process::Command::new("cargo")
+        .args(["set-version", "--help"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !available {
+        bail!(
+            "`cargo set-version` not found — install it with `cargo install cargo-edit` \
+             (required by `just ship` to bump the release version)."
+        );
+    }
+    let status = std::process::Command::new("cargo")
+        .args(["set-version", "--bump", level])
+        .status()
+        .context("running `cargo set-version`")?;
+    if !status.success() {
+        bail!("`cargo set-version --bump {level}` failed");
+    }
+    // Refresh the lockfile so the release commit is byte-reproducible.
+    std::process::Command::new("cargo")
+        .args(["update", "--workspace", "--quiet"])
+        .status()
+        .context("refreshing Cargo.lock after version bump")?;
+    Ok(())
 }
 
 /// Parse `content` (the text of a workspace root `Cargo.toml`) and
@@ -78,145 +100,4 @@ pub(crate) fn extract_version_from_cargo_toml(content: &str) -> Result<String> {
         }
     }
     bail!("Version extraction failed - no version found in [workspace.package]")
-}
-
-/// Parse the current `[workspace.package].version`, bump the patch
-/// component, and rewrite `Cargo.toml` in place.  Separated from
-/// [`version_bump`] so it can be called directly from the workflow
-/// state machine without involving a subprocess.
-///
-/// # Errors
-///
-/// Returns an error if the `./build/update_all_versions.rs` helper
-/// cannot be spawned, or if it exits with a non-zero status.
-pub(crate) async fn increment_version() -> Result<()> {
-    println!("📈 Incrementing version...");
-    let output = Command::new("./build/update_all_versions.rs")
-        .arg("patch")
-        .output()
-        .await
-        .context("Failed to execute version update script")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Version bump failed: {stderr}");
-    }
-    println!("✅ Version incremented successfully");
-    Ok(())
-}
-
-/// Bump the workspace `[package].version` in root `Cargo.toml`.
-/// Runs the shared [`increment_version`] helper under the usual
-/// logging and timeout wrapping.
-///
-/// # Errors
-///
-/// Propagates any failure from the wrapped [`execute_command`]
-/// subprocess.  Fails fast if the helper script is missing.
-pub(crate) async fn version_bump(ctx: &PipelineContext) -> Result<()> {
-    println!("{}", "📈 Incrementing version...".blue());
-    let script_path = Path::new("./build/update_all_versions.rs");
-    if script_path.exists() {
-        execute_command(
-            "Version increment",
-            "./build/update_all_versions.rs",
-            &["patch"],
-            ctx,
-        )
-        .await?;
-    } else {
-        println!("{}", "⚠️  Version script not found".yellow());
-        bail!("Version bump failed - ./build/update_all_versions.rs not found");
-    }
-    Ok(())
-}
-
-/// Update Polars git dependencies to the latest commit on `main`.
-///
-/// **Skipped** when `uffs-polars/Cargo.toml` uses `rev = "..."` pinning
-/// (which prevents upstream breakage).  In that case the pinned commit
-/// is used as-is and `cargo update` is called with
-/// `--precise <pinned-rev>`.
-///
-/// # Errors
-///
-/// Returns an error if `crates/uffs-polars/Cargo.toml` cannot be read,
-/// if `git ls-remote` fails, or if `cargo update` returns non-zero.
-pub(crate) async fn update_polars_git(_ctx: &PipelineContext) -> Result<()> {
-    // Check if uffs-polars/Cargo.toml uses rev pinning
-    let cargo_toml = std::fs::read_to_string("crates/uffs-polars/Cargo.toml")
-        .context("Failed to read crates/uffs-polars/Cargo.toml")?;
-    if let Some(rev_line) = cargo_toml
-        .lines()
-        .find(|line| line.contains("polars") && line.contains("rev ="))
-    {
-        // Extract the rev hash from `... rev = "<hash>" ...`.  Two
-        // `split_once('"')` steps walk past the opening + closing
-        // quotes without any byte-range slicing, so the lint's
-        // UTF-8-boundary panic concern doesn't apply here.
-        if let Some((_, after_open)) = rev_line.split_once("rev = \"")
-            && let Some((pinned_rev, _)) = after_open.split_once('"')
-        {
-            // Short prefix for display; `.get(..12)` returns None if
-            // the rev is shorter than 12 chars (git hashes are 40)
-            // — fall back to the full string in that defensive case.
-            let short_rev = pinned_rev.get(..12).unwrap_or(pinned_rev);
-            println!(
-                "{}",
-                format!("📌 Polars pinned to rev={short_rev} — skipping auto-update").blue()
-            );
-            // Still run cargo update to ensure lockfile matches the pinned rev
-            let status = Command::new("cargo")
-                .args(["update", "-p", "polars", "--precise", pinned_rev])
-                .status()
-                .await
-                .context("Failed to run cargo update for pinned polars")?;
-            if !status.success() {
-                println!("⚠️  cargo update --precise failed (lockfile may already be correct)");
-            }
-            return Ok(());
-        }
-    }
-
-    println!(
-        "{}",
-        "📦 Updating Polars (git, branch=main) to latest commit...".blue()
-    );
-
-    // 1) Discover latest commit on main
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg("https://github.com/pola-rs/polars")
-        .arg("refs/heads/main")
-        .output()
-        .await
-        .context("Failed to run 'git ls-remote' for Polars")?;
-    if !output.status.success() {
-        bail!("git ls-remote failed for Polars main");
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let sha = stdout
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Unable to parse Polars main HEAD sha"))?;
-
-    // 2) Pin workspace lockfile to that exact commit for the 'polars' package
-    let status = Command::new("cargo")
-        .arg("update")
-        .arg("-w")
-        .arg("-p")
-        .arg("polars")
-        .arg("--precise")
-        .arg(sha)
-        .status()
-        .await
-        .context("Failed to execute 'cargo update -w -p polars --precise <sha>'")?;
-
-    if !status.success() {
-        bail!(
-            "Polars update failed - 'cargo update -w -p polars --precise <sha>' exited with non-zero status"
-        );
-    }
-
-    println!("{} {}", "✅ Polars pinned to commit".green(), sha);
-    Ok(())
 }

@@ -235,7 +235,7 @@ pub(super) const fn estimate_combined_phase_timings(
             let merge_est = read_parse_ms * 20 / 100;
             (read_est, parse_est, merge_est)
         }
-        DriveType::Hdd | DriveType::Unknown => {
+        DriveType::Hdd | DriveType::Removable | DriveType::Virtual | DriveType::Unknown => {
             let read_est = read_parse_ms * 70 / 100;
             let parse_est = read_parse_ms * 20 / 100;
             let merge_est = read_parse_ms * 10 / 100;

@@ -175,7 +175,19 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
     /// background thread; the loop does not wait for it.  If
     /// the save fails, the implementor logs but does not
     /// propagate — the next threshold crossing will retry.
-    fn trigger_save(&self, letter: uffs_mft::platform::DriveLetter, reason: SaveReason);
+    ///
+    /// `cursor` is the loop's current read position.  The sink
+    /// persists it **in lockstep** with the on-disk compact-cache
+    /// body — and only when that body save actually succeeds — so
+    /// the persisted cursor never outruns the persisted body (a
+    /// parked shard's save is a no-op, so its cursor must not
+    /// advance on disk; see `journal_sink`).
+    fn trigger_save(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: SaveReason,
+        cursor: u64,
+    );
 
     /// Notify the sink that the USN journal for `letter` was
     /// detected to have wrapped (Phase 7 task 7.7).
@@ -437,13 +449,27 @@ impl JournalLoop {
             0 => self.config.initial_cursor,
             persisted => persisted,
         };
+        let mut backoff = PollBackoff::new(self.config.poll_interval, MAX_POLL_BACKOFF);
         loop {
-            if !wait_for_next_tick(&mut self.cancel_rx, self.config.poll_interval, letter).await {
+            if !wait_for_next_tick(&mut self.cancel_rx, backoff.current(), letter).await {
                 return;
             }
 
-            let Some(result) = poll_blocking(Arc::clone(&self.source), cursor, letter).await else {
-                continue;
+            let result = match poll_blocking(Arc::clone(&self.source), cursor).await {
+                Ok(result) => {
+                    if backoff.on_success() {
+                        tracing::info!(
+                            drive = %letter,
+                            "Journal poll recovered; resuming normal cadence"
+                        );
+                    }
+                    result
+                }
+                Err(failure) => {
+                    let streak = backoff.on_failure();
+                    log_poll_failure(letter, &failure, streak, backoff.current());
+                    continue;
+                }
             };
 
             // Wrap-detection (Phase 7 task 7.7): if the journal_id
@@ -471,7 +497,12 @@ impl JournalLoop {
             }
 
             cursor = result.next_cursor;
-            let saved = process_tick(
+            // The cursor is persisted by the sink in lockstep with the
+            // compact-cache body save (and only when that save actually
+            // happens), so the loop no longer persists it here — doing
+            // so would let a parked shard's on-disk cursor outrun its
+            // frozen on-disk body.  See `PatchSink::trigger_save`.
+            process_tick(
                 self.sink.as_ref(),
                 letter,
                 cursor,
@@ -480,11 +511,6 @@ impl JournalLoop {
                 self.config.save_threshold_events,
                 self.config.save_threshold_age,
             );
-            // Persist the cursor in lockstep with each save so
-            // on-disk cursor and on-disk body advance together.
-            if saved {
-                self.cursor_store.store(letter, cursor);
-            }
         }
     }
 }
@@ -519,35 +545,133 @@ async fn wait_for_next_tick(
     }
 }
 
+/// Upper bound on the journal-poll backoff cadence.
+///
+/// When the journal is unavailable the loop backs its cadence off geometrically
+/// (see [`PollBackoff`]) up to this ceiling, so a persistently unavailable
+/// journal — e.g. a non-elevated daemon whose USN handle isn't brokered yet
+/// (FU-2b) — polls at most this often instead of every `poll_interval`.  Small
+/// enough that a recovered journal is picked up promptly; large enough that an
+/// unavailable one stops flooding the log and the blocking pool.
+const MAX_POLL_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Why a journal poll tick produced no result.
+struct PollFailure {
+    /// Human-readable cause for the log line.
+    cause: String,
+    /// `true` when the `spawn_blocking` task itself failed (panicked /
+    /// cancelled) rather than the source returning an I/O error.
+    aborted: bool,
+}
+
+/// Geometric backoff for the journal poll cadence.
+///
+/// The journal can be transiently unavailable (volume revocation, broker
+/// reconnect) or — for a non-elevated daemon without a brokered USN handle —
+/// persistently access-denied.  Polling every `base` interval in that state
+/// floods the log with one WARN per tick (~2/s) and burns a `spawn_blocking`
+/// plus an FSCTL per tick for nothing.  This doubles the cadence from `base`
+/// toward `cap` on each consecutive failure and snaps back to `base` on the
+/// first success, so a healthy journal keeps its tight cadence while an
+/// unavailable one goes quiet.
+struct PollBackoff {
+    /// Healthy cadence (the configured `poll_interval`).
+    base: Duration,
+    /// Maximum backed-off cadence.
+    cap: Duration,
+    /// Cadence the next tick will wait.
+    current: Duration,
+    /// Consecutive failures since the last success.
+    consecutive_failures: u32,
+}
+
+impl PollBackoff {
+    /// Start at the healthy `base` cadence, backing off no slower than `cap`.
+    const fn new(base: Duration, cap: Duration) -> Self {
+        Self {
+            base,
+            cap,
+            current: base,
+            consecutive_failures: 0,
+        }
+    }
+
+    /// Cadence the next tick should wait.
+    const fn current(&self) -> Duration {
+        self.current
+    }
+
+    /// Record a successful poll: reset to `base`.  Returns `true` when the loop
+    /// was previously backed off, so the caller can log a one-shot recovery.
+    const fn on_success(&mut self) -> bool {
+        let was_backed_off = self.consecutive_failures > 0;
+        self.consecutive_failures = 0;
+        self.current = self.base;
+        was_backed_off
+    }
+
+    /// Record a failed poll: double the cadence (saturating at `cap`).  Returns
+    /// the 1-based failure count in the current streak so the caller can log
+    /// the first failure loudly and demote the rest.
+    fn on_failure(&mut self) -> u32 {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.current = self.current.saturating_mul(2).min(self.cap);
+        self.consecutive_failures
+    }
+}
+
 /// Run one journal poll on the blocking pool.
 ///
-/// **Returns** `Some(result)` on success, `None` when the source
-/// or the spawn-blocking task itself failed (warn-logged at the
-/// call site so the loop can `continue` cleanly).
+/// **Returns** `Ok(result)` on success, or `Err(PollFailure)` describing the
+/// cause — the caller logs it (with backoff-aware severity) and `continue`s.
 async fn poll_blocking(
     source: Arc<dyn JournalSource>,
     cursor: u64,
+) -> Result<JournalPollResult, PollFailure> {
+    match tokio::task::spawn_blocking(move || source.poll(cursor)).await {
+        Ok(Ok(res)) => Ok(res),
+        Ok(Err(io_err)) => Err(PollFailure {
+            cause: io_err.to_string(),
+            aborted: false,
+        }),
+        Err(join_err) => Err(PollFailure {
+            cause: join_err.to_string(),
+            aborted: true,
+        }),
+    }
+}
+
+/// Log a journal poll failure with backoff-aware severity: the **first**
+/// failure of a streak is a WARN (the operator should see the journal went
+/// away), every subsequent tick is DEBUG so an unavailable journal doesn't
+/// storm the log.
+fn log_poll_failure(
     letter: uffs_mft::platform::DriveLetter,
-) -> Option<JournalPollResult> {
-    let poll_result = tokio::task::spawn_blocking(move || source.poll(cursor)).await;
-    match poll_result {
-        Ok(Ok(res)) => Some(res),
-        Ok(Err(io_err)) => {
-            tracing::warn!(
-                drive = %letter,
-                error = %io_err,
-                "Journal poll failed; retrying next tick"
-            );
-            None
-        }
-        Err(join_err) => {
-            tracing::warn!(
-                drive = %letter,
-                error = %join_err,
-                "Journal poll task aborted; retrying next tick"
-            );
-            None
-        }
+    failure: &PollFailure,
+    streak: u32,
+    next_interval: Duration,
+) {
+    let next_ms = u64::try_from(next_interval.as_millis()).unwrap_or(u64::MAX);
+    let what = if failure.aborted {
+        "Journal poll task aborted"
+    } else {
+        "Journal poll failed"
+    };
+    if streak <= 1 {
+        tracing::warn!(
+            drive = %letter,
+            error = %failure.cause,
+            next_poll_ms = next_ms,
+            "{what}; backing off until the journal recovers"
+        );
+    } else {
+        tracing::debug!(
+            drive = %letter,
+            error = %failure.cause,
+            streak,
+            next_poll_ms = next_ms,
+            "{what}; still backed off"
+        );
     }
 }
 
@@ -556,10 +680,8 @@ async fn poll_blocking(
 ///
 /// On a non-empty tick, also: (a) records the event count into
 /// `save_trigger`, (b) evaluates the save thresholds, and (c)
-/// fires [`PatchSink::trigger_save`] when a threshold crosses.
-///
-/// **Returns** `true` when a save was triggered this tick (the
-/// caller persists the cursor in lockstep), `false` otherwise.
+/// fires [`PatchSink::trigger_save`] (passing `cursor` so the sink can
+/// persist it in lockstep with the body save) when a threshold crosses.
 fn process_tick(
     sink: &dyn PatchSink,
     letter: uffs_mft::platform::DriveLetter,
@@ -568,17 +690,15 @@ fn process_tick(
     save_trigger: &mut SaveTrigger,
     save_threshold_events: u64,
     save_threshold_age: Duration,
-) -> bool {
+) {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
-        return false;
+        return;
     }
     let accepted = sink.accept(letter, changes);
     save_trigger.record(changes.len() as u64);
-    let mut saved = false;
     if let Some(reason) = save_trigger.evaluate(save_threshold_events, save_threshold_age) {
-        sink.trigger_save(letter, reason);
-        saved = true;
+        sink.trigger_save(letter, reason, cursor);
         tracing::info!(
             drive = %letter,
             ?reason,
@@ -593,7 +713,6 @@ fn process_tick(
         cursor,
         "Journal poll: applied tick"
     );
-    saved
 }
 
 /// Handle returned by [`spawn_journal_loop`] for cancellation +

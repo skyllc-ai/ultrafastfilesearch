@@ -407,3 +407,12 @@ fn summary_shows_values_complete_false() {
         "should show other_count: {summary}"
     );
 }
+
+/// `format_scan_header` mirrors the `uffs_search` header phrasing so every
+/// daemon-query tool (search, aggregate, `facet_values`) reports its measured
+/// query time identically — agents can quote it straight from the text.
+#[test]
+fn scan_header_phrasing() {
+    let header = uffs_mcp::text::format_scan_header(12_815_626, 3);
+    assert_eq!(header, "(12815626 scanned in 3ms)");
+}

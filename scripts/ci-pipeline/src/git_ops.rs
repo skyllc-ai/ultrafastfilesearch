@@ -264,10 +264,11 @@ async fn open_release_pr(
          `just ship` Phase 2 auto-commit for **v{version}** — the \
          `[workspace.package].version` bump in `Cargo.toml`.  This PR \
          routes that commit through branch-protection rules.  Once it \
-         merges to `{base_branch}`, `auto-tag-release.yml` tags the \
-         commit and invokes `release.yml`, which builds the \
-         cross-platform binaries and publishes GitHub Release \
-         v{version}.\n\n\
+         merges to `{base_branch}`, run `just release-tag` to cut the \
+         signed `v{version}` tag, which fires `release.yml` and builds \
+         the cross-platform binaries + GitHub Release v{version}.  \
+         (No auto-tag on merge — the tag step is manual on-demand, \
+         Path B.)\n\n\
          ## Auto-merge\n\n\
          `--auto --squash` is queued — GitHub will merge as soon as the \
          required status checks pass.  Squash is required because \

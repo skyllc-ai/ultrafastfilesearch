@@ -17,9 +17,10 @@
 //!
 //! * [`phase1_optimized`] — thin orchestrator: [`phase1_prime`] →
 //!   [`phase1_tests`] → [`phase1_fanout_validation`].
-//! * [`phase2_optimized`] — version bump + commit + push in a straight line
-//!   (used by `just phase2-ship`, separate from the resumable
-//!   `run_enhanced_phase2` that [`crate::ship`] drives).
+//! * [`phase2_optimized`] — commit + push in a straight line (used by `just
+//!   phase2-ship`, separate from the resumable `run_enhanced_phase2` that
+//!   [`crate::ship`] drives). Version bumping is handled by release-plz on
+//!   `main`.
 //! * [`coverage_data_exists`] / [`coverage_report_command`] — the
 //!   `coverage-report` subcommand primitives; referenced from both
 //!   `phase1_tests` and the CLI dispatch.
@@ -30,7 +31,7 @@ use colored::Colorize as _;
 use crate::context::{PipelineContext, get_cargo_target_dir};
 use crate::exec::{execute_command, execute_parallel_with_env};
 use crate::git_ops::{git_commit, git_push};
-use crate::version::{get_current_version, version_bump};
+use crate::version::get_current_version;
 use crate::workflow::WorkflowState;
 
 /// Return `true` if a previous `cargo llvm-cov` run left behind
@@ -205,6 +206,15 @@ async fn phase1_fanout_validation(ctx: &PipelineContext) -> Result<()> {
             "clippy::expect_used",
         ]),
         ("Dependency security", "cargo", vec!["deny", "check"]),
+        // WI-G.1 regression gate: fail if any "Bugs Rust Won't Catch"
+        // anti-pattern (lossy UTF decode feeding a decision, predictable temp,
+        // perms-after-create on a secret, discarded control-channel write, …)
+        // is reintroduced into production code. Wired in here (now that the
+        // gate is green) so `just go` / the ship lane enforce it alongside the
+        // clippy trio + cargo-deny.
+        ("Anti-pattern gate", "bash", vec![
+            "scripts/ci/anti_pattern_gate.sh",
+        ]),
         ("Rustdoc link validation", "cargo", vec![
             "doc",
             "--workspace",
@@ -251,49 +261,47 @@ pub(crate) async fn phase1_optimized(ctx: &PipelineContext) -> Result<()> {
 // Phase 2 (explicit ship lane — non-resumable counterpart)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Phase 2: Explicit ship lane (version bump → commit → push).  Used
-/// by the standalone `just phase2-ship` recipe.  The resumable
-/// equivalent lives in [`crate::ship::run_enhanced_phase2`] and is
-/// the one `run_ship_pipeline` calls.
+/// Phase 2: Explicit ship lane (commit → push).  Used by the
+/// standalone `just phase2-ship` recipe.  The resumable equivalent
+/// lives in [`crate::ship::run_enhanced_phase2`] and is the one
+/// `run_ship_pipeline` calls.
 ///
 /// # Errors
 ///
-/// Propagates any failure from [`version_bump`], [`git_commit`], or
-/// [`git_push`].  The workflow-state mutation will also fail if the
-/// state file cannot be written.
+/// Propagates any failure from [`git_commit`] or [`git_push`].
+/// The workflow-state mutation will also fail if the state file
+/// cannot be written.
 pub(crate) async fn phase2_optimized(ctx: &PipelineContext) -> Result<()> {
     println!("{}", "🚀 PHASE 2: Explicit Ship Lane".blue().bold());
 
-    // Step 1: Version increment
-    version_bump(ctx).await?;
+    // Note: Version increment retired in Phase R5. release-plz now
+    // handles version bumps automatically on `main` after PR merge.
 
-    // Update workflow state with new version
+    // Update workflow state with current version
     let mut state = WorkflowState::load().context("Failed to load workflow state")?;
-    let new_version = get_current_version().context("Failed to get updated version")?;
-    state.current_version = new_version;
-    state.version_incremented = true;
+    let current_version = get_current_version().context("Failed to get current version")?;
+    state.current_version = current_version;
     state.save().context("Failed to save workflow state")?;
     println!(
-        "✅ Workflow state updated with new version: {}",
+        "✅ Workflow state initialized with version: {}",
         state.current_version
     );
 
-    // Step 2: Git commit (signed version-bump commit on the working
-    // branch).
+    // Step 1: Git commit (signed commit on the working branch).
     git_commit(ctx).await?;
 
-    // Step 3: Git push -- opens release/vX.Y.Z PR with auto-merge
+    // Step 2: Git push -- opens release/vX.Y.Z PR with auto-merge
     // queued.
     //
     // Binaries are NOT built here.  Once the PR merges to main,
-    // `auto-tag-release.yml` tags the commit and invokes
-    // `release.yml`, which produces the reproducible cross-platform
-    // binaries on GitHub-hosted runners.
+    // release-plz tags the commit and invokes `release.yml`, which
+    // produces the reproducible cross-platform binaries on GitHub-hosted
+    // runners.
     git_push(ctx).await?;
 
     println!(
         "{}",
-        "✅ PHASE 2 COMPLETE: Versioned, committed, and release PR opened!"
+        "✅ PHASE 2 COMPLETE: Committed and release PR opened (version via release-plz)!"
             .green()
             .bold()
     );

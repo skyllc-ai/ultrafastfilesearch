@@ -35,6 +35,10 @@ pub(crate) fn default_log_file() -> PathBuf {
 /// Returns a guard that **must** be held until the daemon exits —
 /// dropping it flushes the non-blocking writer.
 #[must_use]
+#[expect(
+    clippy::print_stderr,
+    reason = "WI-6.2: log-dir create failure must surface before tracing is up; stderr is the only honest channel"
+)]
 pub fn init_tracing(
     log_spec: &str,
     log_file: Option<&std::path::Path>,
@@ -78,7 +82,23 @@ pub fn init_tracing(
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => std::path::Path::new("."),
         };
-        let _mkdir_ignore = std::fs::create_dir_all(parent_dir);
+        // WI-6.2: if the log dir can't be created, surface it once on stderr
+        // (tracing isn't up yet) and DEGRADE to stdout logging. We must NOT
+        // fall through to `rolling::never(parent_dir, …)` in that case —
+        // that constructor PANICS when the parent directory is absent
+        // (tracing-appender rolling.rs), which would kill the detached
+        // daemon before it binds IPC.
+        if let Err(err) = std::fs::create_dir_all(parent_dir) {
+            eprintln!(
+                "uffsd: could not create log dir {} ({err}); falling back to stdout logging",
+                parent_dir.display()
+            );
+            let _ignore = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_target(false)
+                .try_init();
+            return None;
+        }
 
         let file_appender = tracing_appender::rolling::never(
             parent_dir,
@@ -102,5 +122,35 @@ pub fn init_tracing(
             .with_target(false)
             .try_init();
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WI-6.2: when the log dir cannot be created (its parent is a regular
+    /// file), `init_tracing` must degrade gracefully — return without
+    /// panicking so daemon startup continues — rather than aborting. The
+    /// stderr diagnostic itself is emitted via `eprintln!` (covered by the
+    /// scoped `print_stderr` expect); here we assert the no-panic degrade.
+    #[test]
+    fn init_tracing_degrades_when_log_dir_uncreatable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A regular file where a directory component is expected, so
+        // create_dir_all(parent) fails.
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").expect("write blocker file");
+        let bogus_log = blocker.join("sub").join("uffsd.log");
+
+        // Must not panic. With an uncreatable log dir, init degrades to
+        // stdout logging and returns None (no file guard) — proving the
+        // daemon would continue startup rather than crash in the rolling
+        // appender constructor.
+        let guard = init_tracing("info", Some(&bogus_log));
+        assert!(
+            guard.is_none(),
+            "uncreatable log dir must degrade to stdout (None), not a file guard"
+        );
     }
 }

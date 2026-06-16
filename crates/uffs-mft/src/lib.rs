@@ -118,6 +118,7 @@
 //! | `RUST_LOG_FILE` | `path` | (none) | Optional log-file path override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
 //! | `UFFS_LOG_DIR` | `path` | platform default | Log directory override for the standalone `uffs_mft` binary.  INTERNAL semver class. |
 //! | `UFFS_CACHE_PROFILE` | `bool` (`env::var_os(…).is_some()`) | `false` (unset) | Emits per-phase cache I/O timings to stderr (`[CACHE_PROFILE]` prefix) from `cache`, `index/storage/{deserialize,file_io}`, and `reader/persistence`.  Dev / benchmark only.  INTERNAL semver class. |
+//! | `UFFS_NO_JOURNAL_MAX_AGE_SECS` | `u64` (seconds) | `300` | Max age a cached index is served when the drive has **no active USN journal** (os error 1179); older caches trigger a full MFT rebuild instead of serving stale, in `reader::usn_apply`.  INTERNAL semver class. |
 //! | `UFFS_MFT_TEST_DIR` | `path` | (none) | Optional test-fixture directory for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
 //! | `UFFS_MFT_TEST_FILE` | `path` | (none) | Optional test-fixture file path for the parallel-reader chaos-order harness.  Test-only.  INTERNAL semver class. |
 //! | `UFFS_PARITY_DEBUG` | `bool` | `false` | Enables verbose chaos-order parity debugging in the LIVE parser (`io::readers::parallel::to_index`).  INTERNAL semver class (dev only). |
@@ -186,6 +187,10 @@ use rayon as _;
 // FxHash for fast hashing (used in io.rs on Windows)
 #[cfg(not(windows))]
 use rustc_hash as _;
+// `serde_json` powers `--format json` for the Windows-only `info` / `drives`
+// commands (src/commands/windows/info.rs); silence the library's view of it.
+#[cfg(windows)]
+use serde_json as _;
 #[cfg(test)]
 use sha2 as _;
 use smallvec as _;
@@ -240,6 +245,13 @@ pub mod cache;
 
 mod reader;
 
+// WI-7.1 — pathological-name parity corpus (Tier 1 decoder pins + Tier 2
+// offline-capture-vs-golden). Crate-internal so it can reach the `pub(crate)`
+// instrumented decoder; test-only.
+#[cfg(test)]
+#[path = "parity_tests.rs"]
+mod parity_tests;
+
 // ============================================================================
 // Public API re-exports
 // ============================================================================
@@ -289,6 +301,10 @@ pub use ntfs::{
     StandardInformation, StreamInfo, apply_usa_fixup, extract_data_runs_from_attribute,
     fixup_file_record, parse_data_runs,
 };
+// Elevation check — cross-platform public API (Windows: UAC token check;
+// Unix: geteuid() == 0).  Exported unconditionally so uffs-cli and
+// uffs-daemon can gate mutating daemon commands on all targets.
+pub use platform::is_elevated;
 // Re-export platform types
 // Core types (DriveType, MftBitmap, MftExtent) are pure data — available on all platforms
 // Windows-specific types and functions (VolumeHandle, detect_ntfs_drives, etc.) only on
@@ -299,7 +315,7 @@ pub use platform::{DriveType, MftBitmap, MftExtent, SystemMemory, query_system_m
 // is_volume_read_only) are pub(crate) and consumed only via
 // `crate::platform::*` paths, so no crate-root re-export is needed.
 #[cfg(windows)]
-pub use platform::{VolumeHandle, detect_ntfs_drives, is_elevated};
+pub use platform::{VolumeHandle, detect_ntfs_drives, register_broker_handle};
 pub use raw::{
     LoadRawOptions, RawMftData, RawMftHeader, SaveRawOptions, load_raw_mft, load_raw_mft_header,
     save_raw_mft,

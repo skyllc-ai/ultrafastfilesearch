@@ -13,16 +13,22 @@
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/github/downloads/skyllc-ai/UltraFastFileSearch/total?label=downloads" alt="Total Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg" alt="License: MPL 2.0"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform: Windows"></a>
+  <a href="https://opencollective.com/uffs-search"><img src="https://img.shields.io/badge/Sponsor-Open%20Collective-3385FF?logo=opencollective&logoColor=white" alt="Sponsor on Open Collective"></a>
+  <a href="https://ko-fi.com/ufffssearch"><img src="https://img.shields.io/badge/Tip-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white" alt="Tip on Ko-fi"></a>
 </p>
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
 
-> Proven on a real 7-drive, 25.9M-record Windows system; scale-ceiling tested to **100.4M records** with offline MFT clones (v0.5.4 baseline; v0.5.71 current):
+```powershell
+winget install SkyLLC.UFFS    # Windows · then open a new terminal · full install options ↓
+```
+
+> Proven on a real 7-drive, 25.9M-record Windows system; scale-ceiling tested to **100.4M records** with offline MFT clones (v0.5.4 baseline; v0.5.120 current):
 > - **68.5 s COLD** — raw MFT read + compact index build (v0.5.71, flat ± 4 % vs v0.5.4)
 > - **5.7 s WARM CACHE** — restart from serialized cache (v0.5.62/v0.5.71, **−17 %** vs v0.5.4)
 > - **0–3 ms daemon-side** for targeted queries — exact/prefix/ext/substring, unchanged from v0.5.4
-> - **29–32 ms CLI end-to-end** for targeted queries on v0.5.71 (v0.5.4 measured 9–13 ms e2e before the post-Phase-1 thin-client spawn floor settled at ~28 ms)
-> - **vs Everything on v0.5.71**: UFFS wins **12/12 head-to-head cells** at p50 on C+D, median ratio **0.51× (~1.96× faster)** — see the [**benchmark hub**](docs/benchmarks/) and the [full v0.5.71 report](docs/benchmarks/2026-04-v0.5.71-vs-everything-and-cpp.md)
+> - **17–39 ms CLI end-to-end** for targeted single-drive queries on v0.5.120 (Windows process spawn + query; v0.5.71 measured 29–32 ms)
+> - **vs Everything on v0.5.120**: UFFS wins **30/30 head-to-head cells** at p50 across four drives + the combined index, median ratio **0.36× (~2.8× faster)** — see the [**benchmark hub**](docs/benchmarks/) and the [full v0.5.120 report](docs/benchmarks/2026-06-v0.5.120-vs-everything.md)
 
 UFFS is built for **exact filename, path, and metadata search** at scales where directory walking, shell search, and some automation surfaces become the bottleneck. It is open source, written in Rust, and designed first for deterministic local search; CLI, TUI, API, and MCP are all interfaces on top of the same engine.
 
@@ -31,6 +37,8 @@ UFFS is built for **exact filename, path, and metadata search** at scales where 
 📖 **[Full User Manual](docs/user-manual/index.md)** — installation, tutorials, filters, daemon, TUI, MCP integration, and more.
 
 > **Open source, forever.** The UFFS platform — engine, daemon, CLI, and MCP server — is licensed under the [Mozilla Public License 2.0](LICENSE). Code released as part of UFFS Core will never be made less open. Commercial products and enterprise offerings are built on top of the open platform, not by restricting it.
+>
+> 💛 No telemetry, no paywall. If UFFS earns a place in your workflow, sponsorship funds the next thing it needs — starting with a Windows code-signing certificate. **[Support UFFS ↓](#support-uffs)**
 
 ---
 
@@ -41,31 +49,59 @@ UFFS is built for **exact filename, path, and metadata search** at scales where 
 - 🔍 **40+ filters** — size, date, extension, type, attributes, path length, tree size, regex
 - 🧩 **One engine, multiple interfaces** — CLI, TUI, daemon, API, and MCP share the same index
 - 🧭 **Deterministic local scope** — built for exact NTFS filename/path/metadata search, not fuzzy ranking
+- 🔒 **No telemetry, fully local** — UFFS makes no outbound network calls; your index and queries never leave your machine (the optional MCP gateway binds a local-only port you explicitly enable)
 - 🖥️ **Cross-platform offline analysis** — live NTFS on Windows; offline MFT analysis on macOS and Linux
 
 ---
 
-## Benchmark snapshot (v0.5.71)
+## See it in action
 
-Measured on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2, 7 NTFS volumes totaling 26.1 M records; scaled to 100.4 M with offline MFT clones (v0.5.4 era). Full captures in [`docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt`](docs/benchmarks/raw/2026-04-v0.5.66_cross-tool-vs-everything.txt) + [`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
+Every clip runs the **real binary** against real NTFS data with unedited timings and result counts — captured with the reproducible [demo kit](scripts/dev/demo/README.md).
+
+<p align="center">
+  <img src="assets/demo/uffs-tui-short.gif" alt="UFFS TUI: unzip, run uffs-tui, and browse your real NTFS drives against a hot daemon in seconds." width="900"><br>
+  <sub><b>TUI</b> — unzip, run <code>uffs-tui</code>, and browse your own drives in seconds. <a href="assets/demo/uffs-tui.gif">Full reel</a>.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/demo/uffs-cli-short.gif" alt="UFFS CLI: real searches, filters, and aggregations across 25.9M indexed files with measured latency." width="900"><br>
+  <sub><b>CLI</b> — real commands, real result counts, real measured latency on a hot daemon. <a href="assets/demo/uffs-cli.gif">Full 9-step reel</a>.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/demo/uffs-mcp-claude.gif" alt="Claude using the UFFS MCP server to find the largest files untouched in over a year — 26M+ records scanned in under 200 ms on a hot daemon, one tool call." width="900"><br>
+  <sub><b>MCP</b> — one question to Claude, one UFFS tool call: 26M+ records scanned in under 200 ms (hot daemon), and the reply cites the measured query time. Deterministic search underneath, MCP on top.</sub>
+</p>
+
+---
+
+## Benchmark snapshot (v0.5.120 · June 2026)
+
+Measured 2026-06-11 on AMD Ryzen 9 3900XT, 64 GB RAM, Windows 11 Pro 24H2 — cross-tool on four NTFS volumes (C/D/F/G, 12.8 M records, the Everything-RAM-budget-negotiated set), full-scan on all seven (25.9 M records; that workload is UFFS-only, so the negotiation doesn't constrain it). Raw data: [`cross-tool-summary.csv`](docs/benchmarks/raw/2026-06-v0.5.120_cross-tool-summary.csv) · [`full-scan-all-drives.csv`](docs/benchmarks/raw/2026-06-v0.5.120_full-scan-all-drives.csv). Publication-grade report: [**docs/benchmarks/**](docs/benchmarks/).
+
+**vs the competition** (10 rounds per cell, p50, file sink):
+
+- **30/30 head-to-head cells faster than Everything** — median ratio **0.36× (~2.8× faster)** across C/D/F/G + the combined index; every cell from the April snapshot improved (median −33%)
+- **Full-scan export across all 7 drives: 23.3 M rows → CSV in 12.0 s ≈ 1.95 M rec/s** (+13% throughput vs April at the same scale) — a workload Everything's CLI export cannot run (~2 GB IPC ceiling)
+- **180×–3 400× vs the UFFS C++ reference** on targeted queries (daemon HOT vs per-invocation MFT re-read); 6.6× on combined full-scan
+
+**Latency shape** (v0.5.120):
+
+- **0–3 ms daemon-side** for targeted queries (exact, prefix, ext, substring, combined) — unchanged since v0.5.4
+- **17–39 ms CLI end-to-end** single-drive (the Windows process-spawn floor + query); 21–108 ms across the combined four-drive index
+
+**Phase costs** — from earlier captures, version-tagged, not re-measured on v0.5.120:
 
 | Phase | What happens | ALL 7 drives (v0.5.71) | Single NVMe (v0.5.4) |
 |-------|--------------|-----------------------:|---------------------:|
 | **COLD** | Raw MFT read, parse, compact index build, cache write | 68.5 s | 7.7 s |
 | **WARM CACHE** | Daemon restart + serialized cache load | **5.7 s** | 6.4 s |
-| **HOT (`*` top-100)** | Full-scan across all drives with `--limit 100` | **1 112 ms** e2e¹ | 27 ms (v0.5.4) |
-| **HOT (targeted)** | `notepad.exe` / `win*` / `*.dll` / `config` etc. | **29–32 ms** CLI e2e | 9–10 ms (v0.5.4) |
+| **HOT (`*` top-100)** | Full-scan across all drives with `--limit 100` | **1 112 ms** e2e¹ | 27 ms |
+| **HOT (targeted)** | `notepad.exe` / `win*` / `*.dll` / `config` etc. | **29–32 ms** CLI e2e | 9–10 ms |
 
-¹ The `*` top-100 path regressed from the v0.5.4 163 ms figure after the Phase 2 sort rewrite ([`docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt:657`](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt), n=30, StdDev 21 ms). Daemon-side is 1 081 ms — CLI tax is negligible here. Bounded-heap top-N fix is Phase 5 target #2 in the [cross-tool analysis](docs/benchmarks/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions) doc.
+¹ The `*` top-100 path regressed from the v0.5.4 163 ms figure after the Phase 2 sort rewrite ([raw log](docs/benchmarks/raw/2026-04-v0.5.66_full-benchmark-suite.txt), n=30, StdDev 21 ms); daemon-side is 1 081 ms — the CLI tax is negligible here. Tracked in the [archived April report](docs/benchmarks/archive/2026-04-v0.5.66-vs-everything-and-cpp.md#known-regressions).
 
-Hot-path context (v0.5.71, 30 rounds, p50):
-- **0–3 ms daemon-side** for targeted queries (exact, prefix, ext, substring, combined) — unchanged since v0.5.4
-- **29–32 ms CLI end-to-end** for targeted queries across all 7 drives (~28 ms post-Phase-1 cold-spawn floor + 0–3 ms daemon)
-- **UFFS wins 12/12 cells vs Everything** at p50 on C+D, median ratio **0.51×** — see the [benchmark hub](docs/benchmarks/)
-- **Direct stdout redirect crossover**: UFFS **0.27×–0.53×** vs ES across 4 size classes (34 K → 167 K rows)
-- **323 k rows/sec** bulk export throughput (CSV, `--out-dir`)
-- **Full-scan export** `*` → CSV at 26 M records: **13.6 s p50** (1.72 M rec/s through the full pipeline)
-- **100.4 M records** tested (v0.5.4 synthetic-clone data; not re-verified on v0.5.71): targeted queries stayed at 11–13 ms e2e
+**Scale ceiling:** **100.4 M records** tested with offline MFT clones (v0.5.4 capture, not re-verified since) — targeted queries stayed at 11–13 ms e2e.
 
 > 📖 **[Benchmark hub](docs/benchmarks/)** — dated competitive-benchmark reports, fairness methodology, archive of prior versions, reproduction scripts.
 > 📖 **[Full benchmark data](docs/user-manual/performance.md)** — methodology, per-drive tables, interactive search percentiles, bulk retrieval, scale ceiling, and caveats.
@@ -80,7 +116,7 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 
 | Platform | Download | Notes |
 |---|---|---|
-| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + MCP + MFT tools + `uffs-tui` demo. Recommended. |
+| **Windows x64** | [`uffs-windows-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | CLI + daemon + Access Broker + MCP + MFT tools + `uffs-tui` demo. Recommended. |
 | **macOS Apple Silicon** | [`uffs-macos-arm64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `UFFS.app` bundle + `uffs-tui` demo. |
 | **Linux x64** | [`uffs-linux-x64.zip`](https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest) | Offline MFT analysis only. Includes `install.sh` + `uffs-tui` demo. |
 
@@ -91,12 +127,18 @@ Each release ships pre-built binaries, a `CHECKSUMS.txt` (SHA256), per-crate SBO
 **Windows quick-install (one command) — via [WinGet](https://learn.microsoft.com/windows/package-manager/):**
 ```powershell
 winget install SkyLLC.UFFS
+# If the msstore source errors on your machine, pin the source:
+#   winget install -e --id SkyLLC.UFFS --source winget
 ```
 
-Or grab the ZIP above, extract it anywhere, add the folder to PATH, then:
+> ⚠️ **Open a new terminal after installing** — WinGet updates `PATH`, but an already-open shell won't see `uffs` until you start a fresh one.
+
+Or grab the ZIP above, extract it anywhere, add the folder to PATH, then (in a new terminal):
 ```powershell
 uffs --version
 ```
+
+> 🔓 **Binaries aren't code-signed yet.** Windows SmartScreen and the UAC prompt will show **"Publisher: Unknown"** — that's expected, not a compromise. A code-signing certificate is the **first line item sponsorships fund** ([Support UFFS ↓](#support-uffs)). Until then, the published `CHECKSUMS.txt` and SLSA provenance below are how you verify a download is genuine.
 
 **Verify the download:**
 ```bash
@@ -121,8 +163,14 @@ cargo build --release
 
 ## Quick Start
 
+> **Windows elevation — three ways.** Reading the live MFT needs Administrator. Easiest: install the **Access Broker** once (`uffs-broker --install`, from an elevated shell) and every later non-elevated `uffs` search runs with **no UAC prompt**, surviving reboots. Otherwise, run from an **elevated** terminal, or let the first search offer a one-time `uffs daemon start --elevate` (a single UAC prompt). macOS/Linux offline analysis needs no elevation.
+
 ```bash
-# Search all drives (daemon starts automatically on first query)
+# One-time (elevated): install the Access Broker → no UAC on any later search
+uffs-broker --install
+
+# Search all drives (with the broker installed this runs non-elevated;
+# otherwise the daemon auto-starts on first query in an elevated shell)
 uffs "*.rs"
 
 # Search a specific drive
@@ -161,6 +209,30 @@ The daemon keeps each drive's compact index in one of four tiers, demoted automa
 Operator commands let you tune this manually for known workload shapes — `preload` pins a search-heavy drive against demote, `hibernate` frees RAM during long idle stretches, `forget` permanently evicts a drive plus its on-disk caches, and `status_drives` surfaces the live tier + pin + query-rate snapshot.
 
 > 📖 **[Memory-tiering Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)** — what to run on a multi-drive Windows box to validate the operator surface.
+
+---
+
+## Support UFFS
+
+<p align="center">
+  <a href="https://ko-fi.com/ufffssearch"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Tip on Ko-fi" height="38"></a>
+  &nbsp;&nbsp;
+  <a href="https://opencollective.com/uffs-search"><img src="https://opencollective.com/uffs-search/donate/button@2x.png?color=blue" alt="Donate on Open Collective" height="38"></a>
+</p>
+
+UFFS is free, MPL-2.0, and stays that way — **no telemetry, no accounts, no paywalled core, no outbound network calls.** If it earns a place in your workflow, sponsorship funds the work that keeps it improving:
+
+- 🔏 **A Windows code-signing certificate** — the top priority. It removes the SmartScreen and UAC **"Publisher: Unknown"** warning that every user sees on install today, the single biggest trust hurdle for a Windows tool.
+- 📊 **Benchmark hardware** — the multi-drive, multi-TB rig behind the published numbers.
+- 📦 **Release engineering & packaging** — signed builds, WinGet/Scoop, docs, and onboarding.
+
+| Supporter | Where | Best for |
+|---|---|---|
+| 💛 **One-time tip** | [Ko-fi](https://ko-fi.com/ufffssearch) | "this saved me an afternoon" |
+| 🏢 **Companies** (invoice / receipt via Sky, LLC) | [Open Collective](https://opencollective.com/uffs-search) | expensing it as a tool |
+| 🔁 **Recurring (individuals)** | GitHub Sponsors — *enrolling* | following the roadmap |
+
+The **"Sponsor"** button at the top of this repo lists every live channel. For custom arrangements, enterprise pilots, or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net).
 
 ---
 
@@ -225,7 +297,7 @@ The older C++ implementation remains useful as a parity and regression baseline,
 
 ## Requirements
 
-- **Windows** for live NTFS MFT reading (Administrator privileges required)
+- **Windows** for live NTFS MFT reading. Administrator is needed to read the MFT — but only **once**: install the Access Broker (`uffs-broker --install`) and every later search runs **non-elevated with no UAC**. Without the broker, run from an elevated shell (or accept a per-session UAC prompt).
 - **macOS / Linux** for offline MFT analysis (no admin needed)
 - **Rust nightly** (Edition 2024) to build from source — channel pinned in `rust-toolchain.toml`; the workspace has no stable MSRV (see CONTRIBUTING.md → "Toolchain policy")
 
@@ -274,7 +346,7 @@ UFFS is developed and maintained by **[Sky, LLC](https://github.com/skyllc-ai)**
 
 - **Commercial UFFS frontends** (polished GUI / premium TUI) are in development on top of this open-source engine. For waitlist or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net) or open a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
 - **Hiring / collaboration.** This repository is also the public engineering portfolio of its maintainer; see the [Sky, LLC org page](https://github.com/skyllc-ai) for the full pitch and contact details.
-- **Sponsorship.** Formal sponsor channels (GitHub Sponsors, Ko-fi) are being set up. Star the repo and watch for the sponsor CTA to appear here once approvals land.
+- **Sponsorship.** UFFS is free and MPL-2.0 forever; sponsorships fund Windows code-signing, benchmark hardware, and release engineering — see [**Support UFFS**](#support-uffs) for the channels and what they fund.
 
 ## Acknowledgments
 

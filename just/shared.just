@@ -442,6 +442,31 @@ toolchain-sync:
         # Clean up any BSD-sed backup artifact from older broken invocations.
         rm -f "${TOOLCHAIN_FILE}-e"
         rustup default "$CANDIDATE"
+
+        # ── Invalidate stale build caches after the bump ───────────
+        # The probe loop above used a per-candidate scratch CARGO_TARGET_DIR,
+        # so the MAIN `target/` and the sccache daemon are still holding the
+        # OLD nightly's artifacts.  Two distinct caches must be invalidated or
+        # the next build dies with E0514 "found crate X compiled by an
+        # incompatible version of rustc":
+        #   1. `cargo clean` — the main `target/` has rlibs/rmeta stamped with
+        #      the OLD rustc commit-hash; cargo's fingerprint does not always
+        #      force a rebuild across a nightly bump, so clear it outright.
+        #   2. `sccache --stop-server` — the long-lived sccache server caches
+        #      its compiler-version detection keyed by the `rustc` binary's
+        #      mtime/size.  Under rustup, `rustc` is a toolchain-agnostic proxy
+        #      (~/.cargo/bin/rustc -> rustup) whose bytes never change across a
+        #      bump, so the running daemon keeps serving/storing objects under
+        #      the OLD nightly's identity.  Stopping the server forces a fresh
+        #      `rustc -vV` probe on the next invocation, restoring correct
+        #      cache keying.  A full 30 GiB cache wipe is unnecessary — the
+        #      daemon restart is the targeted fix.
+        printf "\033[0;34m   Invalidating stale build caches (cargo clean + sccache restart)...\033[0m\n"
+        cargo clean 2>/dev/null || true
+        if command -v sccache >/dev/null 2>&1; then
+            sccache --stop-server >/dev/null 2>&1 || true
+        fi
+
         printf "\033[0;32m✅ Toolchain synced to %s\033[0m\n" "$CANDIDATE"
         rustc --version
         cargo --version
