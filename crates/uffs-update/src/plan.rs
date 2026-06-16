@@ -9,14 +9,6 @@
 //! phases need are modelled; unknown fields are ignored so the schema can
 //! grow without breaking older helpers.
 
-// The `running[]` entries (component / pid / image_path / command_line)
-// are consumed by the quiesce + restore slice; until then they are
-// parsed and exercised only by the tests below.
-#![expect(
-    dead_code,
-    reason = "snapshot `running[]` consumed by the quiesce/restore slice (next)"
-)]
-
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
@@ -63,7 +55,13 @@ pub(crate) struct SnapBinary {
 pub(crate) struct SnapRunning {
     /// Component kind: `daemon` / `broker` / `mcp`.
     pub(crate) component: String,
-    /// OS process id at snapshot time.
+    /// OS process id at snapshot time. Parsed for audit completeness only:
+    /// quiesce/restore act via the PID file + `sc.exe` + the captured
+    /// command line, never this (stale-by-restart) raw pid.
+    #[expect(
+        dead_code,
+        reason = "snapshot audit field; not used by stop/start logic"
+    )]
     pub(crate) pid: u32,
     /// Image path.
     #[serde(default)]
@@ -97,6 +95,16 @@ impl Snapshot {
         self.targets
             .iter()
             .filter(|target| target.channel == "unmanaged")
+    }
+
+    /// `WinGet`-managed roots. The updater never swaps these (§19.6): their
+    /// update path is `winget upgrade`, which is atomic and not `.bak`-
+    /// rollback-able. We surface them so a winget-managed install is never
+    /// silently left at the old version.
+    pub(crate) fn winget_targets(&self) -> impl Iterator<Item = &SnapTarget> {
+        self.targets
+            .iter()
+            .filter(|target| target.channel == "winget")
     }
 
     /// The lowest `on_disk_version` across all targets (the "from" version),
@@ -136,6 +144,9 @@ mod tests {
         assert_eq!(snap.prior_version(), "0.6.1");
         let unmanaged: Vec<_> = snap.unmanaged_targets().collect();
         assert_eq!(unmanaged.len(), 1, "winget root excluded");
+        let winget: Vec<_> = snap.winget_targets().collect();
+        assert_eq!(winget.len(), 1, "winget root surfaced separately");
+        assert_eq!(winget.first().expect("one").channel, "winget");
         let binary = unmanaged
             .first()
             .and_then(|target| target.binaries.first())

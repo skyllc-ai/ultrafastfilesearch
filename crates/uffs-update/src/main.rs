@@ -87,6 +87,16 @@ fn run_apply(args: &[String]) -> Result<()> {
     journal.snapshot_ref = Some(snapshot_path.display().to_string());
     journal.transition(journal::UpdateState::Acquired, "apply.acquired")?;
 
+    // R3 (§19.6): WinGet roots are delegated, not swapped — tell the user
+    // so a winget-managed install is never silently left at the old version.
+    if !journal.delegated_winget.is_empty() {
+        println!(
+            "note: {} WinGet-managed root(s) are delegated — run `winget upgrade` to update them:\n  {}",
+            journal.delegated_winget.len(),
+            journal.delegated_winget.join("\n  ")
+        );
+    }
+
     // Pre-flight BEFORE touching any service: prove every staged binary
     // is present and every target dir is writable. A failure here is
     // zero-downtime — nothing is quiesced or swapped yet (§19, Phase D).

@@ -55,6 +55,12 @@ pub(crate) fn journal_from_snapshot(
                 .collect(),
         })
         .collect();
+    // Record WinGet roots we intentionally delegate (§19.6, R3) so they
+    // are visible in the journal rather than silently dropped.
+    journal.delegated_winget = snapshot
+        .winget_targets()
+        .map(|target| target.root.display().to_string())
+        .collect();
     journal
 }
 
@@ -233,6 +239,24 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join(exe_name("uffsd"))).expect("read"),
             "OLD"
+        );
+    }
+
+    #[test]
+    fn journal_records_delegated_winget_roots() {
+        let json = r#"{ "to_version": "0.6.2", "targets": [
+             { "root": "/opt/uffs", "channel": "unmanaged",
+               "binaries": [ { "name": "uffsd", "on_disk_version": "0.6.1" } ] },
+             { "root": "/winget/uffs", "channel": "winget",
+               "binaries": [ { "name": "uffs", "on_disk_version": "0.6.1" } ] } ],
+           "running": [] }"#;
+        let snapshot: Snapshot = serde_json::from_str(json).expect("snap");
+        let journal = journal_from_snapshot("/tmp/j.json".into(), &snapshot, "/tmp/bak".into());
+        assert_eq!(journal.targets.len(), 1, "only unmanaged is swapped");
+        assert_eq!(
+            journal.delegated_winget,
+            vec!["/winget/uffs".to_owned()],
+            "winget root recorded for visibility, not silently dropped"
         );
     }
 

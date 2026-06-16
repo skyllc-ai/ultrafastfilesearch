@@ -139,6 +139,12 @@ pub(crate) struct Journal {
     pub(crate) targets: Vec<TargetEntry>,
     /// Services stopped during Quiesce that Phase H must restart (INV-1).
     pub(crate) services_stopped: Vec<String>,
+    /// `WinGet`-managed roots this run **delegated** (did not swap, §19.6).
+    /// Recorded so `--status`/support can see a winget install that the
+    /// updater intentionally left for `winget upgrade` — never a silent
+    /// version mismatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) delegated_winget: Vec<String>,
     /// Append-only event trail.
     pub(crate) events: Vec<JournalEvent>,
     /// Where this journal persists. Not serialised.
@@ -168,6 +174,7 @@ impl Journal {
             commit_point_passed: false,
             targets: Vec::new(),
             services_stopped: Vec::new(),
+            delegated_winget: Vec::new(),
             events: Vec::new(),
             path,
         }
