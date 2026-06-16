@@ -358,10 +358,10 @@ impl IndexManager {
     /// every time [`Self::tune_concurrency`] runs, so the daemon can
     /// be re-tuned at runtime by setting the env var and invoking an
     /// operation that re-tunes (e.g. a refresh).  Typical use is to
-    /// set it before `uffs daemon start` for benchmark sweeps:
+    /// set it before `uffs --daemon start` for benchmark sweeps:
     ///
     /// ```text
-    /// UFFS_SEARCH_MAX_CONCURRENCY=12 uffs daemon start
+    /// UFFS_SEARCH_MAX_CONCURRENCY=12 uffs --daemon start
     /// ```
     const SEARCH_CONCURRENCY_ENV: &'static str = "UFFS_SEARCH_MAX_CONCURRENCY";
 

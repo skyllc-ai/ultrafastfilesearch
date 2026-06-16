@@ -125,7 +125,7 @@ Start here and follow the arrows.  Each page builds on the previous one.
 | Search with wildcards or regex | [Search Modes](search-modes.md) |
 | Find large / old / hidden files | [Filters](filters.md) |
 | Clean up disk space | [Getting Started](getting-started.md) §5 — Triage recipes |
-| Get a filesystem overview | [Aggregation](aggregation.md) §1 — `uffs agg overview` |
+| Get a filesystem overview | [Aggregation](aggregation.md) §1 — `uffs --agg overview` |
 | Understand why sizes differ from Explorer | [Concepts](concepts.md) §1 |
 | See real-world performance numbers | [Performance](performance.md) |
 | Set up UFFS for AI agents | [MCP Server](mcp.md) |

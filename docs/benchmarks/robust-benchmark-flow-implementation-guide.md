@@ -145,7 +145,7 @@ source (§4.7), three verbosity levels.
 ║   daemon is forced to re-read the MFT from disk (not from a warm cache).   ║
 ║                                                                            ║
 ║ WHAT I'LL RUN  (verbatim — nothing hidden)                                 ║
-║   1) uffs daemon stop                                                      ║
+║   1) uffs --daemon stop                                                      ║
 ║   2) del %LOCALAPPDATA%\uffs\cache\{C,D}_index.uffs  (+ _compact/_lock)    ║
 ║   3) uffs '*' --limit 1 --profile     # forces a full cold load            ║
 ║                                                                            ║
@@ -182,7 +182,7 @@ The other half of "no blindside" — confirm reality matches the promise:
 
 ```
 ── DONE · Stage 2 step 1 (COLD purge + warm-up) ───────────────────────────
-   ran:        uffs daemon stop  →  exit 0
+   ran:        uffs --daemon stop  →  exit 0
                purged 2 cache files (C_index.uffs, D_index.uffs)
                uffs '*' --limit 1 --profile  →  exit 0
    result:     daemon warm, 7,412,883 records loaded in 31.8 s (COLD)
@@ -232,7 +232,7 @@ let card = Card {
     title:      "COLD cache purge + daemon warm-up".into(),
     why:        "Drop UFFS cache so the daemon re-reads the MFT from disk …".into(),
     commands:   vec![                              // EXACT, shown verbatim
-        "uffs daemon stop".into(),
+        "uffs --daemon stop".into(),
         r"del %LOCALAPPDATA%\uffs\cache\{C,D}_index.uffs".into(),
         "uffs '*' --limit 1 --profile".into(),
     ],

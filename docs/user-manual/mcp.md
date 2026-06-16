@@ -33,7 +33,7 @@ The daemon must be running (it auto-starts when needed).
 | | HTTP (recommended) | stdio |
 |---|---|---|
 | **Sessions** | Multi-session — many agents share one server | Single-session per AI host |
-| **Lifecycle** | You manage: `uffs mcp start` / `stop` | AI host manages: spawns and kills |
+| **Lifecycle** | You manage: `uffs --mcp start` / `stop` | AI host manages: spawns and kills |
 | **Persistence** | Stays running between agent restarts | Dies when agent disconnects |
 | **Setup** | One `start`, then point hosts at URL | Config per host with `command` + `args` |
 | **Auth** | Optional bearer token | No auth (pipe is private) |
@@ -48,25 +48,25 @@ The daemon must be running (it auto-starts when needed).
 ```bash
 # Start the MCP HTTP server (auto-starts daemon too)
 # Windows — auto-discovers NTFS drives:
-uffs mcp start
+uffs --mcp start
 
 # macOS / Linux — provide MFT data:
-uffs mcp start --data-dir ~/uffs_data
+uffs --mcp start --data-dir ~/uffs_data
 
 # Custom port:
-uffs mcp start --port 9090
+uffs --mcp start --port 9090
 
 # With authentication:
-uffs mcp start --auth-token MY_SECRET_TOKEN
+uffs --mcp start --auth-token MY_SECRET_TOKEN
 
 # Check status:
-uffs mcp status
+uffs --mcp status
 
 # Performance stats:
-uffs mcp stats
+uffs --mcp stats
 
 # Stop:
-uffs mcp stop
+uffs --mcp stop
 ```
 
 ### stdio mode
@@ -74,7 +74,7 @@ uffs mcp stop
 ```bash
 # Typically not run manually — configured in the AI host's MCP settings.
 # The host spawns this process and communicates via stdin/stdout.
-uffs mcp run --data-dir ~/uffs_data
+uffs --mcp run --data-dir ~/uffs_data
 ```
 
 ---
@@ -165,7 +165,7 @@ HTTP mode is auto-detected when the server is running.  Stdio mode:
 
 ### Standalone binary (alternative)
 
-The `uffs-mcp` binary can be used instead of `uffs mcp run`:
+The `uffs-mcp` binary can be used instead of `uffs --mcp run`:
 
 ```json
 {
@@ -308,18 +308,18 @@ then execute the steps using the tools above.
 
 | Command | Description |
 |---------|-------------|
-| `uffs mcp start` | Start the HTTP gateway as a background process |
-| `uffs mcp status` | Show PID, uptime, HTTP health, and load stats |
-| `uffs mcp stats` | Show performance metrics (queries, timing, sessions) |
-| `uffs mcp stop` | Graceful shutdown via HTTP `/shutdown` |
-| `uffs mcp kill` | Hard kill (SIGKILL / taskkill) + PID file cleanup |
-| `uffs mcp restart` | Stop → start with the same configuration |
-| `uffs mcp reload` | SIGHUP all stdio sessions + restart HTTP gateway |
+| `uffs --mcp start` | Start the HTTP gateway as a background process |
+| `uffs --mcp status` | Show PID, uptime, HTTP health, and load stats |
+| `uffs --mcp stats` | Show performance metrics (queries, timing, sessions) |
+| `uffs --mcp stop` | Graceful shutdown via HTTP `/shutdown` |
+| `uffs --mcp kill` | Hard kill (SIGKILL / taskkill) + PID file cleanup |
+| `uffs --mcp restart` | Stop → start with the same configuration |
+| `uffs --mcp reload` | SIGHUP all stdio sessions + restart HTTP gateway |
 
 ### Status
 
 ```
-$ uffs mcp status
+$ uffs --mcp status
 MCP HTTP Server
   PID:         89234
   Transport:   http:127.0.0.1:8080
@@ -331,7 +331,7 @@ MCP HTTP Server
 ### Stats
 
 ```
-$ uffs mcp stats
+$ uffs --mcp stats
 ═══ MCP Server Stats ═══
 Uptime:            15732s
 Tool calls:        847
@@ -365,7 +365,7 @@ When started with `--auth-token`, the HTTP gateway requires a bearer token
 on all `/mcp` requests:
 
 ```bash
-uffs mcp start --auth-token MY_SECRET
+uffs --mcp start --auth-token MY_SECRET
 
 curl -X POST http://127.0.0.1:8080/mcp \
   -H "Authorization: Bearer MY_SECRET" \
@@ -458,7 +458,7 @@ deadline.  A busy agent will never trigger it.
 
 ### HTTP mode
 
-The HTTP gateway runs indefinitely.  Use `uffs mcp stop` to shut it down.
+The HTTP gateway runs indefinitely.  Use `uffs --mcp stop` to shut it down.
 
 ---
 
@@ -469,16 +469,16 @@ or a log file.
 
 ```bash
 # Default: INFO to stderr
-uffs mcp run
+uffs --mcp run
 
 # Verbose: auto-creates log file
-UFFS_LOG=debug uffs mcp run
+UFFS_LOG=debug uffs --mcp run
 
 # Explicit log file
-UFFS_LOG_FILE=/tmp/mcp.log uffs mcp run
+UFFS_LOG_FILE=/tmp/mcp.log uffs --mcp run
 
 # Both
-UFFS_LOG=trace UFFS_LOG_FILE=/tmp/mcp-diag.log uffs mcp run
+UFFS_LOG=trace UFFS_LOG_FILE=/tmp/mcp-diag.log uffs --mcp run
 ```
 
 Default log file location:
@@ -492,12 +492,12 @@ Default log file location:
 
 The MCP server is **not** the daemon.  They are separate processes:
 
-| | Daemon (`uffs-daemon`) | MCP Server (`uffs mcp`) |
+| | Daemon (`uffs-daemon`) | MCP Server (`uffs --mcp`) |
 |---|---|---|
 | **Role** | Holds MFT index in memory, executes queries | Bridges MCP protocol to daemon |
 | **Data** | Yes — full file index | No — stateless bridge |
-| **Started by** | Auto-started by first client | `uffs mcp start` or AI host |
-| **Stopped by** | `uffs daemon stop` or idle timeout | `uffs mcp stop` or AI host disconnect |
+| **Started by** | Auto-started by first client | `uffs --mcp start` or AI host |
+| **Stopped by** | `uffs --daemon stop` or idle timeout | `uffs --mcp stop` or AI host disconnect |
 | **Multiple?** | One daemon per machine | Many MCP servers (one per AI host session) |
 
 When the MCP server connects, it auto-starts the daemon if needed.

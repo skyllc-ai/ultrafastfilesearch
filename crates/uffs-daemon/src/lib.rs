@@ -5,7 +5,7 @@
 //!
 //! This crate exposes [`run_daemon`] so the daemon logic can be invoked
 //! both from the standalone `uffs-daemon` binary and from the embedded
-//! `uffs daemon run` subcommand in the CLI.
+//! `uffs --daemon run` subcommand in the CLI.
 //!
 //! Setup helpers + shutdown coordination live in sibling modules
 //! ([`log_init`], `startup`, `shutdown` — the latter two are
@@ -150,7 +150,7 @@ pub struct DaemonConfig {
 /// Run the UFFS daemon with the given configuration.
 ///
 /// This is the main entry point shared by both the standalone
-/// `uffs-daemon` binary and the embedded `uffs daemon run` subcommand.
+/// `uffs-daemon` binary and the embedded `uffs --daemon run` subcommand.
 ///
 /// **Does not return** until the daemon shuts down (idle timeout,
 /// RPC shutdown, or signal).

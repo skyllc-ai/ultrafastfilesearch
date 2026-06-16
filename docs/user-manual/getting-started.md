@@ -113,7 +113,7 @@ second one was instant.  That is the daemon.
 Check its status:
 
 ```bash
-uffs daemon status
+uffs --daemon status
 ```
 
 

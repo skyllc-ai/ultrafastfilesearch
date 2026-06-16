@@ -8,7 +8,7 @@
 //! lifecycle (auto-start, await_ready, data-dir forwarding).
 //!
 //! Legacy parquet-mode stats have been removed from the thin CLI.
-//! Use `uffsd` directly or `uffs stats` (daemon mode) instead.
+//! Use `uffsd` directly or `uffs --stats` (daemon mode) instead.
 
 use std::path::Path;
 
@@ -31,7 +31,7 @@ pub fn stats(path: Option<&Path>, _top: u32) -> Result<()> {
         Some(dir) => {
             anyhow::bail!(
                 "Legacy parquet stats for '{}' are no longer supported by the thin CLI.\n\
-                 Use `uffs stats` (daemon mode) instead.",
+                 Use `uffs --stats` (daemon mode) instead.",
                 dir.display()
             )
         }

@@ -29,7 +29,7 @@ pub(super) const DAEMON_READY_POLL_INTERVAL_MS: u64 = 2_000;
 /// before issuing preflight queries.
 pub(super) fn kill_and_restart_all_drives(host: &dyn Host, uffs_exe: &str) {
     host.out("[uffs-daemon] killing daemon to restart with all drives …");
-    if let Err(err) = host.run(uffs_exe, &["daemon", "kill"]) {
+    if let Err(err) = host.run(uffs_exe, &["--daemon", "kill"]) {
         host.out(&format!(
             "[uffs-daemon] WARNING: kill returned error (may not have been running): {err}"
         ));
@@ -38,7 +38,7 @@ pub(super) fn kill_and_restart_all_drives(host: &dyn Host, uffs_exe: &str) {
     // before we immediately re-launch.
     host.sleep_ms(1_500);
     host.out(&format!("[uffs-daemon] spawn: {uffs_exe} daemon start"));
-    if let Err(err) = host.run(uffs_exe, &["daemon", "start"]) {
+    if let Err(err) = host.run(uffs_exe, &["--daemon", "start"]) {
         host.out(&format!(
             "[uffs-daemon] WARNING: could not restart UFFS daemon: {err}"
         ));
@@ -48,8 +48,8 @@ pub(super) fn kill_and_restart_all_drives(host: &dyn Host, uffs_exe: &str) {
 /// Kill the running UFFS daemon (hard stop) and start a fresh instance
 /// restricted to `capable_drives`.
 ///
-/// Fires `uffs daemon kill` first, waits briefly for the process to exit,
-/// then calls `uffs daemon start --drive X --drive Y …`.  Returns immediately
+/// Fires `uffs --daemon kill` first, waits briefly for the process to exit,
+/// then calls `uffs --daemon start --drive X --drive Y …`.  Returns immediately
 /// after the start command — the caller must call [`ensure_daemon_ready`] to
 /// poll until the index is loaded.
 pub(super) fn kill_and_restart_with_drives(
@@ -65,7 +65,7 @@ pub(super) fn kill_and_restart_with_drives(
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    if let Err(err) = host.run(uffs_exe, &["daemon", "kill"]) {
+    if let Err(err) = host.run(uffs_exe, &["--daemon", "kill"]) {
         host.out(&format!(
             "[uffs-daemon] WARNING: kill returned error (may not have been running): {err}"
         ));
@@ -75,7 +75,7 @@ pub(super) fn kill_and_restart_with_drives(
     host.sleep_ms(1_500);
 
     let drive_strs: Vec<String> = capable_drives.iter().map(char::to_string).collect();
-    let mut args: Vec<&str> = vec!["daemon", "start"];
+    let mut args: Vec<&str> = vec!["--daemon", "start"];
     for drive_s in &drive_strs {
         args.push("--drive");
         args.push(drive_s.as_str());
@@ -91,7 +91,7 @@ pub(super) fn kill_and_restart_with_drives(
     }
 }
 
-/// Poll `uffs daemon status` until `Status:        Ready` appears, printing a
+/// Poll `uffs --daemon status` until `Status:        Ready` appears, printing a
 /// progress line on each attempt so the operator knows the tool is waiting.
 ///
 /// # Errors
@@ -100,7 +100,7 @@ pub(super) fn kill_and_restart_with_drives(
 /// (~3 minutes).
 pub(super) fn ensure_daemon_ready(host: &dyn Host, uffs_exe: &str) -> Result<()> {
     for attempt in 1..=DAEMON_READY_POLL_ATTEMPTS {
-        match host.run(uffs_exe, &["daemon", "status"]) {
+        match host.run(uffs_exe, &["--daemon", "status"]) {
             Ok(out) if out.stdout.contains("Status:        Ready") => {
                 host.out("[preflight] UFFS daemon is Ready — proceeding");
                 return Ok(());
@@ -129,7 +129,7 @@ pub(super) fn ensure_daemon_ready(host: &dyn Host, uffs_exe: &str) -> Result<()>
     }
     Err(BenchError::Command(
         "UFFS daemon did not reach Ready within 3 minutes — \
-         check `uffs daemon status` and re-run"
+         check `uffs --daemon status` and re-run"
             .to_owned(),
     ))
 }

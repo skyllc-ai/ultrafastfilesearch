@@ -1279,7 +1279,7 @@ provable**:
   gated on `rec.name_len == 0` (byte length). Both are WI-4.4 in spirit: a
   crooked name can no longer hide a file or its descendants from search/resolve.
 - **Windows proof scripted.** `scripts/windows/create-corrupted-name-tree.rs
-  --verify` now also asserts `uffs search * --malformed` returns **exactly** the
+  --verify` now also asserts `uffs '*' --malformed` returns **exactly** the
   ill-formed on-disk entries — the WI-4.4 find+open claim plus the new filter,
   checked end-to-end. **Open item:** one elevated run on a real NTFS volume to
   close the live-Windows acceptance.

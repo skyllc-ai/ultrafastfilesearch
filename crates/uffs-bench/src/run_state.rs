@@ -10,7 +10,7 @@
 //! gateway was up — **before the first kill**, and register a restore that
 //! replays it at teardown.
 //!
-//! The snapshot is parsed from `uffs status` (see [`parse_status`]); the
+//! The snapshot is parsed from `uffs --status` (see [`parse_status`]); the
 //! restore shells back through the [`Host`] seam using the **resolved** UFFS
 //! binary (never a bare `uffs` off `PATH`).
 //!
@@ -66,7 +66,7 @@ fn status_is_running(value: &str) -> bool {
     !lower.contains("not running") && !lower.contains("not responding") && lower.contains("running")
 }
 
-/// Extract a drive letter from a `uffs status` drive line such as
+/// Extract a drive letter from a `uffs --status` drive line such as
 /// `"[W] G:     15,162 records"`. Returns `None` for any other line.
 fn drive_letter_from_line(line: &str) -> Option<char> {
     let after_bracket = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
@@ -75,7 +75,7 @@ fn drive_letter_from_line(line: &str) -> Option<char> {
     (letter.is_ascii_alphabetic() && chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())
 }
 
-/// Section of `uffs status` output currently being parsed.
+/// Section of `uffs --status` output currently being parsed.
 #[derive(PartialEq, Eq)]
 enum Section {
     /// Before the first `──` header.
@@ -88,7 +88,7 @@ enum Section {
     Other,
 }
 
-/// Parse `uffs status` stdout into a [`RunState`].
+/// Parse `uffs --status` stdout into a [`RunState`].
 ///
 /// Scopes the `Status:` line and the `[T] L:` drive lines to the `── Daemon ──`
 /// section, and the MCP gateway `Status:` to `── MCP HTTP Gateway ──`.
@@ -169,7 +169,7 @@ pub fn register_restore(guard: &mut RunGuard<'_>, uffs_exe: &str, state: RunStat
 /// drives fails. Daemon-kill and MCP commands are best-effort (ignored).
 fn restore(host: &dyn Host, uffs_exe: &str, state: &RunState) -> Result<()> {
     // Tear down whatever the bench left, then rebuild the as-found state.
-    if let Err(err) = host.run(uffs_exe, &["daemon", "kill"]) {
+    if let Err(err) = host.run(uffs_exe, &["--daemon", "kill"]) {
         host.out(&format!(
             "[run-state] daemon kill before restore failed (ok if already stopped): {err}"
         ));
@@ -183,13 +183,13 @@ fn restore(host: &dyn Host, uffs_exe: &str, state: &RunState) -> Result<()> {
         }
         Some(drives) if drives.is_empty() => {
             host.out("[run-state] restarting daemon (full discovery — none recorded)");
-            host.run(uffs_exe, &["daemon", "start"])
+            host.run(uffs_exe, &["--daemon", "start"])
                 .map(|_out| ())
                 .map_err(|err| BenchError::Command(format!("restore daemon: {err}")))?;
         }
         Some(drives) => {
             let drive_strs: Vec<String> = drives.iter().map(char::to_string).collect();
-            let mut args: Vec<&str> = vec!["daemon", "start"];
+            let mut args: Vec<&str> = vec!["--daemon", "start"];
             for drive_s in &drive_strs {
                 args.push("--drive");
                 args.push(drive_s.as_str());
@@ -210,7 +210,7 @@ fn restore(host: &dyn Host, uffs_exe: &str, state: &RunState) -> Result<()> {
     // own restore.) `mcp start` is idempotent enough to ignore when already up.
     if state.mcp_running {
         host.out("[run-state] restarting MCP gateway (was up at start)");
-        if let Err(err) = host.run(uffs_exe, &["mcp", "start"]) {
+        if let Err(err) = host.run(uffs_exe, &["--mcp", "start"]) {
             host.out(&format!("[run-state] mcp start failed: {err}"));
         }
     }
@@ -222,7 +222,7 @@ fn restore(host: &dyn Host, uffs_exe: &str, state: &RunState) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Real `uffs status` output (7 drives loaded, MCP up) — the operator's
+    /// Real `uffs --status` output (7 drives loaded, MCP up) — the operator's
     /// reported state. Drive letters must round-trip in listed order.
     const STATUS_7_DRIVES_MCP_UP: &str = "\
 ═══ UFFS System Status ═══

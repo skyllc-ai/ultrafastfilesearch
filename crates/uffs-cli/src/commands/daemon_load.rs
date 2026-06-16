@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs daemon load` — hot-load MFT file(s) into a running daemon.
+//! `uffs --daemon load` — hot-load MFT file(s) into a running daemon.
 //!
 //! Extracted from `super::daemon_mgmt` so the lifecycle file stays
 //! under the workspace 800-LOC ceiling without a file-size exception.
@@ -21,7 +21,7 @@
 use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 
-/// `uffs daemon load` — resolve `--mft-file` / `--data-dir` /
+/// `uffs --daemon load` — resolve `--mft-file` / `--data-dir` /
 /// `--drive` arguments the same way `daemon start` does, but send
 /// them to the running daemon via the `load_drive` IPC method
 /// instead of spawning a new process.
@@ -39,7 +39,7 @@ pub(crate) fn daemon_load(
     no_cache: bool,
 ) -> Result<()> {
     let Ok(mut client) = UffsClientSync::connect_raw() else {
-        println!("Daemon is not running. Start it first with `uffs daemon start`.");
+        println!("Daemon is not running. Start it first with `uffs --daemon start`.");
         return Ok(());
     };
 

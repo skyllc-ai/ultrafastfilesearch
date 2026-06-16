@@ -82,7 +82,7 @@ fn parse_drives_absent_key_is_empty() {
     assert_eq!(parse_drives_from_ini("a=1\nb=2\n"), Vec::<char>::new());
 }
 
-/// Fake `uffs daemon status` output with C (3 M records) and D (7 M records).
+/// Fake `uffs --daemon status` output with C (3 M records) and D (7 M records).
 fn daemon_status_cd() -> &'static str {
     "Version:       0.0.0\n\
      Status:        Ready\n\
@@ -125,14 +125,14 @@ fn parse_daemon_status_drives_handles_hot_and_parked_tiers() {
 fn capture_is_read_only_and_records_state() {
     // Call order:
     //  1. check_es_available: es -get-everything-version (daemon running)
-    //  2. daemon_status_output: uffs daemon status (record counts)
+    //  2. daemon_status_output: uffs --daemon status (record counts)
     //  3. C: es result-count poll → loaded
     //  4. D: es result-count poll → not loaded
     //  5. feasibility estimate for (C, all_dlls)
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\,D:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))       // 1: es availability
-        .with_run_result(stdout_of(daemon_status_cd())) // 2: uffs daemon status
+        .with_run_result(stdout_of(daemon_status_cd())) // 2: uffs --daemon status
         .with_run_result(stdout_of("1000"))             // 3: C es result-count
         .with_run_result(stdout_of("0"))                // 4: D es result-count
         .with_run_result(stdout_of("5000")); // 5: uffs estimate C/all_dlls
@@ -178,7 +178,7 @@ fn configured_zero_drive_is_polled_with_backoff() {
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
-        .with_run_result(stdout_of(                  // 2: uffs daemon status
+        .with_run_result(stdout_of(                  // 2: uffs --daemon status
             "Status: Ready\n  [Warm]   C: \u{2014}  500,000 records (live) \u{2014} 50 MB\n"
         ))
         .with_run_result(stdout_of("0"))             // 3: C es poll 1
@@ -208,7 +208,7 @@ fn drive_unknown_to_daemon_is_skipped() {
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
-        .with_run_result(stdout_of(                  // 2: uffs daemon status (E absent)
+        .with_run_result(stdout_of(                  // 2: uffs --daemon status (E absent)
             "Status: Ready\n  [Warm]   C: \u{2014}  100,000 records (live) \u{2014} 10 MB\n"
         ));
     // E is not in known_drives at all — no preload attempt, no re-check.
@@ -267,7 +267,7 @@ fn cell_above_ipc_ceiling_is_infeasible() {
     let host = MockHost::new()
         .with_file("/Everything.ini", b"ntfs_volume_paths=C:\\".to_vec())
         .with_run_result(stdout_of("1.4.1.1032"))    // 1: es availability
-        .with_run_result(stdout_of(                  // 2: uffs daemon status
+        .with_run_result(stdout_of(                  // 2: uffs --daemon status
             "Status: Ready\n  [Warm]   C: \u{2014}  500,000 records (live) \u{2014} 50 MB\n"
         ))
         .with_run_result(stdout_of("100"))           // 3: C es result-count → loaded

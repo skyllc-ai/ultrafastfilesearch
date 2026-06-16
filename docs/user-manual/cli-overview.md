@@ -168,7 +168,7 @@ Summary:
 ## 6  Inline Aggregation Flags
 
 These flags run server-side analytics alongside (or instead of) search
-results.  For the `uffs aggregate` subcommand, see §7 below.
+results.  For the `uffs --agg` subcommand, see §7 below.
 
 | Flag | Effect |
 |------|--------|
@@ -205,71 +205,71 @@ Show metadata about a saved index file.
 uffs info index.parquet
 ```
 
-### `uffs stats`
+### `uffs --stats`
 
 Show file statistics.  Without a path, connects to the daemon and
 runs the `overview` aggregate preset.  With a path, loads a parquet
 index file.
 
 ```bash
-uffs stats                    # Daemon mode (live overview)
-uffs stats index.parquet      # Parquet mode (--top 20 for largest files)
+uffs --stats                    # Daemon mode (live overview)
+uffs --stats index.parquet      # Parquet mode (--top 20 for largest files)
 ```
 
-### `uffs aggregate` (alias: `uffs agg`)
+### `uffs --agg` (alias: `uffs --aggregate`)
 
 Run server-side analytics on the filesystem index.  Returns aggregate
 results only — no file rows.
 
 ```bash
-uffs aggregate overview         # Full filesystem overview
-uffs aggregate by_extension     # Top 50 extensions
-uffs aggregate by_type          # Breakdown by file type
-uffs aggregate by_drive         # Per-drive totals
-uffs aggregate by_size          # Size distribution
-uffs aggregate by_age           # Age distribution
-uffs aggregate count            # Simple total count
+uffs --agg overview         # Full filesystem overview
+uffs --agg by_extension     # Top 50 extensions
+uffs --agg by_type          # Breakdown by file type
+uffs --agg by_drive         # Per-drive totals
+uffs --agg by_size          # Size distribution
+uffs --agg by_age           # Age distribution
+uffs --agg count            # Simple total count
 ```
 
 > **Full guide:** [Aggregation](aggregation.md)
 
-### `uffs daemon`
+### `uffs --daemon`
 
 Manage the UFFS background daemon.  The daemon starts automatically on
 first search — these commands give explicit control.
 
 ```bash
-uffs daemon start --data-dir ~/uffs_data   # Start with specific data
-uffs daemon status                          # Check status
-uffs daemon stats                           # Performance statistics
-uffs daemon stop                            # Graceful shutdown
-uffs daemon kill                            # Force kill + cleanup
-uffs daemon restart                         # Stop then restart
+uffs --daemon start --data-dir ~/uffs_data   # Start with specific data
+uffs --daemon status                          # Check status
+uffs --daemon stats                           # Performance statistics
+uffs --daemon stop                            # Graceful shutdown
+uffs --daemon kill                            # Force kill + cleanup
+uffs --daemon restart                         # Stop then restart
 ```
 
 > **Full guide:** [Daemon](daemon.md)
 
-### `uffs mcp`
+### `uffs --mcp`
 
 Manage the MCP server for AI agent integration.
 
 ```bash
-uffs mcp start                    # Start HTTP server on :8080
-uffs mcp start --port 9090        # Custom port
-uffs mcp status                   # Health + stats
-uffs mcp stop                     # Graceful shutdown
-uffs mcp reload                   # Reload all MCP sessions after binary update
+uffs --mcp start                    # Start HTTP server on :8080
+uffs --mcp start --port 9090        # Custom port
+uffs --mcp status                   # Health + stats
+uffs --mcp stop                     # Graceful shutdown
+uffs --mcp reload                   # Reload all MCP sessions after binary update
 ```
 
 > **Full guide:** [MCP Server](mcp.md)
 
-### `uffs status`
+### `uffs --status`
 
 Show combined system status — daemon + MCP HTTP server health in one
 view.
 
 ```bash
-uffs status
+uffs --status
 ```
 
 ---

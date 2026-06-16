@@ -561,7 +561,7 @@ jobs:
           # scripts/ci/build-cross-all.rs.  Diagnostic binaries are NOT
           # shipped; they live in uffs-diag and stay workspace-only.
           # uffs-update (the self-update helper) ships on every platform so
-          # `uffs update` has its sibling; uffs-broker is a Windows-only
+          # `uffs --update` has its sibling; uffs-broker is a Windows-only
           # service, so its raw binary ships on Windows only.
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             for binary in uffs.exe uffsd.exe uffsmcp.exe uffs-mft.exe uffs-broker.exe uffs-update.exe; do
@@ -648,7 +648,7 @@ jobs:
             # the CLI auto-spawns the SEPARATE uffsd binary (find_daemon_exe
             # in uffs-client) — `uffs` alone cannot search.
             # uffs-update (self-update helper) is bundled in EVERY tier so
-            # `uffs update` / `uffs update doctor` work wherever uffs is
+            # `uffs --update` / `uffs --update doctor` work wherever uffs is
             # installed — including the winget package (the normal-tier zip).
             local engine_bins=()
             case "$tier" in

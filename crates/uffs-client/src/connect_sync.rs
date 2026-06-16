@@ -176,7 +176,7 @@ impl UffsClientSync {
     /// Connect to a running daemon; if we must auto-start, request a
     /// UAC prompt on Windows when the current process is not elevated.
     ///
-    /// Used by `uffs daemon start --elevate`.  All other entry points
+    /// Used by `uffs --daemon start --elevate`.  All other entry points
     /// default to `ElevationPolicy::RequireExistingElevation`.
     ///
     /// # Errors
@@ -234,7 +234,7 @@ impl UffsClientSync {
                 return Err(ClientError::ConnectionFailed(
                     "No daemon is running and no data source was provided.\n\
                      On macOS/Linux, start the daemon first:\n\n  \
-                     uffs daemon start --data-dir ~/uffs_data\n\n\
+                     uffs --daemon start --data-dir ~/uffs_data\n\n\
                      Or pass --data-dir inline:\n\n  \
                      uffs \"notepad.exe\" --data-dir ~/uffs_data"
                         .to_owned(),
@@ -668,7 +668,7 @@ impl UffsClientSync {
                     "Deep health check failed: the daemon accepted the connection but did \
                      not respond correctly to a probe `status` RPC ({probe_err}). The \
                      daemon may be wedged (deadlocked worker, stuck kernel I/O); consider \
-                     `uffs daemon kill` and restart.  Set UFFS_CLIENT_SKIP_HEALTH_CHECK=1 \
+                     `uffs --daemon kill` and restart.  Set UFFS_CLIENT_SKIP_HEALTH_CHECK=1 \
                      to bypass this probe."
                 )))
             }

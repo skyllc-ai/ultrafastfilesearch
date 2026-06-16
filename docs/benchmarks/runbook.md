@@ -311,7 +311,7 @@ pre-filled report scaffold. To promote it to a canonical benchmark report:
 Run `just bench-fetch-competitors --keep-tools` to download and SHA-256-verify
 the pinned competitor binary into the bundle.
 
-**`uffs daemon` won't start (elevation error)**
+**`uffs --daemon` won't start (elevation error)**
 The orchestrator requires an elevated shell. Re-run from an elevated PowerShell
 or Windows Terminal.
 
@@ -320,7 +320,7 @@ Install it: `cargo install rust-script`.
 
 **Fingerprint diff after teardown shows daemon still running**
 The daemon restore undo (Stage 5) logs a crumb warning. Run
-`uffs daemon stop` manually, then `just bench-suite-verify <bundle>` to
+`uffs --daemon stop` manually, then `just bench-suite-verify <bundle>` to
 confirm the host is clean.
 
 **`restore-manifest.json` replay fails for a cache file**

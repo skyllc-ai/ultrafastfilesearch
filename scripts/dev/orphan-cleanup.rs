@@ -159,7 +159,7 @@ fn default_binary() -> String {
 /// pattern as the validation scripts' `capture_daemon_version`,
 /// targeting a different label.
 fn read_daemon_pid_via_status(bin: &str) -> Option<u32> {
-    let out = Command::new(bin).args(["daemon", "status"]).output().ok()?;
+    let out = Command::new(bin).args(["--daemon", "status"]).output().ok()?;
     if !out.status.success() {
         return None;
     }

@@ -166,12 +166,12 @@ fn flush() { std::io::stderr().flush().ok(); }
 
 /// Kill daemon and **poll until it is confirmed stopped** (up to 10 s).
 fn ensure_stopped(bin: &PathBuf) {
-    let _ = Command::new(bin).args(["daemon", "kill"])
+    let _ = Command::new(bin).args(["--daemon", "kill"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(250));
-        if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+        if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
             .stderr(Stdio::null()).output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -185,7 +185,7 @@ fn ensure_stopped(bin: &PathBuf) {
 /// `source_args` should be e.g. `["--mft-file", "/path/to/C_mft.iocp"]` for a
 /// single drive, or `["--data-dir", "/path"]` for all drives.
 fn start_and_await_ready(bin: &PathBuf, source_args: &[String]) -> bool {
-    let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+    let mut args: Vec<String> = vec!["--daemon".into(), "start".into()];
     args.extend(source_args.iter().cloned());
     let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let _ = Command::new(bin).args(&str_args)
@@ -193,7 +193,7 @@ fn start_and_await_ready(bin: &PathBuf, source_args: &[String]) -> bool {
 
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
-        if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+        if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
             .stderr(Stdio::null()).output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -206,7 +206,7 @@ fn start_and_await_ready(bin: &PathBuf, source_args: &[String]) -> bool {
 
 /// Assert daemon is Ready right now.
 fn assert_ready(bin: &PathBuf) -> bool {
-    if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+    if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
         .stderr(Stdio::null()).output()
     {
         let s = String::from_utf8_lossy(&out.stdout);

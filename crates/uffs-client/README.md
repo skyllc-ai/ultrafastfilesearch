@@ -95,7 +95,7 @@ CLI is invoked from a shell loop).
 ### Daemon lifecycle (`daemon_ctl`)
 
 Spawn / shutdown / status helpers for higher-level orchestration
-(used by the CLI's `uffs daemon start | stop | status` subcommands):
+(used by the CLI's `uffs --daemon start | stop | status` subcommands):
 
 ```rust,no_run
 use uffs_client::daemon_ctl;

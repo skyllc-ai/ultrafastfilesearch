@@ -137,16 +137,16 @@ Safe to run during any 24-h soak.
 
 ```bash
 # Mac (or any Unix-like host)
-uffs daemon status            # must report `Status: Ready` + `Drives: 7 of 7 ready`
-uffs daemon status_drives     # must show 7 rows, sorted ASCII ascending
+uffs --daemon status            # must report `Status: Ready` + `Drives: 7 of 7 ready`
+uffs --daemon status_drives     # must show 7 rows, sorted ASCII ascending
 uffs '*' --ext rs --limit 5   # quick search probe — must return ≥ 1 row
 ps -p $(pgrep uffsd) -o pid,rss,vsz,etime  # process snapshot
 ```
 
 ```powershell
 # Windows (production host)
-uffs daemon status
-uffs daemon status_drives
+uffs --daemon status
+uffs --daemon status_drives
 uffs '*' --ext rs --limit 5 *> $null
 Get-Process uffsd | Select-Object Id, WS, PM, NPM, VM, CPU, StartTime |
     ConvertTo-Json -Compress
@@ -207,7 +207,7 @@ steady-state operator-load Working Set we want to bound.
 
 ```powershell
 # Confirm the daemon is Ready, then start the trace.
-uffs daemon status                  # must report `Status: Ready`
+uffs --daemon status                  # must report `Status: Ready`
 just soak ws-trace
 ```
 

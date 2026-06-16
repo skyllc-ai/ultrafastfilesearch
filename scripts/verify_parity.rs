@@ -643,7 +643,7 @@ fn run_live_drive_parity(
     print!("  [1/5] Purging daemon + cache for cold Rust run...");
     io::stdout().flush().ok();
     let _ = Command::new(rust_bin)
-        .args(["daemon", "kill"])
+        .args(["--daemon", "kill"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output();
@@ -670,7 +670,7 @@ fn run_live_drive_parity(
     //    explicitly — matching what C++ (`uffs.com`) does on every run —
     //    so a future regression in `extract_spawn_args` (e.g. a forgotten
     //    flag) can never silently widen the measurement to "all NTFS
-    //    drives".  `uffs daemon start` blocks until the drive's MFT is
+    //    drives".  `uffs --daemon start` blocks until the drive's MFT is
     //    fully indexed (await_ready, 2 min timeout).
     //
     //    We start timing *before* `daemon start` so `rust_elapsed` captures
@@ -680,7 +680,7 @@ fn run_live_drive_parity(
     io::stdout().flush().ok();
     let rust_start = Instant::now();
     let daemon_start_output = Command::new(rust_bin)
-        .args(["daemon", "start", "--drive", &drive_upper, "--no-cache"])
+        .args(["--daemon", "start", "--drive", &drive_upper, "--no-cache"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output();
@@ -735,7 +735,7 @@ fn run_live_drive_parity(
 
     // Kill daemon after Rust run — next drive must also start cold.
     let _ = Command::new(rust_bin)
-        .args(["daemon", "kill"])
+        .args(["--daemon", "kill"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output();

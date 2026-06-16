@@ -269,7 +269,7 @@ fn poll_result_count(
     0
 }
 
-/// Parse the set of drive letters UFFS knows about from `uffs daemon status`
+/// Parse the set of drive letters UFFS knows about from `uffs --daemon status`
 /// stdout, regardless of tier or record count.
 ///
 /// Parked drives appear without a record count (`[Parked]  C:`) so
@@ -297,7 +297,7 @@ pub(crate) fn parse_daemon_known_drives(status: &str) -> alloc::collections::BTr
     set
 }
 
-/// Parse per-drive record counts from `uffs daemon status` stdout.
+/// Parse per-drive record counts from `uffs --daemon status` stdout.
 ///
 /// Each loaded drive appears as a line matching:
 /// ```text
@@ -339,9 +339,9 @@ pub(crate) fn parse_daemon_status_drives(status: &str) -> alloc::collections::BT
 
 /// Probe one drive's ES state.
 ///
-/// `uffs_record_count` is sourced from the already-parsed `uffs daemon status`
-/// output (passed in by the caller) — no additional UFFS IPC call is made.
-/// Returns early with zeroed ES fields if the daemon is unavailable.
+/// `uffs_record_count` is sourced from the already-parsed `uffs --daemon
+/// status` output (passed in by the caller) — no additional UFFS IPC call is
+/// made. Returns early with zeroed ES fields if the daemon is unavailable.
 /// Otherwise polls `es.exe -get-result-count` (with backoff for configured
 /// drives, once for unconfigured drives).
 fn probe_drive(
@@ -434,7 +434,7 @@ fn feasibility_cells(
 /// Capture a [`PreflightResult`] for the given [`PreflightSpec`].
 ///
 /// Reads `Everything.ini` (never writes it), fetches drive record counts from
-/// `uffs daemon status` in a single call, probes each candidate drive's ES
+/// `uffs --daemon status` in a single call, probes each candidate drive's ES
 /// state, then estimates per-pattern feasibility for the loaded drives.
 #[must_use]
 pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
@@ -508,20 +508,20 @@ pub fn capture(host: &dyn Host, spec: &PreflightSpec) -> PreflightResult {
     PreflightResult { drives, cells }
 }
 
-/// Run `uffs daemon status` once and return the raw stdout (`""` on failure).
+/// Run `uffs --daemon status` once and return the raw stdout (`""` on failure).
 fn daemon_status_output(host: &dyn Host, uffs_exe: &str) -> String {
-    host.run(uffs_exe, &["daemon", "status"])
+    host.run(uffs_exe, &["--daemon", "status"])
         .map(|out| out.stdout)
         .unwrap_or_default()
 }
 
 /// Preload any candidate drive that is absent from `warm_counts` (i.e. parked
-/// or cold) so the follow-up `uffs daemon status` returns a `[Warm]` line with
-/// a live record count.
+/// or cold) so the follow-up `uffs --daemon status` returns a `[Warm]` line
+/// with a live record count.
 ///
-/// Fires `uffs daemon preload <DRIVE>` for each such drive and prints a status
-/// line so the operator knows the tool is promoting drives.  A preload failure
-/// is non-fatal — the drive will still appear with count = 0.
+/// Fires `uffs --daemon preload <DRIVE>` for each such drive and prints a
+/// status line so the operator knows the tool is promoting drives.  A preload
+/// failure is non-fatal — the drive will still appear with count = 0.
 fn warm_parked_drives(
     host: &dyn Host,
     uffs_exe: &str,
@@ -540,7 +540,7 @@ fn warm_parked_drives(
             "[preflight] Preloading parked drive {drive}: into Warm tier …"
         ));
         let drive_s = drive.to_string();
-        if let Err(err) = host.run(uffs_exe, &["daemon", "preload", &drive_s]) {
+        if let Err(err) = host.run(uffs_exe, &["--daemon", "preload", &drive_s]) {
             host.out(&format!(
                 "[preflight] WARNING: could not preload drive {drive}: {err}"
             ));

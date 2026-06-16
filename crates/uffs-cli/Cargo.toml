@@ -7,8 +7,8 @@
 #
 # Usage:
 #   uffs "*.rs" --drive C
-#   uffs stats
-#   uffs daemon start
+#   uffs --stats
+#   uffs --daemon start
 # ============================================================================
 
 [package]
@@ -111,7 +111,7 @@ dirs-next.workspace = true
 uffs-time.workspace = true
 
 # Broker identity (`SERVICE_NAME` / `PIPE_NAME`) + native SCM status so
-# `uffs status` can report the Access Broker. Both Layer-0 leaves:
+# `uffs --status` can report the Access Broker. Both Layer-0 leaves:
 # broker-protocol is pure; uffs-winsvc stubs to "not installed" off Windows.
 uffs-broker-protocol.workspace = true
 uffs-winsvc.workspace = true
@@ -124,12 +124,12 @@ uffs-winsvc.workspace = true
 #
 # `mcp-http-probe` — **default-off**, **additive**.
 #
-#   * Enables `uffs status` probing the MCP HTTP gateway's `/status`
+#   * Enables `uffs --status` probing the MCP HTTP gateway's `/status`
 #     endpoint inside `commands::system_status`.
 #   * Adds no crate-graph deps; uses `std::net::TcpStream` (libstd).
 #   * Disabled by default because `std::net::TcpStream` is the sole
 #     reason `ws2_32.dll` would be linked on Windows, adding ~50 ms
-#     to cold-start launch.  Without the feature, `uffs status` still
+#     to cold-start launch.  Without the feature, `uffs --status` still
 #     reports the configured HTTP bind address — it just does not
 #     actively probe `/status`.
 #   * Semver: removing the probe behaviour or its observable output

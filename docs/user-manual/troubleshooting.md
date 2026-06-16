@@ -19,10 +19,10 @@ a crashed daemon.
 uffs '*.txt'
 
 # Or start manually
-uffs daemon start --data-dir ~/uffs_data
+uffs --daemon start --data-dir ~/uffs_data
 
 # If stale files are blocking startup
-uffs daemon kill
+uffs --daemon kill
 uffs '*.txt'
 ```
 
@@ -58,10 +58,10 @@ the daemon may be restarting each time:
 
 ```bash
 # Check if daemon is running
-uffs daemon status
+uffs --daemon status
 
 # Check daemon idle timeout (default: 2 hours)
-uffs daemon stats
+uffs --daemon stats
 ```
 
 ---
@@ -71,7 +71,7 @@ uffs daemon stats
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Zero results for any pattern | Wrong data source | Check `--data-dir` path; verify MFT files exist |
-| Missing files from specific drives | Drive not loaded | Check `uffs daemon status` for loaded drives |
+| Missing files from specific drives | Drive not loaded | Check `uffs --daemon status` for loaded drives |
 | Missing hidden/system files | Filtered by default | Use `--attr hidden` or `--attr system` |
 | Missing `$` files | System files hidden | Use `--hide-system false` or search `$*` |
 | Missing directories | `--files-only` active | Remove `--files-only` or use `--dirs-only` |
@@ -87,10 +87,10 @@ uffs daemon stats
 
 ```bash
 # Force re-parse of raw MFT data (bypass cache)
-uffs daemon restart --no-cache
+uffs --daemon restart --no-cache
 
 # On Windows (re-read live MFT)
-uffs daemon restart
+uffs --daemon restart
 ```
 
 The daemon does not watch the filesystem for changes.  If files have
@@ -157,8 +157,8 @@ NTFS drives and 25 million files uses roughly 4–6 GB of RAM.
 uffs --help
 
 # Show subcommand help
-uffs daemon --help
-uffs agg --help
+uffs --daemon --help
+uffs --agg --help
 
 # Verbose mode for diagnostic output
 uffs '*.txt' -v
@@ -169,6 +169,6 @@ reporting an issue:
 
 ```bash
 uffs --version
-uffs daemon status
-uffs daemon stats
+uffs --daemon status
+uffs --daemon stats
 ```

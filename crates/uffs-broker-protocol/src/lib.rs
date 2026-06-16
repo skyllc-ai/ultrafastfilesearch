@@ -63,7 +63,7 @@ pub const PIPE_NAME: &str = r"\\.\pipe\uffs-broker";
 ///
 /// The single source of truth shared by everything that names the
 /// service: `uffs-broker` (install / control), `uffs-update`
-/// (quiesce / restore), and `uffs-cli` (`uffs status` + update
+/// (quiesce / restore), and `uffs-cli` (`uffs --status` + update
 /// detection). It belongs here, next to [`PIPE_NAME`], because both are
 /// the broker's *identity* on the wire / on the box — the SCM control
 /// *mechanism* lives separately in `uffs-winsvc`.

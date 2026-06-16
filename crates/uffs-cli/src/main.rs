@@ -15,7 +15,7 @@
 //!
 //! | Feature | Default? | Enables | Adds deps | Binary-size impact | Semver |
 //! |---|:---:|---|---|---|---|
-//! | `mcp-http-probe` | **no** | Active probing of the MCP HTTP gateway's `/status` endpoint inside `uffs status` (see [`commands::system_status`]).  Without it, `uffs status` still reports the configured HTTP bind address but does not actively probe. | None on the crate graph.  Uses `std::net::TcpStream` (libstd) — but on Windows targets that drag in `ws2_32.dll`, adding ~50 ms to cold-start process launch. | Disabling drops the only `std::net` user from the CLI: `ws2_32.dll` is left unlinked.  This is **the** reason the feature is default-off — the CLI is the thin / fast-path binary. | Removing the probe behaviour or its observable output behind `mcp-http-probe` is breaking; adding richer probe output is not. |
+//! | `mcp-http-probe` | **no** | Active probing of the MCP HTTP gateway's `/status` endpoint inside `uffs --status` (see [`commands::system_status`]).  Without it, `uffs --status` still reports the configured HTTP bind address but does not actively probe. | None on the crate graph.  Uses `std::net::TcpStream` (libstd) — but on Windows targets that drag in `ws2_32.dll`, adding ~50 ms to cold-start process launch. | Disabling drops the only `std::net` user from the CLI: `ws2_32.dll` is left unlinked.  This is **the** reason the feature is default-off — the CLI is the thin / fast-path binary. | Removing the probe behaviour or its observable output behind `mcp-http-probe` is breaking; adding richer probe output is not. |
 //!
 //! ## Why `mcp-http-probe` is default-off
 //!
@@ -39,7 +39,7 @@
 //! | `CARGO_PKG_VERSION` | `string` | (set by Cargo) | Read via `env!()` for `--version` output + log preludes.  CARGO semver class. |
 //! | `RUST_LOG` | `string` | `info` | `tracing-subscriber` filter directive; consulted as a fallback when `UFFS_LOG` is unset.  STANDARD semver class (tracing convention). |
 //! | `UFFS_LOG` | `string` | `info` | UFFS-specific log level override (preferred over `RUST_LOG` for UFFS binaries).  INTERNAL semver class. |
-//! | `UFFS_LOG_DIR` | `path` | platform default (`%LOCALAPPDATA%\UFFS\logs` / `$XDG_CACHE_HOME/uffs/logs`) | Log directory override for `uffs daemon start` and `uffs search`.  Mirrors the `--log-dir` CLI flag.  INTERNAL semver class. |
+//! | `UFFS_LOG_DIR` | `path` | platform default (`%LOCALAPPDATA%\UFFS\logs` / `$XDG_CACHE_HOME/uffs/logs`) | Log directory override for `uffs --daemon start` and `uffs --search`.  Mirrors the `--log-dir` CLI flag.  INTERNAL semver class. |
 //! | `UFFS_LOG_FILE` | `path` | (none — auto-generated under `UFFS_LOG_DIR`) | Log-file path override.  Mirrors the `--log-file` CLI flag.  INTERNAL semver class. |
 
 // CLI main module uses single-call functions by design
@@ -88,7 +88,7 @@ fn run() -> Result<()> {
 
     // The first token decides the mode: a known `--command` runs that
     // command; ANYTHING else (bare word, glob, single dash, or a search flag)
-    // is a search — so `uffs update` searches for "update".
+    // is a search — so `uffs --update` searches for "update".
     match dispatch::Command::from_token(first) {
         Some(command) => {
             dispatch::dispatch_command(command, raw_args.get(2..).unwrap_or_default())?;
@@ -477,7 +477,7 @@ fn write_search_payload_to_stdout(
     Ok(())
 }
 
-/// Handle `uffs stats [path] [--top N] [--data-dir ...] [--mft-file ...]`.
+/// Handle `uffs --stats [path] [--top N] [--data-dir ...] [--mft-file ...]`.
 pub(crate) fn run_stats(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_stats_help();
@@ -539,7 +539,7 @@ pub(crate) fn run_stats(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Handle `uffs aggregate|agg <preset> [--format ...] [--data-dir ...]`.
+/// Handle `uffs --agg|agg <preset> [--format ...] [--data-dir ...]`.
 pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         args::print_aggregate_help();
@@ -551,7 +551,7 @@ pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
         .find(|arg| !arg.starts_with('-'))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "Usage: uffs aggregate <PRESET>\n\
+                "Usage: uffs --agg <PRESET>\n\
                  Available presets: overview, by_type, by_extension, by_drive, by_size, by_age, count"
             )
         })?;
@@ -564,7 +564,7 @@ pub(crate) fn run_aggregate(args: &[String]) -> Result<()> {
         "--limit".to_owned(),
         "0".to_owned(),
     ];
-    // Default to table format for `uffs agg` unless user specifies --format.
+    // Default to table format for `uffs --agg` unless user specifies --format.
     let has_format = args.iter().any(|arg| arg == "--format" || arg == "-f");
     if !has_format {
         synth_args.extend(["--format".to_owned(), "table".to_owned()]);
@@ -646,7 +646,7 @@ fn format_elevation_help(daemon_path: &str) -> String {
             then retry the command.\n\
          \n  \
          2. Explicitly request a UAC prompt for this invocation:\n       \
-               uffs daemon start --elevate\n     \
+               uffs --daemon start --elevate\n     \
             Or set it as the default for the current session:\n       \
                set UFFS_ELEVATE=1     (cmd)\n       \
                $env:UFFS_ELEVATE = '1'  (PowerShell)\n\

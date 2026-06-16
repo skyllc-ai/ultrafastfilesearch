@@ -188,7 +188,7 @@ fn check_snapshot(opts: &DoctorOpts, report: &mut Report) -> Option<plan::Snapsh
         report.add(
             Health::Warn,
             "No snapshot — install/version/service checks skipped",
-            Some("run via `uffs update doctor` to include them".to_owned()),
+            Some("run via `uffs --update doctor` to include them".to_owned()),
         );
         return None;
     };

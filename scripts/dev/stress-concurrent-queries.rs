@@ -105,9 +105,9 @@ fn find_uffs_bin(explicit: &Option<PathBuf>) -> Option<PathBuf> {
     None
 }
 
-/// Check if daemon is running via `uffs daemon status`.
+/// Check if daemon is running via `uffs --daemon status`.
 fn daemon_running_via_cli(bin: &PathBuf) -> bool {
-    if let Ok(out) = std::process::Command::new(bin).args(["daemon", "status"]).output() {
+    if let Ok(out) = std::process::Command::new(bin).args(["--daemon", "status"]).output() {
         let stdout = String::from_utf8_lossy(&out.stdout);
         stdout.contains("Ready") || stdout.contains("Loading")
     } else {
@@ -139,8 +139,8 @@ fn ensure_daemon(sock: &PathBuf, cli: &Cli) -> Result<()> {
     ))?;
     println!("  uffs binary:  {}", bin.display());
 
-    // Build args: `uffs daemon start` blocks until "Daemon started and ready."
-    let mut args = vec!["daemon", "start"];
+    // Build args: `uffs --daemon start` blocks until "Daemon started and ready."
+    let mut args = vec!["--daemon", "start"];
     let data_dir_str;
     if let Some(ref dir) = cli.data_dir {
         args.push("--data-dir");
@@ -154,7 +154,7 @@ fn ensure_daemon(sock: &PathBuf, cli: &Cli) -> Result<()> {
     let output = std::process::Command::new(&bin)
         .args(&args)
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run `uffs daemon start`: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run `uffs --daemon start`: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -162,7 +162,7 @@ fn ensure_daemon(sock: &PathBuf, cli: &Cli) -> Result<()> {
 
     if !output.status.success() {
         bail!(
-            "`uffs daemon start` failed (exit {}):\nstdout: {}\nstderr: {}",
+            "`uffs --daemon start` failed (exit {}):\nstdout: {}\nstderr: {}",
             output.status.code().unwrap_or(-1), stdout.trim(), stderr.trim()
         );
     }

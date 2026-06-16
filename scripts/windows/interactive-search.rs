@@ -111,7 +111,7 @@ impl DataSources {
     fn empty() -> Self {
         DataSources { data_dir: None, drive_files: std::collections::HashMap::new() }
     }
-    /// Args for `uffs daemon start` — only --data-dir / --mft-file (NOT --drive).
+    /// Args for `uffs --daemon start` — only --data-dir / --mft-file (NOT --drive).
     fn daemon_start_args(&self) -> Vec<String> {
         match &self.data_dir {
             Some(d) => vec!["--data-dir".into(), d.to_string_lossy().into_owned()],
@@ -158,12 +158,12 @@ fn find_best_mft_file(dir: &std::path::Path) -> Option<PathBuf> {
 fn flush() { std::io::stderr().flush().ok(); }
 
 fn ensure_stopped(bin: &PathBuf) {
-    let _ = Command::new(bin).args(["daemon", "kill"])
+    let _ = Command::new(bin).args(["--daemon", "kill"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(250));
-        if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+        if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
             .stderr(Stdio::null()).output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -174,14 +174,14 @@ fn ensure_stopped(bin: &PathBuf) {
 }
 
 fn start_and_await_ready(bin: &PathBuf, source_args: &[String]) -> bool {
-    let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+    let mut args: Vec<String> = vec!["--daemon".into(), "start".into()];
     args.extend(source_args.iter().cloned());
     let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let _ = Command::new(bin).args(&str_args)
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
-        if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+        if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
             .stderr(Stdio::null()).output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -193,7 +193,7 @@ fn start_and_await_ready(bin: &PathBuf, source_args: &[String]) -> bool {
 }
 
 fn assert_ready(bin: &PathBuf) -> bool {
-    if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+    if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
         .stderr(Stdio::null()).output()
     {
         let s = String::from_utf8_lossy(&out.stdout);

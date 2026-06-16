@@ -171,7 +171,7 @@ function Remove-DriveCache {
 }
 
 function Get-DaemonTotalRecords {
-    # `uffs daemon stats` prints "Total records: N" with thousands
+    # `uffs --daemon stats` prints "Total records: N" with thousands
     # separators. Returns $null if the daemon isn't running or the line
     # isn't found.
     try {
@@ -296,7 +296,7 @@ function Remove-AllDriveCaches {
 }
 
 function Start-DaemonAllDrives {
-    # Force the daemon to start and load all drives.  `uffs daemon start`
+    # Force the daemon to start and load all drives.  `uffs --daemon start`
     # has no --drive filter (args.rs:109 states daemon auto-discovers
     # all drives on Windows live mode), so a bare daemon start (no -d)
     # gets the right behaviour.  Then we issue a trivial `*` --limit 1

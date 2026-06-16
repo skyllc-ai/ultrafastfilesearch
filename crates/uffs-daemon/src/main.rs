@@ -4,7 +4,7 @@
 //! UFFS Daemon binary — thin wrapper around [`uffs_daemon::run_daemon`].
 //!
 //! The actual daemon logic lives in the `uffs-daemon` library crate so it
-//! can also be invoked via `uffs daemon run` (single-binary deployment).
+//! can also be invoked via `uffs --daemon run` (single-binary deployment).
 //!
 //! # Usage
 //!

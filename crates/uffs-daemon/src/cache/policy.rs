@@ -31,7 +31,7 @@
 //! UFFS_HOT_TO_WARM_IDLE_SECS=60      \
 //! UFFS_WARM_TO_PARKED_IDLE_SECS=360  \
 //! UFFS_PARKED_TO_COLD_IDLE_SECS=900  \
-//!     uffs daemon start --drive C,D,E,F,G,M,S
+//!     uffs --daemon start --drive C,D,E,F,G,M,S
 //! ```
 //!
 //! ## Adaptive layer (Phase 6)

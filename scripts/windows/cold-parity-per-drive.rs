@@ -399,12 +399,12 @@ fn purge_drive_cache(cache_dir: &PathBuf, drive: &str, dump_raw: bool) {
 ///   `UFFS_WARM_TO_PARKED_IDLE_SECS=7200` (2 hr — default 30 min)
 fn kill_and_restart_daemon(uffs_bin: &str, drives: &[String]) {
     let _ = Command::new(uffs_bin)
-        .args(["daemon", "kill"])
+        .args(["--daemon", "kill"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
     std::thread::sleep(std::time::Duration::from_millis(1_200));
-    let mut start_args: Vec<&str> = vec!["daemon", "start"];
+    let mut start_args: Vec<&str> = vec!["--daemon", "start"];
     let drive_flags: Vec<String> = drives
         .iter()
         .flat_map(|d| ["--drive".to_owned(), d.clone()])
@@ -423,7 +423,7 @@ fn kill_and_restart_daemon(uffs_bin: &str, drives: &[String]) {
 
 fn daemon_total_records(uffs_bin: &str) -> Option<u64> {
     let out = Command::new(uffs_bin)
-        .args(["daemon", "stats"])
+        .args(["--daemon", "stats"])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);

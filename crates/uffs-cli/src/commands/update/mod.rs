@@ -259,7 +259,7 @@ fn capture_broker(roots: &mut Vec<InstallRoot>, running: &mut Vec<RunningProcess
     }
 }
 
-/// Print the `uffs update` help text.
+/// Print the `uffs --update` help text.
 #[expect(clippy::print_stdout, reason = "intentional help output")]
 fn print_help() {
     println!(

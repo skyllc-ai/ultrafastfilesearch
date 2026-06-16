@@ -57,14 +57,14 @@ uffs "*.rs"
 uffs "*.rs" --drive C
 
 # Daemon status, drive list, version.
-uffs status
+uffs --status
 uffs drives
 uffs version
 
 # Daemon lifecycle.
-uffs daemon start
-uffs daemon stop
-uffs daemon status
+uffs --daemon start
+uffs --daemon stop
+uffs --daemon status
 
 # Index management (build / refresh / load / unload).
 uffs index build --drive C

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs update --apply` — run the **mutating** update end to end.
+//! `uffs --update --apply` — run the **mutating** update end to end.
 //!
 //! The CLI freezes a snapshot and hands off to the `uffs-update` helper,
 //! which performs the journaled flow: pre-flight → quiesce → backup/swap/

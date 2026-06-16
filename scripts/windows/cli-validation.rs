@@ -278,14 +278,14 @@ fn default_binary() -> String {
 /// version string for inclusion in the validation-summary block.
 ///
 /// Returns the trimmed value of the `Version:` line printed by
-/// `uffs daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
+/// `uffs --daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
 /// `<unknown> (daemon) / X.Y.Z (cli)` via the CLI's back-compat
 /// renderer; pre-this-feature daemons (no `Version:` line at all)
 /// surface as `<line not found>`.  When the daemon is unreachable
 /// the helper reports `<not running>` instead of erroring — the
 /// version line is informational, not load-bearing.
 fn capture_daemon_version(bin: &str) -> String {
-    match Command::new(bin).args(["daemon", "status"]).output() {
+    match Command::new(bin).args(["--daemon", "status"]).output() {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -1430,17 +1430,17 @@ fn run_custom_validator(name: &str, stdout: &str, stderr: &str) -> Result<String
         // ── Help / version validators ────────────────────────────────────
         "H1" => {
             // Main help: verify structure has key sections.
-            let sections = ["SUBCOMMANDS:", "COMMON OPTIONS:", "EXAMPLES:"];
+            let sections = ["COMMANDS:", "COMMON OPTIONS:", "EXAMPLES:"];
             for section in &sections {
                 if !stdout.contains(section) {
                     bail!("Missing section: {section}");
                 }
             }
-            // Verify all expected subcommands are listed.
-            let subcommands = ["daemon", "mcp", "stats", "aggregate", "status"];
+            // Verify all expected `--command`s are listed (search-first grammar).
+            let subcommands = ["--search", "--stats", "--agg", "--daemon", "--mcp", "--update", "--status"];
             for sub in &subcommands {
                 if !stdout.contains(sub) {
-                    bail!("Missing subcommand in help: {sub}");
+                    bail!("Missing command in help: {sub}");
                 }
             }
             // Verify key flags are documented.
@@ -1808,9 +1808,9 @@ fn cli_string(bin: &str, args: &[String]) -> String {
     parts.join(" ")
 }
 
-/// Subcommands that do NOT accept `--data-dir` (they don't connect to the
-/// daemon at all).
-const SUBCOMMANDS_NO_DATA_DIR: &[&str] = &["info", "daemon", "index"];
+/// `--command`s that do NOT accept `--data-dir` (pure management — they
+/// don't read a data source). Search-first grammar: commands are `--<name>`.
+const SUBCOMMANDS_NO_DATA_DIR: &[&str] = &["--daemon", "--status", "--mcp", "--update"];
 
 /// Flags whose presence means we should NOT inject `--columns all`.
 const OUTPUT_SHAPING_FLAGS: &[&str] = &[
@@ -1822,9 +1822,9 @@ fn run_one_test_cli(bin: &str, spec: &TestSpec, source_flag: Option<&str>, sourc
     let mut args = spec.args.clone();
     let first = args.first().map(String::as_str).unwrap_or("");
 
-    // Subcommands (agg, stats, info, etc.) don't accept search flags.
+    // Commands (`--agg`, `--stats`, `--daemon`, …) don't accept search flags.
     let is_subcommand = SUBCOMMANDS_NO_DATA_DIR.iter().any(|s| first.eq_ignore_ascii_case(s))
-        || matches!(first.to_lowercase().as_str(), "agg" | "aggregate" | "stats" | "daemon" | "index");
+        || matches!(first.to_lowercase().as_str(), "--agg" | "--aggregate" | "--stats");
 
     if !is_subcommand {
         if let Some(flag) = source_flag {
@@ -1973,8 +1973,8 @@ fn print_results(results: &[TestResult]) {
 ///
 /// Returns the time spent waiting for the daemon to become ready (ms).
 ///
-/// 1. Run `uffs daemon status` — if "Ready", done.
-/// 2. If "not running", run `uffs daemon start --data-dir ...` (blocks
+/// 1. Run `uffs --daemon status` — if "Ready", done.
+/// 2. If "not running", run `uffs --daemon start --data-dir ...` (blocks
 ///    until "Daemon started and ready." is printed, then returns).
 fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
     let bin = &args.bin;
@@ -1982,7 +1982,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
 
     // Step 1: Check status.
     eprintln!("  Checking daemon status...");
-    match run_uffs(bin, &["daemon".to_string(), "status".to_string()]) {
+    match run_uffs(bin, &["--daemon".to_string(), "status".to_string()]) {
         Ok((_code, stdout, stderr)) => {
             let combined = format!("{stdout}{stderr}");
             let lower = combined.to_lowercase();
@@ -2011,7 +2011,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
                 }
                 // Stop the stale daemon so we can restart with the data source.
                 eprintln!("  Stopping stale daemon...");
-                let _ = run_uffs(bin, &["daemon".to_string(), "stop".to_string()]);
+                let _ = run_uffs(bin, &["--daemon".to_string(), "stop".to_string()]);
                 // Brief pause to let the socket close.
                 std::thread::sleep(std::time::Duration::from_millis(500));
             } else if lower.contains("not running") {
@@ -2030,7 +2030,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
     }
 
     // Step 2: Start daemon.
-    let mut start_args = vec!["daemon".to_string(), "start".to_string()];
+    let mut start_args = vec!["--daemon".to_string(), "start".to_string()];
     if let Some(flag) = args.source_flag {
         start_args.push(flag.to_string());
         start_args.push(args.source_path.clone());
@@ -2065,7 +2065,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        match run_uffs(bin, &["daemon".to_string(), "status".to_string()]) {
+        match run_uffs(bin, &["--daemon".to_string(), "status".to_string()]) {
             Ok((_code, stdout, stderr)) => {
                 let combined = format!("{stdout}{stderr}");
                 let lower = combined.to_lowercase();
@@ -2238,8 +2238,8 @@ fn main() {
     // The validation suite is a strict observer: it does not kill orphan
     // processes or mutate the host in any way.  Those concerns live in
     // `scripts/dev/orphan-cleanup.rs` (callable via `just orphan`).
-    print_uffs_command_block(&args.bin, &["daemon", "status"], "═══ Daemon STATUS ═══");
-    print_uffs_command_block(&args.bin, &["daemon", "stats"],  "═══ Daemon STATS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "status"], "═══ Daemon STATUS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "stats"],  "═══ Daemon STATS ═══");
 
     if failed > 0 {
         // Build retest command with failed test IDs.  Same shape as

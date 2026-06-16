@@ -3,132 +3,126 @@
 # These tests do NOT require a running daemon or data source.
 
 [[test]]
-id          = "H1"
-group       = "help"
-name        = "H1 uffs --help"
-title       = "H1 main help text"
-short_desc  = "Top-level help shows subcommands, options, examples"
-cli_args    = ["--help"]
-targets     = ["cli"]
-validator   = "H1"
+id = "H1"
+group = "help"
+name = "H1 uffs --help"
+title = "H1 main help text"
+short_desc = "Top-level help shows the search-first grammar, commands, options, examples"
+cli_args = ["--help"]
+targets = ["cli"]
+validator = "H1"
 stdout_contains = [
-    "USAGE:",
-    "SUBCOMMANDS:",
-    "daemon",
-    "mcp",
-    "stats",
-    "aggregate",
-    "status",
-    "COMMON OPTIONS:",
-    "--drive",
-    "--mft-file",
-    "--data-dir",
-    "--limit",
-    "--format",
-    "--sort",
-    "--ext",
-    "--columns",
-    "--help",
-    "--version",
-    "EXAMPLES:",
+  "USAGE:",
+  "Search-first",
+  "COMMANDS:",
+  "--search",
+  "--stats",
+  "--agg",
+  "--daemon",
+  "--mcp",
+  "--update",
+  "--status",
+  "COMMON OPTIONS:",
+  "--drive",
+  "--mft-file",
+  "--data-dir",
+  "--limit",
+  "--format",
+  "--sort",
+  "--ext",
+  "--columns",
+  "--help",
+  "--version",
+  "EXAMPLES:",
 ]
 
 [[test]]
-id          = "H2"
-group       = "help"
-name        = "H2 uffs daemon --help"
-title       = "H2 daemon subcommand help"
-short_desc  = "Daemon help shows lifecycle actions"
-cli_args    = ["daemon", "--help"]
-targets     = ["cli"]
-validator   = "H2"
+id = "H2"
+group = "help"
+name = "H2 uffs --daemon --help"
+title = "H2 --daemon command help"
+short_desc = "Daemon help shows lifecycle actions"
+cli_args = ["--daemon", "--help"]
+targets = ["cli"]
+validator = "H2"
 stdout_contains = [
-    "daemon",
-    "ACTIONS:",
-    "start",
-    "status",
-    "stats",
-    "stop",
-    "kill",
-    "restart",
-    "load",
+  "daemon",
+  "ACTIONS:",
+  "start",
+  "status",
+  "stats",
+  "stop",
+  "kill",
+  "restart",
+  "load",
 ]
 
 [[test]]
-id          = "H3"
-group       = "help"
-name        = "H3 uffs mcp --help"
-title       = "H3 MCP subcommand help"
-short_desc  = "MCP help shows server management subcommands"
-cli_args    = ["mcp", "--help"]
-targets     = ["cli"]
-validator   = "H3"
+id = "H3"
+group = "help"
+name = "H3 uffs --mcp --help"
+title = "H3 --mcp command help"
+short_desc = "MCP help shows server management subcommands"
+cli_args = ["--mcp", "--help"]
+targets = ["cli"]
+validator = "H3"
 stdout_contains = [
-    "mcp",
-    "start",
-    "status",
-    "stop",
-    "kill",
-    "restart",
-    "reload",
+  "mcp",
+  "start",
+  "status",
+  "stop",
+  "kill",
+  "restart",
+  "reload",
 ]
 
 [[test]]
-id          = "H4"
-group       = "help"
-name        = "H4 uffs stats --help"
-title       = "H4 stats subcommand help"
-short_desc  = "Stats help shows options"
-cli_args    = ["stats", "--help"]
-targets     = ["cli"]
+id = "H4"
+group = "help"
+name = "H4 uffs --stats --help"
+title = "H4 --stats command help"
+short_desc = "Stats help shows options"
+cli_args = ["--stats", "--help"]
+targets = ["cli"]
+stdout_contains = ["stats", "USAGE:", "--top", "--data-dir", "--mft-file"]
+
+[[test]]
+id = "H5"
+group = "help"
+name = "H5 uffs --agg --help"
+title = "H5 --agg command help"
+short_desc = "Aggregate help shows preset argument and options"
+cli_args = ["--aggregate", "--help"]
+targets = ["cli"]
 stdout_contains = [
-    "stats",
-    "USAGE:",
-    "--top",
-    "--data-dir",
-    "--mft-file",
+  "aggregate",
+  "USAGE:",
+  "PRESET",
+  "overview",
+  "by_type",
+  "by_extension",
+  "--format",
+  "--agg-cursor",
+  "--agg-page-size",
 ]
 
 [[test]]
-id          = "H5"
-group       = "help"
-name        = "H5 uffs aggregate --help"
-title       = "H5 aggregate subcommand help"
-short_desc  = "Aggregate help shows preset argument and options"
-cli_args    = ["aggregate", "--help"]
-targets     = ["cli"]
-stdout_contains = [
-    "aggregate",
-    "USAGE:",
-    "PRESET",
-    "overview",
-    "by_type",
-    "by_extension",
-    "--format",
-    "--agg-cursor",
-    "--agg-page-size",
-]
+id = "H6"
+group = "help"
+name = "H6 uffs --status --help"
+title = "H6 --status command help"
+short_desc = "Status help shows usage"
+cli_args = ["--status", "--help"]
+targets = ["cli"]
+stdout_contains = ["status", "USAGE:"]
 
 [[test]]
-id          = "H6"
-group       = "help"
-name        = "H6 uffs status --help"
-title       = "H6 status subcommand help"
-short_desc  = "Status help shows usage"
-cli_args    = ["status", "--help"]
-targets     = ["cli"]
-stdout_contains = [
-    "status",
-    "USAGE:",
-]
-
-[[test]]
-id          = "H7"
-group       = "help"
-name        = "H7 uffs --version"
-title       = "H7 version output"
-short_desc  = "Version flag prints version string"
-cli_args    = ["--version"]
-targets     = ["cli"]
-validator   = "H7"
+id = "H7"
+group = "help"
+name = "H7 uffs --version"
+title = "H7 version output"
+short_desc = "Version flag prints version string"
+cli_args = ["--version"]
+targets = ["cli"]
+validator = "H7"
 stdout_contains = ["uffs"]

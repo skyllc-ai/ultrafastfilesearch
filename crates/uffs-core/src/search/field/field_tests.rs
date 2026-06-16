@@ -383,8 +383,8 @@ fn aggregate_non_aggregatable_fields() {
 // client, and these tests pin that the two enums never drift.
 //
 // If they ever do drift, the symptom is a cross-crate output-format
-// divergence: "uffs search > foo.csv" (CLI / SearchRow) and "uffs
-// search --out=foo.csv" (daemon / DisplayRow) would disagree on a
+// divergence: "uffs '*' > foo.csv" (CLI / SearchRow) and "uffs
+// --out=foo.csv" (daemon / DisplayRow) would disagree on a
 // header label or misfile the column.  The byte-parity tests in
 // `uffs-core::output::tests::format_parity_*` would surface the
 // symptom, but this drift guard surfaces the root cause earlier

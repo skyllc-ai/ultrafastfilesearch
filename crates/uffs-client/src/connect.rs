@@ -181,7 +181,7 @@ impl UffsClient {
     /// request a UAC prompt on Windows when the current process is not
     /// elevated.
     ///
-    /// This is the opt-in variant used by `uffs daemon start --elevate`.
+    /// This is the opt-in variant used by `uffs --daemon start --elevate`.
     /// All other entry points default to
     /// `ElevationPolicy::RequireExistingElevation`.
     ///
@@ -694,7 +694,7 @@ impl UffsClient {
                     "Deep health check failed: the daemon accepted the connection but did \
                      not respond correctly to a probe `status` RPC ({probe_err}). The \
                      daemon may be wedged (deadlocked worker, stuck kernel I/O); consider \
-                     `uffs daemon kill` and restart.  Set UFFS_CLIENT_SKIP_HEALTH_CHECK=1 \
+                     `uffs --daemon kill` and restart.  Set UFFS_CLIENT_SKIP_HEALTH_CHECK=1 \
                      to bypass this probe."
                 )))
             }

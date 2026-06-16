@@ -2,411 +2,510 @@
 # Auto-split from test-definitions.toml
 
 [[test]]
-id          = "T01"
-group       = "general"
-name        = "--files-only"
-title       = "Filter to files only (exclude directories)"
-short_desc  = "All results must be files, not directories"
-long_desc   = """
+id = "T01"
+group = "general"
+name = "--files-only"
+title = "Filter to files only (exclude directories)"
+short_desc = "All results must be files, not directories"
+long_desc = """
 Searches for *.txt with --files-only and verifies that every row has
 Directory Flag = 0.  This is the fundamental file/dir filter test."""
-cli_args    = ["*.txt", "--files-only", "--limit", "10"]
-cli_format  = "csv"
-rpc_method  = "search"
+cli_args = ["*.txt", "--files-only", "--limit", "10"]
+cli_format = "csv"
+rpc_method = "search"
 expect_min_rows = 1
 expect_max_rows = 10
 expect_columns_all = true
 
 [[test.column_checks]]
 column = "Directory Flag"
-op     = "ne"
-value  = "1"
+op = "ne"
+value = "1"
 
 [[test]]
-id          = "T02"
-group       = "general"
-name        = "--dirs-only"
-title       = "Filter to directories only (exclude files)"
-short_desc  = "All results must be directories"
-cli_args    = ["Windows", "--dirs-only", "--limit", "10"]
-rpc_method  = "search"
+id = "T02"
+group = "general"
+name = "--dirs-only"
+title = "Filter to directories only (exclude files)"
+short_desc = "All results must be directories"
+cli_args = ["Windows", "--dirs-only", "--limit", "10"]
+rpc_method = "search"
 expect_min_rows = 1
 expect_max_rows = 10
 expect_columns_all = true
 
 [[test.column_checks]]
 column = "Directory Flag"
-op     = "eq"
-value  = "1"
+op = "eq"
+value = "1"
 
 [[test]]
-id          = "T03"
-group       = "general"
-name        = "--hide-system"
-title       = "Hide system files (no $-prefixed results)"
-short_desc  = "No result should start with $ when --hide-system is used"
+id = "T03"
+group = "general"
+name = "--hide-system"
+title = "Hide system files (no $-prefixed results)"
+short_desc = "No result should start with $ when --hide-system is used"
 # Pattern must be "*" (all files), NOT "$*" — searching only $-prefixed files
 # with --hide-system is self-contradictory and always returns 0 rows.
-cli_args    = ["*", "--limit", "20", "--hide-system"]
+cli_args = ["*", "--limit", "20", "--hide-system"]
 expect_min_rows = 1
-rpc_method  = "search"
+rpc_method = "search"
 expect_columns_all = true
 
 [[test.column_checks]]
 column = "Name"
-op     = "not_starts_with"
-value  = "$"
+op = "not_starts_with"
+value = "$"
 
 [[test]]
-id          = "T04"
-group       = "general"
-name        = "--ext rs"
-title       = "Filter by single extension"
-short_desc  = "All results must have .rs extension"
-cli_args    = ["*", "--ext", "rs", "--limit", "10"]
-rpc_method  = "search"
+id = "T04"
+group = "general"
+name = "--ext rs"
+title = "Filter by single extension"
+short_desc = "All results must have .rs extension"
+cli_args = ["*", "--ext", "rs", "--limit", "10"]
+rpc_method = "search"
 expect_min_rows = 1
 expect_max_rows = 10
 
 [[test.column_checks]]
 column = "Name"
-op     = "ends_with"
-value  = ".rs"
-case   = "lower"
+op = "ends_with"
+value = ".rs"
+case = "lower"
 
 [[test]]
-id          = "T05"
-group       = "general"
-name        = "--ext jpg,png,gif"
-title       = "Filter by multiple extensions"
-short_desc  = "All results must have one of jpg/png/gif extension"
-cli_args    = ["*", "--ext", "jpg,png,gif", "--limit", "10"]
-rpc_method  = "search"
+id = "T05"
+group = "general"
+name = "--ext jpg,png,gif"
+title = "Filter by multiple extensions"
+short_desc = "All results must have one of jpg/png/gif extension"
+cli_args = ["*", "--ext", "jpg,png,gif", "--limit", "10"]
+rpc_method = "search"
 expect_min_rows = 1
 expect_max_rows = 10
-validator   = "ext_multi_check"
-tags        = ["extensions"]
+validator = "ext_multi_check"
+tags = ["extensions"]
 
 [[test]]
-id          = "T17"
-group       = "general"
-name        = "T17 --name-only"
-title       = "T17 --name-only"
-short_desc  = "T17 --name-only"
-cli_args    = ["readme", "--name-only", "--limit", "10"]
+id = "T17"
+group = "general"
+name = "T17 --name-only"
+title = "T17 --name-only"
+short_desc = "T17 --name-only"
+cli_args = ["readme", "--name-only", "--limit", "10"]
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name"
-op     = "contains"
-value  = "readme"
-case   = "lower"
+op = "contains"
+value = "readme"
+case = "lower"
 
 [[test]]
-id          = "T18"
-group       = "general"
-name        = "T18 --case sensitive"
-title       = "T18 --case sensitive"
-short_desc  = "T18 --case sensitive"
-cli_args    = ["README", "--case", "--name-only", "--limit", "10"]
+id = "T18"
+group = "general"
+name = "T18 --case sensitive"
+title = "T18 --case sensitive"
+short_desc = "T18 --case sensitive"
+cli_args = ["README", "--case", "--name-only", "--limit", "10"]
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name"
-op     = "contains"
-value  = "README"
-case   = "lower"
+op = "contains"
+value = "README"
+case = "lower"
 
 [[test]]
-id          = "T19"
-group       = "general"
-name        = "T19 --word"
-title       = "T19 --word"
-short_desc  = "Whole-word match: names must contain 'test' as a word boundary"
-cli_args    = ["test", "--word", "--limit", "10"]
+id = "T19"
+group = "general"
+name = "T19 --word"
+title = "T19 --word"
+short_desc = "Whole-word match: names must contain 'test' as a word boundary"
+cli_args = ["test", "--word", "--limit", "10"]
 expect_min_rows = 1
 expect_max_rows = 10
 
 [[test.column_checks]]
 column = "Name"
-op     = "contains"
-value  = "test"
-case   = "lower"
+op = "contains"
+value = "test"
+case = "lower"
 
 [[test]]
-id          = "T28"
-group       = "general"
-name        = "T28 --drive C"
-title       = "T28 --drive C"
-short_desc  = "T28 --drive C"
-cli_args    = ["*.exe", "--drive", "C", "--limit", "10"]
+id = "T28"
+group = "general"
+name = "T28 --drive C"
+title = "T28 --drive C"
+short_desc = "T28 --drive C"
+cli_args = ["*.exe", "--drive", "C", "--limit", "10"]
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Path Only"
-op     = "starts_with"
-value  = "C:"
-case   = "lower"
+op = "starts_with"
+value = "C:"
+case = "lower"
 
 [[test]]
-id          = "T29"
-group       = "general"
-name        = "T29 --drives C,D"
-title       = "T29 --drives C,D"
-short_desc  = "All results must come from drive C or D"
-cli_args    = ["*.exe", "--drives", "C,D", "--limit", "10"]
+id = "T29"
+group = "general"
+name = "T29 --drives C,D"
+title = "T29 --drives C,D"
+short_desc = "All results must come from drive C or D"
+cli_args = ["*.exe", "--drives", "C,D", "--limit", "10"]
 expect_min_rows = 1
-validator   = "drives_cd"
+validator = "drives_cd"
 
 [[test]]
-id          = "T30"
-group       = "general"
-name        = "T30 --sep | --quotes '"
-title       = "T30 --sep | --quotes '"
-short_desc  = "T30 --sep | --quotes '"
-cli_args    = ["*.txt", "--sep", "|", "--quotes", "'", "--limit", "5"]
-targets     = ["cli"]
+id = "T30"
+group = "general"
+name = "T30 --sep | --quotes '"
+title = "T30 --sep | --quotes '"
+short_desc = "T30 --sep | --quotes '"
+cli_args = ["*.txt", "--sep", "|", "--quotes", "'", "--limit", "5"]
+targets = ["cli"]
 stdout_contains = ["'Path'|'Name'|'Path Only'"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T32"
-group       = "general"
-name        = "T32 --benchmark"
-title       = "T32 --benchmark"
-short_desc  = "T32 --benchmark"
-cli_args    = ["*.rs", "--benchmark"]
-targets     = ["cli"]
-validator   = "T32"
+id = "T32"
+group = "general"
+name = "T32 --benchmark"
+title = "T32 --benchmark"
+short_desc = "T32 --benchmark"
+cli_args = ["*.rs", "--benchmark"]
+targets = ["cli"]
+validator = "T32"
 
 [test.api_checks]
 result_has_key = ["results"]
 total_count_min = 1
 
 [[test]]
-id          = "T33"
-group       = "general"
-name        = "T33 regex >.*\\.config$"
-title       = "T33 regex >.*\\.config$"
-short_desc  = "T33 regex >.*\\.config$"
-cli_args    = [">.*\\.config$", "--limit", "10"]
+id = "T33"
+group = "general"
+name = "T33 regex >.*\\.config$"
+title = "T33 regex >.*\\.config$"
+short_desc = "T33 regex >.*\\.config$"
+cli_args = [">.*\\.config$", "--limit", "10"]
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name"
-op     = "ends_with"
-value  = ".config"
-case   = "lower"
+op = "ends_with"
+value = ".config"
+case = "lower"
 
 [[test]]
-id          = "T35"
-group       = "general"
-name        = "T35 --limit 0 (unlimited)"
-title       = "T35 --limit 0 (unlimited)"
-short_desc  = "CLI --limit 0 = unlimited — CLI translates to no-limit; API limit=0 = 0 rows"
-cli_args    = ["*.dll", "--limit", "0", "--drive", "C", "--files-only"]
-targets     = ["cli", "api"]
+id = "T35"
+group = "general"
+name = "T35 --limit 0 (unlimited)"
+title = "T35 --limit 0 (unlimited)"
+short_desc = "CLI --limit 0 = unlimited — CLI translates to no-limit; API limit=0 = 0 rows"
+cli_args = ["*.dll", "--limit", "0", "--drive", "C", "--files-only"]
+targets = ["cli", "api"]
 expect_min_rows = 0
 cli_checks.expect_min_rows = 10
-rpc_method  = "search"
-rpc_params  = '{"pattern":"*.dll","drives":["C"],"filter":"files"}'
-api_checks.result_has_key  = ["rows"]
+rpc_method = "search"
+rpc_params = '{"pattern":"*.dll","drives":["C"],"filter":"files"}'
+api_checks.result_has_key = ["rows"]
 api_checks.total_count_min = 10
 
 [[test]]
-id          = "T41"
-group       = "general"
-name        = "T41 --header false"
-title       = "T41 --header false"
-short_desc  = "T41 --header false"
-cli_args    = ["*.exe", "--header", "false", "--limit", "5", "--drive", "C"]
-targets     = ["cli"]
+id = "T41"
+group = "general"
+name = "T41 --header false"
+title = "T41 --header false"
+short_desc = "T41 --header false"
+cli_args = ["*.exe", "--header", "false", "--limit", "5", "--drive", "C"]
+targets = ["cli"]
 stdout_not_contains = ["\"Path\"", "\"Name\""]
 expect_min_rows = 1
 
 [[test]]
-id          = "T42"
-group       = "general"
-name        = "T42 --smart-case (lowercase = insensitive)"
-title       = "T42 --smart-case (lowercase = insensitive)"
-short_desc  = "Lowercase pattern + smart-case = case-insensitive: names contain 'readme'"
-cli_args    = ["readme", "--smart-case", "--name-only", "--limit", "10"]
+id = "T42"
+group = "general"
+name = "T42 --smart-case (lowercase = insensitive)"
+title = "T42 --smart-case (lowercase = insensitive)"
+short_desc = "Lowercase pattern + smart-case = case-insensitive: names contain 'readme'"
+cli_args = ["readme", "--smart-case", "--name-only", "--limit", "10"]
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name"
-op     = "contains"
-value  = "readme"
-case   = "lower"
+op = "contains"
+value = "readme"
+case = "lower"
 
 [[test]]
-id          = "T88g"
-group       = "general"
-name        = "T88g --not-contains"
-title       = "T88g --not-contains"
-short_desc  = "T88g --not-contains"
-cli_args    = ["*.log", "--not-contains", "debug", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T88g"
+group = "general"
+name = "T88g --not-contains"
+title = "T88g --not-contains"
+short_desc = "T88g --not-contains"
+cli_args = [
+  "*.log",
+  "--not-contains",
+  "debug",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_min_rows = 1
 expect_columns_all = true
 
 [[test.column_checks]]
 column = "Name"
-op     = "ends_with"
-value  = ".log"
-case   = "lower"
+op = "ends_with"
+value = ".log"
+case = "lower"
 
 [[test]]
-id          = "T89"
-group       = "general"
-name        = "T89 --type code"
-title       = "T89 --type code"
-short_desc  = "All results must have code extensions (rs,py,js,ts,c,cpp,go,java,…)"
-cli_args    = ["*", "--type", "code", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T89"
+group = "general"
+name = "T89 --type code"
+title = "T89 --type code"
+short_desc = "All results must have code extensions (rs,py,js,ts,c,cpp,go,java,…)"
+cli_args = [
+  "*",
+  "--type",
+  "code",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
-validator   = "type_code"
+validator = "type_code"
 
 [[test]]
-id          = "T90"
-group       = "general"
-name        = "T90 --type document"
-title       = "T90 --type document"
-short_desc  = "All results must have document extensions (pdf,doc,docx,xls,…)"
-cli_args    = ["*", "--type", "document", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T90"
+group = "general"
+name = "T90 --type document"
+title = "T90 --type document"
+short_desc = "All results must have document extensions (pdf,doc,docx,xls,…)"
+cli_args = [
+  "*",
+  "--type",
+  "document",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
-validator   = "type_document"
+validator = "type_document"
 
 [[test]]
-id          = "T91"
-group       = "general"
-name        = "T91 --type executable"
-title       = "T91 --type executable"
-short_desc  = "All results must have executable extensions (exe,msi,bat,cmd,…)"
-cli_args    = ["*", "--type", "executable", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T91"
+group = "general"
+name = "T91 --type executable"
+title = "T91 --type executable"
+short_desc = "All results must have executable extensions (exe,msi,bat,cmd,…)"
+cli_args = [
+  "*",
+  "--type",
+  "executable",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
-validator   = "type_executable"
+validator = "type_executable"
 
 [[test]]
-id          = "T92"
-group       = "general"
-name        = "T92 --type picture"
-title       = "T92 --type picture"
-short_desc  = "All results must have picture extensions (jpg,png,gif,bmp,…)"
-cli_args    = ["*", "--type", "picture", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T92"
+group = "general"
+name = "T92 --type picture"
+title = "T92 --type picture"
+short_desc = "All results must have picture extensions (jpg,png,gif,bmp,…)"
+cli_args = [
+  "*",
+  "--type",
+  "picture",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
-validator   = "type_picture"
+validator = "type_picture"
 
 [[test]]
-id          = "T93"
-group       = "general"
-name        = "T93 --type system"
-title       = "T93 --type system"
-short_desc  = "All results must have system marker ($-prefix names)"
-cli_args    = ["*", "--type", "system", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T93"
+group = "general"
+name = "T93 --type system"
+title = "T93 --type system"
+short_desc = "All results must have system marker ($-prefix names)"
+cli_args = [
+  "*",
+  "--type",
+  "system",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
-validator   = "type_system"
+validator = "type_system"
 
 [[test]]
-id          = "T98"
-group       = "general"
-name        = "T98 --min-bulkiness 200"
-title       = "T98 --min-bulkiness 200"
-short_desc  = "T98 --min-bulkiness 200"
-cli_args    = ["*", "--min-bulkiness", "200", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T98"
+group = "general"
+name = "T98 --min-bulkiness 200"
+title = "T98 --min-bulkiness 200"
+short_desc = "T98 --min-bulkiness 200"
+cli_args = [
+  "*",
+  "--min-bulkiness",
+  "200",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Bulkiness"
-op     = "gte"
-value  = "200"
+op = "gte"
+value = "200"
 
 [[test]]
-id          = "T103"
-group       = "general"
-name        = "T103 --min-tree-allocated 100MB"
-title       = "T103 --min-tree-allocated 100MB"
-short_desc  = "T103 --min-tree-allocated 100MB"
-cli_args    = ["*", "--dirs-only", "--min-tree-allocated", "104857600", "--limit", "10", "--columns", "all"]
+id = "T103"
+group = "general"
+name = "T103 --min-tree-allocated 100MB"
+title = "T103 --min-tree-allocated 100MB"
+short_desc = "T103 --min-tree-allocated 100MB"
+cli_args = [
+  "*",
+  "--dirs-only",
+  "--min-tree-allocated",
+  "104857600",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Tree Allocated"
-op     = "gte"
-value  = "104857600"
+op = "gte"
+value = "104857600"
 
 [[test]]
-id          = "T104"
-group       = "general"
-name        = "T104 --min-name-length 50"
-title       = "T104 --min-name-length 50"
-short_desc  = "T104 --min-name-length 50"
-cli_args    = ["*", "--min-name-length", "50", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T104"
+group = "general"
+name = "T104 --min-name-length 50"
+title = "T104 --min-name-length 50"
+short_desc = "T104 --min-name-length 50"
+cli_args = [
+  "*",
+  "--min-name-length",
+  "50",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name Length"
-op     = "gte"
-value  = "50"
+op = "gte"
+value = "50"
 
 [[test]]
-id          = "T105"
-group       = "general"
-name        = "T105 --max-name-length 8"
-title       = "T105 --max-name-length 8"
-short_desc  = "T105 --max-name-length 8"
-cli_args    = ["*", "--max-name-length", "8", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T105"
+group = "general"
+name = "T105 --max-name-length 8"
+title = "T105 --max-name-length 8"
+short_desc = "T105 --max-name-length 8"
+cli_args = [
+  "*",
+  "--max-name-length",
+  "8",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Name Length"
-op     = "lte"
-value  = "8"
+op = "lte"
+value = "8"
 
 [[test]]
-id          = "T106"
-group       = "general"
-name        = "T106 --min-path-length 200"
-title       = "T106 --min-path-length 200"
-short_desc  = "T106 --min-path-length 200"
-cli_args    = ["*", "--min-path-length", "200", "--files-only", "--limit", "10", "--columns", "all"]
+id = "T106"
+group = "general"
+name = "T106 --min-path-length 200"
+title = "T106 --min-path-length 200"
+short_desc = "T106 --min-path-length 200"
+cli_args = [
+  "*",
+  "--min-path-length",
+  "200",
+  "--files-only",
+  "--limit",
+  "10",
+  "--columns",
+  "all",
+]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Path Length"
-op     = "gte"
-value  = "200"
+op = "gte"
+value = "200"
 
 [[test]]
-id          = "T107"
-group       = "general"
-name        = "T107 --max-path-length 30"
-title       = "T107 --max-path-length 30"
-short_desc  = "T107 --max-path-length 30"
-cli_args    = ["*", "--max-path-length", "30", "--files-only", "--limit", "10"]
+id = "T107"
+group = "general"
+name = "T107 --max-path-length 30"
+title = "T107 --max-path-length 30"
+short_desc = "T107 --max-path-length 30"
+cli_args = ["*", "--max-path-length", "30", "--files-only", "--limit", "10"]
 expect_min_rows = 0
 expect_max_rows = 10
 
 [[test.column_checks]]
 column = "Path Length"
-op     = "lte"
-value  = "30"
+op = "lte"
+value = "30"
 
 [[test]]
-id          = "T110"
-group       = "general"
-name        = "T110 --month jan"
-title       = "T110 --month jan"
-short_desc  = "January-modified files — large dataset guarantees matches"
-cli_args    = ["*", "--month", "jan", "--files-only", "--limit", "10"]
+id = "T110"
+group = "general"
+name = "T110 --month jan"
+title = "T110 --month jan"
+short_desc = "January-modified files — large dataset guarantees matches"
+cli_args = ["*", "--month", "jan", "--files-only", "--limit", "10"]
 expect_min_rows = 1
 expect_max_rows = 10
 
@@ -414,12 +513,12 @@ expect_max_rows = 10
 total_count_min = 10
 
 [[test]]
-id          = "T111"
-group       = "general"
-name        = "T111 --month Q4"
-title       = "T111 --month Q4"
-short_desc  = "Q4-modified files (Oct–Dec) — broader range, more results"
-cli_args    = ["*", "--month", "Q4", "--files-only", "--limit", "10"]
+id = "T111"
+group = "general"
+name = "T111 --month Q4"
+title = "T111 --month Q4"
+short_desc = "Q4-modified files (Oct–Dec) — broader range, more results"
+cli_args = ["*", "--month", "Q4", "--files-only", "--limit", "10"]
 expect_min_rows = 1
 expect_max_rows = 10
 
@@ -427,12 +526,12 @@ expect_max_rows = 10
 total_count_min = 10
 
 [[test]]
-id          = "T112"
-group       = "general"
-name        = "T112 --month jan,feb,mar"
-title       = "T112 --month jan,feb,mar"
-short_desc  = "Q1-modified files — must return more than single-month"
-cli_args    = ["*", "--month", "jan,feb,mar", "--files-only", "--limit", "10"]
+id = "T112"
+group = "general"
+name = "T112 --month jan,feb,mar"
+title = "T112 --month jan,feb,mar"
+short_desc = "Q1-modified files — must return more than single-month"
+cli_args = ["*", "--month", "jan,feb,mar", "--files-only", "--limit", "10"]
 expect_min_rows = 1
 expect_max_rows = 10
 
@@ -440,215 +539,233 @@ expect_max_rows = 10
 total_count_min = 10
 
 [[test]]
-id          = "T141"
-group       = "general"
-name        = "T141 --count shorthand"
-title       = "T141 --count shorthand"
-short_desc  = "T141 --count shorthand"
-cli_args    = ["*.exe", "--count"]
-targets     = ["cli"]
+id = "T141"
+group = "general"
+name = "T141 --count shorthand"
+title = "T141 --count shorthand"
+short_desc = "T141 --count shorthand"
+cli_args = ["*.exe", "--count"]
+targets = ["cli"]
 stdout_contains = ["# count", "count"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T142"
-group       = "general"
-name        = "T142 --facet extension"
-title       = "T142 --facet extension"
-short_desc  = "T142 --facet extension"
-cli_args    = ["*", "--facet", "extension"]
-targets     = ["cli"]
+id = "T142"
+group = "general"
+name = "T142 --facet extension"
+title = "T142 --facet extension"
+short_desc = "T142 --facet extension"
+cli_args = ["*", "--facet", "extension"]
+targets = ["cli"]
 stdout_contains = ["# buckets", "key,count,total_bytes"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T143"
-group       = "general"
-name        = "T143 --facet type:10"
-title       = "T143 --facet type:10"
-short_desc  = "T143 --facet type:10"
-cli_args    = ["*", "--facet", "type:10"]
-targets     = ["cli"]
+id = "T143"
+group = "general"
+name = "T143 --facet type:10"
+title = "T143 --facet type:10"
+short_desc = "T143 --facet type:10"
+cli_args = ["*", "--facet", "type:10"]
+targets = ["cli"]
 stdout_contains = ["# buckets", "key,count,total_bytes"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T144"
-group       = "general"
-name        = "T144 --stats size"
-title       = "T144 --stats size"
-short_desc  = "T144 --stats size"
-cli_args    = ["*.exe", "--stats", "size"]
-targets     = ["cli"]
+id = "T144"
+group = "general"
+name = "T144 --stats size"
+title = "T144 --stats size"
+short_desc = "T144 --stats size"
+cli_args = ["*.exe", "--stats", "size"]
+targets = ["cli"]
 stdout_contains = ["# stats", "count,sum,min,max,avg"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T168"
-group       = "general"
-name        = "T168 uffs stats daemon mode"
-title       = "T168 uffs stats daemon mode"
-short_desc  = "T168 uffs stats daemon mode"
-cli_args    = ["stats"]
-targets     = ["cli"]
+id = "T168"
+group = "general"
+name = "T168 uffs --stats daemon mode"
+title = "T168 uffs --stats daemon mode"
+short_desc = "T168 uffs --stats daemon mode"
+cli_args = ["--stats"]
+targets = ["cli"]
 stdout_contains = ["=== total_count ===", "Total:"]
 
 [test.api_checks]
 result_has_key = ["results"]
 
 [[test]]
-id          = "T169"
-group       = "general"
-name        = "T169 uffs daemon stats (perf)"
-title       = "T169 uffs daemon stats (perf)"
-short_desc  = "T169 uffs daemon stats (perf)"
-cli_args    = ["daemon", "stats"]
-targets     = ["cli"]
+id = "T169"
+group = "general"
+name = "T169 uffs --daemon stats (perf)"
+title = "T169 uffs --daemon stats (perf)"
+short_desc = "T169 uffs --daemon stats (perf)"
+cli_args = ["--daemon", "stats"]
+targets = ["cli"]
 stdout_contains = ["Daemon Performance Stats", "Uptime:", "Total records:"]
 
 [test.api_checks]
 result_has_key = ["results"]
 
 [[test]]
-id          = "S3G.2"
-group       = "general"
-name        = "S3G.2 --count shorthand"
-title       = "S3G.2 --count shorthand"
-short_desc  = "S3G.2 --count shorthand"
-cli_args    = ["*.exe", "--count"]
-targets     = ["cli"]
+id = "S3G.2"
+group = "general"
+name = "S3G.2 --count shorthand"
+title = "S3G.2 --count shorthand"
+short_desc = "S3G.2 --count shorthand"
+cli_args = ["*.exe", "--count"]
+targets = ["cli"]
 stdout_contains = ["# count", "count"]
 expect_min_rows = 1
 
 [[test]]
-id          = "S3G.4"
-group       = "general"
-name        = "S3G.4 --facet type:5"
-title       = "S3G.4 --facet type:5"
-short_desc  = "S3G.4 --facet type:5"
-cli_args    = ["*", "--facet", "type:5"]
-targets     = ["cli"]
+id = "S3G.4"
+group = "general"
+name = "S3G.4 --facet type:5"
+title = "S3G.4 --facet type:5"
+short_desc = "S3G.4 --facet type:5"
+cli_args = ["*", "--facet", "type:5"]
+targets = ["cli"]
 stdout_contains = ["# buckets", "key,count,total_bytes"]
 expect_min_rows = 1
 
 [[test]]
-id          = "S3G.5"
-group       = "general"
-name        = "S3G.5 --stats size"
-title       = "S3G.5 --stats size"
-short_desc  = "S3G.5 --stats size"
-cli_args    = ["*.exe", "--stats", "size"]
-targets     = ["cli"]
+id = "S3G.5"
+group = "general"
+name = "S3G.5 --stats size"
+title = "S3G.5 --stats size"
+short_desc = "S3G.5 --stats size"
+cli_args = ["*.exe", "--stats", "size"]
+targets = ["cli"]
 stdout_contains = ["# stats", "count,sum,min,max,avg"]
 expect_min_rows = 1
 
 [[test]]
-id          = "S3G.6"
-group       = "general"
-name        = "S3G.6 --histogram size:1048576"
-title       = "S3G.6 --histogram size:1048576"
-short_desc  = "S3G.6 --histogram size:1048576"
-cli_args    = ["*.exe", "--histogram", "size:1048576"]
-targets     = ["cli"]
+id = "S3G.6"
+group = "general"
+name = "S3G.6 --histogram size:1048576"
+title = "S3G.6 --histogram size:1048576"
+short_desc = "S3G.6 --histogram size:1048576"
+cli_args = ["*.exe", "--histogram", "size:1048576"]
+targets = ["cli"]
 stdout_contains = ["# buckets", "key,count,total_bytes"]
 expect_min_rows = 1
 
 [[test]]
-id          = "T178"
-group       = "general"
-name        = "T178 --case case-sensitive matching"
-title       = "T178 --case case-sensitive matching"
-short_desc  = "Case-sensitive glob returns only exact-case matches"
-cli_args    = ["README*", "--case", "--limit", "20"]
-targets     = ["cli", "api"]
+id = "T178"
+group = "general"
+name = "T178 --case case-sensitive matching"
+title = "T178 --case case-sensitive matching"
+short_desc = "Case-sensitive glob returns only exact-case matches"
+cli_args = ["README*", "--case", "--limit", "20"]
+targets = ["cli", "api"]
 expect_min_rows = 1
-validator   = "T178"
+validator = "T178"
 
 [test.api_checks]
 total_count_min = 1
 
 [[test]]
-id          = "T179"
-group       = "general"
-name        = "T179 --between time range"
-title       = "T179 --between time range"
-short_desc  = "Full-year 2025 range — system has many files from that period"
-cli_args    = ["*", "--between", "2025-01-01,2025-12-31", "--limit", "10"]
-targets     = ["cli", "api"]
+id = "T179"
+group = "general"
+name = "T179 --between time range"
+title = "T179 --between time range"
+short_desc = "Full-year 2025 range — system has many files from that period"
+cli_args = ["*", "--between", "2025-01-01,2025-12-31", "--limit", "10"]
+targets = ["cli", "api"]
 expect_min_rows = 1
 
 [test.api_checks]
 total_count_min = 10
 
 [[test]]
-id          = "T180"
-group       = "general"
-name        = "T180 --exact-size filter"
-title       = "T180 --exact-size filter"
-short_desc  = "Exact file size filter returns only matching sizes"
-cli_args    = ["*", "--exact-size", "0", "--files-only", "--limit", "20"]
-targets     = ["cli", "api"]
+id = "T180"
+group = "general"
+name = "T180 --exact-size filter"
+title = "T180 --exact-size filter"
+short_desc = "Exact file size filter returns only matching sizes"
+cli_args = ["*", "--exact-size", "0", "--files-only", "--limit", "20"]
+targets = ["cli", "api"]
 expect_min_rows = 1
-validator   = "T180"
+validator = "T180"
 
 [test.api_checks]
 total_count_min = 1
 
 [[test]]
-id          = "T181"
-group       = "general"
-name        = "T181 --exact-descendants filter"
-title       = "T181 --exact-descendants filter"
-short_desc  = "Exact descendant count filter (empty directories)"
-cli_args    = ["*", "--exact-descendants", "0", "--dirs-only", "--limit", "20"]
-targets     = ["cli", "api"]
+id = "T181"
+group = "general"
+name = "T181 --exact-descendants filter"
+title = "T181 --exact-descendants filter"
+short_desc = "Exact descendant count filter (empty directories)"
+cli_args = ["*", "--exact-descendants", "0", "--dirs-only", "--limit", "20"]
+targets = ["cli", "api"]
 expect_min_rows = 1
-validator   = "T181"
+validator = "T181"
 
 [test.api_checks]
 total_count_min = 1
 
 [[test]]
-id          = "T182"
-group       = "general"
-name        = "T182 --exact-size-on-disk filter"
-title       = "T182 --exact-size-on-disk filter"
-short_desc  = "All files must have exactly 0 bytes on disk"
-cli_args    = ["*", "--exact-size-on-disk", "0", "--files-only", "--limit", "20", "--columns", "all"]
-targets     = ["cli", "api"]
+id = "T182"
+group = "general"
+name = "T182 --exact-size-on-disk filter"
+title = "T182 --exact-size-on-disk filter"
+short_desc = "All files must have exactly 0 bytes on disk"
+cli_args = [
+  "*",
+  "--exact-size-on-disk",
+  "0",
+  "--files-only",
+  "--limit",
+  "20",
+  "--columns",
+  "all",
+]
+targets = ["cli", "api"]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Size on Disk"
-op     = "eq"
-value  = "0"
+op = "eq"
+value = "0"
 
 [[test]]
-id          = "T183"
-group       = "general"
-name        = "T183 --max-tree-allocated filter"
-title       = "T183 --max-tree-allocated filter"
-short_desc  = "All directories must have tree allocated ≤ 1MB"
-cli_args    = ["*", "--max-tree-allocated", "1048576", "--dirs-only", "--limit", "20", "--columns", "all"]
-targets     = ["cli", "api"]
+id = "T183"
+group = "general"
+name = "T183 --max-tree-allocated filter"
+title = "T183 --max-tree-allocated filter"
+short_desc = "All directories must have tree allocated ≤ 1MB"
+cli_args = [
+  "*",
+  "--max-tree-allocated",
+  "1048576",
+  "--dirs-only",
+  "--limit",
+  "20",
+  "--columns",
+  "all",
+]
+targets = ["cli", "api"]
 expect_columns_all = true
 expect_min_rows = 1
 
 [[test.column_checks]]
 column = "Tree Allocated"
-op     = "lte"
-value  = "1048576"
+op = "lte"
+value = "1048576"
 
 [[test]]
-id          = "T184"
-group       = "general"
-name        = "T184 --case negative (no match)"
-title       = "T184 --case negative (no match)"
-short_desc  = "Case-sensitive search for lowercase 'readme*' returns no README files"
-cli_args    = ["readme*", "--case", "--limit", "20"]
-targets     = ["cli", "api"]
-validator   = "T184"
+id = "T184"
+group = "general"
+name = "T184 --case negative (no match)"
+title = "T184 --case negative (no match)"
+short_desc = "Case-sensitive search for lowercase 'readme*' returns no README files"
+cli_args = ["readme*", "--case", "--limit", "20"]
+targets = ["cli", "api"]
+validator = "T184"
 
 [test.api_checks]
 result_has_key = ["rows"]
@@ -658,4 +775,3 @@ result_has_key = ["rows"]
 # ═══════════════════════════════════════════════════════════════
 
 # ── Daemon / RPC tests (CLI + API) ────────────────────────────────
-

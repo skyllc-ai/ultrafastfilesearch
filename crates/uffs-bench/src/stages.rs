@@ -163,7 +163,7 @@ impl Invocation {
 const RUST_SCRIPT_EXE: &str = "rust-script";
 
 /// Card-facing label for the daemon run-state resource (R1).
-const DAEMON_RESOURCE: &str = "uffs daemon (run-state)";
+const DAEMON_RESOURCE: &str = "uffs --daemon (run-state)";
 
 /// Everything a measurement stage needs to plan and run.
 ///

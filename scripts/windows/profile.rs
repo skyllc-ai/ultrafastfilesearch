@@ -56,7 +56,7 @@ struct RunResult {
 fn flush() { std::io::stderr().flush().ok(); }
 
 fn kill_daemon(bin: &PathBuf) {
-    let _ = Command::new(bin).args(["daemon", "kill"])
+    let _ = Command::new(bin).args(["--daemon", "kill"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     std::thread::sleep(Duration::from_secs(2));
 }
@@ -76,7 +76,7 @@ fn discover_drives(bin: &PathBuf) -> Vec<String> {
     let _ = Command::new(bin).args(["*", "--limit", "1"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     std::thread::sleep(Duration::from_secs(1));
-    let output = Command::new(bin).args(["daemon", "status"])
+    let output = Command::new(bin).args(["--daemon", "status"])
         .stderr(Stdio::null()).output().ok();
     let stdout = output.map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();

@@ -17,9 +17,9 @@
 //!
 //! 1. `Remove-Item` the on-disk caches (`%LOCALAPPDATA%\uffs\cache` and
 //!    `%TEMP%\uffs_index_cache`) to force a clean start.
-//! 2. `uffs mcp kill`
-//! 3. `uffs daemon kill`
-//! 4. Set `UFFS_SEARCH_MAX_CONCURRENCY=N` and run `uffs daemon start`.
+//! 2. `uffs --mcp kill`
+//! 3. `uffs --daemon kill`
+//! 4. Set `UFFS_SEARCH_MAX_CONCURRENCY=N` and run `uffs --daemon start`.
 //!    On Windows this call blocks until the daemon reports `Ready`
 //!    (typical cold-load time: ~80 s for 26 M records over 7 drives).
 //!    No polling is needed — we just wait for the process to return.
@@ -27,7 +27,7 @@
 //!    verify `source="env"` and `target=N`.
 //! 6. Run one warm-up api-validation (populates the agg cache).
 //! 7. Run one measured api-validation and parse its Timing Breakdown.
-//! 8. Capture `uffs daemon stats` for cache hit-rate and avg query time.
+//! 8. Capture `uffs --daemon stats` for cache hit-rate and avg query time.
 //!
 //! A summary table is printed at the end.
 //!
@@ -115,7 +115,7 @@ fn kill(subcmd: &str) {
         .status();
 }
 
-/// Run `uffs daemon start` with `UFFS_SEARCH_MAX_CONCURRENCY=N` in the
+/// Run `uffs --daemon start` with `UFFS_SEARCH_MAX_CONCURRENCY=N` in the
 /// environment.  This call inherits stdout/stderr and **blocks until
 /// the daemon reports `Ready`** (or the CLI gives up).  No polling —
 /// the child `uffs` process does the wait internally and prints
@@ -128,16 +128,16 @@ fn kill(subcmd: &str) {
 /// nothing ever hits disk).
 ///
 /// # Errors
-/// Returns an error if `uffs daemon start` exits non-zero.
+/// Returns an error if `uffs --daemon start` exits non-zero.
 fn start_daemon(n: usize, log_dir: &PathBuf) -> Result<()> {
     let status = Command::new(uffs_bin())
-        .args(["daemon", "start"])
+        .args(["--daemon", "start"])
         .env("UFFS_SEARCH_MAX_CONCURRENCY", n.to_string())
         .env("UFFS_LOG_DIR", log_dir)
         .status()
-        .context("failed to spawn `uffs daemon start`")?;
+        .context("failed to spawn `uffs --daemon start`")?;
     if !status.success() {
-        bail!("`uffs daemon start` exited with status {status}");
+        bail!("`uffs --daemon start` exited with status {status}");
     }
     Ok(())
 }
@@ -164,7 +164,7 @@ fn status_is_running(value: &str) -> bool {
     !lower.contains("not running") && !lower.contains("not responding") && lower.contains("running")
 }
 
-/// Extract a drive letter from a `uffs status` line like `"[W] G:  … records"`.
+/// Extract a drive letter from a `uffs --status` line like `"[W] G:  … records"`.
 fn status_drive_letter(line: &str) -> Option<String> {
     let after = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
     let mut chars = after.chars();
@@ -173,7 +173,7 @@ fn status_drive_letter(line: &str) -> Option<String> {
         .then(|| letter.to_ascii_uppercase().to_string())
 }
 
-/// Parse `uffs status` stdout into a [`RunState`], scoping `Status:` and the
+/// Parse `uffs --status` stdout into a [`RunState`], scoping `Status:` and the
 /// `[T] L:` drive lines to their section.
 fn parse_run_state(stdout: &str) -> RunState {
     let (mut section, mut daemon_running, mut daemon_seen, mut mcp_running) = (0_u8, false, false, false);
@@ -198,9 +198,9 @@ fn parse_run_state(stdout: &str) -> RunState {
     }
 }
 
-/// Capture the as-found daemon + MCP state via `uffs status`.
+/// Capture the as-found daemon + MCP state via `uffs --status`.
 fn capture_run_state() -> RunState {
-    match Command::new(uffs_bin()).arg("status").output() {
+    match Command::new(uffs_bin()).arg("--status").output() {
         Ok(out) => parse_run_state(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => RunState { daemon_drives: None, mcp_running: false },
     }
@@ -216,14 +216,14 @@ fn restore_run_state(state: &RunState) {
         Some(drives) => {
             let scope = if drives.is_empty() { "(all)".to_string() } else { drives.join(",") };
             println!("  restarting daemon on as-found drives: {scope}");
-            let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+            let mut args: Vec<String> = vec!["--daemon".into(), "start".into()];
             for d in drives { args.push("--drive".into()); args.push(d.clone()); }
             let _ = Command::new(uffs_bin()).args(&args).status();
         }
     }
     if state.mcp_running {
         println!("  restarting MCP gateway (was up at start)");
-        let _ = Command::new(uffs_bin()).args(["mcp", "start"]).status();
+        let _ = Command::new(uffs_bin()).args(["--mcp", "start"]).status();
     }
 }
 
@@ -272,10 +272,10 @@ fn run_validation(repo_root: &PathBuf) -> Result<String> {
     Ok(text)
 }
 
-/// Capture `uffs daemon stats` as plain text.
+/// Capture `uffs --daemon stats` as plain text.
 fn daemon_stats_text() -> String {
     Command::new(uffs_bin())
-        .args(["daemon", "stats"])
+        .args(["--daemon", "stats"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
@@ -530,7 +530,7 @@ fn main() -> Result<()> {
         thread::sleep(Duration::from_secs(KILL_SETTLE_SECS));
 
         // 3. Start daemon with UFFS_SEARCH_MAX_CONCURRENCY=N.
-        //    `uffs daemon start` blocks until the daemon reports Ready
+        //    `uffs --daemon start` blocks until the daemon reports Ready
         //    (or gives up), so we just wait for the child process to
         //    return — no polling loop required.
         // Truncate the daemon log before each iteration so `last_tune_line`

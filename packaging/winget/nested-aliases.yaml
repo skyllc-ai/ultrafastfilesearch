@@ -36,7 +36,7 @@
 - RelativeFilePath: uffs-windows-x64/uffs-broker.exe
   PortableCommandAlias: uffs-broker
 
-# uffs-update: the self-update helper that `uffs update` / `uffs update
+# uffs-update: the self-update helper that `uffs --update` / `uffs --update
 # doctor` spawn (it finds itself next to uffs.exe). Declaring it as a
 # NestedInstallerFile guarantees winget actually installs it alongside the
 # CLI, so the in-app updater works for winget users too. Bundled into EVERY

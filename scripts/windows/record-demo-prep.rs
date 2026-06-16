@@ -256,13 +256,13 @@ fn run_hot(bin: &str, drives: &[String]) -> Result<()> {
     println!();
     step("Mode=hot — warming the daemon so targeted queries answer from memory.");
     step("Restarting daemon for a clean, known state...");
-    run_show(bin, &["daemon", "restart"])?;
+    run_show(bin, &["--daemon", "restart"])?;
 
     for d in drives {
         step(&format!(
             "Preloading drive {d} and pinning it for the recording window..."
         ));
-        run_show(bin, &["daemon", "preload", d, "--pin-minutes", "60"])?;
+        run_show(bin, &["--daemon", "preload", d, "--pin-minutes", "60"])?;
     }
 
     step("Priming the query path (these warm-up results are NOT part of the clip)...");
@@ -271,7 +271,7 @@ fn run_hot(bin: &str, drives: &[String]) -> Result<()> {
 
     println!();
     step("Current tier / telemetry (this is the table the CLI clip shows):");
-    run_show(bin, &["daemon", "status_drives"])?;
+    run_show(bin, &["--daemon", "status_drives"])?;
 
     println!();
     println!(
@@ -299,7 +299,7 @@ fn run_cold(bin: &str, drives: &[String], confirm: bool) -> Result<()> {
     }
     for d in drives {
         step(&format!("Forgetting drive {d} (evict + delete on-disk caches)..."));
-        run_show(bin, &["daemon", "forget", d, "--force"])?;
+        run_show(bin, &["--daemon", "forget", d, "--force"])?;
     }
     println!();
     println!(

@@ -35,7 +35,7 @@
 //! `uffs_format::tests::*` and by cross-crate byte-parity tests under
 //! `uffs-client::output::tests::*` / `uffs-core::output::tests::*`.
 //! Changing the canonical output is a breaking change for any pipeline
-//! that consumes `uffs search` output — bump the version and call it
+//! that consumes `uffs --search` output — bump the version and call it
 //! out in the CHANGELOG.
 
 #![forbid(unsafe_code)]

@@ -35,8 +35,8 @@ const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
 /// `ProceedNoop` so the kill/start `--drive C` are skipped; no second-pass
 /// preflight is run.
 ///
-///  1. `capture()` initial kill  -- `uffs daemon kill`
-///  2. `capture()` initial start -- `uffs daemon start` (no drives)
+///  1. `capture()` initial kill  -- `uffs --daemon kill`
+///  2. `capture()` initial start -- `uffs --daemon start` (no drives)
 ///  3. `resolve::es_exe`         -- `where.exe es.exe` (for `everything`)
 ///  4. `resolve::es_exe`         -- `where.exe es.exe` (for `everything_gui`)
 ///  5. `resolve::everything_exe` -- `where.exe Everything.exe`
@@ -50,9 +50,9 @@ const DAEMON_READY_STATUS: &str = "Version:       0.0.0\n\
 /// 13. `env::capture` es -version
 /// 14. tasklist (`everything_gui` state probe -- stopped)
 /// 15. `env::capture` es -get-everything-version
-/// 16. `ensure_daemon_ready`     -- `uffs daemon status` -> Ready
+/// 16. `ensure_daemon_ready`     -- `uffs --daemon status` -> Ready
 /// 17. `preflight`  -- `es -get-everything-version` (availability)
-/// 18. `preflight`  -- `uffs daemon status` (record counts for C)
+/// 18. `preflight`  -- `uffs --daemon status` (record counts for C)
 /// 19. `preflight`  -- `es -get-result-count C:` -> loaded
 fn dry_run_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";
@@ -80,15 +80,15 @@ fn dry_run_host() -> MockHost {
 
 /// Queue the run results needed for the autopilot (non-dry-run) path.
 ///
-/// `teardown::baseline` fires `uffs daemon status` first.  Then `capture()`
+/// `teardown::baseline` fires `uffs --daemon status` first.  Then `capture()`
 /// kills+restarts with no drives (self-discover all), env-probes,
 /// `ensure_daemon_ready`, first preflight.  After the matrix the gated
 /// UFFS restart kills+starts with `--drive C`; a second-pass preflight
 /// follows.
 ///
-///  1. `teardown::baseline`      -- `uffs daemon status`
-///  2. `capture()` initial kill  -- `uffs daemon kill`
-///  3. `capture()` initial start -- `uffs daemon start` (no drives)
+///  1. `teardown::baseline`      -- `uffs --daemon status`
+///  2. `capture()` initial kill  -- `uffs --daemon kill`
+///  3. `capture()` initial start -- `uffs --daemon start` (no drives)
 ///  4. `resolve::es_exe`         -- `where.exe es.exe` (for `everything`)
 ///  5. `resolve::es_exe`         -- `where.exe es.exe` (for `everything_gui`)
 ///  6. `resolve::everything_exe` -- `where.exe Everything.exe`
@@ -102,15 +102,15 @@ fn dry_run_host() -> MockHost {
 /// 14. `env::capture` es -version
 /// 15. tasklist (`everything_gui` state probe -- stopped)
 /// 16. `env::capture` es -get-everything-version
-/// 17. `ensure_daemon_ready`     -- `uffs daemon status` -> Ready
+/// 17. `ensure_daemon_ready`     -- `uffs --daemon status` -> Ready
 /// 18. `preflight`  -- `es -get-everything-version` (availability)
-/// 19. `preflight`  -- `uffs daemon status` (record counts for C)
+/// 19. `preflight`  -- `uffs --daemon status` (record counts for C)
 /// 20. `preflight`  -- `es -get-result-count C:` -> loaded
-/// 21. `uffs daemon kill`   (gated restart: autopilot -> proceed)
-/// 22. `uffs daemon start --drive C`
-/// 23. `ensure_daemon_ready` poll -- `uffs daemon status` -> Ready
+/// 21. `uffs --daemon kill`   (gated restart: autopilot -> proceed)
+/// 22. `uffs --daemon start --drive C`
+/// 23. `ensure_daemon_ready` poll -- `uffs --daemon status` -> Ready
 /// 24. second-pass preflight  -- `es -get-everything-version`
-/// 25. second-pass preflight  -- `uffs daemon status`
+/// 25. second-pass preflight  -- `uffs --daemon status`
 /// 26. second-pass preflight  -- `es -get-result-count C:`
 fn autopilot_host() -> MockHost {
     let evr = "C:\\Program Files (x86)\\Everything\\Everything.exe";

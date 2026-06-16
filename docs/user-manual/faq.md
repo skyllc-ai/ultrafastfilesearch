@@ -102,7 +102,7 @@ The daemon loads the MFT at startup and holds it in memory.  Files
 created after startup are not visible until you restart the daemon:
 
 ```bash
-uffs daemon restart
+uffs --daemon restart
 ```
 
 ---
@@ -132,10 +132,10 @@ the raw MFT data.
 
 ```bash
 # Restart daemon (re-reads MFT or cache)
-uffs daemon restart
+uffs --daemon restart
 
 # Force re-parse (bypass .iocp cache)
-uffs daemon restart --no-cache
+uffs --daemon restart --no-cache
 ```
 
 ---

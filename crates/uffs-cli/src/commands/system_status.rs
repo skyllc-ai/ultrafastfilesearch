@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs status` — combined daemon + broker + MCP status in one view.
+//! `uffs --status` — combined daemon + broker + MCP status in one view.
 //!
 //! Shows four sections:
 //! - **Daemon**: PID, uptime, drives, queries
@@ -15,7 +15,7 @@ use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_client::protocol::response::{DaemonStatus, ShardTier};
 
-/// `uffs status` — show combined system status.
+/// `uffs --status` — show combined system status.
 ///
 /// # Errors
 ///
@@ -146,7 +146,7 @@ fn print_daemon_status() {
     }
 }
 
-/// Render the `Drives:` block of `uffs status`.
+/// Render the `Drives:` block of `uffs --status`.
 ///
 /// Phase 5 task 5.11: enumerate every shard in the registry (Hot /
 /// Warm / Parked / Cold) and tag each row with its tier marker.
@@ -204,7 +204,7 @@ fn print_drive_summary(drives: &[uffs_client::protocol::response::DriveInfo]) {
     }
 }
 
-/// Compact tier marker for `uffs status`'s drive list — fixed-width
+/// Compact tier marker for `uffs --status`'s drive list — fixed-width
 /// bracket label per tier so the per-drive lines align in the
 /// combined system view.  Phase 5 task 5.11.
 const fn compact_tier_marker(tier: Option<ShardTier>) -> &'static str {
@@ -299,7 +299,7 @@ fn print_mcp_http_status() {
         }
     }
     if gw_stale {
-        println!("  Run `uffs mcp reload` to restart with the current binary.");
+        println!("  Run `uffs --mcp reload` to restart with the current binary.");
     }
 }
 
@@ -388,7 +388,7 @@ fn print_mcp_stdio_sessions() {
         );
     }
     if any_stale {
-        println!("  Run `uffs mcp reload` to restart stale sessions.");
+        println!("  Run `uffs --mcp reload` to restart stale sessions.");
     }
 }
 

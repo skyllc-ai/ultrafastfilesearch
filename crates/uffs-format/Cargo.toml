@@ -3,8 +3,8 @@
 # ============================================================================
 # Layer 1 shared crate.  Holds the single canonical CSV output formatter
 # that both `uffs-core` (daemon-side `--out=file`) and `uffs-client` (CLI
-# stdout path) delegate to, so `uffs search --out=file foo.csv` and
-# `uffs search > foo.csv` produce **byte-identical output**.
+# stdout path) delegate to, so `uffs '*' --out=file foo.csv` and
+# `uffs '*' > foo.csv` produce **byte-identical output**.
 #
 # Before v0.5.62 the daemon had its own `DisplayRow` formatter in
 # `uffs_core::output::display_rows` and the CLI had a duplicate

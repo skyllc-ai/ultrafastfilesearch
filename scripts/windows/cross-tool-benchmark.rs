@@ -380,13 +380,13 @@ fn find_everything() -> Option<PathBuf> {
 fn uffs_stop(bin: &Path) {
     // "daemon kill" is a hard kill; "daemon stop" is a graceful shutdown
     // that may leave shared memory / cache warm.
-    let _ = Command::new(bin).args(["daemon","kill"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = Command::new(bin).args(["--daemon","kill"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     std::thread::sleep(Duration::from_secs(2));
 }
 /// Start the daemon with bench-safe idle-demote TTLs so it never demotes
 /// Hot→Warm or Warm→Parked mid-run.  These env vars are scoped to the
 /// daemon child process only — the bench script's own env is unchanged,
-/// and teardown's next `uffs daemon start` gets production defaults.
+/// and teardown's next `uffs --daemon start` gets production defaults.
 ///
 /// `drives` scopes which drives the daemon loads on startup.  This is
 /// **essential** for fair timing: without an explicit `--drive` flag the
@@ -395,7 +395,7 @@ fn uffs_stop(bin: &Path) {
 /// under test.  Each letter is forwarded as a separate `--drive <X>`
 /// (`parse_daemon_start` in uffs-cli accumulates them).
 fn uffs_start(bin: &Path, drives: &[String]) {
-    let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+    let mut args: Vec<String> = vec!["--daemon".into(), "start".into()];
     for d in drives {
         args.push("--drive".into());
         args.push(d.clone());
@@ -430,7 +430,7 @@ fn status_is_running(value: &str) -> bool {
     !lower.contains("not running") && !lower.contains("not responding") && lower.contains("running")
 }
 
-/// Extract a drive letter from a `uffs status` line like `"[W] G:  … records"`.
+/// Extract a drive letter from a `uffs --status` line like `"[W] G:  … records"`.
 fn status_drive_letter(line: &str) -> Option<String> {
     let after = line.strip_prefix('[')?.split_once(']')?.1.trim_start();
     let mut chars = after.chars();
@@ -439,7 +439,7 @@ fn status_drive_letter(line: &str) -> Option<String> {
         .then(|| letter.to_ascii_uppercase().to_string())
 }
 
-/// Parse `uffs status` stdout into a [`RunState`], scoping each `Status:` line
+/// Parse `uffs --status` stdout into a [`RunState`], scoping each `Status:` line
 /// and the `[T] L:` drive lines to their section.
 fn parse_run_state(stdout: &str) -> RunState {
     let (mut section, mut daemon_running, mut daemon_seen, mut mcp_running) = (0_u8, false, false, false);
@@ -466,7 +466,7 @@ fn parse_run_state(stdout: &str) -> RunState {
 
 /// Capture the as-found daemon + MCP state via `<bin> status`.
 fn capture_run_state(bin: &Path) -> RunState {
-    match Command::new(bin).arg("status").output() {
+    match Command::new(bin).arg("--status").output() {
         Ok(out) => parse_run_state(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => RunState { daemon_drives: None, mcp_running: false },
     }
@@ -482,14 +482,14 @@ fn restore_run_state(bin: &Path, state: &RunState) {
         Some(drives) => {
             let scope = if drives.is_empty() { "(all)".to_string() } else { drives.join(",") };
             eprintln!("  restarting daemon on as-found drives: {scope}");
-            let mut args: Vec<String> = vec!["daemon".into(), "start".into()];
+            let mut args: Vec<String> = vec!["--daemon".into(), "start".into()];
             for d in drives { args.push("--drive".into()); args.push(d.clone()); }
             let _ = Command::new(bin).args(&args).stdout(Stdio::null()).stderr(Stdio::null()).status();
         }
     }
     if state.mcp_running {
         eprintln!("  restarting MCP gateway (was up at start)");
-        let _ = Command::new(bin).args(["mcp", "start"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = Command::new(bin).args(["--mcp", "start"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
 }
 
@@ -1963,7 +1963,7 @@ mod tests {
 
     #[test]
     fn parse_run_state_reads_drives_and_mcp() {
-        // The operator's real `uffs status` output: 7 drives loaded, MCP up.
+        // The operator's real `uffs --status` output: 7 drives loaded, MCP up.
         let out = "\
 ── Daemon ──
   Status:      running (PID 62036)

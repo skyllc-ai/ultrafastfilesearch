@@ -91,7 +91,7 @@ pub fn remove_mcp_pid_file() {
 ///
 /// All fields are `pub` because this is a **parsed-data DTO** returned
 /// by [`parse_mcp_pid_file_full`] — callers read fields directly to
-/// render `uffs mcp status` output and to decide whether the running
+/// render `uffs --mcp status` output and to decide whether the running
 /// MCP server matches the requested transport / data sources.  No
 /// invariants are protected (the parse function is the validator).
 ///

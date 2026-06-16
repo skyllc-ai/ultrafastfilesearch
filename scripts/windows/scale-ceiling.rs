@@ -112,12 +112,12 @@ struct MftSource {
 fn flush() { std::io::stderr().flush().ok(); }
 
 fn ensure_stopped(bin: &PathBuf) {
-    let _ = Command::new(bin).args(["daemon", "kill"])
+    let _ = Command::new(bin).args(["--daemon", "kill"])
         .stdout(Stdio::null()).stderr(Stdio::null()).status();
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(250));
-        if let Ok(out) = Command::new(bin).args(["daemon", "status"])
+        if let Ok(out) = Command::new(bin).args(["--daemon", "status"])
             .stderr(Stdio::null()).output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
@@ -352,7 +352,7 @@ fn bench_tier(
     // Daemon should still be running from WARM phase.
     if !assert_ready(&cfg.bin) {
         // If warm failed, try to start fresh.
-        let start_args: Vec<String> = vec!["daemon".into(), "start".into(),
+        let start_args: Vec<String> = vec!["--daemon".into(), "start".into(),
             "--data-dir".into(), corpus.to_string_lossy().into_owned()];
         let _ = Command::new(&cfg.bin).args(&start_args)
             .stdout(Stdio::null()).stderr(Stdio::null()).status();

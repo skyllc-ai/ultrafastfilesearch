@@ -176,7 +176,7 @@ pub fn compact_cache_path(drive_letter: uffs_mft::platform::DriveLetter) -> Path
 /// The cursor file lives alongside the compact cache (`<letter>_compact.uffs`)
 /// in the same `cache_dir()` so a single owner-only directory holds
 /// every per-drive cache artifact, making backup / cleanup
-/// (`uffs daemon forget <drive>`) a single-directory operation.
+/// (`uffs --daemon forget <drive>`) a single-directory operation.
 ///
 /// Storage format: 8 bytes little-endian `u64`.  See
 /// `crate::cache::cursor_store::DiskCursorStore` (in `uffs-daemon`)

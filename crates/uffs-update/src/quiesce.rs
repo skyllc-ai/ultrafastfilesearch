@@ -7,8 +7,9 @@
 //!
 //! Robust by construction — **no fragile external tools, no `sc` text
 //! parsing**:
-//! - daemon / MCP: graceful via our **own** in-tree `uffs daemon stop` / `uffs
-//!   mcp stop`, then poll the daemon **PID file** (deleted on clean exit);
+//! - daemon / MCP: graceful via our **own** in-tree `uffs --daemon stop` /
+//!   `uffs --mcp stop`, then poll the daemon **PID file** (deleted on clean
+//!   exit);
 //! - broker: native SCM stop via `uffs-winsvc` (numeric, locale-proof state —
 //!   never `sc query` text, which is localized).
 
@@ -91,7 +92,7 @@ pub(crate) fn daemon_pid_file() -> PathBuf {
 /// Graceful daemon stop, then wait for the PID file to disappear.
 fn stop_daemon(running: &SnapRunning) -> Result<()> {
     let uffs = uffs_sibling(running);
-    let _ignore = Command::new(&uffs).args(["daemon", "stop"]).status();
+    let _ignore = Command::new(&uffs).args(["--daemon", "stop"]).status();
     if wait_until(STOP_TIMEOUT, || !daemon_pid_file().exists()) {
         Ok(())
     } else {
@@ -109,7 +110,7 @@ fn stop_broker() -> Result<()> {
 /// Best-effort MCP gateway stop (a client just reconnects later).
 fn stop_mcp(running: &SnapRunning) {
     let uffs = uffs_sibling(running);
-    let _ignore = Command::new(&uffs).args(["mcp", "stop"]).status();
+    let _ignore = Command::new(&uffs).args(["--mcp", "stop"]).status();
 }
 
 /// Poll `done` every [`POLL`] until it returns `true` or `timeout` elapses.

@@ -108,7 +108,7 @@ pub fn init_tracing(
         );
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         // `try_init` — a subscriber may already exist when invoked via
-        // the embedded `uffs daemon run` path.
+        // the embedded `uffs --daemon run` path.
         let _ignore = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(false)

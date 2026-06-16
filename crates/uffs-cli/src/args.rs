@@ -114,7 +114,7 @@ pub enum Commands {
     SystemStatus,
 }
 
-/// Actions for `uffs daemon` subcommand.
+/// Actions for `uffs --daemon` subcommand.
 pub(crate) enum DaemonAction {
     /// Start the daemon.
     Start {
@@ -164,7 +164,7 @@ pub(crate) enum DaemonAction {
     },
     /// Demote loaded shards to `Cold` (Phase 8-B).
     ///
-    /// Empty `drives` means every loaded drive.  See `uffs daemon
+    /// Empty `drives` means every loaded drive.  See `uffs --daemon
     /// hibernate --help`.
     Hibernate {
         /// Drive letter(s) to hibernate; empty = all loaded drives.
@@ -229,7 +229,7 @@ pub(crate) fn parse_daemon_action(args: &[String]) -> Result<DaemonAction, anyho
     }
 }
 
-/// Parse `uffs daemon start [flags...]`.
+/// Parse `uffs --daemon start [flags...]`.
 fn parse_daemon_start(rest: &[String]) -> DaemonAction {
     let mut mft_file = Vec::new();
     let mut data_dir = None;
@@ -289,7 +289,7 @@ fn parse_daemon_start(rest: &[String]) -> DaemonAction {
     }
 }
 
-/// Parse `uffs daemon load [flags...]`.
+/// Parse `uffs --daemon load [flags...]`.
 fn parse_daemon_load(rest: &[String]) -> DaemonAction {
     let mut mft_file = Vec::new();
     let mut data_dir = None;
@@ -331,7 +331,7 @@ fn parse_daemon_load(rest: &[String]) -> DaemonAction {
     }
 }
 
-/// Parse `uffs daemon hibernate [DRIVE...]` / `[--drive D]` /
+/// Parse `uffs --daemon hibernate [DRIVE...]` / `[--drive D]` /
 /// `[--drives A,B,...]`.
 ///
 /// Empty drive list means hibernate all loaded drives (the daemon
@@ -347,8 +347,8 @@ fn parse_daemon_hibernate(rest: &[String]) -> DaemonAction {
                 }
             }
             other => {
-                // Bare positional drive letter: `uffs daemon hibernate C D`
-                // or `uffs daemon hibernate C,D`.
+                // Bare positional drive letter: `uffs --daemon hibernate C D`
+                // or `uffs --daemon hibernate C,D`.
                 extend_drives_from_csv(&mut drives, other);
             }
         }
@@ -356,7 +356,7 @@ fn parse_daemon_hibernate(rest: &[String]) -> DaemonAction {
     DaemonAction::Hibernate { drives }
 }
 
-/// Parse `uffs daemon preload [DRIVE...]` / `--drive D` /
+/// Parse `uffs --daemon preload [DRIVE...]` / `--drive D` /
 /// `--drives A,B,...` / `--pin-minutes N`.
 ///
 /// # Errors
@@ -399,7 +399,7 @@ fn parse_daemon_preload(rest: &[String]) -> Result<DaemonAction, anyhow::Error> 
     })
 }
 
-/// Parse `uffs daemon forget <DRIVES...> [--force]` /
+/// Parse `uffs --daemon forget <DRIVES...> [--force]` /
 /// `[--drive D]` / `[--drives A,B]`.
 ///
 /// Empty drive list is rejected — the daemon would reply with
@@ -465,7 +465,7 @@ USAGE:  uffs <PATTERN> [OPTIONS]
         uffs --<COMMAND> [ACTION] [OPTIONS]
 
 Search-first: any first token that is NOT a `--command` is a search pattern,
-so `uffs update`, `uffs status`, etc. search for those words. Management is
+so `uffs --update`, `uffs --status`, etc. search for those words. Management is
 `--<command>` (below). To search a pattern that begins with `--`, use
 `uffs -- <PATTERN>`.
 
@@ -526,7 +526,7 @@ pub(crate) fn print_version() {
 
 // ── Subcommand help texts ─────────────────────────────────────────────
 
-/// Help text for `uffs daemon`.
+/// Help text for `uffs --daemon`.
 const DAEMON_HELP: &str = "\
 uffs --daemon — Manage the UFFS background daemon
 
@@ -569,7 +569,7 @@ pub(crate) fn print_daemon_help() {
     print!("{DAEMON_HELP}");
 }
 
-/// Help text for `uffs stats`.
+/// Help text for `uffs --stats`.
 const STATS_HELP: &str = "\
 uffs --stats — Show filesystem statistics
 
@@ -590,7 +590,7 @@ pub(crate) fn print_stats_help() {
     print!("{STATS_HELP}");
 }
 
-/// Help text for `uffs aggregate`.
+/// Help text for `uffs --agg`.
 const AGGREGATE_HELP: &str = "\
 uffs --agg — Run aggregate analytics on the filesystem index
 
@@ -614,7 +614,7 @@ pub(crate) fn print_aggregate_help() {
     print!("{AGGREGATE_HELP}");
 }
 
-/// Help text for `uffs status`.
+/// Help text for `uffs --status`.
 const STATUS_HELP: &str = "\
 uffs --status — Show combined system status (daemon + broker + MCP)
 

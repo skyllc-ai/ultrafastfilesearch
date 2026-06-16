@@ -4,7 +4,7 @@
 //! `uffs-update` — the self-update **acquire** helper binary.
 //!
 //! A separate binary from `uffs` so the HTTP/TLS stack (reqwest + rustls)
-//! never bloats the lean CLI. `uffs update` spawns this for the
+//! never bloats the lean CLI. `uffs --update` spawns this for the
 //! download/verify step only; detect + snapshot stay in `uffs-cli`.
 //!
 //! ```text

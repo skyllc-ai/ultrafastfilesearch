@@ -139,7 +139,7 @@ raw source.
 uffs '*.dll' --no-cache --data-dir ~/uffs_data
 
 # Also available on daemon start
-uffs daemon start --data-dir ~/uffs_data --no-cache
+uffs --daemon start --data-dir ~/uffs_data --no-cache
 ```
 
 Use `--no-cache` when:

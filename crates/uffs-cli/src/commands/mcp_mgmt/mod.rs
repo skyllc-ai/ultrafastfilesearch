@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result};
 
 /// Execute an MCP management action by forwarding raw args to `uffsmcp`.
 ///
-/// This is the passthrough path — raw args after `uffs mcp` are forwarded
+/// This is the passthrough path — raw args after `uffs --mcp` are forwarded
 /// directly to the `uffsmcp` binary without any parsing.
 ///
 /// # Errors

@@ -192,7 +192,7 @@ async fn deep_health_check_happy_path() {
 /// envelope comes back) but the response carries an `error` object.
 /// `deep_health_check` must wrap that into a
 /// [`ClientError::ConnectionFailed`] whose message includes the
-/// remediation guidance (`uffs daemon kill`, skip-env hint) so the
+/// remediation guidance (`uffs --daemon kill`, skip-env hint) so the
 /// user has an actionable next step.
 #[tokio::test]
 async fn deep_health_check_maps_daemon_error_to_connection_failed() {
@@ -212,7 +212,7 @@ async fn deep_health_check_maps_daemon_error_to_connection_failed() {
         "error must identify itself as a health-check failure: {msg}",
     );
     assert!(
-        msg.contains("uffs daemon kill"),
+        msg.contains("uffs --daemon kill"),
         "error must include the remediation command: {msg}",
     );
     assert!(

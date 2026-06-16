@@ -109,7 +109,7 @@ pub(crate) struct DriveStats {
     /// Bumped from
     /// [`crate::cache::registry::ShardRegistry::promote_letter_to_hot`]
     /// only when the pre-promote tier was `Cold` — i.e. the operator
-    /// ran `uffs daemon preload <drive>` against a fully-evicted
+    /// ran `uffs --daemon preload <drive>` against a fully-evicted
     /// drive and the daemon had to re-decrypt the encrypted compact
     /// cache from disk.  Already-Warm preload calls (where the body
     /// is in RAM and only the tier marker flips Warm → Hot) do

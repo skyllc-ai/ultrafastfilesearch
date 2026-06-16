@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs daemon {hibernate, preload}` subcommand handlers.
+//! `uffs --daemon {hibernate, preload}` subcommand handlers.
 //!
 //! Phase 8-B / 8-C — operator-driven memory-tiering CLI commands.
 //! Split off [`crate::commands::daemon_mgmt`] so the tiering cluster
@@ -16,7 +16,7 @@ use uffs_client::protocol::response::{
     DEFAULT_PRELOAD_PIN_MINUTES, DriveTierStatus, ForgetParams, HibernateParams, PreloadParams,
 };
 
-/// `uffs daemon hibernate [DRIVES...]` — demote loaded shards to `Cold`.
+/// `uffs --daemon hibernate [DRIVES...]` — demote loaded shards to `Cold`.
 ///
 /// Releases RAM but keeps the encrypted compact cache on disk so a
 /// subsequent `preload` / search can re-warm without a full MFT
@@ -35,7 +35,7 @@ use uffs_client::protocol::response::{
 /// # Example
 ///
 /// ```bash
-/// $ uffs daemon hibernate
+/// $ uffs --daemon hibernate
 /// Daemon hibernated 2 drive(s):
 ///   Hot     -> Cold:  C
 ///   Warm    -> Cold:  D
@@ -75,7 +75,7 @@ pub(crate) fn daemon_hibernate(drives: &[uffs_mft::platform::DriveLetter]) -> Re
     Ok(())
 }
 
-/// `uffs daemon preload <DRIVES...> [--pin-minutes N]` — promote
+/// `uffs --daemon preload <DRIVES...> [--pin-minutes N]` — promote
 /// drive(s) to `Hot` and pin the tier against demote for
 /// `pin_minutes` minutes (defaults to
 /// [`DEFAULT_PRELOAD_PIN_MINUTES`] when `None`).
@@ -97,7 +97,7 @@ pub(crate) fn daemon_hibernate(drives: &[uffs_mft::platform::DriveLetter]) -> Re
 /// # Example
 ///
 /// ```bash
-/// $ uffs daemon preload C D --pin-minutes 60
+/// $ uffs --daemon preload C D --pin-minutes 60
 /// Daemon preloaded (60-min pin):
 ///   Promoted to Hot:  C, D
 ///   Pin expires at:   in 60m
@@ -145,7 +145,7 @@ pub(crate) fn daemon_preload(
     Ok(())
 }
 
-/// `uffs daemon forget <DRIVES...> [--force]` — evict drive(s) from
+/// `uffs --daemon forget <DRIVES...> [--force]` — evict drive(s) from
 /// the registry and delete every per-drive on-disk cache artefact.
 ///
 /// Without `--force` the daemon refuses non-`Cold` drives with
@@ -167,7 +167,7 @@ pub(crate) fn daemon_preload(
 /// # Example
 ///
 /// ```bash
-/// $ uffs daemon forget C --force
+/// $ uffs --daemon forget C --force
 /// Daemon forgot 1 drive(s); freed 12.4 MiB:
 ///   Forgotten:        C
 ///   Already absent:   (none)
@@ -208,7 +208,7 @@ pub(crate) fn daemon_forget(drives: &[uffs_mft::platform::DriveLetter], force: b
     Ok(())
 }
 
-/// `uffs daemon status_drives` — render the per-drive tier +
+/// `uffs --daemon status_drives` — render the per-drive tier +
 /// telemetry table.
 ///
 /// Operator-facing companion to `daemon status`: surfaces tier,
@@ -231,7 +231,7 @@ pub(crate) fn daemon_forget(drives: &[uffs_mft::platform::DriveLetter], force: b
 /// # Example
 ///
 /// ```bash
-/// $ uffs daemon status_drives
+/// $ uffs --daemon status_drives
 /// DRIVE  TIER    RESIDENT     QPM   LAST QUERY        PIN UNTIL        PROMOTIONS
 /// C      hot     1.20 GiB   45.30   3m ago            in 57m                    3
 /// D      warm    843 MiB     2.10   4m ago            -                         0
@@ -259,7 +259,7 @@ pub(crate) fn daemon_status_drives() -> Result<()> {
     // Read-only commands match `daemon status`'s graceful "daemon
     // down" rendering on connection failure — same stdout shape,
     // same exit 0 — so an operator pipeline like
-    //   `uffs daemon status_drives | grep cold`
+    //   `uffs --daemon status_drives | grep cold`
     // doesn't crash on a stopped daemon.  Mutating commands
     // (`hibernate` / `preload` / `forget`) deliberately stay on the
     // bail-with-error path because the operator needs to know their

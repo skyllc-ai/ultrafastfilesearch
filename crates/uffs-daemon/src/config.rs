@@ -398,7 +398,7 @@ impl Config {
     /// Serialize back to TOML.
     ///
     /// Used by the round-trip test (task 6.5) and by future
-    /// `uffs daemon config dump` commands.  Pretty-prints with
+    /// `uffs --daemon config dump` commands.  Pretty-prints with
     /// section headers so a human can compare two configs visually.
     #[cfg_attr(
         not(test),

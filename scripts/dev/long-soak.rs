@@ -50,7 +50,7 @@
 //     ├── daemon.log                  # daemon's own --log-file output
 //     ├── snapshots/
 //     │   ├── 00h-process.json        # Get-Process uffsd (Windows only)
-//     │   ├── 00h-status-drives.txt   # uffs daemon status_drives capture
+//     │   ├── 00h-status-drives.txt   # uffs --daemon status_drives capture
 //     │   ├── 00h-cache-sizes.txt     # encrypted-cache file sizes (Phase 7)
 //     │   ├── ...
 //     │   └── 24h-...
@@ -146,7 +146,7 @@ struct Cli {
 
     /// Offline data dir containing `drive_<L>/<L>_mft.iocp` snapshots
     /// (Mac-only — required because macOS has no live NTFS auto-discovery).
-    /// Forwarded to `uffs daemon start --data-dir <PATH>`.  On Windows the
+    /// Forwarded to `uffs --daemon start --data-dir <PATH>`.  On Windows the
     /// daemon auto-discovers live NTFS volumes; leave this unset.
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
@@ -427,10 +427,10 @@ impl Daemon {
     }
 
     fn ensure_stopped(&self) -> Result<()> {
-        let _ = self.run(&["daemon", "kill"]);
+        let _ = self.run(&["--daemon", "kill"]);
         let deadline = Instant::now() + STOP_TIMEOUT;
         while Instant::now() < deadline {
-            if let Ok(out) = self.run(&["daemon", "status"]) {
+            if let Ok(out) = self.run(&["--daemon", "status"]) {
                 if out.contains("not running") {
                     return Ok(());
                 }
@@ -440,10 +440,10 @@ impl Daemon {
         bail!("daemon failed to stop within {}s", STOP_TIMEOUT.as_secs());
     }
 
-    /// True when `uffs daemon status` reports `Ready` — i.e. the
+    /// True when `uffs --daemon status` reports `Ready` — i.e. the
     /// daemon is up AND past the Loading phase.
     fn is_ready(&self) -> bool {
-        matches!(self.run(&["daemon", "status"]), Ok(out) if out.contains("Ready"))
+        matches!(self.run(&["--daemon", "status"]), Ok(out) if out.contains("Ready"))
     }
 
     /// Bring the daemon up to Ready, idempotently.
@@ -485,7 +485,7 @@ impl Daemon {
         //    Windows under elevation.
         let log_arg = self.log_file.to_string_lossy().into_owned();
         let mut cmd = Command::new(&self.binary);
-        cmd.args(["daemon", "start", "--log-file", &log_arg]);
+        cmd.args(["--daemon", "start", "--log-file", &log_arg]);
         // Mac only: forward the offline MFT data dir.  On Windows the
         // daemon auto-discovers live NTFS volumes and this is None.
         if let Some(dir) = data_dir {
@@ -531,7 +531,7 @@ impl Daemon {
     }
 
     fn status_drives(&self) -> Result<String> {
-        self.run(&["daemon", "status_drives"])
+        self.run(&["--daemon", "status_drives"])
     }
 }
 
@@ -1386,15 +1386,15 @@ fn run_ws_trace(
     // capture 24 h of "Get-Process returned nothing".
     if !no_daemon_check {
         let status = daemon
-            .run(&["daemon", "status"])
-            .context("running `uffs daemon status` to check Ready precondition")?;
+            .run(&["--daemon", "status"])
+            .context("running `uffs --daemon status` to check Ready precondition")?;
         if !status.contains("Ready") {
             bail!(
                 "WS-trace requires a Ready daemon — observed status:\n\
                  ───\n{status}───\n\n\
-                 Start the daemon first (e.g. `uffs daemon start \
+                 Start the daemon first (e.g. `uffs --daemon start \
                  --log-file ~/uffs_soak/wstrace.log`) and confirm \
-                 `uffs daemon status` reports Ready before re-running."
+                 `uffs --daemon status` reports Ready before re-running."
             );
         }
         println!("  {}", "Daemon Ready precondition OK".green());
@@ -1755,7 +1755,7 @@ impl Drop for CleanupGuard {
     fn drop(&mut self) {
         // Stop daemon.
         let _ = Command::new(&self.binary)
-            .args(["daemon", "kill"])
+            .args(["--daemon", "kill"])
             .output();
         // Restore daemon.toml.
         if let Some(backup) = &self.cfg_backup {

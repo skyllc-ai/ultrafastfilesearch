@@ -44,7 +44,7 @@ fn build_profile() -> &'static str {
 /// - uffsd: Background daemon (holds MFT index, serves queries via IPC)
 /// - uffsmcp: MCP HTTP/stdio server (bridges AI agents to daemon)
 /// - uffs_mft: Low-level MFT reading tool
-/// - uffs-update: self-update helper (`uffs update` spawns it as a sibling)
+/// - uffs-update: self-update helper (`uffs --update` spawns it as a sibling)
 /// - uffs-broker: Windows elevated handle broker (real service on Windows;
 ///   a no-op stub off Windows)
 ///

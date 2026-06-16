@@ -12,9 +12,9 @@ rows.
 
 | Without aggregation | With aggregation |
 |---------------------|------------------|
-| `uffs '*' --ext pdf` → 48 000 rows, count them yourself | `uffs agg overview --ext pdf` → `total_count: 48 000` |
-| `uffs '*' --sort -size --limit 50` → top 50, but what % is that? | `uffs agg by_type` → full breakdown with percentages |
-| Three separate queries for C:, D:, E: | `uffs agg by_drive` → all drives in one call |
+| `uffs '*' --ext pdf` → 48 000 rows, count them yourself | `uffs --agg overview --ext pdf` → `total_count: 48 000` |
+| `uffs '*' --sort -size --limit 50` → top 50, but what % is that? | `uffs --agg by_type` → full breakdown with percentages |
+| Three separate queries for C:, D:, E: | `uffs --agg by_drive` → all drives in one call |
 
 ---
 
@@ -22,31 +22,31 @@ rows.
 
 ```bash
 # Full filesystem overview — the single best first command
-uffs agg overview
+uffs --agg overview
 
 # What types of files eat the most space?
-uffs agg by_type
+uffs --agg by_type
 
 # Top 30 extensions by disk usage
-uffs agg by_extension
+uffs --agg by_extension
 
 # How much space does each drive use?
-uffs agg by_drive
+uffs --agg by_drive
 
 # Size distribution — tiny, small, medium, large, huge
-uffs agg by_size
+uffs --agg by_size
 
 # When were files last modified?
-uffs agg by_age
+uffs --agg by_age
 ```
 
-All `uffs agg` commands accept every filter from the [filters](filters.md) page.
+All `uffs --agg` commands accept every filter from the [filters](filters.md) page.
 Aggregation reuses the same search pipeline — it just changes the output.
 
 ### Inline aggregation (search + aggregate in one command)
 
 You can run aggregation alongside a search using inline flags instead
-of the `uffs agg` subcommand:
+of the `uffs --agg` subcommand:
 
 ```bash
 # Count matching files (suppresses rows)
@@ -96,22 +96,22 @@ A preset is a one-word shortcut that expands into a tuned set of analytics.
 
 ```bash
 # Basic preset
-uffs agg by_type
+uffs --agg by_type
 
 # Scoped to one drive
-uffs agg by_extension --drives C
+uffs --agg by_extension --drives C
 
 # Scoped to a file pattern
-uffs agg by_size "*.rs"
+uffs --agg by_size "*.rs"
 
 # Scoped with filters
-uffs agg by_type --newer 30d --min-size 1mb
+uffs --agg by_type --newer 30d --min-size 1mb
 
 # JSON output for piping
-uffs agg overview --format json
+uffs --agg overview --format json
 
 # CSV output for spreadsheets
-uffs agg by_extension --format csv
+uffs --agg by_extension --format csv
 ```
 
 ---
@@ -147,34 +147,34 @@ The `--agg` flag is repeatable — stack multiple specs in one command.
 
 ```bash
 # Top 20 extensions (default is 50)
-uffs search "*" --agg "terms:extension,top=20"
+uffs "*" --agg "terms:extension,top=20"
 
 # Size statistics for all files
-uffs search "*" --agg "stats:size"
+uffs "*" --agg "stats:size"
 
 # Modified date statistics
-uffs search "*" --agg "stats:modified"
+uffs "*" --agg "stats:modified"
 
 # Size histogram with 10 MB buckets
-uffs search "*" --agg "hist:size,interval=10485760"
+uffs "*" --agg "hist:size,interval=10485760"
 
 # Monthly creation timeline
-uffs search "*" --agg "datehist:created,calendar=month"
+uffs "*" --agg "datehist:created,calendar=month"
 
 # Custom size ranges
-uffs search "*" --agg "range:size,bins=0..1048576+1048576..1073741824+1073741824..∞"
+uffs "*" --agg "range:size,bins=0..1048576+1048576..1073741824+1073741824..∞"
 
 # Count files with no extension
-uffs search "*" --agg "missing:extension"
+uffs "*" --agg "missing:extension"
 
 # How many unique extensions exist?
-uffs search "*" --agg "distinct:extension"
+uffs "*" --agg "distinct:extension"
 
 # Top 10 folders at depth 2
-uffs search "*" --agg "rollup:path,depth=2,top=10"
+uffs "*" --agg "rollup:path,depth=2,top=10"
 
 # Multiple specs in one command
-uffs search "*" --agg "count" --agg "stats:size" --agg "terms:type,top=10"
+uffs "*" --agg "count" --agg "stats:size" --agg "terms:type,top=10"
 ```
 
 ---
@@ -235,7 +235,7 @@ actually in each group without a follow-up search.
 
 ```bash
 # Top 10 extensions with 3 sample files each
-uffs search "*" --agg "terms:extension,top=10,sample=3"
+uffs "*" --agg "terms:extension,top=10,sample=3"
 ```
 
 Output:
@@ -271,10 +271,10 @@ buckets than the default top-N.  Use pagination to walk through all of them:
 
 ```bash
 # First page
-uffs agg by_extension --agg-page-size 20
+uffs --agg by_extension --agg-page-size 20
 
 # Next page (use the cursor from the previous response)
-uffs agg by_extension --agg-page-size 20 --agg-cursor "eyJza..."
+uffs --agg by_extension --agg-page-size 20 --agg-cursor "eyJza..."
 ```
 
 The response includes:
@@ -291,13 +291,13 @@ The `duplicates` preset finds files that share the same **name and size**
 
 ```bash
 # Basic duplicate scan
-uffs agg duplicates
+uffs --agg duplicates
 
 # With verification (reads first 4 KB of each candidate)
-uffs search "*" --agg "duplicates:size+name,verify=first_bytes,top=50"
+uffs "*" --agg "duplicates:size+name,verify=first_bytes,top=50"
 
 # Full SHA-256 verification (slow but certain)
-uffs search "*" --agg "duplicates:size+name,verify=sha256,top=20"
+uffs "*" --agg "duplicates:size+name,verify=sha256,top=20"
 ```
 
 Output:
@@ -327,16 +327,16 @@ Groups beyond the budget are kept but marked unverified.
 
 ```bash
 # Human-readable table (default)
-uffs agg by_extension
+uffs --agg by_extension
 
 # JSON — structured, complete, pipe-friendly
-uffs agg by_extension --format json
+uffs --agg by_extension --format json
 
 # CSV — for spreadsheets and data tools
-uffs agg by_extension --format csv
+uffs --agg by_extension --format csv
 
 # TSV — tab-separated variant
-uffs agg by_extension --format tsv
+uffs --agg by_extension --format tsv
 ```
 
 ### JSON structure
@@ -372,18 +372,18 @@ Every aggregation response contains:
 
 ## 9  Combining aggregation with search
 
-By default, `uffs agg` returns **only** aggregate results and no file rows.
+By default, `uffs --agg` returns **only** aggregate results and no file rows.
 Use `--rows` to get both:
 
 ```bash
 # Aggregate + rows
-uffs search "*.rs" --agg "stats:size" --rows
+uffs "*.rs" --agg "stats:size" --rows
 
 # Count files matching a filter (no rows)
-uffs search "*.pdf" --count
+uffs "*.pdf" --count
 
 # Facet a filtered set
-uffs search "*" --newer 7d --facet type
+uffs "*" --newer 7d --facet type
 ```
 
 ### Shorthand flags
@@ -447,49 +447,49 @@ See `uffs://cookbook` in the MCP resource list for more examples.
 ### "How much space do my photos take?"
 
 ```bash
-uffs agg overview --ext pictures
+uffs --agg overview --ext pictures
 ```
 
 ### "Which drive has the most waste?"
 
 ```bash
-uffs agg storage
+uffs --agg storage
 ```
 
 ### "Are there files near the MAX_PATH limit?"
 
 ```bash
-uffs search "*" --agg "range:path_length,bins=0..100+100..200+200..260+260..500"
+uffs "*" --agg "range:path_length,bins=0..100+100..200+200..260+260..500"
 ```
 
 ### "What's the creation timeline of my music collection?"
 
 ```bash
-uffs agg activity --ext music --drives M
+uffs --agg activity --ext music --drives M
 ```
 
 ### "Show me the 10 largest top-level folders, with their type breakdown"
 
 ```bash
-uffs search "*" --agg "rollup:path,depth=1,top=10,sub=terms:type"
+uffs "*" --agg "rollup:path,depth=1,top=10,sub=terms:type"
 ```
 
 ### "How many unique extensions are on D:?"
 
 ```bash
-uffs search "*" --agg "distinct:extension" --drives D
+uffs "*" --agg "distinct:extension" --drives D
 ```
 
 ### "Find all Rust code stats in my GitHub folder"
 
 ```bash
-uffs agg overview "*.rs" --path-contains GitHub
+uffs --agg overview "*.rs" --path-contains GitHub
 ```
 
 ### "Monthly modification activity for the last 2 years"
 
 ```bash
-uffs search "*" --newer 730d --agg "datehist:modified,calendar=month"
+uffs "*" --newer 730d --agg "datehist:modified,calendar=month"
 ```
 
 ---

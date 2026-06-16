@@ -270,11 +270,11 @@ fn multiple_specs_return_multiple_results() {
     assert_eq!(results[2].kind, "buckets");
 }
 
-// ── S1H.2: uffs stats daemon-path parity ─────────────────────────
+// ── S1H.2: uffs --stats daemon-path parity ─────────────────────────
 
 #[test]
 fn stats_overview_preset_wire_roundtrip() {
-    // Simulate the exact wire spec that `uffs stats` (no path)
+    // Simulate the exact wire spec that `uffs --stats` (no path)
     // sends to the daemon, and verify it produces correct results.
     let index = test_index();
     let specs = [AggregateSpecWire {

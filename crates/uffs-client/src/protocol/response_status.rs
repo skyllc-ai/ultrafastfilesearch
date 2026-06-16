@@ -89,7 +89,7 @@ pub struct StatusResponse {
     pub pid: u32,
     /// Compile-time version of the daemon binary (`env!("CARGO_PKG_VERSION")`).
     ///
-    /// Surfaced to the CLI so `uffs daemon status` / `uffs status` can
+    /// Surfaced to the CLI so `uffs --daemon status` / `uffs --status` can
     /// flag a daemon-vs-CLI version mismatch when the user has an old
     /// long-running daemon and an upgraded CLI binary (or vice versa).
     /// Defaults to `""` for back-compat with pre-0.5.79 daemons that

@@ -94,7 +94,7 @@ fn ensure_fresh_release_build() -> String {
     eprintln!("╚══════════════════════════════════════════════════════════════════╝");
     eprintln!("  Workspace: {}", ws.display());
     let start = Instant::now();
-    // Build both uffs (thin CLI) and uffsmcp (MCP server) — `uffs mcp *`
+    // Build both uffs (thin CLI) and uffsmcp (MCP server) — `uffs --mcp *`
     // delegates to `uffsmcp` so both must be present.
     let status = Command::new("cargo")
         .args(["build", "--release", "-p", "uffs-cli", "-p", "uffs-mcp"])
@@ -465,11 +465,11 @@ impl Runner {
         }
     }
 
-    /// Start the MCP HTTP server via `uffs mcp start`.
+    /// Start the MCP HTTP server via `uffs --mcp start`.
     ///
-    /// `uffs mcp start` already handles:
+    /// `uffs --mcp start` already handles:
     ///   1. Auto-starting the daemon if needed
-    ///   2. Spawning `uffs mcp serve` as a background process
+    ///   2. Spawning `uffs --mcp serve` as a background process
     ///   3. Polling /health until the server is ready
     ///   4. Exiting with code 0 on success, non-zero on failure
     ///
@@ -477,7 +477,7 @@ impl Runner {
     /// pipe handle inheritance issues on Windows) and check the exit code.
     fn mcp_start(&self) -> Result<String> {
         let port_str = self.port.to_string();
-        let mut args: Vec<&str> = vec!["mcp", "start", "--port", &port_str, "--bind", &self.host];
+        let mut args: Vec<&str> = vec!["--mcp", "start", "--port", &port_str, "--bind", &self.host];
         args.extend(self.source_args());
 
         eprintln!("    [mcp_start] {} {}", self.binary, args.join(" "));
@@ -489,7 +489,7 @@ impl Runner {
 
         if !status.success() {
             bail!(
-                "`uffs mcp start` exited with {status}\n\
+                "`uffs --mcp start` exited with {status}\n\
                  Run manually with logging:\n  \
                  UFFS_LOG=debug UFFS_LOG_FILE=/tmp/mcp.log {} {}",
                 self.binary, args.join(" ")
@@ -500,7 +500,7 @@ impl Runner {
         let (ok, detail) = health_check_detail(&self.host, self.port);
         if !ok {
             bail!(
-                "`uffs mcp start` exited OK but /health check failed: {detail}"
+                "`uffs --mcp start` exited OK but /health check failed: {detail}"
             );
         }
 
@@ -547,30 +547,30 @@ impl Runner {
     }
 
     fn ensure_daemon_stopped(&self) {
-        let _ = self.run_ok(&["daemon", "kill"]);
+        let _ = self.run_ok(&["--daemon", "kill"]);
         for _ in 0..20 {
             std::thread::sleep(Duration::from_millis(500));
-            let status = self.run_ok(&["daemon", "status"]).unwrap_or_default().to_lowercase();
+            let status = self.run_ok(&["--daemon", "status"]).unwrap_or_default().to_lowercase();
             if status.contains("not running") { return; }
         }
     }
 
     fn ensure_daemon_running(&self) -> Result<String> {
-        let mut args: Vec<&str> = vec!["daemon", "start"];
+        let mut args: Vec<&str> = vec!["--daemon", "start"];
         args.extend(self.source_args());
         self.run_ok(&args)
     }
 
-    fn mcp_status(&self) -> Result<String> { self.run_ok(&["mcp", "status"]) }
-    fn mcp_stop(&self) -> Result<String> { self.run_ok(&["mcp", "stop"]) }
+    fn mcp_status(&self) -> Result<String> { self.run_ok(&["--mcp", "status"]) }
+    fn mcp_stop(&self) -> Result<String> { self.run_ok(&["--mcp", "stop"]) }
     fn mcp_kill(&self) -> Result<String> {
         let port_str = self.port.to_string();
-        self.run_ok(&["mcp", "kill", "--port", &port_str, "--bind", &self.host])
+        self.run_ok(&["--mcp", "kill", "--port", &port_str, "--bind", &self.host])
     }
-    fn daemon_kill(&self) -> Result<String> { self.run_ok(&["daemon", "kill"]) }
+    fn daemon_kill(&self) -> Result<String> { self.run_ok(&["--daemon", "kill"]) }
 
     fn daemon_status_text(&self) -> String {
-        self.run_ok(&["daemon", "status"]).unwrap_or_default()
+        self.run_ok(&["--daemon", "status"]).unwrap_or_default()
     }
 
     fn is_daemon_running(&self) -> bool {
@@ -581,9 +581,9 @@ impl Runner {
             && !out.contains("not running")
     }
 
-    /// Run `uffs daemon load` with given args, return stdout.
+    /// Run `uffs --daemon load` with given args, return stdout.
     fn daemon_load(&self, extra_args: &[&str]) -> Result<String> {
-        let mut args = vec!["daemon", "load"];
+        let mut args = vec!["--daemon", "load"];
         args.extend_from_slice(extra_args);
         self.run_ok(&args)
     }
@@ -694,7 +694,7 @@ fn scenario_c(r: &mut Runner) {
     });
 
     r.step("C4  Verify daemon now running", |r| {
-        let status = r.run_ok(&["daemon", "status"]).unwrap_or_default();
+        let status = r.run_ok(&["--daemon", "status"]).unwrap_or_default();
         if !status.to_lowercase().contains("ready")
             && !status.to_lowercase().contains("running")
             && !status.to_lowercase().contains("pid") {
@@ -761,7 +761,7 @@ fn scenario_e(r: &mut Runner) {
 
     r.step("E2  Second `mcp start` → already running (gateway ✓, daemon ✓)", |r| {
         let port_str = r.port.to_string();
-        let mut args: Vec<&str> = vec!["mcp", "start", "--port", &port_str, "--bind", &r.host];
+        let mut args: Vec<&str> = vec!["--mcp", "start", "--port", &port_str, "--bind", &r.host];
         args.extend(r.source_args());
         let out = r.run_ok(&args)?;
         let lower = out.to_lowercase();
@@ -835,7 +835,7 @@ fn scenario_g(r: &mut Runner) {
 
     r.step("G3  `mcp start` detects daemon dead → restarts daemon only", |r| {
         let port_str = r.port.to_string();
-        let mut args: Vec<&str> = vec!["mcp", "start", "--port", &port_str, "--bind", &r.host];
+        let mut args: Vec<&str> = vec!["--mcp", "start", "--port", &port_str, "--bind", &r.host];
         args.extend(r.source_args());
         let out = r.run_ok(&args)?;
         let lower = out.to_lowercase();
@@ -950,7 +950,7 @@ fn scenario_j(r: &mut Runner) {
 
     r.step("J3  `mcp start` sees healthy stack → reports already running", |r| {
         let port_str = r.port.to_string();
-        let mut args: Vec<&str> = vec!["mcp", "start", "--port", &port_str, "--bind", &r.host];
+        let mut args: Vec<&str> = vec!["--mcp", "start", "--port", &port_str, "--bind", &r.host];
         args.extend(r.source_args());
         let out = r.run_ok(&args)?;
         // Stack is healthy (gateway ✓ + daemon ✓), even without PID file.
@@ -1053,7 +1053,7 @@ fn scenario_l(r: &mut Runner) {
 
     r.step("L6  `mcp start` sees healthy stack", |r| {
         let port_str = r.port.to_string();
-        let mut args: Vec<&str> = vec!["mcp", "start", "--port", &port_str, "--bind", &r.host];
+        let mut args: Vec<&str> = vec!["--mcp", "start", "--port", &port_str, "--bind", &r.host];
         args.extend(r.source_args());
         let out = r.run_ok(&args)?;
         if !out.to_lowercase().contains("already running") {
@@ -1112,7 +1112,7 @@ fn discover_drive_mft_files(data_dir: &str) -> Vec<(char, String)> {
     results
 }
 
-/// Parse drive count and individual drive letters from `uffs daemon status`.
+/// Parse drive count and individual drive letters from `uffs --daemon status`.
 ///
 /// The status output format (v0.5.95+, Phase 8-E memory-tiering) is:
 /// ```text
@@ -1203,7 +1203,7 @@ fn scenario_m(r: &mut Runner) {
         // M1: Kill everything, start daemon with FIRST drive only (explicit --mft-file).
         r.step("M1  Start daemon with single drive", |r| {
             r.kill_all();
-            let args = vec!["daemon", "start", "--mft-file", &first_mft];
+            let args = vec!["--daemon", "start", "--mft-file", &first_mft];
             r.run_ok(&args)?;
             if !r.is_daemon_running() { bail!("daemon not running"); }
             Ok(format!("started with {first}: via --mft-file"))
@@ -1322,7 +1322,7 @@ fn scenario_m(r: &mut Runner) {
 
     // M7: `daemon load` with no args → informative error.
     r.step("M7  `daemon load` no args → error message", |r| {
-        let (out, success) = r.run_full(&["daemon", "load"])?;
+        let (out, success) = r.run_full(&["--daemon", "load"])?;
         let lower = out.to_lowercase();
         if success {
             bail!("expected non-zero exit, but command succeeded: {out}");
@@ -1336,7 +1336,7 @@ fn scenario_m(r: &mut Runner) {
 
     // M8: `daemon load --mft-file <bogus>` → error reported (not a crash).
     r.step("M8  `daemon load --mft-file /nonexistent` → daemon survives", |r| {
-        let (out, _success) = r.run_full(&["daemon", "load", "--mft-file", "/nonexistent/fake.bin"])?;
+        let (out, _success) = r.run_full(&["--daemon", "load", "--mft-file", "/nonexistent/fake.bin"])?;
         if !r.is_daemon_running() {
             bail!("daemon crashed after bad load: {out}");
         }
@@ -1387,7 +1387,7 @@ fn main() -> Result<()> {
     };
 
     // ── Preflight: verify companion binaries exist ──────────────────
-    // `uffs mcp *` delegates to the standalone `uffsmcp` binary.
+    // `uffs --mcp *` delegates to the standalone `uffsmcp` binary.
     // Fail immediately with a clear message instead of waiting 3.5 min
     // for a health timeout.
     {
@@ -1399,7 +1399,7 @@ fn main() -> Result<()> {
         if !mcp_path.exists() {
             bail!(
                 "Companion binary `{mcp_name}` not found at {}\n\
-                 `uffs mcp *` delegates to `{mcp_name}` which must sit alongside `uffs`.\n\
+                 `uffs --mcp *` delegates to `{mcp_name}` which must sit alongside `uffs`.\n\
                  Rebuild and deploy: just build-local   (or: just use-local)",
                 mcp_path.display(),
             );

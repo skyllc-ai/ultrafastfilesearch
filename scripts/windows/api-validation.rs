@@ -232,14 +232,14 @@ fn default_binary() -> String {
 /// version string for inclusion in the validation-summary block.
 ///
 /// Returns the trimmed value of the `Version:` line printed by
-/// `uffs daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
+/// `uffs --daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
 /// `<unknown> (daemon) / X.Y.Z (cli)` via the CLI's back-compat
 /// renderer; pre-this-feature daemons (no `Version:` line at all)
 /// surface as `<line not found>`.  When the daemon is unreachable
 /// the helper reports `<not running>` instead of erroring — the
 /// version line is informational, not load-bearing.
 fn capture_daemon_version(bin: &str) -> String {
-    match Command::new(bin).args(["daemon", "status"]).output() {
+    match Command::new(bin).args(["--daemon", "status"]).output() {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -754,7 +754,7 @@ fn run_tests(sock: &str, specs: Vec<TestSpec>, args: &ScriptArgs) -> Vec<TestRes
                 };
                 // Build the full CLI command for debugging.
                 // For RPC-only methods (status, drives, etc.) map to
-                // their `uffs daemon <method>` CLI equivalent.
+                // their `uffs --daemon <method>` CLI equivalent.
                 let cli_command = {
                     let mut cli_parts = cli_prefix.as_ref().clone();
                     let bin = cli_parts.remove(0);
@@ -2525,7 +2525,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> bool {
     // Step 1: Check status.
     eprintln!("  Checking daemon status...");
     let status = Command::new(bin)
-        .args(["daemon", "status"])
+        .args(["--daemon", "status"])
         .output();
     match status {
         Ok(o) => {
@@ -2564,7 +2564,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> bool {
                 // synchronous by design and always leaves a clean slate.
                 eprintln!("  Killing stale daemon...");
                 let _ = Command::new(bin)
-                    .args(["daemon", "kill"])
+                    .args(["--daemon", "kill"])
                     .output();
                 // Brief pause to let the socket slot fully release on macOS
                 // (Darwin retains the inode ~50 ms after the process exits).
@@ -2585,7 +2585,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> bool {
     }
 
     // Step 2: Start daemon (blocks until ready).
-    let mut start_args = vec!["daemon".to_string(), "start".to_string()];
+    let mut start_args = vec!["--daemon".to_string(), "start".to_string()];
     if let Some(flag) = args.source_flag {
         start_args.push(flag.to_string());
         start_args.push(args.source_path.clone());
@@ -2740,8 +2740,8 @@ fn main() {
                 eprintln!("  {}", "Tests cannot validate anything without data. Aborting.".red().bold());
                 eprintln!();
                 eprintln!("  Hint: start the daemon with data:");
-                eprintln!("    uffs daemon start --data-dir ~/uffs_data");
-                eprintln!("    uffs daemon start --mft-file /path/to/C_mft.iocp");
+                eprintln!("    uffs --daemon start --data-dir ~/uffs_data");
+                eprintln!("    uffs --daemon start --mft-file /path/to/C_mft.iocp");
                 eprintln!();
                 eprintln!("  Raw response: {}", serde_json::to_string_pretty(&resp).unwrap_or_default());
                 std::process::exit(1);
@@ -2888,8 +2888,8 @@ fn main() {
     // The validation suite is a strict observer: it does not kill orphan
     // processes or mutate the host in any way.  Those concerns live in
     // `scripts/dev/orphan-cleanup.rs` (callable via `just orphan`).
-    print_uffs_command_block(&args.bin, &["daemon", "status"], "═══ Daemon STATUS ═══");
-    print_uffs_command_block(&args.bin, &["daemon", "stats"],  "═══ Daemon STATS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "status"], "═══ Daemon STATUS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "stats"],  "═══ Daemon STATS ═══");
 
     if failed > 0 {
         // Build retest command with failed test IDs.  Same shape as

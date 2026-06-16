@@ -59,15 +59,15 @@ close each gate.
 * The seven NTFS volumes loaded against the daemon — confirm with the
   Phase-8-E per-drive tier table:
   ```powershell
-  uffs daemon status     # expect: Status: Ready
-  uffs daemon status_drives
+  uffs --daemon status     # expect: Status: Ready
+  uffs --daemon status_drives
   ```
   `daemon status_drives` is the canonical post-Phase-8 view: a fixed-
   width table with `DRIVE / TIER / RESIDENT / QPM / LAST QUERY (ms) /
   PIN UNTIL (ms)` columns, sorted ASCII ascending by drive letter.
   Expect every drive's `TIER` column to be `warm` (default after
   load) — any `parked` / `cold` from the start means the gate setup
-  is wrong; bounce the daemon (`uffs daemon stop` → `uffs daemon
+  is wrong; bounce the daemon (`uffs --daemon stop` → `uffs --daemon
   start --drives C,D,E,F,G,M,S`).
 * Task Manager → **Details** tab → enable the **I/O priority** column
   via column-header → *Select columns…* → check `I/O priority`.  This
@@ -91,10 +91,10 @@ daemon with structured logging:
 
 ```powershell
 $env:RUST_LOG = "uffs_daemon=info,cache.pressure=info,shard.transition=info"
-uffs daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-G1.log
+uffs --daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-G1.log
 ```
 
-Wait until `uffs status` reports `Ready` for every drive.
+Wait until `uffs --status` reports `Ready` for every drive.
 
 #### Drive
 
@@ -241,8 +241,8 @@ the default 5 min between ticks.  In terminal A:
 ```powershell
 $env:UFFS_USN_REFRESH_INTERVAL_SECS = "30"
 $env:RUST_LOG = "uffs_daemon=info,shard.refresh=info"
-uffs daemon stop
-uffs daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-G3.log
+uffs --daemon stop
+uffs --daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-G3.log
 ```
 
 The 30-second cadence guarantees a refresh tick within ~1 minute of
@@ -299,10 +299,10 @@ on every per-drive worker; the wiring + the unit test
 complete the proof:
 
 ```powershell
-uffs daemon stop
+uffs --daemon stop
 Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
 $env:UFFS_USN_REFRESH_INTERVAL_SECS = "30"
-uffs daemon start --log-level debug --log-file C:\Temp\uffsd-G3-debug.log
+uffs --daemon start --log-level debug --log-file C:\Temp\uffsd-G3-debug.log
 
 # Re-warm so refresh has work to do.
 uffs "*" --ext rs --drive C --limit 5 > $null
@@ -412,7 +412,7 @@ Reset before moving on:
 
 ```powershell
 Remove-Item Env:\UFFS_USN_REFRESH_INTERVAL_SECS
-uffs daemon stop
+uffs --daemon stop
 ```
 
 ---
@@ -441,8 +441,8 @@ for, then holds at the target while the daemon cascades:
 # shell so RUST_LOG doesn't carry over from a previous gate.
 Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
 $env:RUST_LOG = "uffs_daemon=info,cache.pressure=info,shard.transition=info"
-uffs daemon stop
-uffs daemon start --log-file C:\Temp\uffsd-G4.log
+uffs --daemon stop
+uffs --daemon start --log-file C:\Temp\uffsd-G4.log
 
 # In a second shell, run the adaptive allocator.
 $targetAvailMB = 1024  # squeeze sysAvailable down to ~1 GB to fire Low
@@ -520,7 +520,7 @@ Acceptance criteria:
 * `uffsd.exe` is still running (`Get-Process uffsd | Select Id, WS`).
 * No `OutOfMemoryError` lines in `uffsd-G4.log`.
 * No `panic` lines.
-* `uffs status --drives` returns within 1 s after the soak completes;
+* `uffs --status --drives` returns within 1 s after the soak completes;
   the per-drive tier markers reflect a coherent state (some `[Parked]`,
   some `[Hot]`/`[Warm]` where the operator drove queries).
 
@@ -586,7 +586,7 @@ $cfgPath = "$env:LOCALAPPDATA\uffs\daemon.toml"
 [shards.per_drive."C:"]
 min_tier = "WARM"
 '@ | Set-Content -Encoding UTF8 -Path $cfgPath
-uffs daemon stop
+uffs --daemon stop
 # shard.ttl at TRACE (not DEBUG) is REQUIRED — see the 2026-05-11
 # soak findings in §6 ("Reference captures") sub-section §4.5b
 # below.  The DEBUG `idle-demote` /
@@ -596,7 +596,7 @@ uffs daemon stop
 # TRACE-level `below-ttl` event carries the bonused
 # `warm_ttl_sec` field that criterion 3 below scrapes for.
 $env:RUST_LOG = "uffs_daemon=info,shard.ttl=trace,shard.transition=info"
-uffs daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-phase6-soak.log
+uffs --daemon start --drives C,D,E,F,G,M,S 2>&1 | Tee-Object -FilePath C:\Temp\uffsd-phase6-soak.log
 ```
 
 #### Drive
@@ -674,7 +674,7 @@ daemon's tracing fields, update these patterns in the same commit.
 
 ```powershell
 Remove-Item $cfgPath
-uffs daemon stop
+uffs --daemon stop
 ```
 
 #### Automation
@@ -715,8 +715,8 @@ New-Item -ItemType Directory -Path $churnDir -Force | Out-Null
 # 2. Bounce the daemon with the right log filter.
 Remove-Item Env:\RUST_LOG -ErrorAction SilentlyContinue
 $env:RUST_LOG = "uffs_daemon=info,shard.refresh=info,shard.transition=info,journal_loop=debug"
-uffs daemon stop
-uffs daemon start --drives C,D,E,F,G,M,S \
+uffs --daemon stop
+uffs --daemon start --drives C,D,E,F,G,M,S \
     --log-file "$env:USERPROFILE\uffs_soak\phase7-$(Get-Date -Format yyyyMMdd-HHmmss)\daemon.log"
 ```
 
@@ -746,7 +746,7 @@ Four acceptance criteria (the Phase 7 contract under
 `memory-tiering-implementation-plan.md` §3 Phase 7 Windows gate):
 
 1. **New-item latency ≤ 2 s.**  Drop a unique probe file in
-   `$churnDir`; confirm `uffs daemon status_drives` returns a
+   `$churnDir`; confirm `uffs --daemon status_drives` returns a
    non-error response within 2 s of the file's `LastWriteTime`.
    The harness probes once at T+0 and once at T+24h; both must hit
    the budget.
@@ -811,7 +811,7 @@ Four acceptance criteria (the Phase 7 contract under
 #### Reset
 
 ```powershell
-uffs daemon stop
+uffs --daemon stop
 Remove-Item -Recurse -Force "$env:USERPROFILE\uffs-soak\churn"
 ```
 
@@ -853,7 +853,7 @@ Run them in order — G7 is destructive (deletes a drive's caches)
 and the order leaves the daemon in a known-good shape for the
 final G8 render.
 
-### G5 — `uffs daemon hibernate` demotes every drive to Cold
+### G5 — `uffs --daemon hibernate` demotes every drive to Cold
 
 **Duration:** ~3 min wall-clock.
 **Plan reference:** plan task 8.1; PR #122.
@@ -869,12 +869,12 @@ state — typically the post-G4 shape after the Phase-5 soak).
 # Capture pre-hibernate state.
 "=== Pre-hibernate ==="
 Get-Process uffsd | Select Id, WS, PM, NPM, VM
-uffs daemon status_drives
+uffs --daemon status_drives
 ```
 
 ```powershell
 # Hibernate every loaded drive.
-uffs daemon hibernate
+uffs --daemon hibernate
 ```
 
 Expected stdout (drive letters depend on the registry):
@@ -892,7 +892,7 @@ Daemon hibernated 7 drive(s):
 ```powershell
 "=== Post-hibernate ==="
 Get-Process uffsd | Select Id, WS, PM, NPM, VM
-uffs daemon status_drives
+uffs --daemon status_drives
 
 # Hibernate keeps the encrypted compact caches on disk — verify
 # they're all still there (the *_compact.uffs files are the
@@ -911,7 +911,7 @@ Acceptance criteria:
   is still on disk with the same `Length` (hibernate releases RAM
   only — disk untouched).
 
-### G6 — `uffs daemon preload` pin contract survives idle TTL
+### G6 — `uffs --daemon preload` pin contract survives idle TTL
 
 **Duration:** ~10 min wall-clock.
 **Plan reference:** plan task 8.2; PR #122.
@@ -932,8 +932,8 @@ without a default-30-min wait:
 $env:UFFS_WARM_TO_PARKED_IDLE_SECS = "30"
 $env:UFFS_PARKED_TO_COLD_IDLE_SECS = "60"
 $env:RUST_LOG = "uffs_daemon=info,shard.transition=info,shard.ttl=debug"
-uffs daemon stop
-uffs daemon start --drives C,D,E,F,G,M,S 2>&1 |
+uffs --daemon stop
+uffs --daemon start --drives C,D,E,F,G,M,S 2>&1 |
     Tee-Object -FilePath C:\Temp\uffsd-G6.log
 ```
 
@@ -941,7 +941,7 @@ uffs daemon start --drives C,D,E,F,G,M,S 2>&1 |
 
 ```powershell
 # Pin C in Hot for 5 minutes.
-uffs daemon preload C --pin-minutes 5
+uffs --daemon preload C --pin-minutes 5
 ```
 
 Expected stdout:
@@ -957,7 +957,7 @@ Verify C is Hot + pinned and the others are still Cold:
 
 ```powershell
 "=== Pre-wait ==="
-uffs daemon status_drives
+uffs --daemon status_drives
 ```
 
 Wait through 1.5× the warm-to-parked TTL — total ~90 s — long
@@ -968,7 +968,7 @@ twice:
 "=== Wait 90 s for the idle-demote controller to fire ==="
 Start-Sleep -Seconds 90
 "=== Post-wait ==="
-uffs daemon status_drives
+uffs --daemon status_drives
 ```
 
 Confirm the demote-controller log shows zero `to=parked` /
@@ -1005,11 +1005,11 @@ Acceptance criteria:
 ```powershell
 Remove-Item Env:\UFFS_WARM_TO_PARKED_IDLE_SECS
 Remove-Item Env:\UFFS_PARKED_TO_COLD_IDLE_SECS
-uffs daemon stop
-uffs daemon start --drives C,D,E,F,G,M,S
+uffs --daemon stop
+uffs --daemon start --drives C,D,E,F,G,M,S
 ```
 
-### G7 — `uffs daemon forget --force` evicts + deletes caches
+### G7 — `uffs --daemon forget --force` evicts + deletes caches
 
 **Duration:** ~3 min wall-clock.
 **Plan reference:** plan task 8.3; PR #123.
@@ -1059,7 +1059,7 @@ foreach ($p in $cachePaths) {
 #### Drive
 
 ```powershell
-uffs daemon forget M --force
+uffs --daemon forget M --force
 ```
 
 Expected stdout:
@@ -1075,7 +1075,7 @@ Daemon forgot 1 drive(s); freed XX.XX MiB:
 ```powershell
 # Verify M is gone from the registry.
 "=== Post-forget status_drives — M must NOT be listed ==="
-uffs daemon status_drives
+uffs --daemon status_drives
 
 # Verify every per-drive cache file is gone.
 "=== Post-forget cache files — every Test-Path must be False ==="
@@ -1100,10 +1100,10 @@ To restore `M:` to the daemon, hot-load it (re-reads the MFT cold,
 ~30-60 s for a typical drive):
 
 ```powershell
-uffs daemon load --drive M
+uffs --daemon load --drive M
 ```
 
-### G8 — `uffs daemon status_drives` table render contract
+### G8 — `uffs --daemon status_drives` table render contract
 
 **Duration:** ~1 min wall-clock.
 **Plan reference:** plan task 8.4; PR #123.
@@ -1111,7 +1111,7 @@ uffs daemon load --drive M
 #### Drive
 
 ```powershell
-uffs daemon status_drives
+uffs --daemon status_drives
 ```
 
 #### Capture

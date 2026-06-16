@@ -96,14 +96,14 @@ fn default_binary() -> String {
 /// version string for inclusion in the validation-summary block.
 ///
 /// Returns the trimmed value of the `Version:` line printed by
-/// `uffs daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
+/// `uffs --daemon status` on uffs ≥ 0.5.79.  Pre-0.5.79 daemons emit
 /// `<unknown> (daemon) / X.Y.Z (cli)` via the CLI's back-compat
 /// renderer; pre-this-feature daemons (no `Version:` line at all)
 /// surface as `<line not found>`.  When the daemon is unreachable
 /// the helper reports `<not running>` instead of erroring — the
 /// version line is informational, not load-bearing.
 fn capture_daemon_version(bin: &str) -> String {
-    match Command::new(bin).args(["daemon", "status"]).output() {
+    match Command::new(bin).args(["--daemon", "status"]).output() {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -230,13 +230,13 @@ struct McpSession {
 }
 
 impl McpSession {
-    /// Spawn a fresh `uffs mcp run` subprocess and attach a background
+    /// Spawn a fresh `uffs --mcp run` subprocess and attach a background
     /// reader thread that routes JSON-RPC responses by id.
     ///
     /// Returns an [`Arc`] because the reader thread holds a clone for
     /// the life of the session.
     fn spawn(binary: &str, source_args: &[&str]) -> Result<Arc<Self>> {
-        let mut args = vec!["mcp", "run"];
+        let mut args = vec!["--mcp", "run"];
         args.extend(source_args);
         let mut child = Command::new(binary)
             .args(&args)
@@ -482,7 +482,7 @@ impl McpSession {
 impl Drop for McpSession {
     fn drop(&mut self) {
         // Best-effort teardown so leaked `Arc<McpSession>`s don't leave
-        // orphan `uffs mcp run` subprocesses.  Mutex::get_mut is
+        // orphan `uffs --mcp run` subprocesses.  Mutex::get_mut is
         // infallible when we hold `&mut self`.
         let _ = self.stdin.get_mut().map(core::mem::take);
         if let Ok(slot) = self.child.get_mut() {
@@ -1668,8 +1668,8 @@ fn run_uffs(bin: &str, args: &[&str]) -> Result<(i32, String, String)> {
 
 /// Ensure the daemon is running and ready with drives loaded.
 ///
-/// 1. `uffs daemon status` — if "Ready" with drives, done.
-/// 2. If not running or stale, `uffs daemon start --data-dir ...`
+/// 1. `uffs --daemon status` — if "Ready" with drives, done.
+/// 2. If not running or stale, `uffs --daemon start --data-dir ...`
 ///    (blocks until daemon is ready, no polling needed).
 ///
 /// Prints the daemon status banner (PID, uptime, drives, records).
@@ -1679,7 +1679,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
     let t0 = Instant::now();
 
     eprintln!("  Checking daemon status...");
-    match run_uffs(bin, &["daemon", "status"]) {
+    match run_uffs(bin, &["--daemon", "status"]) {
         Ok((_code, stdout, stderr)) => {
             let combined = format!("{stdout}{stderr}");
             let lower = combined.to_lowercase();
@@ -1705,7 +1705,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
                     eprintln!("    {line}");
                 }
                 eprintln!("  Stopping stale daemon...");
-                let _ = run_uffs(bin, &["daemon", "stop"]);
+                let _ = run_uffs(bin, &["--daemon", "stop"]);
                 std::thread::sleep(Duration::from_millis(500));
             } else if lower.contains("not running") {
                 eprintln!("  Daemon is not running, starting...");
@@ -1724,7 +1724,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
 
     // Step 2: Start daemon (blocks until ready — `daemon start` waits
     // until all drives are loaded before returning).
-    let mut start_args: Vec<&str> = vec!["daemon", "start"];
+    let mut start_args: Vec<&str> = vec!["--daemon", "start"];
     if let Some(f) = args.source_flag { start_args.push(f); start_args.push(&args.source_path); }
     let cli_str = format!("{bin} {}", start_args.join(" "));
     eprintln!("    ↳ {}", cli_str.dimmed());
@@ -1747,7 +1747,7 @@ fn ensure_daemon_ready(args: &ScriptArgs) -> u128 {
     }
 
     // Verify it's really ready now.
-    match run_uffs(bin, &["daemon", "status"]) {
+    match run_uffs(bin, &["--daemon", "status"]) {
         Ok((_code, stdout, stderr)) => {
             let ms = t0.elapsed().as_millis();
             let combined = format!("{stdout}{stderr}");
@@ -2057,8 +2057,8 @@ fn main() -> Result<()> {
     //                       MCP stdio sessions (this suite specifically
     //                       exercises the MCP surface, so the gateway
     //                       telemetry belongs in the summary).
-    print_uffs_command_block(&args.bin, &["daemon", "status"], "═══ Daemon STATUS ═══");
-    print_uffs_command_block(&args.bin, &["daemon", "stats"],  "═══ Daemon STATS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "status"], "═══ Daemon STATUS ═══");
+    print_uffs_command_block(&args.bin, &["--daemon", "stats"],  "═══ Daemon STATS ═══");
     print_uffs_command_block(&args.bin, &["status"],           "═══ MCP STATUS (system-wide) ═══");
 
     if failed > 0 {

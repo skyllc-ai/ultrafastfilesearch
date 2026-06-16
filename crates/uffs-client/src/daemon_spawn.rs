@@ -27,7 +27,7 @@ use crate::daemon_child::DaemonChildHandle;
 /// the spawn succeeds only if the current process is already elevated;
 /// otherwise it returns [`crate::error::ClientError::DaemonNeedsElevation`] and
 /// the CLI renders an actionable message.  Callers that actually want the
-/// UAC dialog (e.g. `uffs daemon start --elevate`) must opt in with
+/// UAC dialog (e.g. `uffs --daemon start --elevate`) must opt in with
 /// [`ElevationPolicy::AllowUacPrompt`].
 ///
 /// Has no effect on Unix — Unix spawn never triggers UAC.
@@ -45,7 +45,7 @@ pub(crate) enum ElevationPolicy {
     /// When not elevated, request a UAC prompt via `ShellExecuteW`
     /// with the `"runas"` verb.  Preserves the pre-v0.5.36 behavior.
     ///
-    /// Used by `uffs daemon start --elevate` and by auto-spawn paths
+    /// Used by `uffs --daemon start --elevate` and by auto-spawn paths
     /// when the environment variable `UFFS_ELEVATE=1` is set.
     AllowUacPrompt,
 }
@@ -54,7 +54,7 @@ pub(crate) enum ElevationPolicy {
 ///
 /// Rules, in priority order:
 ///
-/// 1. If `force_allow` is `true` (e.g. `uffs daemon start --elevate`), return
+/// 1. If `force_allow` is `true` (e.g. `uffs --daemon start --elevate`), return
 ///    [`ElevationPolicy::AllowUacPrompt`].
 /// 2. Otherwise, if `env_value` contains a truthy token (`1`, `true`, `yes`,
 ///    `on`, case-insensitive — leading/trailing whitespace is trimmed), return
@@ -269,9 +269,9 @@ fn spawn_via_uac_prompt(
 ///
 /// * An **empty** argument must become `""` — otherwise it collapses into the
 ///   separating space and disappears from the child's argv.  This is exactly
-///   what caused the silent `uffs daemon start` failure (`LOG/Output`): the CLI
-///   pushed `["--log-level", ""]` and the child saw only `--log-level`, then
-///   consumed the *next* flag as its value.
+///   what caused the silent `uffs --daemon start` failure (`LOG/Output`): the
+///   CLI pushed `["--log-level", ""]` and the child saw only `--log-level`,
+///   then consumed the *next* flag as its value.
 /// * If the arg contains no whitespace, double-quote, or control chars, emit it
 ///   verbatim — cheap and readable.
 /// * Otherwise wrap in `"..."` and, inside the quotes, double every run of

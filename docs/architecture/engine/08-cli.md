@@ -94,7 +94,7 @@ uffs * --files-only --min-size 1048576  # Files > 1MB
 |------------|-------------|
 | `uffs index` | Build and save a Parquet index from MFT |
 | `uffs info` | Show NTFS volume information |
-| `uffs stats` | Display index statistics |
+| `uffs --stats` | Display index statistics |
 | `uffs save-raw` | Save raw MFT data to file |
 | `uffs load-raw` | Load and display raw MFT file |
 

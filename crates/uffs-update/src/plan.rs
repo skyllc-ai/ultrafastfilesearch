@@ -4,7 +4,7 @@
 //! Typed read of the Phase-B snapshot (design §13) — the input to apply,
 //! quiesce, and restore.
 //!
-//! The snapshot is written by `uffs update --snapshot` (in `uffs-cli`);
+//! The snapshot is written by `uffs --update --snapshot` (in `uffs-cli`);
 //! the apply helper reads it back here. Only the fields the mutating
 //! phases need are modelled; unknown fields are ignored so the schema can
 //! grow without breaking older helpers.

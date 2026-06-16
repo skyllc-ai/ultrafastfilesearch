@@ -8,7 +8,7 @@
 
 /// Aggregate analytics subcommand.
 pub mod aggregate;
-/// `uffs daemon load` — hot-load MFT file(s) into a running daemon.
+/// `uffs --daemon load` — hot-load MFT file(s) into a running daemon.
 ///
 /// Split off `daemon_mgmt` so the lifecycle file stays under the
 /// 800-LOC policy ceiling without a file-size exception (mirrors
@@ -31,13 +31,13 @@ pub mod output;
 pub mod search;
 /// Stats subcommand implementation.
 pub mod stats;
-/// Combined `uffs status` command.
+/// Combined `uffs --status` command.
 pub(crate) mod system_status;
-/// `uffs update` — self-update detection (Phase A of the self-update design).
+/// `uffs --update` — self-update detection (Phase A of the self-update design).
 pub(crate) mod update;
 
 /// Render a one-line version summary suitable for `daemon status`,
-/// `daemon stats`, and `uffs status` output.
+/// `daemon stats`, and `uffs --status` output.
 ///
 /// `daemon_version` is the daemon-reported `env!("CARGO_PKG_VERSION")`
 /// from [`uffs_client::protocol::response::StatusResponse::version`]

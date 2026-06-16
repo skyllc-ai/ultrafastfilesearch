@@ -410,7 +410,7 @@ fn promote_letter_already_warm_returns_none() {
 
 /// `promote_letter_to_hot` from a `Cold` source bumps the per-shard
 /// `promotions_total` counter by 1 — the canonical
-/// `uffs daemon preload <drive>`-against-evicted-drive path that
+/// `uffs --daemon preload <drive>`-against-evicted-drive path that
 /// Phase 9 wires through.
 #[test]
 fn promote_letter_to_hot_bumps_promotions_total_when_source_is_cold() {

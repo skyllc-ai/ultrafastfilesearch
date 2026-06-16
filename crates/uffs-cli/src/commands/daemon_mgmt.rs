@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! `uffs daemon {status|stop|kill|restart}` subcommand handlers.
+//! `uffs --daemon {status|stop|kill|restart}` subcommand handlers.
 
 use anyhow::{Context as _, Result};
 use uffs_client::connect_sync::UffsClientSync;
@@ -52,7 +52,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
                  \x20 1. Relaunch PowerShell / cmd as Administrator\n\
                  \x20    (right-click \u{2192} \"Run as administrator\"), then retry.\n\
                  \x20 2. For `daemon start`, add --elevate to get a UAC prompt:\n\
-                 \x20      uffs daemon start --elevate\n\
+                 \x20      uffs --daemon start --elevate\n\
                  \x20 3. Install the broker service (one-time setup, no future UAC):\n\
                  \x20      uffs-broker --install"
             );
@@ -63,7 +63,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
                  A non-root process must not stop or restart it — doing so would\n\
                  kill the running daemon with no way to bring it back.\n\n\
                  To run this command, prefix it with sudo:\n\
-                 \x20  sudo uffs daemon <subcommand>"
+                 \x20  sudo uffs --daemon <subcommand>"
             );
             // Fallback for platforms that are neither Windows nor Unix
             // (e.g. WASM, bare-metal targets — should not arise in practice).
@@ -117,7 +117,7 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
     }
 }
 
-/// `uffs daemon start` — start the daemon, forwarding data-source flags
+/// `uffs --daemon start` — start the daemon, forwarding data-source flags
 /// as-is so the daemon resolves them internally (DRY).
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 #[expect(
@@ -135,7 +135,7 @@ fn daemon_start(
 ) -> Result<()> {
     // Already running?
     if UffsClientSync::connect_raw().is_ok() {
-        println!("Daemon is already running. Use `uffs daemon restart` to reload.");
+        println!("Daemon is already running. Use `uffs --daemon restart` to reload.");
         return Ok(());
     }
 
@@ -256,7 +256,7 @@ fn daemon_start(
     Ok(())
 }
 
-/// `uffs daemon status` — show daemon status, PID, loaded drives.
+/// `uffs --daemon status` — show daemon status, PID, loaded drives.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn daemon_status() -> Result<()> {
     let Ok(mut client) = UffsClientSync::connect_raw() else {
@@ -415,7 +415,7 @@ const fn tier_marker(tier: Option<ShardTier>) -> &'static str {
 /// Visible to sibling command modules (`daemon_tiering.rs`) so the
 /// graceful "daemon down" rendering stays consistent across every
 /// read-only daemon command — the operator sees the **same** stdout
-/// shape from `uffs daemon status` and `uffs daemon status_drives`
+/// shape from `uffs --daemon status` and `uffs --daemon status_drives`
 /// when the daemon happens to be down.  Mutating commands
 /// (`hibernate` / `preload` / `forget`) deliberately stay on the
 /// bail-with-error path because the operator should know their
@@ -429,7 +429,7 @@ pub(crate) fn print_not_running() {
     }
 }
 
-/// `uffs daemon stats` — show performance metrics.
+/// `uffs --daemon stats` — show performance metrics.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn daemon_stats() -> Result<()> {
     if let Ok(mut client) = UffsClientSync::connect_raw() {
@@ -496,13 +496,13 @@ fn compute_hit_rate_percent(hits: u64, lookups: u64) -> f64 {
     (hits as f64 / lookups as f64) * 100.0_f64
 }
 
-/// `uffs daemon stop` — graceful shutdown via RPC.
+/// `uffs --daemon stop` — graceful shutdown via RPC.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn daemon_stop() -> Result<()> {
     if let Ok(mut client) = UffsClientSync::connect_raw() {
         client
             .shutdown()
-            .with_context(|| "Shutdown RPC failed — try `uffs daemon kill` instead")?;
+            .with_context(|| "Shutdown RPC failed — try `uffs --daemon kill` instead")?;
         println!("Daemon shutdown requested.");
     } else {
         println!("Daemon is not running.");
@@ -510,7 +510,7 @@ fn daemon_stop() -> Result<()> {
     Ok(())
 }
 
-/// `uffs daemon kill` — hard kill via PID file or socket discovery + cleanup.
+/// `uffs --daemon kill` — hard kill via PID file or socket discovery + cleanup.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn daemon_kill() {
     let pid_path = pid_file_path();
@@ -561,7 +561,7 @@ fn kill_pid(pid: u32) {
     }
 }
 
-/// `uffs daemon restart` — stop, capture data sources, then re-launch.
+/// `uffs --daemon restart` — stop, capture data sources, then re-launch.
 ///
 /// If the daemon is running, queries its loaded drives to extract the
 /// original `--mft-file` paths, stops it, then re-spawns with the same
@@ -587,7 +587,7 @@ fn daemon_restart() -> Result<()> {
         client.shutdown().with_context(|| {
             format!(
                 "Graceful shutdown of PID {daemon_pid} failed.\n\
-                 Run `uffs daemon kill` first, then retry."
+                 Run `uffs --daemon kill` first, then retry."
             )
         })?;
 
@@ -639,7 +639,7 @@ fn daemon_restart() -> Result<()> {
 /// `std::env::var("X")` returns `Ok("")` when a shell has left `X` set to the
 /// empty string (common in PowerShell after a sub-script unsets a variable
 /// via assignment rather than `Remove-Item Env:\X`).  Treating that as a real
-/// value is what caused the silent `uffs daemon start` failure documented in
+/// value is what caused the silent `uffs --daemon start` failure documented in
 /// `LOG/Output`: the CLI forwarded `--log-level ""` and
 /// `--log-file uffsd.log` (relative path, from `""+"/uffsd.log"`) to uffsd,
 /// uffsd's `tracing_appender::rolling::never("", "uffsd.log")` then panicked

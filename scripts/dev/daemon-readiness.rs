@@ -144,7 +144,7 @@ struct Cli {
     /// ```
     ///
     /// Adds ~`<value>` seconds of wall-clock to the run.  Mirrors
-    /// the Windows-host runbook gate **G6 — `uffs daemon preload` pin
+    /// the Windows-host runbook gate **G6 — `uffs --daemon preload` pin
     /// contract survives idle TTL** (Ctrl-F for `G6 —` in
     /// `docs/architecture/memory-tiering-windows-host-validation.md`).
     /// Reference uses the gate ID, not the section number, so future
@@ -388,12 +388,12 @@ impl Runner {
     // ── Helpers ──────────────────────────────────────────────────────────
 
     fn ensure_stopped(&self) {
-        let _ = self.run_ok(&["daemon", "kill"]);
+        let _ = self.run_ok(&["--daemon", "kill"]);
         // Poll until the daemon is actually gone (up to 10s).
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
-            if let Ok(out) = self.run_ok(&["daemon", "status"]) {
+            if let Ok(out) = self.run_ok(&["--daemon", "status"]) {
                 if out.contains("not running") { return; }
             }
         }
@@ -403,7 +403,7 @@ impl Runner {
         // Poll for up to 5s — on Windows, process teardown can be slow.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let out = self.run_ok(&["daemon", "status"])?;
+            let out = self.run_ok(&["--daemon", "status"])?;
             if out.contains("not running") { return Ok(()); }
             if Instant::now() >= deadline {
                 bail!("Expected 'not running', got:\n{out}");
@@ -413,7 +413,7 @@ impl Runner {
     }
 
     fn assert_ready(&self) -> Result<String> {
-        let out = self.run_ok(&["daemon", "status"])?;
+        let out = self.run_ok(&["--daemon", "status"])?;
         if !out.contains("Ready") {
             bail!("Expected 'Ready', got:\n{out}");
         }
@@ -422,7 +422,7 @@ impl Runner {
     }
 
     fn start_daemon(&self) -> Result<String> {
-        let mut args: Vec<&str> = vec!["daemon", "start"];
+        let mut args: Vec<&str> = vec!["--daemon", "start"];
         args.extend(self.source_args());
         self.run_ok(&args)
     }
@@ -443,22 +443,22 @@ impl Runner {
     // hibernate (RAM-only release) vs preload (cold-boot decrypt) vs
     // forget (registry eviction + four-file unlink) costs.
 
-    /// `uffs daemon status_drives` — Phase 8-E table.  Returns the raw
+    /// `uffs --daemon status_drives` — Phase 8-E table.  Returns the raw
     /// stdout; callers parse it with `parse_drive_tier` /
     /// `parse_pin_until` / `parse_promotions_total`.
     fn status_drives(&mut self) -> Result<(String, u128)> {
         let t = Instant::now();
-        let out = self.run_ok(&["daemon", "status_drives"])?;
+        let out = self.run_ok(&["--daemon", "status_drives"])?;
         let ms = t.elapsed().as_millis();
         self.phase8_timings.push(("status_drives".to_owned(), ms));
         Ok((out, ms))
     }
 
-    /// `uffs daemon hibernate [DRIVES...]` — Phase 8-B.  Empty `drives`
+    /// `uffs --daemon hibernate [DRIVES...]` — Phase 8-B.  Empty `drives`
     /// hibernates every loaded drive.
     fn hibernate(&mut self, drives: &[char]) -> Result<(String, u128)> {
         let drive_strs: Vec<String> = drives.iter().map(|c| c.to_string()).collect();
-        let mut args: Vec<&str> = vec!["daemon", "hibernate"];
+        let mut args: Vec<&str> = vec!["--daemon", "hibernate"];
         for s in &drive_strs {
             args.push(s);
         }
@@ -469,7 +469,7 @@ impl Runner {
         Ok((out, ms))
     }
 
-    /// `uffs daemon preload <DRIVE> --pin-minutes N` — Phase 8-C.
+    /// `uffs --daemon preload <DRIVE> --pin-minutes N` — Phase 8-C.
     fn preload(&mut self, drive: char, pin_minutes: u32) -> Result<(String, u128)> {
         let drive_s = drive.to_string();
         let pin_s = pin_minutes.to_string();
@@ -481,11 +481,11 @@ impl Runner {
         Ok((out, ms))
     }
 
-    /// `uffs daemon forget <DRIVE> [--force]` — Phase 8-D.
+    /// `uffs --daemon forget <DRIVE> [--force]` — Phase 8-D.
     /// **Destructive:** deletes every per-drive cache file.
     fn forget(&mut self, drive: char, force: bool) -> Result<(String, u128)> {
         let drive_s = drive.to_string();
-        let mut args: Vec<&str> = vec!["daemon", "forget", &drive_s];
+        let mut args: Vec<&str> = vec!["--daemon", "forget", &drive_s];
         if force {
             args.push("--force");
         }
@@ -753,7 +753,7 @@ fn scenario_a(r: &mut Runner) {
         Ok(format!("[{n} rows]"))
     });
     r.step("A7  Stats show queries", |r| {
-        let out = r.run_ok(&["daemon", "stats"])?;
+        let out = r.run_ok(&["--daemon", "stats"])?;
         if !out.contains("Queries served:") { bail!("Missing stats"); }
         let detail: Vec<&str> = out.lines()
             .map(|l| l.trim())
@@ -763,7 +763,7 @@ fn scenario_a(r: &mut Runner) {
             .collect();
         Ok(detail.join(" | "))
     });
-    r.step("A8  Graceful stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("A8  Graceful stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
     r.step("A9  Verify stopped", |r| { r.assert_not_running()?; Ok(String::new()) });
 }
 
@@ -773,24 +773,24 @@ fn scenario_b(r: &mut Runner) {
     r.step("B0  Ensure stopped", |r| { r.ensure_stopped(); Ok(String::new()) });
     r.step("B1  Status when not running", |r| { r.assert_not_running()?; Ok(String::new()) });
     r.step("B2  Stop when not running", |r| {
-        let out = r.run_ok(&["daemon", "stop"])?;
+        let out = r.run_ok(&["--daemon", "stop"])?;
         if !out.contains("not running") { bail!("Expected 'not running', got: {out}"); }
         Ok(String::new())
     });
     r.step("B3  Kill when not running", |r| {
-        let out = r.run_ok(&["daemon", "kill"])?;
+        let out = r.run_ok(&["--daemon", "kill"])?;
         if !out.contains("No daemon found") && !out.contains("not running") {
             bail!("Expected no-daemon message, got: {out}");
         }
         Ok(String::new())
     });
     r.step("B4  Restart when not running", |r| {
-        let out = r.run_ok(&["daemon", "restart"])?;
+        let out = r.run_ok(&["--daemon", "restart"])?;
         if !out.contains("not running") { bail!("Expected 'not running', got: {out}"); }
         Ok(String::new())
     });
     r.step("B5  Stats when not running", |r| {
-        let out = r.run_ok(&["daemon", "stats"])?;
+        let out = r.run_ok(&["--daemon", "stats"])?;
         if !out.contains("not running") { bail!("Expected 'not running', got: {out}"); }
         Ok(String::new())
     });
@@ -807,7 +807,7 @@ fn scenario_c(r: &mut Runner) {
         Ok(String::new())
     });
     r.step("C3  Still Ready", |r| r.assert_ready());
-    r.step("C4  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("C4  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_d(r: &mut Runner) {
@@ -816,7 +816,7 @@ fn scenario_d(r: &mut Runner) {
     r.step("D0  Ensure stopped", |r| { r.ensure_stopped(); Ok(String::new()) });
     r.step("D1  Start daemon", |r| { r.start_daemon()?; Ok(String::new()) });
     r.step("D2  Verify Ready", |r| r.assert_ready());
-    r.step("D3  Kill -9", |r| { r.run_ok(&["daemon", "kill"])?; Ok(String::new()) });
+    r.step("D3  Kill -9", |r| { r.run_ok(&["--daemon", "kill"])?; Ok(String::new()) });
     r.step("D4  Verify stopped", |r| { r.assert_not_running()?; Ok(String::new()) });
     r.step("D5  Start after kill", |r| { r.start_daemon()?; Ok(String::new()) });
     r.step("D6  Verify Ready after kill→start", |r| r.assert_ready());
@@ -825,7 +825,7 @@ fn scenario_d(r: &mut Runner) {
         if n == 0 { bail!("Zero results after kill→start"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("D8  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("D8  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_e(r: &mut Runner) {
@@ -838,7 +838,7 @@ fn scenario_e(r: &mut Runner) {
         if n == 0 { bail!("Zero results"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("E3  Stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("E3  Stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
     r.step("E4  Verify stopped", |r| { r.assert_not_running()?; Ok(String::new()) });
     r.step("E5  Start again", |r| { r.start_daemon()?; Ok(String::new()) });
     r.step("E6  Search after stop→start", |r| {
@@ -846,7 +846,7 @@ fn scenario_e(r: &mut Runner) {
         if n == 0 { bail!("Zero results"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("E7  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("E7  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_f(r: &mut Runner) {
@@ -860,14 +860,14 @@ fn scenario_f(r: &mut Runner) {
         if n == 0 { bail!("Zero results"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("F4  Restart", |r| { r.run_ok(&["daemon", "restart"])?; Ok(String::new()) });
+    r.step("F4  Restart", |r| { r.run_ok(&["--daemon", "restart"])?; Ok(String::new()) });
     r.step("F5  Verify Ready after restart", |r| r.assert_ready());
     r.step("F6  Search after restart", |r| {
         let n = r.search(1000)?;
         if n == 0 { bail!("Zero results after restart"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("F7  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("F7  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_g(r: &mut Runner) {
@@ -875,16 +875,16 @@ fn scenario_g(r: &mut Runner) {
 
     r.step("G0  Ensure stopped", |r| { r.ensure_stopped(); Ok(String::new()) });
     r.step("G1  Start", |r| { r.start_daemon()?; Ok(String::new()) });
-    r.step("G2  Restart #1", |r| { r.run_ok(&["daemon", "restart"])?; Ok(String::new()) });
+    r.step("G2  Restart #1", |r| { r.run_ok(&["--daemon", "restart"])?; Ok(String::new()) });
     r.step("G3  Verify Ready", |r| r.assert_ready());
-    r.step("G4  Restart #2", |r| { r.run_ok(&["daemon", "restart"])?; Ok(String::new()) });
+    r.step("G4  Restart #2", |r| { r.run_ok(&["--daemon", "restart"])?; Ok(String::new()) });
     r.step("G5  Verify Ready", |r| r.assert_ready());
     r.step("G6  Search after 2 restarts", |r| {
         let n = r.search(1000)?;
         if n == 0 { bail!("Zero results"); }
         Ok(format!("[{n} rows]"))
     });
-    r.step("G7  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("G7  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_h(r: &mut Runner) {
@@ -897,7 +897,7 @@ fn scenario_h(r: &mut Runner) {
         Ok(String::new())
     });
     r.step("H3  Stats show ≥3 queries", |r| {
-        let out = r.run_ok(&["daemon", "stats"])?;
+        let out = r.run_ok(&["--daemon", "stats"])?;
         let count_line = out.lines()
             .find(|l| l.contains("Queries served:"))
             .unwrap_or("");
@@ -908,7 +908,7 @@ fn scenario_h(r: &mut Runner) {
         if count < 3 { bail!("Expected ≥3 queries, got {count}"); }
         Ok(format!("[{count} queries]"))
     });
-    r.step("H4  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("H4  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 fn scenario_i(r: &mut Runner) {
@@ -917,7 +917,7 @@ fn scenario_i(r: &mut Runner) {
     r.step("I0  Ensure stopped", |r| { r.ensure_stopped(); Ok(String::new()) });
     r.step("I1  Start", |r| { r.start_daemon()?; Ok(String::new()) });
     r.step("I2  Verify Ready", |r| r.assert_ready());
-    r.step("I3  Kill", |r| { r.run_ok(&["daemon", "kill"])?; Ok(String::new()) });
+    r.step("I3  Kill", |r| { r.run_ok(&["--daemon", "kill"])?; Ok(String::new()) });
     r.step("I4  Status → not running", |r| { r.assert_not_running()?; Ok(String::new()) });
 }
 
@@ -932,7 +932,7 @@ fn scenario_j(r: &mut Runner) {
         Ok(format!("[{n} rows, daemon auto-started]"))
     });
     r.step("J3  Verify daemon now running", |r| r.assert_ready());
-    r.step("J4  Cleanup: stop", |r| { r.run_ok(&["daemon", "stop"])?; Ok(String::new()) });
+    r.step("J4  Cleanup: stop", |r| { r.run_ok(&["--daemon", "stop"])?; Ok(String::new()) });
 }
 
 // ── Startup Timing (COLD → WARM → HOT) ──────────────────────────────────────
@@ -970,7 +970,7 @@ fn delete_cache() {
 /// Measure daemon start + first-query timing at a given cache level.
 fn measure_startup(r: &Runner, label: &str) -> Result<(u128, u128, usize)> {
     // 1. Start daemon (blocking).
-    let mut start_args: Vec<&str> = vec!["daemon", "start"];
+    let mut start_args: Vec<&str> = vec!["--daemon", "start"];
     let sa = r.source_args();
     start_args.extend(&sa);
     let t0 = Instant::now();
@@ -1109,7 +1109,7 @@ fn scenario_l(r: &mut Runner) {
         // the operator needs to know their mutation didn't run;
         // those error paths are exercised in scenarios M / N / O
         // when the daemon happens to be up and healthy.
-        let out = r.run_ok(&["daemon", "status_drives"])?;
+        let out = r.run_ok(&["--daemon", "status_drives"])?;
         let lower = out.to_lowercase();
         if !lower.contains("not running") {
             bail!(
@@ -1221,7 +1221,7 @@ fn scenario_l(r: &mut Runner) {
     });
 
     r.step("L8  Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -1318,7 +1318,7 @@ fn scenario_m(r: &mut Runner) {
     });
 
     r.step("M9  Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -1443,7 +1443,7 @@ fn scenario_n(r: &mut Runner) {
     }
 
     r.step("N9  Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -1555,7 +1555,7 @@ fn scenario_o(r: &mut Runner) {
     });
 
     r.step("O8  Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -1642,7 +1642,7 @@ fn scenario_p(r: &mut Runner) {
     });
 
     r.step("P10 Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -1828,7 +1828,7 @@ fn scenario_q(r: &mut Runner) {
     });
 
     r.step("Q10 Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -2015,7 +2015,7 @@ fn scenario_r(r: &mut Runner) {
     });
 
     r.step("R13 Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }
@@ -2228,7 +2228,7 @@ fn scenario_s(r: &mut Runner) {
     });
 
     r.step("S12 Cleanup: stop", |r| {
-        r.run_ok(&["daemon", "stop"])?;
+        r.run_ok(&["--daemon", "stop"])?;
         Ok(String::new())
     });
 }

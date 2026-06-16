@@ -243,11 +243,11 @@ impl Runner {
     /// Stop the daemon (if running) and wait up to 10 s for it to
     /// actually exit.  Idempotent on a stopped daemon.
     fn ensure_stopped(&self) {
-        let _ = self.run_ok(&["daemon", "kill"]);
+        let _ = self.run_ok(&["--daemon", "kill"]);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
-            if let Ok(out) = self.run_ok(&["daemon", "status"]) {
+            if let Ok(out) = self.run_ok(&["--daemon", "status"]) {
                 if out.contains("not running") {
                     return;
                 }
@@ -261,7 +261,7 @@ impl Runner {
     /// `daemon start` blocks until Ready (or errors), so callers
     /// don't need their own poll loop.
     fn start_daemon(&self) -> Result<()> {
-        let mut args: Vec<&str> = vec!["daemon", "start"];
+        let mut args: Vec<&str> = vec!["--daemon", "start"];
         args.extend(self.source_args());
         let out = self.run_raw_with_env(
             &args,
@@ -282,7 +282,7 @@ impl Runner {
 
     /// Sanity-check that the daemon is Ready and report drive count.
     fn assert_ready(&self) -> Result<usize> {
-        let out = self.run_ok(&["daemon", "status"])?;
+        let out = self.run_ok(&["--daemon", "status"])?;
         if !out.contains("Ready") {
             bail!("expected 'Ready' in `daemon status`, got:\n{out}");
         }
@@ -290,12 +290,12 @@ impl Runner {
     }
 
     fn hibernate_all(&self) -> Result<()> {
-        self.run_ok(&["daemon", "hibernate"])?;
+        self.run_ok(&["--daemon", "hibernate"])?;
         Ok(())
     }
 
     fn status_drives_table(&self) -> Result<String> {
-        self.run_ok(&["daemon", "status_drives"])
+        self.run_ok(&["--daemon", "status_drives"])
     }
 
     /// Run the configured search, return wall-clock millis.  Stdout

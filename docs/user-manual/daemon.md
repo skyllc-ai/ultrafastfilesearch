@@ -18,7 +18,7 @@ Searches that would normally take 60+ seconds to load data complete in
 ┌─────────┐                          ┌─────────────┐
 │ uffs CLI ├──── JSON-RPC over ──────┤ uffs-daemon  │
 │ uffs_tui │     local IPC socket    │  (in-memory  │
-│ uffs mcp │                         │   MFT index) │
+│ uffs --mcp │                         │   MFT index) │
 └─────────┘                          └─────────────┘
 ```
 
@@ -42,10 +42,10 @@ On non-Windows platforms, the daemon works with MFT capture files (`.iocp`,
 
 ```bash
 # Start the daemon with a data directory
-uffs daemon start --data-dir ~/uffs_data
+uffs --daemon start --data-dir ~/uffs_data
 
 # Or with individual MFT files
-uffs daemon start --mft-file /path/to/C_mft.iocp --mft-file /path/to/D_mft.iocp
+uffs --daemon start --mft-file /path/to/C_mft.iocp --mft-file /path/to/D_mft.iocp
 
 # Search (daemon is already running — instant results)
 uffs "*.rs" --data-dir ~/uffs_data
@@ -64,13 +64,13 @@ directly.  No `--data-dir` or `--mft-file` needed.
 
 ```powershell
 # Start the daemon (auto-discovers C:, D:, E:, ...)
-uffs daemon start
+uffs --daemon start
 
 # Search — daemon auto-starts if not running
 uffs "*.exe"
 
 # Force specific drives only
-uffs daemon start --drive C --drive D
+uffs --daemon start --drive C --drive D
 ```
 
 > **Note:** Live MFT access requires **Administrator privileges**.
@@ -109,14 +109,14 @@ removed on exit.
 | Disable retirement | `--no-retire` | Off |
 
 These flags are passed by the auto-start mechanism.  You can also set
-them on `uffs daemon start`:
+them on `uffs --daemon start`:
 
 ```bash
 # Never retire (run indefinitely)
-uffs daemon start --data-dir ~/uffs_data --idle-timeout 0
+uffs --daemon start --data-dir ~/uffs_data --idle-timeout 0
 
 # Retire after 30 minutes
-uffs daemon start --data-dir ~/uffs_data --idle-timeout 1800
+uffs --daemon start --data-dir ~/uffs_data --idle-timeout 1800
 ```
 
 ---
@@ -125,17 +125,17 @@ uffs daemon start --data-dir ~/uffs_data --idle-timeout 1800
 
 | Command | Description |
 |---------|-------------|
-| `uffs daemon start` | Start the daemon (with data sources) |
-| `uffs daemon status` | Show PID, uptime, loaded drives, record counts |
-| `uffs daemon stats` | Show performance metrics (queries, timing, startup) |
-| `uffs daemon stop` | Graceful shutdown via RPC |
-| `uffs daemon kill` | Hard kill + remove PID/socket files |
-| `uffs daemon restart` | Stop → re-start with same data sources |
+| `uffs --daemon start` | Start the daemon (with data sources) |
+| `uffs --daemon status` | Show PID, uptime, loaded drives, record counts |
+| `uffs --daemon stats` | Show performance metrics (queries, timing, startup) |
+| `uffs --daemon stop` | Graceful shutdown via RPC |
+| `uffs --daemon kill` | Hard kill + remove PID/socket files |
+| `uffs --daemon restart` | Stop → re-start with same data sources |
 
-### `uffs daemon status`
+### `uffs --daemon status`
 
 ```
-$ uffs daemon status
+$ uffs --daemon status
 Daemon PID:    72558
 Uptime:        145s
 Status:        Ready
@@ -146,10 +146,10 @@ Connections:   1
   ...
 ```
 
-### `uffs daemon stats`
+### `uffs --daemon stats`
 
 ```
-$ uffs daemon stats
+$ uffs --daemon stats
 ═══ Daemon Performance Stats ═══
 Uptime:            591s
 Startup duration:  10871ms
@@ -168,7 +168,7 @@ The daemon runs detached — its stdout is `/dev/null`.  To capture logs,
 use `--log-file` and `--log-level`:
 
 ```bash
-uffs daemon start --data-dir ~/uffs_data \
+uffs --daemon start --data-dir ~/uffs_data \
     --log-level debug \
     --log-file ~/uffs_daemon.log
 ```
@@ -200,7 +200,7 @@ logging — see [Advanced Diagnostics](advanced-diagnostics.md) for details.
 | Linux | `$XDG_RUNTIME_DIR/uffs/uffs-daemon.sock` or `/tmp/uffs/uffs-daemon.sock` |
 | Windows | `\\.\pipe\uffs-daemon` |
 
-PID files are stored alongside the socket.  `uffs daemon kill` removes
+PID files are stored alongside the socket.  `uffs --daemon kill` removes
 both if a graceful stop fails.
 
 ---
@@ -236,11 +236,11 @@ stdout formatting.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Connection refused" on search | Daemon not running | Let auto-start handle it, or `uffs daemon start` |
-| Stale PID file | Previous daemon crashed | `uffs daemon kill` removes PID + socket |
+| "Connection refused" on search | Daemon not running | Let auto-start handle it, or `uffs --daemon start` |
+| Stale PID file | Previous daemon crashed | `uffs --daemon kill` removes PID + socket |
 | First search slow after restart | MFT being loaded | Normal — ~7 s warm cache (or ~66 s cold), sub-second after |
 | "Permission denied" (Windows) | Not running as Admin | Right-click terminal → "Run as administrator" |
-| Multiple daemons running | Rare race condition | `uffs daemon kill` + `uffs daemon start` |
+| Multiple daemons running | Rare race condition | `uffs --daemon kill` + `uffs --daemon start` |
 
 > **More troubleshooting:** [Troubleshooting](troubleshooting.md)
 

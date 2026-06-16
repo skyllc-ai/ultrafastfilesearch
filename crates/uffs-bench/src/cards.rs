@@ -220,8 +220,8 @@ pub(crate) fn uffs_restart_card(capable_drives: &[char], step_num: u32, step_tot
          The bench will kill it and restart it with only those drives so index RAM, \
          warmup time, and query routing are confined to the drives under test."
     );
-    let cmd_kill = "uffs daemon kill".to_owned();
-    let cmd_start = format!("uffs daemon start {drive_args}");
+    let cmd_kill = "uffs --daemon kill".to_owned();
+    let cmd_start = format!("uffs --daemon start {drive_args}");
     Card {
         id: "uffs-daemon-restart".to_owned(),
         stage: "STAGE 0: PREFLIGHT".to_owned(),
@@ -234,12 +234,12 @@ pub(crate) fn uffs_restart_card(capable_drives: &[char], step_num: u32, step_tot
             .iter()
             .map(|ch| format!("{ch}: (UFFS index)"))
             .collect(),
-        backups: vec!["uffs daemon run-state: restored to as-found state on teardown".to_owned()],
+        backups: vec!["uffs --daemon run-state: restored to as-found state on teardown".to_owned()],
         est_time: "~10-60 s (index load)".to_owned(),
         recovery: "Aborting here keeps the daemon in its current state — all drives remain loaded."
             .to_owned(),
         long_why: format!(
-            "{why}\n\nThe daemon is stopped with `uffs daemon kill` (hard stop) rather than \
+            "{why}\n\nThe daemon is stopped with `uffs --daemon kill` (hard stop) rather than \
              `restart` because `restart` reloads with the previous drive set. \
              On teardown the bench will stop the restricted instance so your normal \
              daemon session can reload with all drives on next use."

@@ -403,7 +403,7 @@ fn run_null_matrix(cfg: &Cfg) {
                 size, p50(&times), p95(&times), p_min(&times),
             ));
         }
-        // uffs search (hot, tiny result, to NUL)
+        // uffs --search (hot, tiny result, to NUL)
         let drive_arg = format!("--drive={}", cfg.drive);
         let times = measure_binary(&cfg.uffs_bin,
             &["notepad.exe", &drive_arg, "--columns", "Path"],
@@ -532,24 +532,24 @@ fn run_startup(cfg: &Cfg) {
 
     // 2. Status (connects to daemon, no search)
     let t_status = measure_binary(&cfg.uffs_bin, &["status"], cfg.rounds,
-        "uffs status (+ daemon connect)", || Stdio::null());
+        "uffs --status (+ daemon connect)", || Stdio::null());
 
     // 3. Tiny search → NUL (connect + search + serialize, no output)
     let t_search_nul = measure_binary(&cfg.uffs_bin,
         &["notepad.exe", &drive_arg, "--columns", "Path"],
-        cfg.rounds, "uffs search tiny → NUL", || Stdio::null());
+        cfg.rounds, "uffs --search tiny → NUL", || Stdio::null());
 
     // 4. Tiny search → stdout (adds console output cost)
     let t_search_stdout = measure_binary(&cfg.uffs_bin,
         &["notepad.exe", &drive_arg, "--columns", "Path"],
-        cfg.rounds, "uffs search tiny → stdout", || Stdio::piped());
+        cfg.rounds, "uffs --search tiny → stdout", || Stdio::piped());
 
     // 5. Tiny search → --out file (daemon-direct file write)
     let out_file = cfg.build_dir.join("startup_bench_out.csv");
     let out_arg = format!("--out={}", out_file.display());
     let t_search_file = measure_binary(&cfg.uffs_bin,
         &["notepad.exe", &drive_arg, "--columns", "Path", &out_arg],
-        cfg.rounds, "uffs search tiny → --out file", || Stdio::null());
+        cfg.rounds, "uffs --search tiny → --out file", || Stdio::null());
     let _ = fs::remove_file(&out_file);
 
     // 6. Medium search → NUL (more rows, IPC transfer cost)
@@ -673,7 +673,7 @@ fn run_ipc(cfg: &Cfg) {
 
     let drive_arg = format!("--drive={}", cfg.drive);
 
-    // Current IPC path: uffs search with --profile (shows IPC breakdown)
+    // Current IPC path: uffs --search with --profile (shows IPC breakdown)
     eprintln!("── Current IPC (AF_UNIX socket + JSON-RPC) ──\n");
 
     // Tiny result — IPC overhead dominates

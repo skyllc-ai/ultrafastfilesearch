@@ -725,11 +725,11 @@ fn wait_with_timeout_partial(mut child: Child, timeout: Duration) -> Result<Wait
 
 // ── Daemon sanity ─────────────────────────────────────────────────────────
 
-/// Emit a one-time `uffs daemon status` summary before the matrix so
+/// Emit a one-time `uffs --daemon status` summary before the matrix so
 /// a zero-rows run is obviously a "daemon has no drives" issue rather
 /// than a streaming regression.
 fn print_daemon_banner(bin: &Path) {
-    let out = Command::new(bin).args(["daemon", "status"]).output();
+    let out = Command::new(bin).args(["--daemon", "status"]).output();
     match out {
         Ok(o) => {
             let combined = format!(

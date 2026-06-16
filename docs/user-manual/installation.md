@@ -80,10 +80,10 @@ This downloads the latest release binaries and installs them to `~/bin`.
 5. To start the MCP server for AI agents:
 
    ```powershell
-   uffs mcp start
+   uffs --mcp start
    ```
 
-   Run `uffs mcp --help` for instructions on how to configure
+   Run `uffs --mcp --help` for instructions on how to configure
    Claude, Cursor, Windsurf, and other AI agents to connect to the
    MCP server.
 
