@@ -14,16 +14,6 @@
 //! recover phases drive it. Keeping it side-effect-free (besides its own
 //! file) makes the invariants in §19.0 unit-testable.
 
-// The journal API is built ahead of its consumers: the apply and
-// recover phases (the next slices on this branch) call `commit`,
-// `set_binary_status`, `needs_recovery`, etc. Until they land, those are
-// exercised only by the unit tests below. Each `expect` is removed as
-// its method gets wired in.
-#![expect(
-    dead_code,
-    reason = "journal API built ahead of its apply/recover consumers (next slices on this branch)"
-)]
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};

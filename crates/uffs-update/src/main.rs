@@ -18,7 +18,9 @@ mod github;
 mod journal;
 mod orchestrate;
 mod plan;
+mod proc;
 mod quiesce;
+mod recover;
 mod restore;
 mod verify;
 
@@ -34,11 +36,14 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("acquire") => run_acquire(args.get(1..).unwrap_or_default()),
         Some("apply") => run_apply(args.get(1..).unwrap_or_default()),
+        Some("recover") => run_recover(args.get(1..).unwrap_or_default()),
         Some("--help" | "-h") | None => {
             print_usage();
             Ok(())
         }
-        Some(other) => bail!("unknown subcommand `{other}` (try `acquire` / `apply`)"),
+        Some(other) => {
+            bail!("unknown subcommand `{other}` (try `acquire` / `apply` / `recover`)")
+        }
     }
 }
 
@@ -58,6 +63,8 @@ fn run_apply(args: &[String]) -> Result<()> {
     let backup_dir = update_dir.join(format!("backup-{}", std::process::id()));
     let journal_path = update_dir.join("journal.json");
     let mut journal = orchestrate::journal_from_snapshot(journal_path, &snapshot, backup_dir);
+    // Record the snapshot so Phase H can restore service state on recovery.
+    journal.snapshot_ref = Some(snapshot_path.display().to_string());
     journal.transition(journal::UpdateState::Acquired, "apply.acquired")?;
 
     // Stop the resident services so their files unlock.
@@ -92,6 +99,20 @@ fn run_apply(args: &[String]) -> Result<()> {
     orchestrate::prune_all(&journal);
     journal.transition(journal::UpdateState::Done, "apply.done")?;
     println!("Applied + committed → {}", journal.to_version);
+    Ok(())
+}
+
+/// Parse the `recover` flags and run Phase H against a journal.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn run_recover(args: &[String]) -> Result<()> {
+    let journal_path = PathBuf::from(required(flag(args, "--journal"), "--journal <path>")?);
+    let message = match recover::recover(&journal_path)? {
+        recover::Recovery::NothingToDo => "nothing to do",
+        recover::Recovery::InProgress => "another update is in progress (owner alive)",
+        recover::Recovery::RolledForward => "interrupted update resumed → completed",
+        recover::Recovery::RolledBack => "interrupted update rolled back to the previous version",
+    };
+    println!("recover: {message}");
     Ok(())
 }
 

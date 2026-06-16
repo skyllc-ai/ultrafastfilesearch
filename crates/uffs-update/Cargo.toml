@@ -44,5 +44,13 @@ dirs-next.workspace = true
 # runtime overhead of a full client is unwarranted.
 reqwest.workspace = true
 
+# Native owner-PID liveness for Phase H (no fragile `tasklist`/`kill`
+# shell-outs). Both are already in the lock → cargo-vet stays green.
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true
