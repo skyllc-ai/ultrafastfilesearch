@@ -27,11 +27,14 @@ pub(crate) fn update_dir() -> PathBuf {
 /// # Errors
 ///
 /// Propagates any directory-create or file-write failure.
-pub(crate) fn write_snapshot(report: &DetectionReport) -> std::io::Result<PathBuf> {
+pub(crate) fn write_snapshot(
+    report: &DetectionReport,
+    to_version: Option<&str>,
+) -> std::io::Result<PathBuf> {
     let dir = update_dir();
     std::fs::create_dir_all(&dir)?;
     let captured_unix = unix_now();
-    let value = build_snapshot_value(report, &daemon_drive_state(), captured_unix);
+    let value = build_snapshot_value(report, &daemon_drive_state(), captured_unix, to_version);
     let path = dir.join(format!("snapshot-{captured_unix}.json"));
     let body = serde_json::to_string_pretty(&value)
         .unwrap_or_else(|_| "{\"schema\":2,\"error\":\"serialize\"}".to_owned());
@@ -74,6 +77,7 @@ fn build_snapshot_value(
     report: &DetectionReport,
     daemon_drives: &[Value],
     captured_unix: u64,
+    to_version: Option<&str>,
 ) -> Value {
     let targets: Vec<Value> = report
         .roots
@@ -109,6 +113,9 @@ fn build_snapshot_value(
     json!({
         "schema": 2,
         "captured_unix": captured_unix,
+        // The release the apply is moving *to* (so the journal records it
+        // and `Applied + committed → <tag>` is faithful, not "unknown").
+        "to_version": to_version,
         "targets": targets,
         "running": running,
         "daemon": { "drives": daemon_drives },
@@ -149,7 +156,8 @@ mod tests {
     #[test]
     fn snapshot_shape_is_stable() {
         let drives = vec![json!({"letter": "C", "tier": "warm"})];
-        let value = build_snapshot_value(&sample_report(), &drives, 1_700_000_000_u64);
+        let value =
+            build_snapshot_value(&sample_report(), &drives, 1_700_000_000_u64, Some("0.6.3"));
         // `pointer` avoids panicking index ops; `json!(typed)` pins the
         // expected literal type (no default numeric fallback).
         let probe = |path: &str, expected: serde_json::Value| {
@@ -157,6 +165,7 @@ mod tests {
         };
         probe("/schema", json!(2_u64));
         probe("/captured_unix", json!(1_700_000_000_u64));
+        probe("/to_version", json!("0.6.3"));
         probe("/targets/0/channel", json!("unmanaged"));
         probe("/targets/0/anchored_by/1", json!("daemon"));
         probe("/targets/0/binaries/0/on_disk_version", json!("0.6.2"));

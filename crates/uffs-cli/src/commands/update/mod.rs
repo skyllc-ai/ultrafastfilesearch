@@ -66,11 +66,11 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     if let Some(act) = action
         && !matches!(
             act,
-            "check" | "snapshot" | "acquire" | "apply" | "doctor" | "recover"
+            "check" | "snapshot" | "acquire" | "apply" | "doctor" | "repair" | "recover"
         )
     {
         bail!(
-            "unknown `--update` action `{act}` — expected: check | snapshot | acquire | apply | doctor | recover"
+            "unknown `--update` action `{act}` — expected: check | snapshot | acquire | apply | doctor | repair | recover"
         );
     }
 
@@ -85,12 +85,23 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         return self_heal::run_foreground();
     }
 
-    // `doctor` runs its own flow: detect → freeze a snapshot → hand off to the
-    // helper's health check (which prints its own report).
-    if action == Some("doctor") {
+    // `repair` is the first-class verb for `doctor --repair`; a bare `--repair`
+    // flag (with no action) means the same. Both route to the doctor health
+    // check with self-heal on — so the user never has to remember whether
+    // repair is a verb or a flag.
+    let repair = action == Some("repair") || args.iter().any(|arg| arg == "--repair");
+
+    // `doctor` (diagnose) and `repair` (diagnose + self-heal) share one flow:
+    // detect → freeze a snapshot → hand off to the helper's health check
+    // (which prints its own report). A health-check snapshot has no target.
+    if action == Some("doctor") || repair {
         let report = detect();
-        let snapshot_path = snapshot::write_snapshot(&report)?;
-        return doctor::spawn(&snapshot_path, args);
+        let snapshot_path = snapshot::write_snapshot(&report, None)?;
+        let mut forwarded: Vec<String> = args.to_vec();
+        if repair && !forwarded.iter().any(|arg| arg == "--repair") {
+            forwarded.push("--repair".to_owned());
+        }
+        return doctor::spawn(&snapshot_path, &forwarded);
     }
 
     let report = detect();
@@ -115,12 +126,12 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         }
         // `acquire` only stages + verifies; `apply` implies acquire then swaps.
         Some("acquire" | "apply") => {
-            let snapshot_path = snapshot::write_snapshot(&report)?;
-            acquire::spawn(
-                &snapshot_path,
-                flag_value(args, "--version").as_deref(),
-                verbose,
-            )?;
+            // The target this snapshot is for: an explicit `--version`, else
+            // the resolved latest — so the journal stamps `to_version`
+            // faithfully instead of "unknown".
+            let target = flag_value(args, "--version").or_else(acquire::latest_version);
+            let snapshot_path = snapshot::write_snapshot(&report, target.as_deref())?;
+            acquire::spawn(&snapshot_path, target.as_deref(), verbose)?;
             if action == Some("apply") {
                 apply::spawn(&snapshot_path, verbose)?;
             }
@@ -183,7 +194,7 @@ fn run_automatic_update(report: &DetectionReport, verbose: bool) -> Result<()> {
         }
         UpdatePlan::Available { latest } => {
             print_updating(&latest);
-            let snapshot_path = snapshot::write_snapshot(report)?;
+            let snapshot_path = snapshot::write_snapshot(report, Some(&latest))?;
             acquire::spawn(&snapshot_path, None, verbose)?;
             apply::spawn(&snapshot_path, verbose)?;
             print_updated(&latest);
@@ -254,7 +265,7 @@ fn flag_value(args: &[String], name: &str) -> Option<String> {
 /// Write a Phase-B snapshot and report where it landed.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn write_and_report_snapshot(report: &DetectionReport) {
-    match snapshot::write_snapshot(report) {
+    match snapshot::write_snapshot(report, None) {
         Ok(path) => println!("\nSnapshot written: {}", path.display()),
         Err(err) => {
             #[expect(clippy::print_stderr, reason = "CLI user-facing error")]
@@ -424,18 +435,23 @@ fn print_help() {
          \x20                     Journaled + auto-rollback on failure.\n\
          \x20 doctor              End-to-end health check (versions, dirs, journal,\n\
          \x20                     backups, services, broker pipe, release reach).\n\
+         \x20 repair              Diagnose + self-heal (= doctor --repair):\n\
+         \x20                     resume/roll back an interrupted update, sweep\n\
+         \x20                     stale backups, restart stopped services.\n\
          \x20 recover             Finish or roll back an interrupted update now\n\
          \x20                     (foreground; the on-demand self-heal).\n\n\
          OPTIONS:\n\
          \x20 -v, --verbose       Show the full breakdown — per-binary versions,\n\
          \x20                     PIDs, launch commands, every doctor check.\n\
          \x20 --version <tag>     Acquire/apply a specific release tag (default: latest).\n\
-         \x20 --repair            (doctor) self-heal what can be fixed.\n\
+         \x20 --repair            (doctor) self-heal what can be fixed (or use the\n\
+         \x20                     `repair` action above).\n\
          \x20 --offline           (doctor) skip the network checks.\n\n\
          EXAMPLES:\n\
          \x20 uffs --update                 update now (if needed)\n\
          \x20 uffs --update check           is a new release available?\n\
          \x20 uffs --update doctor          health-check the update flow\n\
+         \x20 uffs --update repair          self-heal the update flow\n\
          \x20 uffs --update apply --version v0.6.3   pin a specific release\n"
     );
 }

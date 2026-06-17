@@ -45,7 +45,15 @@ fn start_component(component: &str, running: &SnapRunning) -> bool {
     match component {
         "broker" => start_broker(),
         "daemon" => start_from_command_line(running, || daemon_pid_file().exists()),
-        "mcp" => start_from_command_line(running, || true),
+        // The stdio MCP server (`uffsmcp`) is spawned and OWNED by its LLM host
+        // (Claude Desktop / Cursor / Windsurf) over stdio — relaunching it
+        // detached has no client to serve. Quiesce stopped it only to free the
+        // `uffsmcp.exe` file lock for the swap; the host respawns it on the next
+        // tool call. So restoring mcp is a deliberate no-op (and a success, not
+        // a "failed to restart"). The HTTP gateway is a separate binary
+        // (`uffs-mcp-http`), never captured here — detection scans only for
+        // `uffsmcp`.
+        "mcp" => true,
         _ => false,
     }
 }
@@ -91,7 +99,22 @@ pub(crate) fn parse_command_line(cmd: &str) -> Option<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_command_line;
+    use super::{parse_command_line, start_component};
+    use crate::plan::SnapRunning;
+
+    #[test]
+    fn mcp_restore_is_noop_success() {
+        // A stdio `uffsmcp` is client-owned: restore must not relaunch it,
+        // and must report success (not a "failed to restart") so the commit
+        // path doesn't warn about a component it deliberately leaves alone.
+        let running = SnapRunning {
+            component: "mcp".to_owned(),
+            pid: 1,
+            image_path: None,
+            command_line: Some("uffsmcp".to_owned()),
+        };
+        assert!(start_component("mcp", &running));
+    }
 
     #[test]
     fn parses_switch_style_command_line() {

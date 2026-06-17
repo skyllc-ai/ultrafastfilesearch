@@ -146,7 +146,9 @@ impl Report {
             }
         }
         if !repair && (warn > 0 || fail > 0) {
-            println!("hint: re-run with `--repair` to self-heal what can be fixed automatically.");
+            println!(
+                "hint: run `uffs --update repair` to self-heal what can be fixed automatically."
+            );
         }
     }
 }
@@ -317,7 +319,7 @@ fn check_journal(update_dir: Option<&Path>, repair: bool, report: &mut Report) {
         report.add(
             Health::Warn,
             "Interrupted update found",
-            Some("owner gone — re-run with `--repair` to resume or roll back".to_owned()),
+            Some("owner gone — run `uffs --update repair` to resume or roll back".to_owned()),
         );
         return;
     }
