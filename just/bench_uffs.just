@@ -170,7 +170,7 @@ ship-crt-static:
 
     # Use a sibling target directory so the main release build cache
     # is not invalidated by the rustflags change.  Honors any active
-    # CARGO_TARGET_DIR (e.g. C:\rust-target\ttapi).
+    # CARGO_TARGET_DIR (e.g. C:\rust-target\uffs).
     if ($env:CARGO_TARGET_DIR) {
         $targetDir = "$env:CARGO_TARGET_DIR-crt-static"
     } else {
