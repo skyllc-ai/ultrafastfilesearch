@@ -18,11 +18,10 @@ If you discover a security vulnerability in UFFS, please report it responsibly
 through one of these channels:
 
 1. **GitHub Security Advisories (preferred)**
-   → [Report a vulnerability](https://github.com/githubrobbi/Ultra-Fast-File-Search/security/advisories/new)
+   → [Report a vulnerability](https://github.com/skyllc-ai/UltraFastFileSearch/security/advisories/new)
 
 2. **Email**
-   → Send details to the email address listed in the repository's `Cargo.toml`
-   under `[workspace.package]`.
+   → [`security@uffs.io`](mailto:security@uffs.io)
 
 ### What to include
 
