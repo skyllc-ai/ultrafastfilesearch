@@ -163,6 +163,33 @@ cargo build --release
 
 ---
 
+## Updating
+
+UFFS updates itself — one command keeps the whole install current:
+
+```bash
+uffs --update          # update to the latest release if needed (no-op if current)
+uffs --update check    # is a new release available? (non-mutating)
+```
+
+It downloads, SHA-256-verifies, and atomically swaps every core binary
+(journaled, with auto-rollback). It reconciles **any** starting state to a
+complete latest install — behind, version-skewed, or even missing a binary — and
+does nothing when you're already current.
+
+```bash
+uffs --update doctor                    # health-check the install
+uffs --update repair                    # diagnose + self-heal
+uffs --update apply --version v0.6.5    # pin / roll back to a specific release
+```
+
+> **WinGet installs** update with `winget upgrade SkyLLC.UFFS` instead — UFFS
+> defers to WinGet for WinGet-managed installs.
+
+> 📖 **[Full update guide](docs/user-manual/updating.md)** — every action, version pinning/rollback, the health check, and edge cases.
+
+---
+
 ## Quick Start
 
 > **Windows elevation — three ways.** Reading the live MFT needs Administrator. Easiest: install the **Access Broker** once (`uffs-broker --install`, from an elevated shell) and every later non-elevated `uffs` search runs with **no UAC prompt**, surviving reboots. Otherwise, run from an **elevated** terminal, or let the first search offer a one-time `uffs --daemon start --elevate` (a single UAC prompt). macOS/Linux offline analysis needs no elevation.
@@ -310,6 +337,7 @@ The older C++ implementation remains useful as a parity and regression baseline,
 | Topic | Link |
 |-------|------|
 | Installation | [docs/user-manual/installation.md](docs/user-manual/installation.md) |
+| Updating (self-update) | [docs/user-manual/updating.md](docs/user-manual/updating.md) |
 | Getting started (5 min) | [docs/user-manual/getting-started.md](docs/user-manual/getting-started.md) |
 | CLI overview & examples | [docs/user-manual/cli-overview.md](docs/user-manual/cli-overview.md) |
 | 40+ search filters | [docs/user-manual/filters.md](docs/user-manual/filters.md) |

@@ -72,6 +72,7 @@ Start here and follow the arrows.  Each page builds on the previous one.
 | Page | What you learn |
 |------|---------------|
 | [Installation](installation.md) | Build from source, platform requirements, PATH setup |
+| [Updating](updating.md) | Self-update: `uffs --update`, version pinning/rollback, doctor & repair |
 | [Getting Started](getting-started.md) | First search, understanding output, 5-minute tutorial |
 
 ### Core Usage
