@@ -173,6 +173,9 @@ enum UpdatePlan {
 fn assess(report: &DetectionReport) -> UpdatePlan {
     let installed = report::distinct_versions(report);
     let skewed = installed.len() > 1;
+    // A core binary missing from a real install root makes it *incomplete* —
+    // an update reconciles the full core set back into place.
+    let incomplete = has_missing_core(report);
     let Some(latest) = acquire::latest_version() else {
         return UpdatePlan::Offline;
     };
@@ -182,11 +185,27 @@ fn assess(report: &DetectionReport) -> UpdatePlan {
         // Zero or mixed versions → an update realigns the install.
         _ => true,
     };
-    if skewed || newer {
+    if skewed || newer || incomplete {
         UpdatePlan::Available { latest }
     } else {
         UpdatePlan::UpToDate { latest }
     }
+}
+
+/// True when any **unmanaged** install root is missing a core binary — i.e.
+/// the install is incomplete relative to the canonical set
+/// (`binaries::KNOWN_BINARIES`, the single source of truth). `WinGet` roots are
+/// delegated to `winget upgrade`, so they are not reconciled here.
+fn has_missing_core(report: &DetectionReport) -> bool {
+    report
+        .roots
+        .iter()
+        .filter(|root| root.channel.label() == "unmanaged")
+        .any(|root| {
+            binaries::KNOWN_BINARIES
+                .iter()
+                .any(|stem| !root.binaries.iter().any(|bin| bin.name == *stem))
+        })
 }
 
 /// Run the full end-to-end update when one is needed; otherwise report the

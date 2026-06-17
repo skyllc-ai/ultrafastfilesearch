@@ -88,6 +88,11 @@ pub(crate) struct BinaryEntry {
     /// Backup file name (in `backup_dir`) once backed up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) backup: Option<String>,
+    /// True when this binary was newly **added** (no prior file existed) by a
+    /// completeness reconcile. There is no `.bak`, so rollback **deletes** the
+    /// placed image rather than restoring a backup.
+    #[serde(default)]
+    pub(crate) added: bool,
 }
 
 /// One install root being updated.
@@ -262,6 +267,20 @@ impl Journal {
         }
     }
 
+    /// Mark a binary as newly added (no prior file) so rollback deletes it
+    /// rather than restoring a non-existent `.bak`.
+    pub(crate) fn set_binary_added(&mut self, root: &Path, name: &str) {
+        for target in &mut self.targets {
+            if target.root == root {
+                for binary in &mut target.binaries {
+                    if binary.name == name {
+                        binary.added = true;
+                    }
+                }
+            }
+        }
+    }
+
     /// `true` when this journal describes an interrupted run that Phase H
     /// should finish or undo: not terminal **and** its owner is gone.
     pub(crate) const fn needs_recovery(&self, owner_alive: bool) -> bool {
@@ -295,6 +314,7 @@ mod tests {
                 name: "uffsd".to_owned(),
                 status: BinaryStatus::Pending,
                 backup: None,
+                added: false,
             }],
         }];
         journal

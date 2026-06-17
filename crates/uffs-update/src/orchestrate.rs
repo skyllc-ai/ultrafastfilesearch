@@ -68,6 +68,7 @@ pub(crate) fn journal_from_snapshot(
                     name: binary.name.clone(),
                     status: BinaryStatus::Pending,
                     backup: None,
+                    added: false,
                 })
                 .collect(),
         })
@@ -146,15 +147,24 @@ where
     journal.transition(UpdateState::Swapping, "apply.begin")?;
     let plan = collect_plan(journal);
 
-    // backup + swap each
+    // backup + swap each (or, for a missing core binary, *add* it)
     for (root, stem, target) in &plan {
         let staged = staged_dir.join(exe_name(stem));
-        if let Err(err) = apply::backup_and_swap(&staged, target) {
-            rollback_all(journal)?;
-            return Err(err);
+        match apply::backup_and_swap(&staged, target) {
+            // `None` ⇒ the target did not exist: a completeness add. Record it
+            // so rollback deletes the placed image instead of hunting a `.bak`.
+            Ok(backup) => {
+                if backup.is_none() {
+                    journal.set_binary_added(root, stem);
+                }
+                journal.set_binary_status(root, stem, BinaryStatus::Swapped);
+                journal.save()?;
+            }
+            Err(err) => {
+                rollback_all(journal)?;
+                return Err(err);
+            }
         }
-        journal.set_binary_status(root, stem, BinaryStatus::Swapped);
-        journal.save()?;
     }
     journal.transition(UpdateState::Swapped, "apply.all_swapped")?;
 
@@ -171,15 +181,34 @@ where
     Ok(())
 }
 
-/// Restore every backed-up binary (pre-commit rollback, INV-3).
+/// Roll back every touched binary (pre-commit rollback, INV-3): restore a
+/// **replaced** binary from its `.bak`, and **delete** an **added** binary
+/// (no `.bak` exists). Both primitives are idempotent on untouched targets.
 ///
 /// # Errors
 ///
-/// Propagates a restore failure.
+/// Propagates a restore / remove failure.
 pub(crate) fn rollback_all(journal: &mut Journal) -> Result<()> {
     journal.transition(UpdateState::RollingBack, "rollback.begin")?;
-    for (root, stem, target) in collect_plan(journal) {
-        apply::restore(&target)?;
+    // Snapshot (root, stem, target, added) first — the `set_binary_status`
+    // below needs `&mut journal`, so we cannot hold an iterator into it.
+    let items: Vec<(PathBuf, String, PathBuf, bool)> = journal
+        .targets
+        .iter()
+        .flat_map(|target| {
+            let root = target.root.clone();
+            target.binaries.iter().map(move |binary| {
+                let path = root.join(exe_name(&binary.name));
+                (root.clone(), binary.name.clone(), path, binary.added)
+            })
+        })
+        .collect();
+    for (root, stem, target, added) in items {
+        if added {
+            apply::remove_added(&target)?;
+        } else {
+            apply::restore(&target)?;
+        }
         journal.set_binary_status(&root, &stem, BinaryStatus::RolledBack);
     }
     journal.transition(UpdateState::RolledBack, "rollback.done")?;

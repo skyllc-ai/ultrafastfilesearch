@@ -143,20 +143,43 @@ pub(crate) fn prune_backup(binary: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Backup-then-swap a single binary from `staged` into `target`, leaving
-/// a `.bak` for rollback. Fails (without swapping) if the staged image is
-/// missing.
+/// Place the staged image at `target`, atomically.
+///
+/// - **Replace** (target exists): back the old image aside to `.bak`, then swap
+///   the new one in — returns `Some(bak)`. Rollback = restore the `.bak`.
+/// - **Add** (target absent): no prior image to back up, so just place the new
+///   one — returns `None`. This is the completeness path; rollback of an added
+///   binary is a *delete* (the caller records `BinaryEntry::added`).
 ///
 /// # Errors
 ///
-/// Propagates backup/swap failures; bails if `staged` is absent.
-pub(crate) fn backup_and_swap(staged: &Path, target: &Path) -> Result<PathBuf> {
+/// The staged image is missing, or a backup/rename fails.
+pub(crate) fn backup_and_swap(staged: &Path, target: &Path) -> Result<Option<PathBuf>> {
     if !staged.is_file() {
         bail!("staged image missing: {}", staged.display());
     }
-    let bak = backup(target)?;
-    swap_in(staged, target)?;
-    Ok(bak)
+    if target.exists() {
+        let bak = backup(target)?;
+        swap_in(staged, target)?;
+        Ok(Some(bak))
+    } else {
+        swap_in(staged, target)?;
+        Ok(None)
+    }
+}
+
+/// Roll back an **added** binary (no `.bak` exists): delete the image we
+/// placed. Idempotent — an already-absent target is success.
+///
+/// # Errors
+///
+/// The file exists but cannot be removed.
+pub(crate) fn remove_added(target: &Path) -> Result<()> {
+    if target.exists() {
+        std::fs::remove_file(target)
+            .with_context(|| format!("removing added binary {}", target.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -164,7 +187,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        backup, backup_and_swap, backup_path, prune_backup, restore, swap_in, sweep_stale_backups,
+        backup, backup_and_swap, backup_path, prune_backup, remove_added, restore, swap_in,
+        sweep_stale_backups,
     };
 
     fn scratch(tag: &str) -> PathBuf {
@@ -189,7 +213,9 @@ mod tests {
         write(&target, "OLD");
         write(&staged, "NEW");
 
-        let bak = backup_and_swap(&staged, &target).expect("apply");
+        let bak = backup_and_swap(&staged, &target)
+            .expect("apply")
+            .expect("replace returns a backup");
         assert_eq!(read(&target), "NEW", "target holds the new image");
         assert_eq!(read(&bak), "OLD", "backup holds the old image");
         assert!(!staged.exists(), "staged consumed by the rename");
@@ -198,6 +224,27 @@ mod tests {
         restore(&target).expect("restore");
         assert_eq!(read(&target), "OLD");
         assert!(!bak.exists(), "backup consumed by the restore");
+    }
+
+    #[test]
+    fn add_then_rollback_deletes_the_added_binary() {
+        // Completeness "add": the target does not exist yet.
+        let dir = scratch("add");
+        let target = dir.join("uffs-mft");
+        let staged = dir.join("uffs-mft.new");
+        write(&staged, "NEW");
+
+        // Add → no backup, target placed, return is None (signals "added").
+        let backup = backup_and_swap(&staged, &target).expect("add");
+        assert!(backup.is_none(), "an add has no backup");
+        assert_eq!(read(&target), "NEW", "added image is in place");
+        assert!(!backup_path(&target).exists(), "no .bak for an add");
+
+        // Rollback of an add = delete the placed image.
+        remove_added(&target).expect("remove_added");
+        assert!(!target.exists(), "rollback removed the added binary");
+        // Idempotent on an already-absent target.
+        remove_added(&target).expect("remove_added is idempotent");
     }
 
     #[test]
