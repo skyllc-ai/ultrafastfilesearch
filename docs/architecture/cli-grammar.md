@@ -167,7 +167,7 @@ different (each internally-consistent) conventions.
 | `uffs aggregate\|agg <preset>` | `uffs --agg <preset>` | — | `--format` |
 | `uffs daemon <a>` | `uffs --daemon <a>` | `start` `status` `stats` `stop` `kill` `restart` `load` `hibernate` `preload` `forget` `status_drives` | `--data-dir` `--mft-file` `--elevate` |
 | `uffs mcp <a>` | `uffs --mcp <a>` | `run` `start` `status` `stop` `kill` `restart` `reload` | `--bind` `--port` `--data-dir` |
-| `uffs update [--acquire\|--apply\|--snapshot]` + `uffs update doctor` | `uffs --update [<a>]` | ***(none = update end-to-end if needed)*** `check` `snapshot` `acquire` `apply` `doctor` `recover` | `--version` `--repair` `--offline` `--repo` `-v` |
+| `uffs update [--acquire\|--apply\|--snapshot]` + `uffs update doctor` | `uffs --update [<a>]` | ***(none = update end-to-end if needed, incl. completing a missing core binary)*** `check` `snapshot` `acquire` `apply` `doctor` `repair` `recover` `bins` | `--version` `--repair` `--offline` `--repo` `-v` |
 | `uffs status` | `uffs --status` | — | — |
 | `uffs --help / --version` | `uffs --help / --version` *(unchanged; global)* | — | — |
 
@@ -178,6 +178,15 @@ different (each internally-consistent) conventions.
 `doctor` is an **action of `--update`** (`uffs --update doctor`) — it is part of
 the update subsystem, so this keeps the surface uniform. (A top-level `--doctor`
 convenience alias is an open question, §12.)
+
+`repair` is a first-class **alias for `doctor --repair`** (a bare `--repair`
+flag routes there too) — verbs stay bare, options stay dashed, and the user
+never has to remember which `repair` is. `doctor`/`repair` **redirect to the
+update flow** when they find an update-class issue (out of date, version-skewed,
+or a missing core binary) rather than duplicating the updater's logic. `bins`
+prints the canonical core binary set (the single source of truth all flows
+share); bare `uffs --update` reconciles that whole set, *adding* a missing core
+binary, not just version-matching the ones present.
 
 ## 6. Edge cases & escapes
 
