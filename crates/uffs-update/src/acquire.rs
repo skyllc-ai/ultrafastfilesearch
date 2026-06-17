@@ -16,7 +16,7 @@
 //! Requires the release to publish per-binary assets + `SHA256SUMS` (a
 //! release-pipeline follow-up; the code is ready for it).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -82,7 +82,66 @@ pub(crate) fn run(plan: &AcquirePlan) -> Result<Vec<PathBuf>> {
             let _ignore = std::fs::remove_file(&dest);
             bail!("SHA-256 mismatch for {asset} — download rejected, nothing staged");
         }
+        // Downloads land 0644 — not executable. The apply-phase smoke test
+        // runs the swapped-in binary (and it must run once installed), so a
+        // staged binary that isn't +x makes apply fail with "smoke test failed"
+        // on macOS/Linux. (No-op on Windows.)
+        make_executable(&dest)?;
         staged.push(dest);
     }
     Ok(staged)
+}
+
+/// Mark a freshly-downloaded binary executable. Unix only; Windows ignores the
+/// mode bits, so this is a no-op there.
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut perms = std::fs::metadata(path)
+        .with_context(|| format!("stat {}", path.display()))?
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).with_context(|| format!("chmod +x {}", path.display()))
+}
+
+/// Non-Unix: executability is not governed by file mode.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "signature mirrors the Unix path so the `?` call site compiles on every target"
+)]
+const fn make_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn make_executable_sets_the_exec_bits() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use super::make_executable;
+
+        // A freshly-written download lands 0644 (no exec bit) — the exact
+        // state that made apply fail the smoke test on macOS/Linux.
+        let path = std::env::temp_dir().join(format!("uffs-acq-{}", std::process::id()));
+        std::fs::write(&path, b"#!/bin/sh\n").expect("write temp binary");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("seed 0644");
+        assert_eq!(
+            std::fs::metadata(&path).expect("stat").permissions().mode() & 0o111,
+            0,
+            "precondition: not executable"
+        );
+
+        make_executable(&path).expect("make_executable");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+        assert_ne!(
+            mode & 0o100,
+            0,
+            "owner-execute bit must be set after the fix"
+        );
+        let _cleanup = std::fs::remove_file(&path);
+    }
 }
