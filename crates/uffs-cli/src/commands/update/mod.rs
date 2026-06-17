@@ -110,7 +110,26 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
         if repair && !forwarded.iter().any(|arg| arg == "--repair") {
             forwarded.push("--repair".to_owned());
         }
-        return doctor::spawn(&snapshot_path, &forwarded);
+        // Helper health check (+ local self-heal when --repair): journal,
+        // backups, services, broker, release reach. Captured (not `?`-propagated)
+        // so a reported failure doesn't pre-empt the update-flow fix below.
+        let health = doctor::spawn(&snapshot_path, &forwarded);
+
+        // Update-class issues — out-of-date, version-skewed, or **missing a core
+        // binary** — are fixed by the update flow itself, which already owns the
+        // core set. So doctor *redirects* there rather than teaching the
+        // health-check helper that set. `--offline` skips this (assess needs the
+        // release feed). With `--repair` we run it; interactively we ask; piped
+        // we just point.
+        if !args.iter().any(|arg| arg == "--offline")
+            && matches!(assess(&report), UpdatePlan::Available { .. })
+        {
+            if repair || prompt_yes_no("Run `uffs --update` now to fix this?") {
+                return run_automatic_update(&report, verbose);
+            }
+            print_update_redirect_hint();
+        }
+        return health;
     }
 
     let report = detect();
@@ -206,6 +225,35 @@ fn has_missing_core(report: &DetectionReport) -> bool {
                 .iter()
                 .any(|stem| !root.binaries.iter().any(|bin| bin.name == *stem))
         })
+}
+
+/// Point the user at the update flow — the fix for an out-of-date, skewed, or
+/// incomplete install (doctor detects; `uffs --update` repairs).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_update_redirect_hint() {
+    println!(
+        "\n\u{2192} Run `uffs --update` to bring the install up to date and complete the core set."
+    );
+}
+
+/// Ask a yes/no question on an interactive terminal. Returns `false` **without
+/// prompting** when stdin is not a TTY (scripts / pipes / CI), so callers fall
+/// back to a printed hint instead of blocking on a read that can't be answered.
+#[expect(clippy::print_stdout, reason = "interactive CLI prompt")]
+fn prompt_yes_no(question: &str) -> bool {
+    use std::io::{IsTerminal as _, Write as _};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("\n{question} [y/N] ");
+    if std::io::stdout().flush().is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// Run the full end-to-end update when one is needed; otherwise report the
@@ -462,10 +510,13 @@ fn print_help() {
          \x20                     atomically swap + smoke-test, commit, restart.\n\
          \x20                     Journaled + auto-rollback on failure.\n\
          \x20 doctor              End-to-end health check (versions, dirs, journal,\n\
-         \x20                     backups, services, broker pipe, release reach).\n\
-         \x20 repair              Diagnose + self-heal (= doctor --repair):\n\
-         \x20                     resume/roll back an interrupted update, sweep\n\
-         \x20                     stale backups, restart stopped services.\n\
+         \x20                     backups, services, broker pipe, release reach). If\n\
+         \x20                     out of date / skewed / missing a core binary, it\n\
+         \x20                     points to `uffs --update` (asks first on a TTY).\n\
+         \x20 repair              Diagnose + self-heal (= doctor --repair): resume/\n\
+         \x20                     roll back an interrupted update, sweep stale\n\
+         \x20                     backups, restart stopped services — and run the\n\
+         \x20                     update flow if the install is out of date.\n\
          \x20 recover             Finish or roll back an interrupted update now\n\
          \x20                     (foreground; the on-demand self-heal).\n\
          \x20 bins                Print the core binary stems (one per line) —\n\
