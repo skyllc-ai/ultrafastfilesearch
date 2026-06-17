@@ -66,11 +66,11 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     if let Some(act) = action
         && !matches!(
             act,
-            "check" | "snapshot" | "acquire" | "apply" | "doctor" | "repair" | "recover"
+            "check" | "snapshot" | "acquire" | "apply" | "doctor" | "repair" | "recover" | "bins"
         )
     {
         bail!(
-            "unknown `--update` action `{act}` — expected: check | snapshot | acquire | apply | doctor | repair | recover"
+            "unknown `--update` action `{act}` — expected: check | snapshot | acquire | apply | doctor | repair | recover | bins"
         );
     }
 
@@ -78,6 +78,15 @@ pub(crate) fn run_update(args: &[String]) -> Result<()> {
     // (and forward verbosity to the spawned `uffs-update` helper). Default is
     // a few plain-language lines for someone who just wants the gist.
     let verbose = args.iter().any(|arg| arg == "-v" || arg == "--verbose");
+
+    // `bins` prints the canonical core binary stems (the single source of
+    // truth in `binaries::KNOWN_BINARIES`) for tooling — e.g. the `just`
+    // deploy recipes read the set from here instead of hardcoding it.
+    // Pure + non-mutating: no detection needed.
+    if action == Some("bins") {
+        binaries::print_core_stems();
+        return Ok(());
+    }
 
     // `recover` finishes (or rolls back) an interrupted update in the
     // foreground — the on-demand twin of the startup best-effort self-heal.
@@ -439,7 +448,9 @@ fn print_help() {
          \x20                     resume/roll back an interrupted update, sweep\n\
          \x20                     stale backups, restart stopped services.\n\
          \x20 recover             Finish or roll back an interrupted update now\n\
-         \x20                     (foreground; the on-demand self-heal).\n\n\
+         \x20                     (foreground; the on-demand self-heal).\n\
+         \x20 bins                Print the core binary stems (one per line) —\n\
+         \x20                     the canonical set, for scripts/tooling.\n\n\
          OPTIONS:\n\
          \x20 -v, --verbose       Show the full breakdown — per-binary versions,\n\
          \x20                     PIDs, launch commands, every doctor check.\n\

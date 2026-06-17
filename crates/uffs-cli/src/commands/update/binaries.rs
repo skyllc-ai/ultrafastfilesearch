@@ -16,7 +16,15 @@ use super::model::BinaryInfo;
 
 /// Logical stems of every UFFS binary the updater knows about — i.e. the
 /// engine binaries this repo builds and publishes as release assets, so
-/// each can be acquired + swapped. The platform `.exe` suffix is added by
+/// each can be acquired + swapped.
+///
+/// **This is the single source of truth for the UFFS core binary set.**
+/// Every flow honours it: detection, self-update completeness, and tooling
+/// (the `just` deploy recipes query it via `uffs --update bins` rather than
+/// keeping their own list). Do not hardcode this set anywhere else — add a
+/// stem here and all flows pick it up.
+///
+/// The platform `.exe` suffix is added by
 /// [`exe_file_name`].
 ///
 /// `uffs-tui` is deliberately **excluded**: it ships from the separate
@@ -55,6 +63,17 @@ pub(crate) fn exe_file_name(stem: &str) -> String {
         format!("{stem}.exe")
     } else {
         stem.to_owned()
+    }
+}
+
+/// Print the canonical core binary stems, one per line (platform-aware:
+/// `uffs-broker` only on Windows). The machine-readable accessor behind
+/// `uffs --update bins`, so shell tooling (the `just` deploy recipes) reads
+/// the set from here instead of keeping a hardcoded copy that can drift.
+#[expect(clippy::print_stdout, reason = "machine-readable list for scripts")]
+pub(crate) fn print_core_stems() {
+    for stem in KNOWN_BINARIES {
+        println!("{stem}");
     }
 }
 

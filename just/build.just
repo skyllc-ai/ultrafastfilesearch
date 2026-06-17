@@ -92,10 +92,16 @@ copy-binary profile:
     if [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "cygwin"* ]] || [[ -n "$WINDIR" ]]; then EXT=".exe"; printf "\033[0;34m  → Windows detected\033[0m\n"; else EXT=""; printf "\033[0;34m  → Unix-like system detected\033[0m\n"; fi
     SOURCE_DIR="target/{{ profile }}"
     mkdir -p ~/bin
-    # uffs-update is the self-update helper (`uffs update` spawns it as a
-    # sibling). uffs-broker is the elevated handle service — Windows only.
-    BINS=(uffs uffsd uffsmcp uffs-mft uffs-update)
-    if [[ -n "$EXT" ]]; then BINS+=(uffs-broker); fi
+    # The core binary set is owned by `uffs --update bins` (single source of
+    # truth in uffs-cli) — query the just-built binary instead of hardcoding,
+    # so this list never drifts. The printer is platform-aware: it emits
+    # uffs-broker only on Windows (the self-update helper + elevated handle
+    # service are included automatically).
+    UFFS_BIN="$SOURCE_DIR/uffs${EXT}"
+    if [[ ! -x "$UFFS_BIN" ]]; then
+        printf "\033[0;31m❌ %s not built — run a build first\033[0m\n" "$UFFS_BIN"; exit 1
+    fi
+    mapfile -t BINS < <("$UFFS_BIN" --update bins)
     for BIN in "${BINS[@]}"; do
         SOURCE_PATH="$SOURCE_DIR/${BIN}${EXT}"
         DEST_PATH="$HOME/bin/${BIN}${EXT}"
