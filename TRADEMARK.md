@@ -129,7 +129,7 @@ that's cool — call it something else.
 
 For anything in the "ask first" list: open a GitHub issue on the
 repository with the label `brand`, or email
-[`uffs@nios.net`](mailto:uffs@nios.net).
+[`trademark@uffs.io`](mailto:trademark@uffs.io).
 
 Tell us:
 
@@ -173,7 +173,7 @@ the repository's `HEAD`.
 
 - **Project:** <https://github.com/skyllc-ai/UltraFastFileSearch>
 - **Maintainer:** Robert Nio · [Sky, LLC](https://github.com/skyllc-ai)
-- **Email:** [`uffs@nios.net`](mailto:uffs@nios.net)
+- **Email:** [`trademark@uffs.io`](mailto:trademark@uffs.io)
 
 ---
 

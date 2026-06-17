@@ -208,7 +208,7 @@ jobs:
               title = `🔴 CI Failure: Tier 2 Nightly CI — ${shortSha}`;
               extraBody = [
                 '',
-                '📧 Notification sent to: githubrobbi@nios.net',
+                '📧 Notification sent to: cifail@uffs.io',
               ];
             } else if (wf === '🐤 Nightly Canary') {
               // Early-warning probe against the LATEST floating nightly
@@ -228,7 +228,7 @@ jobs:
                 'regression, the fix is usually a dependency bump (cf. the ethnum ' +
                 '1.5.2→1.5.3 episode), not a toolchain downgrade.',
                 '',
-                '📧 Notification sent to: githubrobbi@nios.net',
+                '📧 Notification sent to: cifail@uffs.io',
               ];
             } else {
               core.warning(`Unknown workflow name: ${wf}; not notifying.`);

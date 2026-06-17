@@ -7,8 +7,8 @@ Thanks for helping improve UFFS.
 ## Contact
 
 - **Bug reports, feature requests, questions:** open a GitHub issue on [skyllc-ai/UltraFastFileSearch](https://github.com/skyllc-ai/UltraFastFileSearch/issues).
-- **Brand / trademark questions:** open an issue tagged `brand`, or email [`uffs@nios.net`](mailto:uffs@nios.net).
-- **Commercial / partnership inquiries:** [`uffs@nios.net`](mailto:uffs@nios.net), or a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
+- **Brand / trademark questions:** open an issue tagged `brand`, or email [`trademark@uffs.io`](mailto:trademark@uffs.io).
+- **Commercial / partnership inquiries:** [`partnerships@uffs.io`](mailto:partnerships@uffs.io), or a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
 - **Organization:** [Sky, LLC](https://github.com/skyllc-ai).
 
 ## Platform and privilege model

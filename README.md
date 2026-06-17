@@ -234,7 +234,7 @@ UFFS is free, MPL-2.0, and stays that way — **no telemetry, no accounts, no pa
 | 🏢 **Companies** (invoice / receipt via Sky, LLC) | [Open Collective](https://opencollective.com/uffs-search) | expensing it as a tool |
 | 🔁 **Recurring (individuals)** | GitHub Sponsors — *enrolling* | following the roadmap |
 
-The **"Sponsor"** button at the top of this repo lists every live channel. For custom arrangements, enterprise pilots, or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net).
+The **"Sponsor"** button at the top of this repo lists every live channel. For custom arrangements, enterprise pilots, or partnership inquiries: [`partnerships@uffs.io`](mailto:partnerships@uffs.io).
 
 ---
 
@@ -346,7 +346,7 @@ See [LICENSES/MPL-2.0.txt](LICENSES/MPL-2.0.txt) for the full license text and [
 
 UFFS is developed and maintained by **[Sky, LLC](https://github.com/skyllc-ai)** — a systems-engineering shop focused on high-performance Rust tooling.
 
-- **Commercial UFFS frontends** (polished GUI / premium TUI) are in development on top of this open-source engine. For waitlist or partnership inquiries: [`uffs@nios.net`](mailto:uffs@nios.net) or open a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
+- **Commercial UFFS frontends** (polished GUI / premium TUI) are in development on top of this open-source engine. For waitlist or partnership inquiries: [`partnerships@uffs.io`](mailto:partnerships@uffs.io) or open a [discussion](https://github.com/skyllc-ai/UltraFastFileSearch/discussions) with the `commercial-interest` label.
 - **Hiring / collaboration.** This repository is also the public engineering portfolio of its maintainer; see the [Sky, LLC org page](https://github.com/skyllc-ai) for the full pitch and contact details.
 - **Sponsorship.** UFFS is free and MPL-2.0 forever; sponsorships fund Windows code-signing, benchmark hardware, and release engineering — see [**Support UFFS**](#support-uffs) for the channels and what they fund.
 

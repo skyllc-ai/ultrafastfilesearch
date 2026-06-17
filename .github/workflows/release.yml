@@ -1229,7 +1229,7 @@ jobs:
               ``,
               `⚠️ **This is a release pipeline failure — immediate attention required.**`,
               ``,
-              `📧 Notification sent to: githubrobbi@nios.net`,
+              `📧 Notification sent to: releasefail@uffs.io`,
             ].join('\n');
 
             const existing = await github.rest.issues.listForRepo({
