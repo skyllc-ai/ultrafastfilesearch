@@ -14,7 +14,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg" alt="License: MPL 2.0"></a>
   <a href="https://github.com/skyllc-ai/UltraFastFileSearch/releases/latest"><img src="https://img.shields.io/badge/platform-Windows-blue.svg" alt="Platform: Windows"></a>
   <a href="https://opencollective.com/uffs-search"><img src="https://img.shields.io/badge/Sponsor-Open%20Collective-3385FF?logo=opencollective&logoColor=white" alt="Sponsor on Open Collective"></a>
-  <a href="https://ko-fi.com/ufffssearch"><img src="https://img.shields.io/badge/Tip-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white" alt="Tip on Ko-fi"></a>
+  <a href="https://ko-fi.com/uffssearch"><img src="https://img.shields.io/badge/Tip-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white" alt="Tip on Ko-fi"></a>
 </p>
 
 **A benchmark-driven NTFS search engine for Windows.** UFFS reads the Master File Table directly, builds a compact persisted index, and keeps large NTFS estates searchable through a background daemon.
@@ -217,7 +217,7 @@ Operator commands let you tune this manually for known workload shapes — `prel
 ## Support UFFS
 
 <p align="center">
-  <a href="https://ko-fi.com/ufffssearch"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Tip on Ko-fi" height="38"></a>
+  <a href="https://ko-fi.com/uffssearch"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Tip on Ko-fi" height="38"></a>
   &nbsp;&nbsp;
   <a href="https://opencollective.com/uffs-search"><img src="https://opencollective.com/uffs-search/donate/button@2x.png?color=blue" alt="Donate on Open Collective" height="38"></a>
 </p>
@@ -230,7 +230,7 @@ UFFS is free, MPL-2.0, and stays that way — **no telemetry, no accounts, no pa
 
 | Supporter | Where | Best for |
 |---|---|---|
-| 💛 **One-time tip** | [Ko-fi](https://ko-fi.com/ufffssearch) | "this saved me an afternoon" |
+| 💛 **One-time tip** | [Ko-fi](https://ko-fi.com/uffssearch) | "this saved me an afternoon" |
 | 🏢 **Companies** (invoice / receipt via Sky, LLC) | [Open Collective](https://opencollective.com/uffs-search) | expensing it as a tool |
 | 🔁 **Recurring (individuals)** | GitHub Sponsors — *enrolling* | following the roadmap |
 
