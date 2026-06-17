@@ -25,9 +25,9 @@ open_collective: uffs-search
 
 # ── Ko-fi ───────────────────────────────────────────────────────────────────
 # Low-friction one-time tips.  Takes ~20 min to set up.
-# Create at: https://ko-fi.com  — use handle "uffs" if available.
-# Uncomment once the Ko-fi page is live:
-ko_fi: ufffssearch
+# Create at: https://ko-fi.com  (handle: uffssearch — 4-char "uffs" is paywalled).
+# Live:
+ko_fi: uffssearch
 
 # ── Patreon ─────────────────────────────────────────────────────────────────
 # Not used — Patreon is optimised for creative content, not developer tooling.
