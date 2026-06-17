@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 136" width="400" height="136">
+  <!-- UFFS Wordmark — RECEIPT variant: 400x136, light-background (dark text). -->
+  <!-- Derived from source/uffs-wordmark.svg; reuses the exact icon glyph. -->
+  <title>UFFS — Ultra Fast File Search (Receipt wordmark, 400x136)</title>
+  <defs>
+    <linearGradient id="rcTile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1E1B18"/>
+      <stop offset="1" stop-color="#0F0D0B"/>
+    </linearGradient>
+    <linearGradient id="rcBolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7B26B"/>
+      <stop offset="1" stop-color="#B03618"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon tile: original 512px glyph scaled to 108px, padded 14px top/left -->
+  <g transform="translate(14,14) scale(0.2109375)">
+    <rect x="0" y="0" width="512" height="512" rx="104" ry="104" fill="url(#rcTile)"/>
+    <g transform="rotate(45 340 340)">
+      <rect x="340" y="340" width="148" height="46" rx="23" ry="23" fill="#CE422B"/>
+    </g>
+    <circle cx="216" cy="216" r="156" fill="#0F0D0B" stroke="#DEA584" stroke-width="18"/>
+    <path d="M 246 96 L 140 234 L 206 234 L 174 344 L 300 196 L 230 196 L 270 96 Z"
+          fill="url(#rcBolt)" stroke="#2A0E04" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Wordmark + tagline (dark, for white receipts) -->
+  <g font-family="'Inter', 'Helvetica Neue', 'Segoe UI', system-ui, Arial, sans-serif">
+    <text x="142" y="82" font-size="60" font-weight="800" letter-spacing="-2" fill="#1E1B18">UFFS</text>
+    <text x="144" y="107" font-size="15" font-weight="600" letter-spacing="1.2" fill="#8A7D72">ULTRA &#8226; FAST &#8226; FILE &#8226; SEARCH</text>
+  </g>
+</svg>
