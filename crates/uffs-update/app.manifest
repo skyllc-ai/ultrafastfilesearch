@@ -10,8 +10,14 @@
   heuristic from force-elevating this binary purely because its NAME contains
   "update" — without it, `uffs.exe` (non-elevated) cannot spawn
   `uffs-update.exe`; it fails with ERROR_ELEVATION_REQUIRED (os error 740),
-  breaking every `uffs --update` operation. The self-update helper only
-  rewrites files in the user's own install dir; it never needs Administrator.
+  breaking every `uffs` self-update operation. The helper only rewrites
+  files in the user's own install dir; it never needs Administrator.
+
+  DO NOT write a double hyphen anywhere inside this comment block. XML
+  forbids "- -" (no space) in a comment body, and Windows' side-by-side
+  manifest parser rejects the whole manifest as "Invalid Xml syntax" if it
+  finds one — which is exactly the os error 14001 crash this file once had
+  (the old comment contained the literal CLI flag with two leading dashes).
 
   WHY MINIMAL — nothing but `trustInfo`: an earlier, richer version of this
   manifest (with `<assemblyIdentity>`, a `<compatibility>` supportedOS block,
