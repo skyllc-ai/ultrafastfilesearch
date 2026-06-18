@@ -18,6 +18,10 @@
 //! (os error 740) — breaking every `uffs --update` operation on Windows. The
 //! helper only rewrites files in the user's install dir; it never needs admin.
 //!
+//! The manifest is intentionally minimal (`trustInfo`-only): a richer earlier
+//! version tripped `ERROR_SXS_CANT_GEN_ACTCTX` (os error 14001) so the binary
+//! would not start at all. See `app.manifest` for the full rationale.
+//!
 //! Inert on non-Windows / non-MSVC targets (the helper ships windows-msvc).
 
 fn main() {
