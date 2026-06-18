@@ -15,9 +15,11 @@
 //! uffs-broker --start       # Start the service
 //! uffs-broker --stop        # Stop the service
 //! uffs-broker --run         # Run in foreground (for debugging)
+//! uffs-broker --version     # Print version (also -V)
 //! ```
 //!
-//! On non-Windows platforms, this binary prints an error and exits.
+//! On non-Windows platforms, every subcommand except `--version` prints an
+//! error and exits.
 
 // `broker` is gated to `#[cfg(windows)]` because the entire module
 // (Win32 named-pipe service, OpenProcess, DuplicateHandle, audit log,
@@ -45,6 +47,19 @@ mod broker;
               `--install` failed with NO output). stderr always reaches the operator."
 )]
 fn main() {
+    // `--version` / `-V` is handled here, before the Windows service dispatch,
+    // so it works on every platform and exits 0. The self-update version probe
+    // runs `<bin> --version` and parses the output; without this arm the broker
+    // fell through to its usage text and the probe reported the broker as `?`
+    // (every other UFFS binary prints a version, so it was the odd one out).
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        print_version();
+        return;
+    }
+
     #[cfg(windows)]
     {
         if let Err(run_err) = broker::run() {
@@ -60,4 +75,11 @@ fn main() {
         eprintln!("uffs-broker is a Windows-only component.");
         std::process::exit(1);
     }
+}
+
+/// Print `uffs-broker <version>` to stdout, matching the `uffs <version>`
+/// shape the other binaries use so the self-update version probe parses it.
+#[expect(clippy::print_stdout, reason = "intentional version output")]
+fn print_version() {
+    println!("uffs-broker {}", env!("CARGO_PKG_VERSION"));
 }

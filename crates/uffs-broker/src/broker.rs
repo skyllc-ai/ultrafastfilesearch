@@ -133,6 +133,7 @@ fn print_usage() {
     eprintln!("  --start       Start the service (waits for RUNNING)");
     eprintln!("  --stop        Stop the service (waits for STOPPED)");
     eprintln!("  --run         Run in foreground (debugging)");
+    eprintln!("  --version     Print version (also -V)");
 }
 
 /// Run the broker in foreground mode.

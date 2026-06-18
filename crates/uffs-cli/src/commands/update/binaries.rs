@@ -146,6 +146,9 @@ mod tests {
     fn parses_named_version_line() {
         assert_eq!(parse_version("uffs 0.6.2").as_deref(), Some("0.6.2"));
         assert_eq!(parse_version("uffsd 0.6.10\n").as_deref(), Some("0.6.10"));
+        // The broker prints a hyphenated name; the hyphen must not be mistaken
+        // for part of the version token (else its version probes back as `?`).
+        assert_eq!(parse_version("uffs-broker 0.6.9").as_deref(), Some("0.6.9"));
     }
 
     #[test]
