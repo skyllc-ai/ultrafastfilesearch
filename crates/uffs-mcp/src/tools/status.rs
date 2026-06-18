@@ -22,8 +22,12 @@ pub(crate) async fn run(client: &mut UffsClient) -> Result<CallToolResult, Bridg
 
     let status_str = serde_json::to_string_pretty(&response.status)?;
 
+    // The running `uffsmcp` build version — a read-only freshness signal the
+    // agent can surface (UFFS self-updates via `uffs --update`).
+    let server_version = env!("CARGO_PKG_VERSION");
+
     let text = format!(
-        "Daemon Status: {status_str}\nUptime: {}s\nConnections: {}\nPID: {}\n",
+        "Daemon Status: {status_str}\nUptime: {}s\nConnections: {}\nPID: {}\nUFFS server version: {server_version}\n",
         response.uptime_secs, response.connections, response.pid
     );
 
@@ -32,6 +36,7 @@ pub(crate) async fn run(client: &mut UffsClient) -> Result<CallToolResult, Bridg
         uptime_secs: response.uptime_secs,
         connections: response.connections,
         pid: response.pid,
+        server_version: server_version.to_owned(),
     };
 
     let mut result = CallToolResult::success(vec![Content::text(text)]);

@@ -388,7 +388,14 @@ fn print_mcp_stdio_sessions() {
         );
     }
     if any_stale {
-        println!("  Run `uffs --mcp reload` to restart stale sessions.");
+        // Deliberately NO action hint: these stdio sessions are spawned and
+        // OWNED by their AI host (Claude/Cursor/…), not by the user. A human
+        // running `uffs --mcp reload` would only sever the host's live link —
+        // false hope. The host picks up the new binary when it next relaunches
+        // the session; the agent is told this via the MCP server instructions.
+        println!(
+            "  These run an older binary; the AI host that launched them refreshes on its next start."
+        );
     }
 }
 

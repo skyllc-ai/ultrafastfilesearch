@@ -131,6 +131,11 @@ pub(crate) struct StatusOutput {
     pub connections: usize,
     /// Daemon process ID.
     pub pid: u32,
+    /// Version of the running `uffsmcp` server binary (e.g. `"0.6.10"`). Lets
+    /// an agent see which UFFS build is serving it. UFFS can self-update,
+    /// so an occasional `uffs --update` (run by the user) keeps
+    /// capabilities current — see the server instructions.
+    pub server_version: String,
 }
 
 // ── uffs_aggregate ──────────────────────────────────────────────────

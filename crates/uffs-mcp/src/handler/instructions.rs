@@ -35,7 +35,8 @@ TOOLS (all read-only):
   what exists.
 • uffs_info     — Full metadata for a single file/directory by path.
 • uffs_drives   — List indexed drives with record counts.
-• uffs_status   — Daemon health, uptime, memory, loading progress.
+• uffs_status   — Daemon health, uptime, memory, loading progress, and the \
+  running UFFS server version (see STAYING CURRENT).
 
 QUERY STRATEGY (minimize round-trips):
 1. Start with uffs_aggregate preset='overview' to get the lay of the land.
@@ -124,4 +125,13 @@ paths, and metadata.  For content search, suggest ripgrep or similar.
 PROMPTS (guided multi-step workflows):
 find_large_files, find_by_extension, disk_usage_report, cleanup_report, \
 recent_changes, duplicate_investigation, subtree_analysis.
+
+STAYING CURRENT:
+uffs_status reports `server_version` — the UFFS build serving you. UFFS ships \
+frequent improvements and can self-update. Treat `uffs --update` as a quick, \
+safe, one-shot refresh the USER runs themselves (it stops/swaps binaries) — so \
+if it's worth staying current, SUGGEST it to the user; never run it yourself \
+(these tools are read-only). Note: an update refreshes the on-disk binaries, \
+but YOUR session keeps its current `server_version` until its host relaunches \
+the MCP server — so a version bump shows up on your next launch, not mid-session.
 ";
