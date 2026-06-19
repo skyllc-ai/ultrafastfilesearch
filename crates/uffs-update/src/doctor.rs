@@ -382,7 +382,18 @@ fn count_stale_backups(dir: &Path) -> usize {
 fn check_services(snapshot: &plan::Snapshot, repair: bool, report: &mut Report) {
     let mut down = Vec::new();
     for running in &snapshot.running {
-        if proc::is_alive(running.pid) {
+        // The broker runs as a LocalSystem service. A non-elevated uffs-update
+        // can't `OpenProcess` a SYSTEM-owned pid, so `proc::is_alive` false-
+        // negatives on it — which would flag a perfectly healthy broker as
+        // "down" and then trigger a doomed (also elevation-gated) restart.
+        // Its authoritative liveness is the serving pipe (what check_broker
+        // probes too), so use that for the broker instead of pid liveness.
+        let alive = if running.component == "broker" {
+            restore::broker_pipe_ready(DOCTOR_PIPE_PROBE_MS)
+        } else {
+            proc::is_alive(running.pid)
+        };
+        if alive {
             report.add(
                 Health::Ok,
                 format!("Service up: {}", running.component),

@@ -62,7 +62,15 @@ fn start_component(component: &str, running: &SnapRunning) -> bool {
 /// wait until the pipe is actually serving (R10, §19.13). Service-RUNNING
 /// is necessary but not sufficient: the daemon's warm-up hits
 /// `ERROR_PIPE_BUSY` if it connects before the broker's pipe is listening.
+///
+/// Idempotent: if the broker is **already serving**, it's up — and a
+/// non-elevated caller can neither need nor (via SCM) perform a start of a
+/// `LocalSystem` service. Treat that as success so a redundant, elevation-gated
+/// `uffs_winsvc::start` failure can't surface as a fault on a healthy broker.
 fn start_broker() -> bool {
+    if broker_pipe_ready(PIPE_READY_TIMEOUT_MS) {
+        return true;
+    }
     uffs_winsvc::start(SERVICE_NAME).is_ok() && broker_pipe_ready(PIPE_READY_TIMEOUT_MS)
 }
 
