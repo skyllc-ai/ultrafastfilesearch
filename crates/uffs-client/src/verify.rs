@@ -126,14 +126,25 @@ pub(crate) fn verify_daemon_pid_file(pid_path: &std::path::Path) -> bool {
     };
 
     if actual_hash != expected_hash {
+        // A path-STRING hash mismatch is NOT proof of impersonation. The daemon
+        // records `current_exe()` (its launch path), while this side reads
+        // `QueryFullProcessImageNameW` (the resolved image path). For a daemon
+        // launched through a symlink/shim — e.g. a WinGet `…\Links\uffsd.exe`
+        // entry, or any relaunch — those two path strings differ for the SAME
+        // binary, so the hashes differ even though nothing is wrong. Rather than
+        // refuse a legitimate daemon, defer to the authoritative identity check:
+        // the peer must be a `uffsd` binary (by name) and, when signed, pass
+        // Authenticode — which a real impostor fails just as it fails the hash.
+        // (This mirrors the hash==0 path, which already falls back here.)
         tracing::warn!(
             pid,
             exe = %exe_path.display(),
             expected_hash,
             actual_hash,
-            "Daemon exe_path_hash mismatch — possible impersonation"
+            "Daemon exe_path_hash mismatch (launch path vs resolved image path?) \
+             — deferring to name + signature identity check"
         );
-        return false;
+        return verify_daemon_identity(pid);
     }
 
     true
