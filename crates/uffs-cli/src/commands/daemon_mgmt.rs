@@ -24,7 +24,9 @@ use crate::commands::{daemon_load, daemon_tiering};
 ///
 /// Read-only queries (`status`, `stats`, `status_drives`) are always
 /// permitted without elevation.  `daemon start --elevate` is also
-/// permitted on Windows; it opts in to an explicit UAC prompt.
+/// permitted on Windows; it opts in to an explicit UAC prompt.  On Windows,
+/// mutating commands are also permitted un-elevated while the Access Broker is
+/// serving (the daemon then runs non-elevated and is safely restartable).
 ///
 /// # Errors
 ///
@@ -132,9 +134,8 @@ pub(crate) fn daemon(action: &DaemonAction) -> Result<()> {
 /// the daemon's uid; an unreadable/absent PID file means there is no daemon to
 /// protect → no elevation required.
 ///
-/// On **Windows** (and any non-Unix target) `uffsd` runs elevated to read the
-/// live MFT, so managing it always needs an elevated token — behaviour is
-/// unchanged.
+/// (Windows uses a broker-aware variant — see the `#[cfg(windows)]` impl
+/// below.)
 #[cfg(unix)]
 fn mutating_management_needs_elevation() -> bool {
     daemon_owner_needs_elevation(&pid_file_path(), uffs_mft::current_euid())
@@ -152,8 +153,21 @@ fn daemon_owner_needs_elevation(pid_file: &std::path::Path, caller_euid: u32) ->
     std::fs::metadata(pid_file).is_ok_and(|meta| meta.uid() != caller_euid)
 }
 
-/// Non-Unix: managing the (elevated) daemon always needs an elevated token.
-#[cfg(not(unix))]
+/// Windows: elevation is required only when the Access Broker pipe is NOT
+/// serving. With the broker up the daemon runs non-elevated and a non-elevated
+/// caller can stop AND restart it (restart adopts broker handles — no UAC), so
+/// a non-elevated `uffs --update` can quiesce/restart it; without the broker a
+/// restart needs admin for the MFT (mirrors the Unix PID-owner gate).
+#[cfg(windows)]
+fn mutating_management_needs_elevation() -> bool {
+    /// Short pipe probe — this gate runs once per management command.
+    const BROKER_GATE_PROBE_MS: u32 = 600;
+    !uffs_winsvc::pipe_serving(uffs_broker_protocol::PIPE_NAME, BROKER_GATE_PROBE_MS)
+}
+
+/// Other non-Unix targets (WASM, bare-metal — not real deployments): keep the
+/// conservative default of always requiring elevation.
+#[cfg(not(any(unix, windows)))]
 const fn mutating_management_needs_elevation() -> bool {
     true
 }
