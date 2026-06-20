@@ -206,10 +206,7 @@ pub(crate) fn is_elevated() -> bool {
     let mut returned = 0_u32;
     // SAFETY: `token` is a valid token handle; the buffer is exactly one
     // `TOKEN_ELEVATION`; `returned` is a live `u32` out-param.
-    #[expect(
-        unsafe_code,
-        reason = "Win32 FFI — GetTokenInformation(TokenElevation)"
-    )]
+    #[expect(unsafe_code, reason = "Win32 FFI — GetTokenInformation")]
     let ok = unsafe {
         GetTokenInformation(
             token,
