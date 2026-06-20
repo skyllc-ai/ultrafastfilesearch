@@ -121,7 +121,12 @@ Add `--offline` to skip every network check (and the update redirect).
   try to restart it.
 - **Windows broker:** if `uffs --update doctor` warns the broker pipe isn't
   serving, install it from an elevated PowerShell with `uffs-broker --install`.
-  It's a self-update target too, so later updates keep it current.
+  The broker is a `LocalSystem` service, so refreshing **it** needs elevation: a
+  **non-elevated** `uffs --update` updates every binary *except* the broker —
+  the running broker keeps serving (its wire protocol is back-compatible) and
+  the update prints a reminder. Run `uffs --update` once from an **elevated**
+  shell to bring the broker up to date too. (Everything else — daemon included —
+  updates without elevation once the broker is installed.)
 - **Publisher: Unknown:** binaries aren't code-signed yet, so a fresh download
   may show a SmartScreen / UAC warning — see
   [Installation](installation.md) for verifying a download with `CHECKSUMS.txt`
