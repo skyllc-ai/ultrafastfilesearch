@@ -33,7 +33,10 @@ Confirm the install:
 uffs --version
 ```
 
-> Live NTFS search still requires an **Administrator** terminal — see
+> Live NTFS search needs elevation **once**: install the Access Broker
+> (`uffs-broker --install`, one-time from an elevated terminal) and every later
+> search — plus daemon start/stop and non-elevated updates — runs with **no
+> UAC**. Without the broker, use an Administrator terminal. See
 > [§3 Platform Requirements](#3--platform-requirements).
 
 ---
@@ -103,21 +106,29 @@ Get-FileHash uffs-windows-x64.exe -Algorithm SHA256
 
 | Platform | Data source | Privileges |
 |----------|------------|------------|
-| **Windows** | Live NTFS MFT (auto-detected) | Administrator required |
+| **Windows** | Live NTFS MFT (auto-detected) | Admin **once** (Access Broker) → then none; or an Administrator terminal |
 | **macOS / Linux** | Offline MFT captures (`.iocp`, `.bin`, `.mft`) | None |
 
 ### Windows
 
-The pre-built binary reads NTFS drives directly.  **Administrator
-privileges are required** — the MFT is a protected system structure.
+The pre-built binary reads NTFS drives directly.  The MFT is a protected
+system structure, so reading it needs elevation — but you grant it **once**:
 
 ```powershell
-# Option A: Run your terminal as Administrator
+# Option A (recommended): install the Access Broker — one-time elevation, then
+# NO UAC on any later search, daemon start/stop, or non-elevated update.
+uffs-broker --install          # run once from an elevated PowerShell
+
+# Option B: run your terminal as Administrator each time
 # Right-click Terminal → "Run as administrator"
 
-# Option B: Use gsudo (recommended)
+# Option C: per-command elevation with gsudo
 gsudo uffs "*.dll"
 ```
+
+With the broker installed, plain `uffs <pattern>` and `uffs --daemon …` run
+unelevated — no prompts. The broker is a `LocalSystem` service that vends the
+daemon a read-only volume handle, so the daemon itself never needs admin.
 
 ### macOS / Linux
 

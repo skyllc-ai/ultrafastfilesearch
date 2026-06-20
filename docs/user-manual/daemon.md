@@ -73,7 +73,10 @@ uffs "*.exe"
 uffs --daemon start --drive C --drive D
 ```
 
-> **Note:** Live MFT access requires **Administrator privileges**.
+> **Note:** Live MFT access needs elevation. Install the Access Broker **once**
+> (`uffs-broker --install`, from an elevated terminal) and the daemon — its
+> start/stop/restart and non-elevated updates — runs with **no UAC**; otherwise
+> start it from an Administrator terminal.
 
 ---
 
@@ -188,7 +191,7 @@ logging — see [Advanced Diagnostics](advanced-diagnostics.md) for details.
 | Aspect | Windows | macOS / Linux |
 |--------|---------|---------------|
 | Data source | Live NTFS MFT (auto-detected) | Offline captures (`.iocp`, `.bin`, `.mft`) |
-| Privileges | Administrator required | None (reads regular files) |
+| Privileges | Admin **once** (Access Broker) → then none; else Administrator | None (reads regular files) |
 | IPC transport | Named pipe | Unix domain socket |
 | Auto-discovery | All NTFS drives | Requires `--data-dir` or `--mft-file` |
 
@@ -239,7 +242,7 @@ stdout formatting.
 | "Connection refused" on search | Daemon not running | Let auto-start handle it, or `uffs --daemon start` |
 | Stale PID file | Previous daemon crashed | `uffs --daemon kill` removes PID + socket |
 | First search slow after restart | MFT being loaded | Normal — ~7 s warm cache (or ~66 s cold), sub-second after |
-| "Permission denied" (Windows) | Not running as Admin | Right-click terminal → "Run as administrator" |
+| "Permission denied" (Windows) | No broker + not elevated | Install the Access Broker once (`uffs-broker --install`, elevated) for zero-UAC, or run the terminal as Administrator |
 | Multiple daemons running | Rare race condition | `uffs --daemon kill` + `uffs --daemon start` |
 
 > **More troubleshooting:** [Troubleshooting](troubleshooting.md)
