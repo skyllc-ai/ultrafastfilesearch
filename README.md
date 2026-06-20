@@ -183,8 +183,12 @@ uffs --update repair                    # diagnose + self-heal
 uffs --update apply --version v0.6.5    # pin / roll back to a specific release
 ```
 
-> **WinGet installs** update with `winget upgrade SkyLLC.UFFS` instead — UFFS
-> defers to WinGet for WinGet-managed installs.
+> **WinGet installs:** prefer `uffs --update` here too. `winget upgrade
+> SkyLLC.UFFS` can fail with `remove_all: Access is denied` — the running
+> daemon and broker hold open the very binaries WinGet tries to replace.
+> `uffs --update` stops those services first, then swaps, so it's the reliable
+> path. (If you do run `winget upgrade`, stop UFFS first — elevated
+> `uffs --daemon stop` + `uffs-broker --stop`.)
 
 > 📖 **[Full update guide](docs/user-manual/updating.md)** — every action, version pinning/rollback, the health check, and edge cases.
 
