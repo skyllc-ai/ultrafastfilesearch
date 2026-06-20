@@ -179,3 +179,51 @@ pub(crate) fn pipe_serving(pipe_name: &str, timeout_ms: u32) -> bool {
     let ready = unsafe { WaitNamedPipeW(PCWSTR(name.as_ptr()), timeout_ms) };
     ready.as_bool()
 }
+
+/// Query `TokenElevation` on the current process token. Any FFI failure maps to
+/// `false` — the conservative answer for a privilege gate.
+pub(crate) fn is_elevated() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    // SAFETY: returns the current-process pseudo-handle; never fails.
+    #[expect(unsafe_code, reason = "Win32 FFI — GetCurrentProcess")]
+    let process = unsafe { GetCurrentProcess() };
+
+    let mut token = HANDLE::default();
+    // SAFETY: opening our OWN process token with query access; `token` is a
+    // live out-param written only on success. Returns `Err` on failure.
+    #[expect(unsafe_code, reason = "Win32 FFI — OpenProcessToken")]
+    let opened = unsafe { OpenProcessToken(process, TOKEN_QUERY, core::ptr::from_mut(&mut token)) };
+    if opened.is_err() {
+        return false;
+    }
+
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0_u32;
+    // SAFETY: `token` is a valid token handle; the buffer is exactly one
+    // `TOKEN_ELEVATION`; `returned` is a live `u32` out-param.
+    #[expect(
+        unsafe_code,
+        reason = "Win32 FFI — GetTokenInformation(TokenElevation)"
+    )]
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(core::ptr::from_mut(&mut elevation).cast()),
+            u32::try_from(size_of::<TOKEN_ELEVATION>()).unwrap_or(0),
+            core::ptr::from_mut(&mut returned),
+        )
+    }
+    .is_ok();
+
+    // SAFETY: `token` came from `OpenProcessToken` and is closed exactly once.
+    #[expect(unsafe_code, reason = "Win32 FFI — CloseHandle")]
+    let _closed = unsafe { CloseHandle(token) };
+
+    ok && elevation.TokenIsElevated != 0
+}

@@ -154,6 +154,17 @@ pub fn pipe_serving(pipe_name: &str, timeout_ms: u32) -> bool {
     sys::pipe_serving(pipe_name, timeout_ms)
 }
 
+/// `true` if the current process runs with an elevated (Administrator) token.
+///
+/// Queries `TokenElevation` on the current process token. Any FFI failure maps
+/// to `false` — the conservative answer for a privilege gate. Always `false`
+/// off Windows (there is no token-elevation concept; non-Windows callers that
+/// care about root use their own check).
+#[must_use]
+pub fn is_elevated() -> bool {
+    sys::is_elevated()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ServiceInfo, ServiceState};

@@ -105,7 +105,20 @@ fn run_apply(args: &[String]) -> Result<()> {
     // begin (no live journal yet for this run).
     sweep_self_backups_if_idle(&update_dir);
 
-    let snapshot = plan::Snapshot::load(&snapshot_path)?;
+    let mut snapshot = plan::Snapshot::load(&snapshot_path)?;
+
+    // Non-elevated apply skips the Access Broker: it is a LocalSystem service we
+    // can neither stop (to unlock its `.exe`) nor restart without admin. Drop it
+    // from this run — update everything else; the running broker keeps serving
+    // (its wire protocol is back-compatible) and catches up on the next elevated
+    // update. `is_elevated()` is `false` off Windows, but the snapshot has no
+    // broker there, so this is a no-op away from Windows.
+    let skipped_broker = if uffs_winsvc::is_elevated() {
+        None
+    } else {
+        snapshot.drop_broker()
+    };
+
     let backup_dir = update_dir.join(format!("backup-{}", std::process::id()));
     let journal_path = update_dir.join("journal.json");
     let mut journal = orchestrate::journal_from_snapshot(journal_path, &snapshot, backup_dir);
@@ -167,6 +180,14 @@ fn run_apply(args: &[String]) -> Result<()> {
     journal.transition(journal::UpdateState::Done, "apply.done")?;
     journal.archive();
     println!("Applied + committed → {}", journal.to_version);
+    if let Some(broker_version) = skipped_broker {
+        println!(
+            "note: the Access Broker (uffs-broker {broker_version}) was left running \
+             and NOT updated — refreshing the LocalSystem broker service needs \
+             elevation. The running broker stays compatible; for a full refresh \
+             (incl. the broker), run once from an elevated shell:\n    uffs --update"
+        );
+    }
     Ok(())
 }
 

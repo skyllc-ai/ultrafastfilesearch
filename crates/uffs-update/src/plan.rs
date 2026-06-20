@@ -14,6 +14,11 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
+/// Snapshot binary stem for the Access Broker (`uffs-broker.exe`).
+const BROKER_STEM: &str = "uffs-broker";
+/// Snapshot running-component name for the Access Broker (vs. its binary stem).
+const BROKER_COMPONENT: &str = "broker";
+
 /// A parsed Phase-B snapshot.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Snapshot {
@@ -82,6 +87,41 @@ impl Snapshot {
     /// The version this update is moving *to* (falls back to `unknown`).
     pub(crate) fn to_version(&self) -> &str {
         self.to_version.as_deref().unwrap_or("unknown")
+    }
+
+    /// Remove the Access Broker from this snapshot so a non-elevated apply
+    /// leaves it alone.
+    ///
+    /// The broker is a `LocalSystem` service: stopping it (to unlock its
+    /// `.exe`) and restarting it both need elevation, and its wire protocol is
+    /// fixed/back-compatible — so a slightly-older broker keeps serving a newer
+    /// daemon. Drops the `broker` running entry and every `uffs-broker` binary
+    /// target. Returns the broker's on-disk version (for a user hint), or
+    /// `None` when the snapshot had no broker at all (e.g. off Windows).
+    pub(crate) fn drop_broker(&mut self) -> Option<String> {
+        let present = self
+            .running
+            .iter()
+            .any(|run| run.component == BROKER_COMPONENT)
+            || self
+                .targets
+                .iter()
+                .any(|tgt| tgt.binaries.iter().any(|bin| bin.name == BROKER_STEM));
+        if !present {
+            return None;
+        }
+        let version = self
+            .targets
+            .iter()
+            .flat_map(|tgt| &tgt.binaries)
+            .find(|bin| bin.name == BROKER_STEM)
+            .and_then(|bin| bin.on_disk_version.clone())
+            .unwrap_or_else(|| "?".to_owned());
+        self.running.retain(|run| run.component != BROKER_COMPONENT);
+        for target in &mut self.targets {
+            target.binaries.retain(|bin| bin.name != BROKER_STEM);
+        }
+        Some(version)
     }
 
     /// Roots the **updater** owns: `unmanaged` only. `WinGet` roots are
@@ -172,5 +212,54 @@ mod tests {
         assert_eq!(snap.to_version(), "unknown");
         assert_eq!(snap.prior_version(), "unknown");
         assert_eq!(snap.unmanaged_targets().count(), 0);
+    }
+
+    #[test]
+    fn drop_broker_removes_broker_and_reports_version() {
+        const WITH_BROKER: &str = r#"{
+          "to_version": "0.6.11",
+          "targets": [
+            { "root": "C:\\uffs", "channel": "unmanaged", "binaries": [
+              { "name": "uffsd", "on_disk_version": "0.6.10" },
+              { "name": "uffs-broker", "on_disk_version": "0.6.10" }
+            ] }
+          ],
+          "running": [
+            { "component": "daemon", "pid": 42 },
+            { "component": "broker", "pid": 7 }
+          ]
+        }"#;
+        let mut snap: Snapshot = serde_json::from_str(WITH_BROKER).expect("parse");
+        assert_eq!(
+            snap.drop_broker().as_deref(),
+            Some("0.6.10"),
+            "returns the broker's version for the user hint"
+        );
+        assert!(
+            snap.targets
+                .iter()
+                .flat_map(|tgt| &tgt.binaries)
+                .all(|bin| bin.name != "uffs-broker"),
+            "broker binary target removed"
+        );
+        assert!(
+            snap.running.iter().all(|run| run.component != "broker"),
+            "broker running entry removed"
+        );
+        assert!(
+            snap.running.iter().any(|run| run.component == "daemon"),
+            "non-broker components are untouched"
+        );
+        assert_eq!(
+            snap.drop_broker(),
+            None,
+            "a second call finds no broker left to drop"
+        );
+    }
+
+    #[test]
+    fn drop_broker_is_none_when_absent() {
+        let mut snap: Snapshot = serde_json::from_str(SNAP).expect("parse");
+        assert_eq!(snap.drop_broker(), None, "snapshot has no broker");
     }
 }

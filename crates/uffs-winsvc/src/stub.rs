@@ -51,3 +51,12 @@ pub(crate) fn stop(_service: &str) -> Result<()> {
 pub(crate) fn pipe_serving(_pipe_name: &str, _timeout_ms: u32) -> bool {
     true
 }
+
+/// No Windows token here — off-Windows callers use their own root check.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "mirrors the non-const Windows impl so the public wrapper is uniform"
+)]
+pub(crate) fn is_elevated() -> bool {
+    false
+}
