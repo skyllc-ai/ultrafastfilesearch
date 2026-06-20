@@ -37,13 +37,20 @@ pub(crate) fn system_status() {
 const BROKER_PIPE_PROBE_MS: u32 = 1_000;
 
 /// Print the Access Broker section: SCM state + pid + whether its pipe is
-/// serving. Native `uffs-winsvc` (locale-proof); reports "not installed"
-/// off Windows.
+/// serving. Native `uffs-winsvc` (locale-proof). The broker is a Windows-only
+/// component (it vends elevated NTFS volume handles); off Windows there is no
+/// broker and no UAC, so the section reports "not applicable" rather than
+/// advertising an install that does nothing — matching the doctor's
+/// "Broker check skipped (non-Windows)".
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_broker_status() {
     use uffs_broker_protocol::{PIPE_NAME, SERVICE_NAME};
 
     println!("── Access Broker ──");
+    if !cfg!(windows) {
+        println!("  Status:      not applicable (Windows-only component)");
+        return;
+    }
     let info = uffs_winsvc::query(SERVICE_NAME);
     if !info.state.is_installed() {
         println!("  Status:      not installed");
