@@ -55,6 +55,7 @@ use assert_cmd as _;
 pub mod args;
 pub mod commands;
 mod dispatch;
+mod search_retry;
 
 /// Run the CLI and return a result.
 fn run() -> Result<()> {
@@ -313,8 +314,7 @@ pub(crate) fn run_search(args: &[String]) -> Result<()> {
     let args_owned: Vec<String> = commands::search::args::inject_no_output_for_null_stdout(
         commands::search::args::resolve_out_path(args),
     );
-    let raw_response = client
-        .search_cli_raw(&args_owned)
+    let raw_response = search_retry::search_cli_with_warm_retry(&mut client, &args_owned)
         .with_context(|| "Daemon search_cli failed")?;
     let ipc_ms = t_search.elapsed().as_millis();
 

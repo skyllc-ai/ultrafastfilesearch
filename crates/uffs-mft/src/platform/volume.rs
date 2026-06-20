@@ -173,8 +173,48 @@ pub(crate) fn try_adopt_broker_handle(drive: super::DriveLetter) -> Result<Optio
 /// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
 /// [`MftError::InvalidData`] on a short read.
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
 pub(crate) fn read_handle_at(handle: HANDLE, offset: u64, buf: &mut [u8]) -> Result<()> {
+    // `ERROR_OPERATION_ABORTED` (995) is transient: the OS cancels a *pending*
+    // overlapped read when the thread that issued it is reaped — e.g. a tokio
+    // `spawn_blocking` / rayon worker recycling during a parked-drive re-warm
+    // (the USN-refresh reads MFT extents over the broker's overlapped handle).
+    // The read is valid, so reissue it; bounded so a genuinely wedged handle
+    // still fails fast instead of spinning forever.
+    const MAX_ABORT_RETRIES: u32 = 8;
+
+    let mut attempt = 0_u32;
+    loop {
+        match read_handle_at_once(handle, offset, buf) {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt < MAX_ABORT_RETRIES && is_operation_aborted(&err) => {
+                attempt += 1;
+                // Yield so the recycled thread / overlapped slot can settle
+                // before the read is reissued.
+                std::thread::yield_now();
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// `true` when `err` is a Windows `ERROR_OPERATION_ABORTED` (995) I/O failure —
+/// the transient cancellation [`read_handle_at`] retries.
+#[cfg(windows)]
+fn is_operation_aborted(err: &MftError) -> bool {
+    let aborted = i32::try_from(ERROR_OPERATION_ABORTED_CODE).ok();
+    matches!(err, MftError::Io(io) if io.raw_os_error() == aborted)
+}
+
+/// One overlapped read attempt; the [`read_handle_at`] wrapper adds the
+/// transient-abort (995) retry.
+///
+/// # Errors
+///
+/// [`MftError::Io`] if `ReadFile` / `GetOverlappedResult` fail, or
+/// [`MftError::InvalidData`] on a short read.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "FFI: overlapped ReadFile + GetOverlappedResult")]
+fn read_handle_at_once(handle: HANDLE, offset: u64, buf: &mut [u8]) -> Result<()> {
     use windows::Win32::Foundation::ERROR_IO_PENDING;
     use windows::Win32::Storage::FileSystem::ReadFile;
     use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
