@@ -353,6 +353,12 @@ pub struct SearchParams {
     /// portion of the path, not the filename.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_contains: Option<String>,
+    /// Directory-path **exclude** patterns — a comma-separated list of globs
+    /// (e.g. `"*appdata*,*.cargo*,*.rustup*"`). A record is dropped when its
+    /// directory portion matches **any** of them. Inverse of `path_contains`;
+    /// the comma-list lets several noise dirs be excluded in one query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_excludes: Option<String>,
     /// File type/category filter (e.g. `"code"`, `"document"`, `"picture"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_filter: Option<String>,
@@ -573,6 +579,7 @@ impl Default for SearchParams {
             ext: None,
             exclude: None,
             path_contains: None,
+            path_excludes: None,
             type_filter: None,
             min_bulkiness: None,
             max_bulkiness: None,

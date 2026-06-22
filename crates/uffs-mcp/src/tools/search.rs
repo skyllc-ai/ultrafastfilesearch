@@ -97,9 +97,14 @@ pub(crate) struct SearchArgs {
     /// Exclude files matching this glob pattern (e.g. `"*.tmp"`).
     #[serde(default)]
     pub exclude: Option<String>,
-    /// Only include results whose path contains this substring.
+    /// Only include results whose directory path matches this glob.
     #[serde(default)]
     pub path_contains: Option<String>,
+    /// Exclude results whose directory path matches ANY of these globs
+    /// (comma-separated, e.g. `"*appdata*,*.cargo*,*.rustup*"`). The one-call
+    /// way to strip noise dirs — inverse of `path_contains`.
+    #[serde(default)]
+    pub path_excludes: Option<String>,
 
     // ── Size filters ──────────────────────────────────────────────
     /// Minimum file size in bytes.
@@ -312,6 +317,7 @@ pub(crate) async fn run(
         ext: args.ext,
         exclude: args.exclude,
         path_contains: args.path_contains,
+        path_excludes: args.path_excludes,
         hide_system: args.hide_system,
         // Size bounds.
         min_size: args.min_size,

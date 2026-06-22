@@ -16,7 +16,9 @@ impl SearchFilters {
     /// (full path, semantic type).
     #[must_use]
     pub const fn needs_display_row_filter(&self) -> bool {
-        self.path_contains_lower.is_some() || self.type_filter.is_some()
+        self.path_contains_lower.is_some()
+            || self.path_excludes_lower.is_some()
+            || self.type_filter.is_some()
     }
 }
 
@@ -190,6 +192,13 @@ fn apply_derived_filters(row: &DisplayRow, filters: &SearchFilters) -> bool {
         let dir = row.path_dir();
         let dir_lower = dir.to_ascii_lowercase();
         if !name_matches(&dir_lower, pat) {
+            return false;
+        }
+    }
+    // ── Directory-path exclude filter (drop if dir matches ANY) ──
+    if let Some(excludes) = &filters.path_excludes_lower {
+        let dir_lower = row.path_dir().to_ascii_lowercase();
+        if excludes.iter().any(|pat| name_matches(&dir_lower, pat)) {
             return false;
         }
     }

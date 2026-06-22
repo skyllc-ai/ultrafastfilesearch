@@ -125,6 +125,7 @@ impl IndexManager {
             ext_filter: ep.ext.as_deref(),
             exclude: ep.exclude.as_deref(),
             path_contains: ep.path_contains.as_deref(),
+            path_excludes: ep.path_excludes.as_deref(),
             type_filter: ep.type_filter.as_deref(),
             min_bulkiness: ep.min_bulkiness,
             max_bulkiness: ep.max_bulkiness,

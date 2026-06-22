@@ -34,3 +34,17 @@ pub(in crate::search) fn normalize_path_separators(input: &str) -> String {
     }
     result
 }
+
+/// Parse a comma-separated `path_excludes` spec into normalized directory
+/// globs. Splits on `,`, trims, drops blanks, ASCII-lowercases, and normalizes
+/// separators so each entry matches `path_dir()` exactly as `path_contains`
+/// does. `None` when the spec is absent or entirely blank.
+pub(in crate::search) fn parse_path_excludes(spec: Option<&str>) -> Option<Vec<String>> {
+    let entries: Vec<String> = spec?
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| normalize_path_separators(&entry.to_ascii_lowercase()))
+        .collect();
+    (!entries.is_empty()).then_some(entries)
+}

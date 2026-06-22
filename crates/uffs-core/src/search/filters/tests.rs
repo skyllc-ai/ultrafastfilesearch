@@ -225,6 +225,45 @@ fn from_params_normalizes_extensions_to_lowercase_without_dot() {
 }
 
 #[test]
+fn from_params_path_excludes_splits_lowercases_and_normalizes() {
+    let filters = SearchFilters::from_params(&SearchFilterParams {
+        // Mixed case, forward slashes, blank entries, and surrounding spaces.
+        path_excludes: Some(" *AppData* , */.Cargo/* , , *Downloads* "),
+        ..Default::default()
+    });
+    let got: Vec<&str> = filters
+        .path_excludes_lower
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        got,
+        ["*appdata*", "*\\.cargo\\*", "*downloads*"],
+        "comma-split, ASCII-lowered, separator-normalized, blanks dropped"
+    );
+}
+
+#[test]
+fn from_params_path_excludes_none_when_absent_or_all_blank() {
+    assert!(
+        SearchFilters::from_params(&SearchFilterParams::default())
+            .path_excludes_lower
+            .is_none()
+    );
+    assert!(
+        SearchFilters::from_params(&SearchFilterParams {
+            path_excludes: Some("  , ,"),
+            ..Default::default()
+        })
+        .path_excludes_lower
+        .is_none(),
+        "all-blank spec collapses to None"
+    );
+}
+
+#[test]
 fn resolve_ext_ids_for_drive_accepts_mixed_case_extensions() {
     let drive = test_drive_with_rs_file();
     let mut filters = SearchFilters::from_params(&SearchFilterParams {

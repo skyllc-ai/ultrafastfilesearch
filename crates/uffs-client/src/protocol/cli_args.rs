@@ -108,6 +108,9 @@ impl SearchParams {
                 }
                 "--exclude" => raw.exclude = Some(flag_val(&arg, "--exclude", &mut iter)?),
                 "--in-path" => raw.in_path = Some(flag_val(&arg, "--in-path", &mut iter)?),
+                "--not-in-path" => {
+                    raw.path_excludes = Some(flag_val(&arg, "--not-in-path", &mut iter)?);
+                }
                 "--type" => raw.type_filter = Some(flag_val(&arg, "--type", &mut iter)?),
                 "--ext" => raw.ext = Some(flag_val(&arg, "--ext", &mut iter)?),
                 "--month" => raw.month = Some(flag_val(&arg, "--month", &mut iter)?),
@@ -331,6 +334,7 @@ struct RawCliArgs {
     older_accessed: Option<String>,
     exclude: Option<String>,
     in_path: Option<String>,
+    path_excludes: Option<String>,
     type_filter: Option<String>,
     month: Option<String>,
     between: Option<String>,
@@ -690,6 +694,7 @@ impl RawCliArgs {
             ext: self.ext,
             exclude,
             path_contains: self.in_path,
+            path_excludes: self.path_excludes,
             type_filter: self.type_filter,
             min_bulkiness: self.min_bulkiness,
             max_bulkiness: self.max_bulkiness,

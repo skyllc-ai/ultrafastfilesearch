@@ -6,6 +6,11 @@
 //! [`SearchFilters`] holds pre-parsed filter criteria. All parsing (time
 //! bounds, attribute bits) happens at construction time so the hot `retain`
 //! loop is branch-only.
+//!
+//! Exception: the `SearchFilters` / `SearchFilterParams` definitions and the
+//! `from_params` constructor stay together so the full per-field filter
+//! contract is auditable in one place (see
+//! `scripts/ci/file_size_exceptions.txt`).
 
 mod apply;
 mod attr_parsing;
@@ -89,6 +94,9 @@ pub struct SearchFilters {
     /// Directory-path pattern (glob, lowered). Matches against `path_dir()`
     /// only.
     pub path_contains_lower: Option<String>,
+    /// Directory-path **exclude** globs (lowered, separator-normalized). A
+    /// record is dropped when its `path_dir()` matches any entry.
+    pub path_excludes_lower: Option<Vec<String>>,
     /// File type/category filter (e.g. `"code"`, `"document"`, `"picture"`).
     pub type_filter: Option<String>,
     /// Minimum bulkiness in **per-million** scale.
@@ -184,6 +192,9 @@ pub struct SearchFilterParams<'a> {
     pub exclude: Option<&'a str>,
     /// Directory-path pattern (glob, matched against dir portion only).
     pub path_contains: Option<&'a str>,
+    /// Directory-path exclude globs, comma-separated (matched against the dir
+    /// portion only; a record is dropped if its directory matches **any**).
+    pub path_excludes: Option<&'a str>,
     /// File type/category filter (e.g. `"code"`, `"document"`).
     pub type_filter: Option<&'a str>,
     /// Minimum bulkiness percentage (e.g. `200` = allocated ≥ 2× size).
@@ -271,6 +282,9 @@ impl SearchFilters {
             let lowered = pat.to_ascii_lowercase();
             normalize_path_separators(&lowered)
         });
+        // Comma-list of dir globs (`*appdata*,*.cargo*,…`), normalized like
+        // `path_contains`; see [`path_normalize::parse_path_excludes`].
+        let path_excludes_lower = path_normalize::parse_path_excludes(params.path_excludes);
 
         // ── Promote type_filter → extensions for early filtering ─────
         //
@@ -344,6 +358,7 @@ impl SearchFilters {
             resolved_ext_ids: Vec::new(),
             exclude_lower,
             path_contains_lower,
+            path_excludes_lower,
             type_filter,
             // CLI bulkiness is a user-facing percentage (200 = 200%).
             // Internal scale is per-million (1_000_000 = 100%).
@@ -503,6 +518,7 @@ impl SearchFilters {
             && self.max_descendants.is_none()
             && self.exclude_lower.is_none()
             && self.path_contains_lower.is_none()
+            && self.path_excludes_lower.is_none()
             && self.type_filter.is_none()
             && self.min_bulkiness.is_none()
             && self.max_bulkiness.is_none()
@@ -768,6 +784,7 @@ impl SearchFilters {
             && self.extensions.is_empty()
             && self.exclude_lower.is_none()
             && self.path_contains_lower.is_none()
+            && self.path_excludes_lower.is_none()
             && self.type_filter.is_none()
             && self.min_bulkiness.is_none()
             && self.max_bulkiness.is_none()

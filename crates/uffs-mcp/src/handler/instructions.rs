@@ -47,15 +47,23 @@ QUERY STRATEGY (minimize round-trips):
 
 KEY PARAMETERS for uffs_search:
 • pattern: '*' (match-all), '*.ext' (glob), 'word' (substring), '>regex'
+  KEYWORD-OR — for a topic that could be any of several words, use ONE \
+  regex, NEVER N separate searches: '>(solar|energy|utility|pge|sunrun)'. \
+  Regex is CASE-INSENSITIVE by default.
+• match_path: true → match `pattern` against the full path, not just the name
 • filter: 'files', 'dirs', or 'all'
 • ext: 'pdf' or collection aliases: pictures, documents, videos, music, \
-  archives, code
+  archives, code  (documents = pdf, doc/docx, xls/xlsx, ppt/pptx, csv, txt, …)
 • type_filter: semantic category: picture, document, archive, code, video, \
   audio, executable, database, config, log, system
 • min_size / max_size: bytes (1073741824 = 1 GB)
 • newer / older: '7d', '24h', '2w', '2026-01-15', 'today', 'last_30d'
 • newer_created / older_created / newer_accessed / older_accessed
 • path_contains: scope to a subtree ('Users\\\\name' or 'Users/name')
+• path_excludes: drop noise DIRS — comma-separated dir globs matched against \
+  the path, record dropped if it matches ANY: \
+  '*appdata*,*.cargo*,*.rustup*,*node_modules*,*downloads*'
+• exclude: drop by FILENAME glob (not path) — e.g. '~$*' for Office temp files
 • drives: ['C'] or ['C','D'] to scope to specific drives
 • sort: 'modified', '-size', 'name', '-treesize', '-descendants', '-bulkiness'
 • limit: max results (default 50, cap 500)
@@ -119,8 +127,14 @@ COMMON USER REQUESTS (natural language -> tool call):
 • Recent executables  -> uffs_search type_filter='executable' newer='7d'
 • Old large files     -> uffs_search min_size=104857600 older='365d' sort='-size'
 • Inventory a drive   -> uffs_aggregate preset='overview' drives=['X']
+• Topic files in a folder, minus dev noise (ONE call, not many):
+    My solar/energy spreadsheets under my home dir ->
+    uffs_search pattern='>(solar|energy|utility|electric|pge|sunrun|sunpower|tesla)' \
+      ext='xls,xlsx' path_contains='Users\\\\name' \
+      path_excludes='*appdata*,*.cargo*,*.rustup*,*downloads*' sort='-modified'
 NOTE: UFFS does NOT search inside file contents — it searches file names, \
-paths, and metadata.  For content search, suggest ripgrep or similar.
+paths, and metadata (the keyword regex matches the FILENAME — e.g. an invoice \
+named after the installer/utility).  For content search, suggest ripgrep.
 
 PROMPTS (guided multi-step workflows):
 find_large_files, find_by_extension, disk_usage_report, cleanup_report, \

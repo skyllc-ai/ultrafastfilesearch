@@ -5,6 +5,7 @@
 # --- Permanent exceptions (documented justification) ---
 crates/uffs-core/src/search/field/field_metadata.rs|PERMANENT: Single const fn match table — one FieldMeta per FieldId variant; cannot be split without breaking the match
 crates/uffs-core/src/search/filters/tests.rs|PERMANENT: Integration test suite for filter pipeline; splitting further would scatter related test fixtures
+crates/uffs-core/src/search/filters/mod.rs|PERMANENT: Cohesive SearchFilters/SearchFilterParams definitions + from_params construction; kept together so the full per-field filter contract is auditable in one place
 crates/uffs-client/src/schema/field_metadata.rs|PERMANENT: Single const fn match table — one FieldMeta per FieldId variant; mirrors uffs-core version
 crates/uffs-mft/src/io/parser/index.rs|PERMANENT: Performance-critical single-pass MFT record parser; monolithic loop for cache locality
 crates/uffs-mft/src/io/parser/index_extension.rs|PERMANENT: Extension record parser mirroring index.rs structure; must stay parallel for maintenance parity
