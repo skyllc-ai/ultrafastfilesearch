@@ -315,6 +315,82 @@ fn apply_usn_patch_create_replaces_live_reused_slot() {
     );
 }
 
+/// Metadata backfill: when the journal source attaches a `RecordMeta`
+/// (from a targeted MFT read), the created record carries the real
+/// size/timestamps/flags instead of the USN-only zeros. Covers both the
+/// append (new FRS) and the overwrite (reused slot) paths, plus rename.
+#[test]
+fn apply_usn_patch_applies_backfilled_metadata() {
+    use uffs_mft::usn::RecordMeta;
+
+    let meta = RecordMeta {
+        size: 1_637_013,
+        allocated: 1_638_400,
+        created: 1_700_000_000_000_000,
+        modified: 1_700_000_500_000_000,
+        accessed: 1_700_000_900_000_000,
+        flags: 0x20, // FILE_ATTRIBUTE_ARCHIVE
+    };
+
+    // Append path: brand-new FRS 13 with metadata.
+    let mut appended_drive = make_synthetic_drive();
+    let appended_idx = appended_drive.records.len();
+    apply_usn_patch(&mut appended_drive, &[FileChange {
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "report.pdf".to_owned(),
+        created: true,
+        meta: Some(meta),
+        ..FileChange::default()
+    }]);
+    let appended = appended_drive
+        .records
+        .as_slice()
+        .get(appended_idx)
+        .expect("appended");
+    assert_eq!(
+        appended.size, meta.size,
+        "appended record carries real size"
+    );
+    assert_eq!(appended.modified, meta.modified, "and real modified time");
+    assert_eq!(appended.flags, meta.flags, "and real attribute flags");
+
+    // Overwrite path: a reused live slot (FRS 11 → idx 2) with metadata.
+    let mut overwrite_drive = make_synthetic_drive();
+    apply_usn_patch(&mut overwrite_drive, &[FileChange {
+        frs: 11_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "reused.pdf".to_owned(),
+        created: true,
+        meta: Some(meta),
+        ..FileChange::default()
+    }]);
+    let overwritten = overwrite_drive
+        .records
+        .as_slice()
+        .get(2)
+        .expect("reused slot");
+    assert_eq!(
+        overwritten.size, meta.size,
+        "overwritten slot carries real size"
+    );
+    assert_eq!(overwritten.created, meta.created, "and real created time");
+
+    // No metadata (USN-only) still yields zeros — unchanged behaviour.
+    let mut bare_drive = make_synthetic_drive();
+    let bare_idx = bare_drive.records.len();
+    apply_usn_patch(&mut bare_drive, &[FileChange {
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "bare.pdf".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }]);
+    let bare = bare_drive.records.as_slice().get(bare_idx).expect("bare");
+    assert_eq!(bare.size, 0, "USN-only create stays zero-size");
+    assert_eq!(bare.modified, 0, "USN-only create stays zero-time");
+}
+
 /// Create contract: a newly-created FRS that doesn't map to an
 /// existing compact slot (`frs_to_compact[frs] == u32::MAX`) appends
 /// a fresh record at the end with the correct `parent_idx`,

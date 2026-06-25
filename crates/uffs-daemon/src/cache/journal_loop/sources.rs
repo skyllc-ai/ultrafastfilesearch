@@ -147,14 +147,101 @@ impl JournalSource for WindowsJournalSource {
         let (records, next_usn) =
             uffs_mft::usn::read_usn_journal(self.drive, info.journal_id, start_usn)?;
         let aggregated = uffs_mft::usn::aggregate_changes(&records);
-        let changes: Vec<uffs_mft::usn::FileChange> = aggregated.into_values().collect();
+        let mut changes: Vec<uffs_mft::usn::FileChange> = aggregated.into_values().collect();
         let next_cursor = u64::try_from(next_usn.raw()).unwrap_or(u64::MAX);
+
+        // Backfill real size/timestamps/flags via a targeted MFT read. USN
+        // records carry only name+parent, so a create/rename would otherwise
+        // land with size 0 and zero timestamps. This runs HERE (in `poll`,
+        // on the spawn_blocking thread) — before the registry write-lock is
+        // taken in `accept` — so it never lengthens the lock hold or touches
+        // the query path. Best-effort: any failure leaves `meta = None` and
+        // the records keep their (current) zeroed metrics.
+        Self::backfill_metadata(self.drive, &mut changes);
 
         Ok(JournalPollResult {
             changes,
             next_cursor,
             journal_id: info.journal_id,
         })
+    }
+}
+
+#[cfg(windows)]
+impl WindowsJournalSource {
+    /// Upper bound on targeted MFT reads per poll. A bulk operation (e.g.
+    /// unzipping thousands of files) can produce a large change set in one
+    /// 500 ms window; cap the read so a single poll can't stall the loop.
+    /// Records past the cap keep `meta = None` for this poll and are
+    /// backfilled on a subsequent one (or by the next full re-warm).
+    const MAX_TARGETED_READS_PER_POLL: usize = 4096;
+
+    /// Issue one batched targeted MFT read for the created/renamed FRSes in
+    /// `changes` and attach the recovered [`uffs_mft::usn::RecordMeta`] to
+    /// each. Deletes need no metadata and are skipped.
+    fn backfill_metadata(
+        drive: uffs_mft::platform::DriveLetter,
+        changes: &mut [uffs_mft::usn::FileChange],
+    ) {
+        // Collect the FRSes that need real metadata (creates + renames).
+        let frs_list: Vec<u64> = changes
+            .iter()
+            .filter(|change| change.created || change.renamed)
+            .take(Self::MAX_TARGETED_READS_PER_POLL)
+            .map(|change| change.frs.raw())
+            .collect();
+        if frs_list.is_empty() {
+            return;
+        }
+        let Some(scratch) = Self::read_targeted_records(drive, &frs_list) else {
+            return;
+        };
+
+        // Attach the recovered metadata. Representation matches CompactRecord
+        // exactly (i64 µs timestamps, raw NTFS flags), so it copies straight.
+        for change in changes.iter_mut() {
+            if !(change.created || change.renamed) {
+                continue;
+            }
+            if let Some(record) = scratch.find(change.frs) {
+                change.meta = Some(uffs_mft::usn::RecordMeta {
+                    size: record.first_stream.size.length,
+                    allocated: record.first_stream.size.allocated,
+                    created: record.stdinfo.created,
+                    modified: record.stdinfo.modified,
+                    accessed: record.stdinfo.accessed,
+                    flags: record.stdinfo.flags,
+                });
+            }
+        }
+    }
+
+    /// Open the volume (auto-adopting the broker handle when non-elevated —
+    /// the same path the USN read already uses) and read `frs_list` into a
+    /// scratch [`MftIndex`](uffs_mft::index::MftIndex). Best-effort: any
+    /// failure returns `None` (debug-logged), leaving callers' `meta` empty.
+    fn read_targeted_records(
+        drive: uffs_mft::platform::DriveLetter,
+        frs_list: &[u64],
+    ) -> Option<uffs_mft::index::MftIndex> {
+        let handle = match uffs_mft::platform::VolumeHandle::open(drive) {
+            Ok(handle) => handle,
+            Err(err) => {
+                tracing::debug!(drive = %drive, error = %err, "usn backfill: volume open failed");
+                return None;
+            }
+        };
+        let mut scratch = uffs_mft::index::MftIndex::new(drive);
+        match uffs_mft::usn::read_targeted_frs_records(&handle, &mut scratch, frs_list) {
+            Ok(read) => {
+                tracing::debug!(drive = %drive, requested = frs_list.len(), read, "usn backfill: targeted MFT reads complete");
+                Some(scratch)
+            }
+            Err(err) => {
+                tracing::debug!(drive = %drive, error = %err, "usn backfill: targeted reads failed");
+                None
+            }
+        }
     }
 }
 

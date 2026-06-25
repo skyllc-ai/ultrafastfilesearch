@@ -262,6 +262,33 @@ impl UsnRecord {
     }
 }
 
+/// Real per-file metadata that a USN record does NOT carry (size,
+/// allocation, timestamps, attribute flags).
+///
+/// A `UsnRecord` only conveys the FRS, parent FRS, name, and reason flags,
+/// so a file created/renamed via the live journal lands in the index with
+/// size 0 and zero timestamps. When the journal source issues a targeted
+/// MFT read (`read_targeted_frs_records`) to recover the real values, it
+/// attaches them here so `apply_usn_patch` can populate the record fully —
+/// matching what a cold rebuild would store. Field representation mirrors
+/// `CompactRecord` exactly (i64 µs timestamps, raw NTFS attribute flags),
+/// so application is a straight copy with no conversion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecordMeta {
+    /// Logical file size in bytes.
+    pub size: u64,
+    /// Allocated size on disk in bytes.
+    pub allocated: u64,
+    /// Creation time (Unix microseconds).
+    pub created: i64,
+    /// Last write time (Unix microseconds).
+    pub modified: i64,
+    /// Last access time (Unix microseconds).
+    pub accessed: i64,
+    /// Raw NTFS `FILE_ATTRIBUTE_*` flags.
+    pub flags: u32,
+}
+
 /// Aggregated changes for a single file (consolidates multiple USN records).
 // These bools represent independent change flags from USN journal records.
 // Using a bitflags pattern would add complexity without benefit for this DTO.
@@ -288,6 +315,10 @@ pub struct FileChange {
     pub size_changed: bool,
     /// Did metadata change?
     pub metadata_changed: bool,
+    /// Real size/timestamp/flags metadata, when a targeted MFT read
+    /// backfilled it (USN records carry none). `None` → the applier leaves
+    /// the record's metrics zeroed for a later re-warm to fill.
+    pub meta: Option<RecordMeta>,
 }
 
 /// Aggregates multiple USN records into per-file changes.

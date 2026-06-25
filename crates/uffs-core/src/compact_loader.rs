@@ -470,6 +470,10 @@ struct StagedCreate {
     extension_id: u16,
     /// Compact index of the parent directory (`u32::MAX` if unmapped).
     parent_idx: u32,
+    /// Real size/timestamps/flags from a targeted MFT read, or all-zero when
+    /// the USN-only change carried no metadata (a later re-warm fills it).
+    /// Representation matches `CompactRecord`, so it copies straight in.
+    meta: uffs_mft::usn::RecordMeta,
 }
 
 /// Append `change`'s filename to the names blob and intern its extension,
@@ -494,27 +498,31 @@ fn stage_create(drive: &mut DriveCompactIndex, change: &uffs_mft::usn::FileChang
         name_first_byte: change.filename.as_bytes().first().copied().unwrap_or(0),
         extension_id,
         parent_idx,
+        meta: change.meta.unwrap_or_default(),
     }
 }
 
 /// Overwrite an existing compact slot with a reused/re-animated file's
-/// identity, resetting the per-file metrics (a USN `FileChange` carries
-/// only name + parent; size/timestamps are backfilled by a later re-warm).
+/// identity. Per-file metrics come from the staged metadata — real values
+/// when a targeted MFT read backfilled them, else zero (a later re-warm
+/// fills them; the USN `FileChange` carries only name + parent).
 const fn overwrite_slot(rec: &mut CompactRecord, staged: &StagedCreate) {
     rec.name_offset = staged.name_offset;
     rec.name_len = staged.name_len;
     rec.name_first_byte = staged.name_first_byte;
     rec.extension_id = staged.extension_id;
     rec.parent_idx = staged.parent_idx;
-    rec.size = 0;
-    rec.allocated = 0;
+    rec.size = staged.meta.size;
+    rec.allocated = staged.meta.allocated;
+    rec.created = staged.meta.created;
+    rec.modified = staged.meta.modified;
+    rec.accessed = staged.meta.accessed;
+    rec.flags = staged.meta.flags;
+    // Tree metrics are recomputed post-loop (CSR rebuild + compute_path_
+    // lengths); never carried by a USN change.
     rec.treesize = 0;
     rec.tree_allocated = 0;
-    rec.created = 0;
-    rec.modified = 0;
-    rec.accessed = 0;
     rec.descendants = 0;
-    rec.flags = 0;
     rec.path_len = 0;
 }
 
@@ -563,15 +571,15 @@ fn apply_create(
         // reuses freed record numbers and a long-running daemon can outgrow
         // the build-time table, so extend + sentinel-fill any gap.
         let new_rec = CompactRecord {
-            size: 0,
-            allocated: 0,
+            size: staged.meta.size,
+            allocated: staged.meta.allocated,
             treesize: 0,
             tree_allocated: 0,
-            created: 0,
-            modified: 0,
-            accessed: 0,
+            created: staged.meta.created,
+            modified: staged.meta.modified,
+            accessed: staged.meta.accessed,
             name_offset: staged.name_offset,
-            flags: 0,
+            flags: staged.meta.flags,
             parent_idx: staged.parent_idx,
             descendants: 0,
             name_len: staged.name_len,
@@ -635,6 +643,17 @@ fn apply_rename(
         rec.extension_id = extension_id;
         rec.name_first_byte = change.filename.as_bytes().first().copied().unwrap_or(0);
         rec.parent_idx = new_parent_compact;
+        // Apply backfilled size/timestamps/flags when a targeted MFT read
+        // attached them (corrects a record previously created USN-only with
+        // zeroed metrics); otherwise leave the existing values untouched.
+        if let Some(meta) = change.meta {
+            rec.size = meta.size;
+            rec.allocated = meta.allocated;
+            rec.created = meta.created;
+            rec.modified = meta.modified;
+            rec.accessed = meta.accessed;
+            rec.flags = meta.flags;
+        }
         stats.renamed += 1;
     }
 }
