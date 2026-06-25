@@ -602,6 +602,56 @@ impl DriveCompactIndex {
         ids.dedup();
         ids
     }
+
+    /// Extract `filename`'s extension and intern it into [`Self::ext_names`],
+    /// returning its `extension_id`.
+    ///
+    /// Mirrors the build-time logic (`MftIndex::intern_extension` +
+    /// `ExtensionTable::intern`) so a record created by the USN journal patch
+    /// path lands under the SAME `extension_id` a full rebuild would assign —
+    /// otherwise `--ext <x>` (which resolves the name via [`Self::ext_names`]
+    /// and looks it up in the [`ExtensionIndex`]) silently misses the new file.
+    ///
+    /// Returns `0` (the reserved "no extension" id) for a dotless name, a
+    /// leading-dot dotfile (`.gitignore`), a trailing-dot name (`file.`), or if
+    /// the table is already at the `u16::MAX` interning ceiling.
+    pub(crate) fn intern_extension(&mut self, filename: &str) -> u16 {
+        // Extension = substring after the LAST dot, where the dot is neither
+        // the first byte (dotfile) nor the last (trailing dot).
+        let Some(dot_pos) = filename.rfind('.') else {
+            return 0;
+        };
+        if dot_pos == 0 || dot_pos + 1 >= filename.len() {
+            return 0;
+        }
+        let Some(raw_ext) = filename.get(dot_pos + 1..) else {
+            return 0;
+        };
+        let normalized = raw_ext.trim_start_matches('.').to_lowercase();
+        if normalized.is_empty() {
+            return 0;
+        }
+
+        // Find-or-append. `ext_names[0]` is the reserved "" (no-extension)
+        // slot, so a real extension never collides with id 0.
+        if let Some(existing) = self
+            .ext_names
+            .iter()
+            .position(|name| name.as_ref() == normalized)
+        {
+            return u16::try_from(existing).unwrap_or(0);
+        }
+        let Ok(new_id) = u16::try_from(self.ext_names.len()) else {
+            // Interning ceiling reached (>= 65 535 distinct extensions);
+            // fall back to "no extension" rather than wrap.
+            return 0;
+        };
+        if new_id == u16::MAX {
+            return 0;
+        }
+        self.ext_names.push(normalized.into_boxed_str());
+        new_id
+    }
 }
 
 /// Expand alternate data streams (ADS) for a single record, producing the

@@ -277,6 +277,101 @@ fn apply_usn_patch_created_record_appended_with_correct_parent() {
     );
 }
 
+/// Regression (v0.6.13 field report): a file created via the USN journal
+/// patch must become findable by `--ext`.  The create branch used to
+/// hardcode `extension_id: 0`, so the rebuilt `ExtensionIndex` filed the
+/// new file under "no extension" — `uffs report.pdf` found it by name but
+/// `uffs report --ext pdf` returned nothing.  This pins the whole chain:
+/// the extension is interned into `ext_names`, the record carries the real
+/// `extension_id`, and the inverted index returns it for that id.
+#[test]
+fn apply_usn_patch_created_record_is_findable_by_extension() {
+    let mut drive = make_synthetic_drive();
+    let new_idx = drive.records.len();
+
+    // Pre-condition: "pdf" is unknown on this synthetic drive, so an
+    // `--ext pdf` query resolves to no ids (the bug's starting point).
+    assert!(
+        drive.resolve_ext_ids(&["pdf".to_owned()]).is_empty(),
+        "fixture must not already know the 'pdf' extension"
+    );
+
+    let changes = vec![FileChange {
+        frs: 13_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "report.pdf".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }];
+    let stats = apply_usn_patch(&mut drive, &changes);
+    assert_eq!(stats.created, 1, "the create should have applied");
+
+    // 1. The extension is now interned and resolvable.
+    let ids = drive.resolve_ext_ids(&["pdf".to_owned()]);
+    assert_eq!(ids.len(), 1, "'pdf' must resolve to exactly one ext id");
+    let pdf_id = *ids.first().expect("one id present");
+    assert_ne!(
+        pdf_id, 0,
+        "a real extension must not collapse to the no-ext id"
+    );
+
+    // 2. The new record carries that extension_id (not the hardcoded 0).
+    let record = drive
+        .records
+        .as_slice()
+        .get(new_idx)
+        .expect("created record reachable at the tail");
+    assert_eq!(
+        record.extension_id, pdf_id,
+        "created record must be tagged with the resolved 'pdf' id"
+    );
+
+    // 3. The rebuilt inverted index returns the new record for that id — this is
+    //    exactly what `--ext pdf` walks.
+    let matches = drive.ext_index.get(pdf_id);
+    assert!(
+        matches.contains(&u32::try_from(new_idx).expect("idx fits u32")),
+        "ExtensionIndex.get(pdf) must include the USN-created record"
+    );
+}
+
+/// Companion edge cases for [`DriveCompactIndex::intern_extension`] via the
+/// create path: a dotless name and a leading-dot dotfile both resolve to
+/// the reserved no-extension id (0) and never pollute `ext_names`.
+#[test]
+fn apply_usn_patch_dotless_and_dotfile_creates_have_no_extension() {
+    let mut drive = make_synthetic_drive();
+    let ext_names_before = drive.ext_names.len();
+
+    let changes = vec![
+        FileChange {
+            frs: 13_u64.into(),
+            parent_frs: 5_u64.into(),
+            filename: "Makefile".to_owned(), // dotless
+            created: true,
+            ..FileChange::default()
+        },
+        FileChange {
+            frs: 14_u64.into(),
+            parent_frs: 5_u64.into(),
+            filename: ".gitignore".to_owned(), // leading-dot dotfile
+            created: true,
+            ..FileChange::default()
+        },
+    ];
+    apply_usn_patch(&mut drive, &changes);
+
+    let makefile = drive.records.as_slice().get(4).expect("Makefile record");
+    let gitignore = drive.records.as_slice().get(5).expect(".gitignore record");
+    assert_eq!(makefile.extension_id, 0, "dotless name → no extension");
+    assert_eq!(gitignore.extension_id, 0, "dotfile → no extension");
+    assert_eq!(
+        drive.ext_names.len(),
+        ext_names_before,
+        "no-extension creates must not append to ext_names"
+    );
+}
+
 /// Empty-batch fast path: passing zero changes produces all-zero
 /// stats and leaves the drive byte-for-byte unchanged in shape (same
 /// record count, same names blob length).  Pins that the rebuilt

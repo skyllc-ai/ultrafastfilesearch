@@ -536,21 +536,39 @@ pub fn apply_usn_patch(
             }
         } else if change.created {
             if compact_idx != u32::MAX {
-                // Re-animate a previously deleted slot.
-                if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize)
-                    && rec.name_len == 0
-                    && !change.filename.is_empty()
-                {
+                // Re-animate a previously deleted slot. Only a tombstone
+                // (name_len == 0) is revived; a live slot is left untouched.
+                let is_tombstone = drive
+                    .records
+                    .as_slice()
+                    .get(compact_idx as usize)
+                    .is_some_and(|rec| rec.name_len == 0);
+                if is_tombstone && !change.filename.is_empty() {
+                    // Re-intern the extension from the NEW name BEFORE taking
+                    // the record borrow (intern_extension mutably borrows the
+                    // index); a revived slot otherwise keeps its pre-delete
+                    // extension_id and drops out of `--ext` for its new name.
+                    let extension_id = drive.intern_extension(&change.filename);
                     let name_start = drive.names.len();
                     drive
                         .names
                         .as_mut_vec()
                         .extend_from_slice(change.filename.as_bytes());
-                    rec.name_offset = uffs_mft::len_to_u32(name_start);
-                    rec.name_len = uffs_mft::len_to_u16(change.filename.len());
+                    if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
+                        rec.name_offset = uffs_mft::len_to_u32(name_start);
+                        rec.name_len = uffs_mft::len_to_u16(change.filename.len());
+                        rec.extension_id = extension_id;
+                        rec.name_first_byte =
+                            change.filename.as_bytes().first().copied().unwrap_or(0);
+                    }
                 }
                 stats.skipped += 1;
             } else if !change.filename.is_empty() {
+                // Intern the extension first (mutable index borrow) so the new
+                // record carries the SAME extension_id a full rebuild would —
+                // the rebuilt ExtensionIndex below groups by this field, and a
+                // hardcoded 0 made USN-created files invisible to `--ext <x>`.
+                let extension_id = drive.intern_extension(&change.filename);
                 let name_start = drive.names.len();
                 drive
                     .names
@@ -580,7 +598,7 @@ pub fn apply_usn_patch(
                     parent_idx: parent_compact,
                     descendants: 0,
                     name_len: uffs_mft::len_to_u16(change.filename.len()),
-                    extension_id: 0,
+                    extension_id,
                     // path_len is set to 0 here; the full-array
                     // `compute_path_lengths` call after the USN loop
                     // will populate the correct value for all records.
