@@ -180,10 +180,17 @@ pub(crate) fn search_compact_drive_regex(
     drive: &DriveCompactIndex,
     compiled_re: &regex::Regex,
     limit: usize,
+    filters: &SearchFilters,
 ) -> Vec<DisplayRow> {
     let mut vp_buf = [0_u8; 4];
     let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
     let profile = *CACHE_PROFILE;
+
+    // Resolve the extension filter for THIS drive so record-level filters are
+    // applied BEFORE the `.take(limit)` cutoff (see `search_compact_drive`).
+    let mut local_filters = filters.clone();
+    local_filters.resolve_ext_ids_for_drive(drive);
+    let mut filter_buf: Vec<u8> = Vec::with_capacity(256);
 
     let t_match = std::time::Instant::now();
     let match_indices: Vec<u32> = drive
@@ -192,7 +199,9 @@ pub(crate) fn search_compact_drive_regex(
         .enumerate()
         .filter(|(_, rec)| {
             let name = rec.name(&drive.names);
-            !name.is_empty() && compiled_re.is_match(name)
+            !name.is_empty()
+                && compiled_re.is_match(name)
+                && local_filters.matches_record(rec, &drive.names, &mut filter_buf, drive.fold)
         })
         .take(limit)
         .map(|(idx, _)| uffs_mft::len_to_u32(idx))
@@ -287,7 +296,19 @@ fn collect_match_indices(
     limit: usize,
     lower_buf: &mut Vec<u8>,
     matches: &dyn Fn(&str, &mut Vec<u8>) -> bool,
+    filters: &SearchFilters,
 ) -> Vec<u32> {
+    // Record-level filters (extension, size, dates, hide_system/ads, …) must
+    // be applied BEFORE the `limit` cutoff. Otherwise a small `--limit` fills
+    // the result with name-matches that the filter later removes, dropping
+    // valid matches that sit past the cutoff — the `pcl5 --ext pdf --limit 5`
+    // regression, where eight `.dll` matches preceded the one `.pdf`. The
+    // `matches_record` predicate is a no-op for an empty filter set, so an
+    // unfiltered search keeps its original behaviour. `filters.resolved_ext_ids`
+    // must already be resolved for THIS drive (see `search_compact_drive`).
+    let keep = |rec: &CompactRecord, name: &str, buf: &mut Vec<u8>| -> bool {
+        matches(name, buf) && filters.matches_record(rec, &drive.names, buf, drive.fold)
+    };
     match candidates {
         None => {
             let mut out = Vec::new();
@@ -296,7 +317,7 @@ fn collect_match_indices(
                     break;
                 }
                 let name = rec.name(&drive.names);
-                if matches(name, lower_buf) {
+                if keep(rec, name, lower_buf) {
                     out.push(uffs_mft::len_to_u32(idx));
                 }
             }
@@ -312,7 +333,7 @@ fn collect_match_indices(
                     continue;
                 };
                 let name = rec.name(&drive.names);
-                if matches(name, lower_buf) {
+                if keep(rec, name, lower_buf) {
                     out.push(idx);
                 }
             }
@@ -330,10 +351,19 @@ pub(crate) fn search_compact_drive(
     case_sensitive: bool,
     whole_word: bool,
     match_path: bool,
+    filters: &SearchFilters,
 ) -> Vec<DisplayRow> {
     if needle.is_empty() {
         return Vec::new();
     }
+
+    // Resolve the extension filter against THIS drive's interning table once,
+    // up front, so the per-record `matches_record` check inside
+    // `collect_match_indices` runs before the `limit` cutoff. Cloning keeps the
+    // parallel per-drive scan free of `&mut` contention (matches the
+    // numeric_top_n fast path).
+    let mut local_filters = filters.clone();
+    local_filters.resolve_ext_ids_for_drive(drive);
 
     let mut vp_buf = [0_u8; 4];
     let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
@@ -402,8 +432,14 @@ pub(crate) fn search_compact_drive(
     let tri_count = candidates.as_ref().map_or(0, Vec::len);
 
     let t_match = std::time::Instant::now();
-    let mut match_indices =
-        collect_match_indices(drive, candidates, limit, &mut fold_buf, &matches);
+    let mut match_indices = collect_match_indices(
+        drive,
+        candidates,
+        limit,
+        &mut fold_buf,
+        &matches,
+        &local_filters,
+    );
     let match_ms = t_match.elapsed().as_millis();
     let match_count = match_indices.len();
 
@@ -472,13 +508,30 @@ pub(crate) fn search_compact_drive_tree(
     drive: &DriveCompactIndex,
     pattern_lower: &str,
     limit: usize,
+    filters: &SearchFilters,
 ) -> Vec<DisplayRow> {
     let mut vp_buf = [0_u8; 4];
     let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
     let profile = *CACHE_PROFILE;
 
+    // Resolve the extension filter for THIS drive. When an `--ext` filter is
+    // active we must NOT let `tree_search` cap the path-walk at `limit` — the
+    // per-record filter below could otherwise drop matches that sit past the
+    // cutoff (the `--ext` limit-before-filter class). Over-fetch the full
+    // path-match set and re-apply `limit` after filtering. The gate is the
+    // single stable `extensions` field, so it never drifts out of sync with
+    // `matches_record`'s field set.
+    let mut local_filters = filters.clone();
+    local_filters.resolve_ext_ids_for_drive(drive);
+    let scan_limit = if local_filters.extensions.is_empty() {
+        limit
+    } else {
+        usize::MAX
+    };
+    let mut filter_buf: Vec<u8> = Vec::with_capacity(256);
+
     let t_tree = std::time::Instant::now();
-    let match_indices = tree::tree_search(drive, pattern_lower, limit);
+    let match_indices = tree::tree_search(drive, pattern_lower, scan_limit);
     let tree_ms = t_tree.elapsed().as_millis();
     let match_count = match_indices.len();
 
@@ -491,6 +544,9 @@ pub(crate) fn search_compact_drive_tree(
             let rec = drive.records.get(record_idx as usize)?;
             let name = rec.name(&drive.names);
             if name.is_empty() {
+                return None;
+            }
+            if !local_filters.matches_record(rec, &drive.names, &mut filter_buf, drive.fold) {
                 return None;
             }
             let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
@@ -510,6 +566,9 @@ pub(crate) fn search_compact_drive_tree(
                 forensics,
             ))
         })
+        // Re-apply the limit after filtering (the walk may have over-fetched
+        // when an extension filter was active — see `scan_limit` above).
+        .take(limit)
         .collect();
     let resolve_ms = t_resolve.elapsed().as_millis();
 

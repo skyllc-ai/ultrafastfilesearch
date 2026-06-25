@@ -372,11 +372,15 @@ impl MultiDriveBackend {
                 .build()
             {
                 Ok(compiled_re) => {
+                    // Immutable reborrow so the parallel per-drive closure is
+                    // `Sync` (a captured `&mut` is not). The record-level
+                    // filters are applied inside each scan, before its limit.
+                    let sf: &super::filters::SearchFilters = search_filters;
                     let drive_results: Vec<Vec<DisplayRow>> = self
                         .drives
                         .par_iter()
                         .map(|drive| {
-                            super::query::search_compact_drive_regex(drive, &compiled_re, limit)
+                            super::query::search_compact_drive_regex(drive, &compiled_re, limit, sf)
                         })
                         .collect();
                     for drive_rows in drive_results {
@@ -410,6 +414,7 @@ impl MultiDriveBackend {
             // Trigram-accelerated prefix scan (`win*`). `is_prefix` already
             // proved `is_prefix_pattern` holds, so the strip is infallible.
             if let Some(prefix) = crate::search::tree::is_prefix_pattern(&needle) {
+                let sf: &super::filters::SearchFilters = search_filters;
                 let drive_results: Vec<Vec<DisplayRow>> = self
                     .drives
                     .par_iter()
@@ -419,6 +424,7 @@ impl MultiDriveBackend {
                             prefix,
                             limit,
                             case_sensitive,
+                            sf,
                         )
                     })
                     .collect();
@@ -436,12 +442,13 @@ impl MultiDriveBackend {
                 rows.truncate(limit);
             }
         } else {
+            let sf: &super::filters::SearchFilters = search_filters;
             let drive_results: Vec<Vec<DisplayRow>> = self
                 .drives
                 .par_iter()
                 .map(|drive| {
                     if is_path {
-                        super::query::search_compact_drive_tree(drive, &needle, limit)
+                        super::query::search_compact_drive_tree(drive, &needle, limit, sf)
                     } else {
                         super::query::search_compact_drive(
                             drive,
@@ -450,6 +457,7 @@ impl MultiDriveBackend {
                             case_sensitive,
                             whole_word,
                             match_path,
+                            sf,
                         )
                     }
                 })

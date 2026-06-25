@@ -27,10 +27,17 @@ pub(crate) fn search_compact_drive_prefix(
     prefix: &str,
     limit: usize,
     case_sensitive: bool,
+    filters: &crate::search::filters::SearchFilters,
 ) -> Vec<super::DisplayRow> {
     let mut vp_buf = [0_u8; 4];
     let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
     let profile = *CACHE_PROFILE;
+
+    // Resolve the extension filter for THIS drive up front so the per-record
+    // filter runs BEFORE the `limit` cutoff (see `search_compact_drive`).
+    let mut local_filters = filters.clone();
+    local_filters.resolve_ext_ids_for_drive(drive);
+    let mut filter_buf: Vec<u8> = Vec::with_capacity(256);
 
     let t_tri = std::time::Instant::now();
 
@@ -73,7 +80,9 @@ pub(crate) fn search_compact_drive_prefix(
                 name_folded.starts_with(&prefix_folded)
             };
 
-            if matches {
+            if matches
+                && local_filters.matches_record(rec, &drive.names, &mut filter_buf, drive.fold)
+            {
                 match_indices.push(rec_idx);
                 if match_indices.len() >= limit {
                     break;

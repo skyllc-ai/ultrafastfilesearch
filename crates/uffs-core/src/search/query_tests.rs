@@ -132,7 +132,15 @@ fn build_large_drive(count: usize) -> DriveCompactIndex {
 #[test]
 fn search_compact_finds_file_by_name() {
     let drive = build_test_drive();
-    let rows = search_compact_drive(&drive, "readme", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "readme",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     assert!(
         rows.iter().any(|row| row.name() == "readme.txt"),
         "search for 'readme' must find readme.txt"
@@ -144,7 +152,15 @@ fn search_compact_finds_file_by_name() {
 #[test]
 fn display_row_fields_match_source_data() {
     let drive = build_test_drive();
-    let rows = search_compact_drive(&drive, "readme", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "readme",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     let row = rows
         .iter()
         .find(|row| row.name() == "readme.txt")
@@ -163,7 +179,15 @@ fn display_row_fields_match_source_data() {
 #[test]
 fn display_row_directory_has_tree_metrics() {
     let drive = build_test_drive();
-    let rows = search_compact_drive(&drive, "projects", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "projects",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     let row = rows
         .iter()
         .find(|row| row.name() == "Projects")
@@ -258,7 +282,15 @@ fn multi_drive_search_sort_by_size_desc() {
 #[test]
 fn display_row_path_includes_volume_prefix() {
     let drive = build_test_drive();
-    let rows = search_compact_drive(&drive, "readme", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "readme",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     let row = rows
         .iter()
         .find(|row| row.name() == "readme.txt")
@@ -327,8 +359,17 @@ fn prefix_search_matches_generic_glob_path() {
     // The trigram-accelerated prefix path must return exactly the same set of
     // rows as the ground-truth generic glob scan. `f000` matches f00000..f00099.
     let drive = build_large_drive(1_500);
-    let prefix_rows = search_compact_drive_prefix(&drive, "f000", 10_000, false);
-    let glob_rows = search_compact_drive(&drive, "f000*", 10_000, false, false, false);
+    let prefix_rows =
+        search_compact_drive_prefix(&drive, "f000", 10_000, false, &SearchFilters::default());
+    let glob_rows = search_compact_drive(
+        &drive,
+        "f000*",
+        10_000,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
 
     let mut prefix_names: Vec<&str> = prefix_rows.iter().map(DisplayRow::name).collect();
     let mut glob_names: Vec<&str> = glob_rows.iter().map(DisplayRow::name).collect();
@@ -345,7 +386,7 @@ fn prefix_search_matches_generic_glob_path() {
 #[test]
 fn prefix_search_respects_limit() {
     let drive = build_large_drive(1_500);
-    let rows = search_compact_drive_prefix(&drive, "f00", 25, false);
+    let rows = search_compact_drive_prefix(&drive, "f00", 25, false, &SearchFilters::default());
     assert!(
         rows.len() <= 25,
         "prefix search must respect limit, got {}",
@@ -360,7 +401,15 @@ fn large_glob_uses_parallel_resolve_with_correct_rows() {
     // parallel branch. Verify that path returns every match with intact paths
     // (no dropped, duplicated, or misordered rows from the chunk reduce).
     let drive = build_large_drive(9_000);
-    let rows = search_compact_drive(&drive, "f0*", 20_000, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "f0*",
+        20_000,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     assert_eq!(
         rows.len(),
         9_000,
@@ -381,7 +430,7 @@ fn large_glob_uses_parallel_resolve_with_correct_rows() {
 fn regex_search_finds_matching_files() {
     let drive = build_test_drive();
     let re = regex::Regex::new("(?i)readme").expect("valid regex");
-    let rows = search_compact_drive_regex(&drive, &re, 100);
+    let rows = search_compact_drive_regex(&drive, &re, 100, &SearchFilters::default());
     assert!(
         rows.iter().any(|row| row.name() == "readme.txt"),
         "regex 'readme' must find readme.txt"
@@ -392,7 +441,7 @@ fn regex_search_finds_matching_files() {
 fn regex_search_no_match_returns_empty() {
     let drive = build_test_drive();
     let re = regex::Regex::new("zzz_no_match[0-9]+").expect("valid regex");
-    let rows = search_compact_drive_regex(&drive, &re, 100);
+    let rows = search_compact_drive_regex(&drive, &re, 100, &SearchFilters::default());
     assert!(rows.is_empty(), "regex with no match must return empty");
 }
 
@@ -400,7 +449,7 @@ fn regex_search_no_match_returns_empty() {
 fn regex_search_respects_limit() {
     let drive = build_large_drive(500);
     let re = regex::Regex::new("f[0-9]+").expect("valid regex");
-    let rows = search_compact_drive_regex(&drive, &re, 10);
+    let rows = search_compact_drive_regex(&drive, &re, 10, &SearchFilters::default());
     assert!(
         rows.len() <= 10,
         "regex search must respect limit, got {}",
@@ -477,7 +526,15 @@ fn ads_on_directory_display_row_is_not_directory() {
     let drive = build_ads_on_dir_drive();
     // needle must be lowered — search_compact_drive expects pre-lowered for
     // case-insensitive
-    let rows = search_compact_drive(&drive, "myfolder:metadata", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "myfolder:metadata",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     let ads_row = rows
         .iter()
         .find(|row| row.name().contains(':'))
@@ -494,7 +551,15 @@ fn normal_directory_display_row_is_directory() {
     let drive = build_ads_on_dir_drive();
     // needle must be lowered — search_compact_drive expects pre-lowered for
     // case-insensitive
-    let rows = search_compact_drive(&drive, "myfolder", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "myfolder",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     let dir_row = rows
         .iter()
         .find(|row| row.name() == "MyFolder")
@@ -512,7 +577,15 @@ fn normal_directory_display_row_is_directory() {
 #[test]
 fn case_sensitive_search_misses_wrong_case() {
     let drive = build_test_drive();
-    let rows = search_compact_drive(&drive, "README", 100, true, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "README",
+        100,
+        true,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     assert!(
         !rows.iter().any(|row| row.name() == "readme.txt"),
         "case-sensitive 'README' must not match 'readme.txt'"
@@ -524,7 +597,15 @@ fn case_insensitive_search_finds_any_case() {
     let drive = build_test_drive();
     // needle must be pre-lowered for case-insensitive search (caller's
     // responsibility)
-    let rows = search_compact_drive(&drive, "readme", 100, false, false, false);
+    let rows = search_compact_drive(
+        &drive,
+        "readme",
+        100,
+        false,
+        false,
+        false,
+        &SearchFilters::default(),
+    );
     assert!(
         rows.iter().any(|row| row.name() == "readme.txt"),
         "case-insensitive 'readme' must match 'readme.txt'"
@@ -535,7 +616,15 @@ fn case_insensitive_search_finds_any_case() {
 fn whole_word_search_exact_match() {
     let drive = build_test_drive();
     // Whole-word with exact name (no extension)
-    let rows = search_compact_drive(&drive, "readme.txt", 100, false, true, false);
+    let rows = search_compact_drive(
+        &drive,
+        "readme.txt",
+        100,
+        false,
+        true,
+        false,
+        &SearchFilters::default(),
+    );
     assert!(
         rows.iter().any(|row| row.name() == "readme.txt"),
         "whole-word exact match must find readme.txt"

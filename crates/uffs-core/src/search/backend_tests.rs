@@ -898,6 +898,113 @@ fn search_index_explicit_extensions_not_clobbered() {
     );
 }
 
+/// Build a single C: drive where many files share the substring `pcl5`
+/// but only the LAST record (highest index) has extension `pdf`:
+/// `pcl5_00.dll` … `pcl5_07.dll` then `pcl5_report.pdf`.
+///
+/// Mirrors the field report: `PCL5-Assessment-*.pdf` sits among many
+/// `PCL5*.DLL` system files, and the pdf is not among the first matches.
+fn build_substring_then_extension_fixture() -> MultiDriveBackend {
+    use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
+
+    use crate::compact::build_compact_index;
+
+    let letter = uffs_mft::platform::DriveLetter::C;
+    let mut mft = MftIndex::new(letter);
+    let root_off = mft.add_name(".");
+    let root = mft.get_or_create(ROOT_FRS.into());
+    root.stdinfo.set_directory(true);
+    root.first_name.name = IndexNameRef::new(root_off, 1, true, IndexNameRef::NO_EXTENSION);
+    root.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    // Eight `pcl5_NN.dll` files first (FRS 200..208), then one pdf last
+    // (FRS 999 → highest record index). All contain the substring "pcl5".
+    let add = |index: &mut MftIndex, frs: u64, name: &str, size: u64| {
+        let off = index.add_name(name);
+        let ext = index.intern_extension(name);
+        let rec = index.get_or_create(frs.into());
+        rec.first_name.name =
+            IndexNameRef::new(off, u16::try_from(name.len()).expect("len"), true, ext);
+        rec.first_name.parent_frs = Into::into(ROOT_FRS);
+        rec.first_stream.size = SizeInfo {
+            length: size,
+            allocated: size.next_multiple_of(512),
+        };
+        rec.stdinfo.flags = 0x20;
+    };
+    for seq in 0..8_u64 {
+        add(&mut mft, 200 + seq, &format!("pcl5_{seq:02}.dll"), 1000);
+    }
+    add(&mut mft, 999, "pcl5_report.pdf", 5000);
+
+    let mut backend = MultiDriveBackend::new();
+    let (drive, _, _) = build_compact_index(letter, &mft);
+    backend.drives.push(drive);
+    backend
+}
+
+/// Regression (v0.6.13 field report): `uffs pcl5 --ext pdf --limit 5`
+/// returned nothing even though `pcl5_report.pdf` exists, matches the
+/// substring, and has extension `pdf`.
+///
+/// Root cause this pins: the per-drive substring scan truncates to
+/// `--limit` BEFORE the extension filter runs (`collect_match_indices`
+/// stops at `limit`, then `apply_search_filters` filters the survivors).
+/// With 8 `.dll` matches ahead of the single `.pdf`, a limit of 5 fills
+/// the result with `.dll`s, then `--ext pdf` removes all of them.
+///
+/// The unlimited query in the same test proves the filter logic itself
+/// is correct — the bug is purely the limit-before-filter ordering.
+#[test]
+fn search_substring_with_extension_filter_survives_limit() {
+    // Diagnostic 1: UNLIMITED — the ext filter alone works, pdf is found.
+    let mut backend_unlimited = build_substring_then_extension_fixture();
+    let mut filters_unlimited = super::super::filters::SearchFilters {
+        extensions: vec!["pdf".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let unlimited = backend_unlimited.search(SearchRequest::new("pcl5", &mut filters_unlimited));
+    assert!(
+        unlimited
+            .rows
+            .iter()
+            .any(|row| row.name() == "pcl5_report.pdf"),
+        "sanity: unlimited 'pcl5 --ext pdf' must find the pdf (got {:?})",
+        unlimited
+            .rows
+            .iter()
+            .map(DisplayRow::name)
+            .collect::<Vec<_>>()
+    );
+
+    // Diagnostic 2: LIMIT 5 — the pdf must STILL be found. On the buggy
+    // code the limit truncates the 8 .dll matches before the ext filter,
+    // so this returns zero rows.
+    let mut backend = build_substring_then_extension_fixture();
+    let mut filters_limited = super::super::filters::SearchFilters {
+        extensions: vec!["pdf".to_owned()],
+        ..super::super::filters::SearchFilters::default()
+    };
+    let limited = backend.search(SearchRequest {
+        result_limit: Some(5),
+        ..SearchRequest::new("pcl5", &mut filters_limited)
+    });
+    assert!(
+        limited
+            .rows
+            .iter()
+            .any(|row| row.name() == "pcl5_report.pdf"),
+        "'pcl5 --ext pdf --limit 5' must find the pdf — the extension \
+         filter must be applied BEFORE the per-drive limit truncation \
+         (got {:?})",
+        limited
+            .rows
+            .iter()
+            .map(DisplayRow::name)
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── *.ext + `--hide-system` / `--hide-ads` fast-path regression pins ─
 //
 // 2026-04-19 regression fix: the `is_ext_only()` gate that admits the

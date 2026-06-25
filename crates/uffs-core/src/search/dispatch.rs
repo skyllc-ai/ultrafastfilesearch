@@ -339,7 +339,9 @@ pub(super) fn dispatch_regex(
         .ok()?;
     let drive_results: Vec<Vec<DisplayRow>> = active_drives
         .par_iter()
-        .map(|drive| super::query::search_compact_drive_regex(drive, &compiled_re, limit))
+        .map(|drive| {
+            super::query::search_compact_drive_regex(drive, &compiled_re, limit, search_filters)
+        })
         .collect();
     let mut rows: Vec<DisplayRow> = drive_results.into_iter().flatten().collect();
     super::filters::apply_filter(&mut rows, filter_mode);
@@ -377,7 +379,7 @@ pub(super) fn dispatch_trigram_or_tree(
         .par_iter()
         .map(|drive| {
             if is_path {
-                super::query::search_compact_drive_tree(drive, needle, limit)
+                super::query::search_compact_drive_tree(drive, needle, limit, search_filters)
             } else if is_prefix {
                 // `is_prefix` was validated upstream via `is_prefix_pattern`;
                 // re-extract the prefix and fall back to the generic scan if
@@ -391,6 +393,7 @@ pub(super) fn dispatch_trigram_or_tree(
                             case_sensitive,
                             whole_word,
                             match_path,
+                            search_filters,
                         )
                     },
                     |prefix| {
@@ -399,6 +402,7 @@ pub(super) fn dispatch_trigram_or_tree(
                             prefix,
                             limit,
                             case_sensitive,
+                            search_filters,
                         )
                     },
                 )
@@ -410,6 +414,7 @@ pub(super) fn dispatch_trigram_or_tree(
                     case_sensitive,
                     whole_word,
                     match_path,
+                    search_filters,
                 )
             }
         })
