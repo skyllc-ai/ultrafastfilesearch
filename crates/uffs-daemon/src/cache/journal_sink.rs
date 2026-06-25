@@ -259,8 +259,23 @@ impl PatchSink for RegistryPatchSink {
             "Journal accept (buffered for next save tick)",
         );
         let mut guard = self.lock_pending();
-        guard.entry(letter).or_default().extend_from_slice(changes);
+        let buffered = guard.entry(letter).or_default();
+        buffered.extend_from_slice(changes);
+        let pending_total = buffered.len();
         drop(guard);
+        // USNFIX: prove the buffer-until-save behaviour. `accept` only
+        // appends here; the body is NOT patched until `trigger_save` drains
+        // this buffer (on the 50k-event / 5-min threshold). Remove with the
+        // rest of the USNFIX instrumentation.
+        if !changes.is_empty() {
+            tracing::info!(
+                marker = "USNFIX",
+                drive = %letter,
+                buffered_now = changes.len(),
+                pending_total,
+                "USNFIX accept: BUFFERED only (body not patched until save tick)"
+            );
+        }
         true
     }
 
@@ -278,6 +293,18 @@ impl PatchSink for RegistryPatchSink {
             let mut guard = self.lock_pending();
             guard.remove(&letter).unwrap_or_default()
         };
+        // USNFIX: this is where the buffered changes finally reach the
+        // applier (apply_usn_patch + replace_warm_body). It fires only on
+        // the 50k-event / 5-min save threshold — the gap between this and
+        // the accept lines above is the search-visibility lag. Remove with
+        // the rest of the USNFIX instrumentation.
+        tracing::info!(
+            marker = "USNFIX",
+            drive = %letter,
+            ?reason,
+            drained = drained.len(),
+            "USNFIX trigger_save: draining buffer → apply (body patched now)"
+        );
         let _ignore = self.apply_tx.send(ApplyMsg::Save {
             letter,
             reason,

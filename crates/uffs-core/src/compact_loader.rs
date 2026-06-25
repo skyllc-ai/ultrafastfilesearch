@@ -751,24 +751,42 @@ pub fn apply_usn_patch(
     // Rebuild extension inverted index so --ext queries reflect USN changes.
     drive.ext_index = crate::compact::ExtensionIndex::build(&drive.records);
 
-    // Batch summary — at DEBUG so a `--log-level debug` daemon shows how each
-    // USN poll mutated the index (created/deleted/renamed/skipped + the new
-    // record + ext-index totals) without the per-change TRACE firehose.
     if !changes.is_empty() {
-        tracing::debug!(
-            drive = %drive.letter,
-            changes = changes.len(),
-            created = stats.created,
-            deleted = stats.deleted,
-            renamed = stats.renamed,
-            skipped = stats.skipped,
-            records = drive.records.len(),
-            ext_index_entries = drive.ext_index.total_entries(),
-            "usn apply: batch applied"
-        );
+        log_batch_summary(drive, changes.len(), &stats);
     }
 
     stats
+}
+
+/// Emit the per-batch USN-apply summary (how the poll mutated the index).
+///
+/// At DEBUG for normal operation; also at INFO behind the temporary
+/// `USNFIX` marker so a live run sees the apply without needing a
+/// per-target filter directive. Remove the USNFIX line with the rest of
+/// the USNFIX instrumentation.
+fn log_batch_summary(drive: &DriveCompactIndex, changes: usize, stats: &PatchStats) {
+    tracing::debug!(
+        drive = %drive.letter,
+        changes,
+        created = stats.created,
+        deleted = stats.deleted,
+        renamed = stats.renamed,
+        skipped = stats.skipped,
+        records = drive.records.len(),
+        ext_index_entries = drive.ext_index.total_entries(),
+        "usn apply: batch applied"
+    );
+    tracing::info!(
+        marker = "USNFIX",
+        drive = %drive.letter,
+        changes,
+        created = stats.created,
+        deleted = stats.deleted,
+        renamed = stats.renamed,
+        skipped = stats.skipped,
+        records = drive.records.len(),
+        "USNFIX apply_usn_patch: body patched"
+    );
 }
 
 #[cfg(test)]
