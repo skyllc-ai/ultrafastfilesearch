@@ -91,8 +91,37 @@ fn start_from_command_line(running: &SnapRunning, ready: impl Fn() -> bool) -> b
         return false;
     };
     // Spawn detached: don't wait, so the relaunched service outlives us.
-    let spawned = Command::new(&program).args(&args).spawn().is_ok();
+    let mut command = Command::new(&program);
+    command.args(&args);
+    detach_stdio(&mut command);
+    let spawned = command.spawn().is_ok();
     spawned && wait_until(START_TIMEOUT, &ready)
+}
+
+/// Sever the relaunched service from this process's console.
+///
+/// The captured command line replays the daemon's argv but NOT the stdio
+/// redirection the normal `--daemon start` path applies via the client's
+/// detached spawn. Without this, a service relaunched here inherits the
+/// updater's console: the daemon's `info` tracing (and any startup prints)
+/// pour into the user's terminal long after `uffs --update` returns. Null
+/// all three handles, and on Windows also set `DETACHED_PROCESS |
+/// CREATE_NO_WINDOW` so no console is attached at all.
+fn detach_stdio(command: &mut Command) {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        /// `DETACHED_PROCESS` — the child gets no console.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        /// `CREATE_NO_WINDOW` — belt-and-suspenders against a console window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+    }
 }
 
 /// Split a captured command line into `(program, args)`.

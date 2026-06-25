@@ -215,14 +215,6 @@ impl IndexManager {
     /// is skipped and an error is logged.  This prevents a single stuck
     /// volume from making the daemon unkillable.
     #[cfg(windows)]
-    #[expect(
-        clippy::print_stderr,
-        reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
-    )]
-    #[expect(
-        clippy::use_debug,
-        reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
-    )]
     pub(crate) async fn load_live_drives(
         &self,
         drives: &[uffs_mft::platform::DriveLetter],
@@ -230,7 +222,7 @@ impl IndexManager {
         lifecycle: &crate::lifecycle::LifecycleHandle,
     ) {
         let total = drives.len();
-        eprintln!("[diag] load_live_drives: starting — drives={drives:?}  no_cache={no_cache}");
+        tracing::debug!(?drives, no_cache, "load_live_drives: starting");
         self.set_loading_progress(0, total).await;
 
         let join_set = Self::spawn_drive_loaders(drives, no_cache);
@@ -324,10 +316,6 @@ impl IndexManager {
     /// task overruns [`Self::DRIVE_LOAD_TIMEOUT`].  Each completion
     /// updates the daemon status so clients see incremental progress.
     #[cfg(windows)]
-    #[expect(
-        clippy::print_stderr,
-        reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
-    )]
     async fn collect_drive_load_results(
         &self,
         mut join_set: tokio::task::JoinSet<(
@@ -362,10 +350,6 @@ impl IndexManager {
                 Ok(None) => break,
                 Err(_elapsed) => {
                     let remaining = total.saturating_sub(loaded);
-                    eprintln!(
-                        "[diag] load_live_drives: TIMEOUT — {remaining} drive(s) stuck after {}s",
-                        Self::DRIVE_LOAD_TIMEOUT.as_secs()
-                    );
                     tracing::error!(
                         remaining,
                         timeout_secs = Self::DRIVE_LOAD_TIMEOUT.as_secs(),
@@ -392,10 +376,6 @@ impl IndexManager {
     /// successful drive into the index, log a partial failure, or log a
     /// task panic — and bump `loaded` exactly once per outcome.
     #[cfg(windows)]
-    #[expect(
-        clippy::print_stderr,
-        reason = "[diag] diagnostic tracing — remove after D: drive issue is resolved"
-    )]
     async fn handle_drive_load_result(
         &self,
         join_result: Result<
@@ -419,17 +399,14 @@ impl IndexManager {
             }
             Ok((letter, Err(err))) => {
                 *loaded += 1;
-                eprintln!("[diag] load_live_drives: FAILED drive={letter}  error={err:#}");
-                // Log the FULL anyhow cause chain to the file sink (the
-                // detached daemon's stderr above is discarded).  `%err`
-                // alone shows only the outer context, hiding the real
-                // failure deep in the broker-handle read path.
+                // Log the FULL anyhow cause chain — `%err` alone shows only
+                // the outer context, hiding the real failure deep in the
+                // broker-handle read path.
                 let err_chain = format!("{err:#}");
                 tracing::error!(drive = %letter, error = %err_chain, "Failed to load live drive");
             }
             Err(err) => {
                 *loaded += 1;
-                eprintln!("[diag] load_live_drives: PANIC in task  error={err}");
                 tracing::error!(error = %err, "Task panicked loading drive");
             }
         }
