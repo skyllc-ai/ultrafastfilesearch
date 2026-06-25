@@ -52,8 +52,18 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-/// Time to let the per-shard USN loop (≈500 ms poll) ingest a batch.
+/// Time to let the per-shard USN loop ingest a batch and patch the live
+/// body.  With [`APPLY_INTERVAL_MS`] pinned to 500 ms below, the apply
+/// tick fires on essentially the first poll that sees the new events, so
+/// 3 s is a comfortable margin (the body is searchable well under 1 s
+/// after the file op in practice).  No 5-minute disk-save wait is needed
+/// — the apply tick is decoupled from the rare compact-cache save.
 const POLL_SETTLE: Duration = Duration::from_secs(3);
+/// Apply-cadence override (ms) for the test daemon — pins
+/// `UFFS_USN_APPLY_INTERVAL_MS` low so the near-live body patch fires
+/// promptly and deterministically instead of relying on the 2 s default
+/// landing inside [`POLL_SETTLE`].
+const APPLY_INTERVAL_MS: &str = "500";
 /// Settle time after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);
 /// Tracing directive: per-change USN trace + daemon-side debug (backfill,
@@ -164,13 +174,14 @@ fn main() -> Result<()> {
     let _ = Command::new(&uffs).args(["--daemon", "stop"]).status();
     sleep(KILL_SETTLE);
     println!(
-        "\n$ {} --daemon start   (UFFS_LOG={LOG_SPEC})",
+        "\n$ {} --daemon start   (UFFS_LOG={LOG_SPEC}, UFFS_USN_APPLY_INTERVAL_MS={APPLY_INTERVAL_MS})",
         uffs_display()
     );
     let status = Command::new(&uffs)
         .args(["--daemon", "start"])
         .env("UFFS_LOG", LOG_SPEC)
         .env("UFFS_LOG_DIR", &run_dir)
+        .env("UFFS_USN_APPLY_INTERVAL_MS", APPLY_INTERVAL_MS)
         .status()
         .context("failed to spawn `uffs --daemon start`")?;
     if !status.success() {
