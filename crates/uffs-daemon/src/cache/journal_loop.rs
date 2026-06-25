@@ -43,10 +43,16 @@
 
 use alloc::sync::Arc;
 use core::time::Duration;
-use std::time::Instant;
 
 use tokio::sync::watch;
 use uffs_mft::usn::FileChange;
+
+mod triggers;
+
+pub(crate) use triggers::{
+    ApplyTrigger, DEFAULT_APPLY_INTERVAL_MS, DEFAULT_SAVE_THRESHOLD_AGE,
+    DEFAULT_SAVE_THRESHOLD_EVENTS, SaveReason, SaveTrigger,
+};
 
 /// Default poll interval for the per-shard journal loop (500 ms).
 ///
@@ -55,28 +61,6 @@ use uffs_mft::usn::FileChange;
 /// long-running soak tests slow the tick down to reduce log noise
 /// without recompiling.
 pub(crate) const DEFAULT_POLL_INTERVAL_MS: u64 = 500;
-
-/// Default events-since-save threshold for triggering a background
-/// compact-cache save (Phase 7 task 7.4).
-///
-/// Sized to approximate the plan's "5% churn" criterion at the
-/// typical 1.3 GB × ~7 M-record drive shape (`50_000` events ≈ 0.7%
-/// churn, comfortably below 5%).  Saving more frequently would
-/// thrash the disk; less frequently would let the on-disk snapshot
-/// drift far enough that a cold-boot replay window grows beyond
-/// the cost of an incremental save.
-pub(crate) const DEFAULT_SAVE_THRESHOLD_EVENTS: u64 = 50_000;
-
-/// Default time-since-save threshold for triggering a background
-/// compact-cache save (Phase 7 task 7.4) — 5 minutes.
-///
-/// Provides a wall-clock ceiling for how stale the on-disk snapshot
-/// can get under low-churn workloads (where the events-threshold
-/// would never fire on its own).  Five minutes matches the cadence
-/// of the existing Phase-5 `refresh_usn_for_warm_shards` global
-/// tick so the persistence guarantee carries over to the per-shard
-/// path without changing the operator-visible recovery window.
-pub(crate) const DEFAULT_SAVE_THRESHOLD_AGE: Duration = Duration::from_mins(5);
 
 /// Result of one [`JournalSource::poll`] call.
 ///
@@ -189,6 +173,28 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
         cursor: u64,
     );
 
+    /// Patch the in-memory body for `letter` on the short apply
+    /// cadence — the near-live sibling of [`PatchSink::trigger_save`].
+    ///
+    /// The loop calls this (via the per-shard [`ApplyTrigger`]) when
+    /// buffered changes exist and at least
+    /// [`JournalLoopConfig::apply_interval`] has elapsed since the last
+    /// apply / save.  Production drains the same pending buffer
+    /// `trigger_save` uses and runs the surgical patch + body swap so
+    /// search sees the change within a couple of seconds, but **skips**
+    /// the compact-cache disk write and the cursor persist — disk
+    /// persistence stays the rarer `trigger_save` tick's job.
+    ///
+    /// Unlike `trigger_save` this takes **no cursor**: the on-disk
+    /// cursor must only advance in lockstep with a real on-disk body
+    /// save, so the apply tick deliberately leaves it pinned.  A cold
+    /// start re-replays the apply-only deltas from the last saved
+    /// cursor; the body patcher is idempotent on duplicate records, so
+    /// the re-replay is a no-op against the freshly loaded body.
+    ///
+    /// Fire-and-forget, same as `trigger_save`.
+    fn trigger_apply(&self, letter: uffs_mft::platform::DriveLetter);
+
     /// Notify the sink that the USN journal for `letter` was
     /// detected to have wrapped (Phase 7 task 7.7).
     ///
@@ -237,96 +243,6 @@ pub(crate) trait CursorStore: Send + Sync + 'static {
     fn store(&self, letter: uffs_mft::platform::DriveLetter, cursor: u64);
 }
 
-/// Why a [`PatchSink::trigger_save`] call fired.
-///
-/// Encoded so observability surfaces (logs, metrics) can
-/// distinguish heavy-churn-driven saves from time-pressure-driven
-/// saves; the production sink also passes this through to the
-/// compact-cache writer for telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SaveReason {
-    /// `events_since_save >= save_threshold_events` — lots of
-    /// churn has accumulated and the on-disk snapshot is
-    /// progressively stale.
-    EventsExceeded,
-    /// `Instant::now() - last_save_at >= save_threshold_age` —
-    /// time-pressure path for low-churn drives where the
-    /// events threshold would otherwise never fire.
-    AgeElapsed,
-}
-
-/// Per-shard save-threshold state machine (Phase 7 task 7.4).
-///
-/// Tracks the wall-clock time of the last save trigger and the
-/// number of events accumulated since.  Crossing either the
-/// events- or age-threshold (with at least one event pending)
-/// produces a [`SaveReason`] and resets both counters.  Held
-/// inside the [`JournalLoop`] so each per-shard task carries
-/// its own independent counters.
-#[derive(Debug)]
-struct SaveTrigger {
-    /// Wall-clock time of the last save trigger (or, before any
-    /// triggers, the loop's spawn time).  Compared against
-    /// `Instant::now()` to compute elapsed-since-last-save.
-    last_save_at: Instant,
-    /// Total events accumulated across [`Self::record`] calls
-    /// since the last save trigger.  Compared against
-    /// `save_threshold_events` to fire the events-based save.
-    events_since_save: u64,
-}
-
-impl SaveTrigger {
-    /// Construct a fresh trigger with `last_save_at` set to
-    /// `Instant::now()` (so the first age-based save can't fire
-    /// until at least `save_threshold_age` has elapsed since
-    /// loop spawn).
-    fn new() -> Self {
-        Self {
-            last_save_at: Instant::now(),
-            events_since_save: 0,
-        }
-    }
-
-    /// Record `change_count` events accumulating toward the
-    /// events-based threshold.  Saturating add so a runaway
-    /// drive can't wrap and silently miss the threshold.
-    const fn record(&mut self, change_count: u64) {
-        self.events_since_save = self.events_since_save.saturating_add(change_count);
-    }
-
-    /// Evaluate the thresholds.
-    ///
-    /// **Returns** `Some(reason)` if a save should fire — and
-    /// resets both counters as a side effect (so the next
-    /// `evaluate` after a save starts from a clean slate).
-    /// Returns `None` when no threshold is crossed *or* when no
-    /// events are pending (zero-churn drives never produce
-    /// no-op saves).
-    fn evaluate(
-        &mut self,
-        save_threshold_events: u64,
-        save_threshold_age: Duration,
-    ) -> Option<SaveReason> {
-        if self.events_since_save == 0 {
-            return None;
-        }
-        let now = Instant::now();
-        let elapsed = now.saturating_duration_since(self.last_save_at);
-        let reason = if self.events_since_save >= save_threshold_events {
-            Some(SaveReason::EventsExceeded)
-        } else if elapsed >= save_threshold_age {
-            Some(SaveReason::AgeElapsed)
-        } else {
-            None
-        };
-        if reason.is_some() {
-            self.last_save_at = now;
-            self.events_since_save = 0;
-        }
-        reason
-    }
-}
-
 /// Configuration for a single [`JournalLoop`] task.
 ///
 /// Carries the tuning knobs the production loop reads from env
@@ -351,6 +267,13 @@ pub(crate) struct JournalLoopConfig {
     /// when at least one event is pending.  Default
     /// [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min).
     pub(crate) save_threshold_age: Duration,
+    /// Search-freshness apply cadence — decoupled from the disk-save
+    /// thresholds above.  When buffered changes exist and this long
+    /// has elapsed since the last apply / save, the loop patches the
+    /// in-memory body via [`PatchSink::trigger_apply`] so the change
+    /// is searchable within a couple of seconds.  Default
+    /// [`DEFAULT_APPLY_INTERVAL_MS`] (2 s).
+    pub(crate) apply_interval: Duration,
 }
 
 impl Default for JournalLoopConfig {
@@ -360,6 +283,62 @@ impl Default for JournalLoopConfig {
             initial_cursor: 0,
             save_threshold_events: DEFAULT_SAVE_THRESHOLD_EVENTS,
             save_threshold_age: DEFAULT_SAVE_THRESHOLD_AGE,
+            apply_interval: Duration::from_millis(DEFAULT_APPLY_INTERVAL_MS),
+        }
+    }
+}
+
+/// Env var overriding [`JournalLoopConfig::poll_interval`] (milliseconds).
+pub(crate) const POLL_INTERVAL_ENV: &str = "UFFS_USN_POLL_INTERVAL_MS";
+
+/// Env var overriding [`JournalLoopConfig::apply_interval`] (milliseconds).
+pub(crate) const APPLY_INTERVAL_ENV: &str = "UFFS_USN_APPLY_INTERVAL_MS";
+
+impl JournalLoopConfig {
+    /// Build the production config: [`Self::default`] with the two
+    /// millisecond-valued env overrides applied when present + parseable.
+    ///
+    /// `UFFS_USN_POLL_INTERVAL_MS` dials the poll cadence (long
+    /// documented; this is the wire-up) and `UFFS_USN_APPLY_INTERVAL_MS`
+    /// dials the search-freshness apply cadence.  A missing, empty, or
+    /// unparseable value leaves the corresponding default untouched and
+    /// warn-logs the bad input so a typo is visible rather than silently
+    /// ignored.  A `0` is accepted verbatim (apply / poll on every tick)
+    /// — useful for tests and aggressive soak runs.
+    #[must_use]
+    pub(crate) fn from_env() -> Self {
+        let mut config = Self::default();
+        if let Some(ms) = env_millis(POLL_INTERVAL_ENV) {
+            config.poll_interval = Duration::from_millis(ms);
+        }
+        if let Some(ms) = env_millis(APPLY_INTERVAL_ENV) {
+            config.apply_interval = Duration::from_millis(ms);
+        }
+        config
+    }
+}
+
+/// Read `name` from the environment as a `u64` millisecond count.
+///
+/// Returns `None` (caller keeps the default) when the var is unset,
+/// empty, or non-numeric; a non-numeric value also warn-logs so the
+/// operator sees the typo instead of silently getting the default.
+fn env_millis(name: &str) -> Option<u64> {
+    let raw = std::env::var(name).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(ms) => Some(ms),
+        Err(parse_err) => {
+            tracing::warn!(
+                env = name,
+                value = trimmed,
+                error = %parse_err,
+                "Ignoring non-numeric journal-loop interval override; using default"
+            );
+            None
         }
     }
 }
@@ -396,6 +375,12 @@ pub(crate) struct JournalLoop {
     /// Mutated on every non-empty tick by [`SaveTrigger::record`]
     /// + [`SaveTrigger::evaluate`].
     save_trigger: SaveTrigger,
+    /// Per-shard apply-cadence state — the search-freshness sibling
+    /// of `save_trigger`.  Mutated on every non-empty tick by
+    /// [`ApplyTrigger::record`] + [`ApplyTrigger::evaluate`], and
+    /// reset via [`ApplyTrigger::reset_after_save`] when a save tick
+    /// subsumes the apply.
+    apply_trigger: ApplyTrigger,
     /// Last `journal_id` observed from a non-zero-id poll
     /// (Phase 7 task 7.7 wrap detection).  `None` until the first
     /// non-zero `journal_id` is observed; transitions to
@@ -426,6 +411,7 @@ impl JournalLoop {
             cancel_rx,
             config,
             save_trigger: SaveTrigger::new(),
+            apply_trigger: ApplyTrigger::new(),
             last_journal_id: None,
         }
     }
@@ -508,8 +494,8 @@ impl JournalLoop {
                 cursor,
                 &result.changes,
                 &mut self.save_trigger,
-                self.config.save_threshold_events,
-                self.config.save_threshold_age,
+                &mut self.apply_trigger,
+                &self.config,
             );
         }
     }
@@ -675,37 +661,32 @@ fn log_poll_failure(
     }
 }
 
-/// Apply the post-poll change batch to `sink`, or trace-log the
-/// no-op tick when `changes` is empty.
+/// Buffer the post-poll change batch into `sink`, record it into both
+/// cadence triggers, and fire whichever is due via [`fire_due_cadence`]
+/// — or trace-log the no-op tick when `changes` is empty.
 ///
-/// On a non-empty tick, also: (a) records the event count into
-/// `save_trigger`, (b) evaluates the save thresholds, and (c)
-/// fires [`PatchSink::trigger_save`] (passing `cursor` so the sink can
-/// persist it in lockstep with the body save) when a threshold crosses.
+/// On an idle drive neither cadence fires (both event counters stay at
+/// zero), so a quiescent volume costs nothing beyond the poll itself.
 fn process_tick(
     sink: &dyn PatchSink,
     letter: uffs_mft::platform::DriveLetter,
     cursor: u64,
     changes: &[FileChange],
     save_trigger: &mut SaveTrigger,
-    save_threshold_events: u64,
-    save_threshold_age: Duration,
+    apply_trigger: &mut ApplyTrigger,
+    config: &JournalLoopConfig,
 ) {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
         return;
     }
     let accepted = sink.accept(letter, changes);
-    save_trigger.record(changes.len() as u64);
-    if let Some(reason) = save_trigger.evaluate(save_threshold_events, save_threshold_age) {
-        sink.trigger_save(letter, reason, cursor);
-        tracing::info!(
-            drive = %letter,
-            ?reason,
-            cursor,
-            "Journal poll: triggered background compact-cache save"
-        );
-    }
+    let change_count = changes.len() as u64;
+    save_trigger.record(change_count);
+    apply_trigger.record(change_count);
+
+    fire_due_cadence(sink, letter, cursor, save_trigger, apply_trigger, config);
+
     tracing::debug!(
         drive = %letter,
         accepted,
@@ -713,6 +694,53 @@ fn process_tick(
         cursor,
         "Journal poll: applied tick"
     );
+}
+
+/// Fire whichever cadence is due this tick — **at most one**, since a
+/// save drains + applies the same buffer an apply would (a save
+/// subsumes an apply).
+///
+/// * **Save tick** (rare — 50k events / 5 min): fire
+///   [`PatchSink::trigger_save`] (passing `cursor` so the sink persists it in
+///   lockstep with the on-disk body), then [`ApplyTrigger::reset_after_save`]
+///   so the loop doesn't redundantly re-apply the just-drained buffer.
+/// * **Apply tick** (frequent — default 2 s): when no save fired, fire
+///   [`PatchSink::trigger_apply`] so the in-memory body (and search) goes
+///   near-live without the disk write.
+///
+/// Extracted from [`process_tick`] so each function stays under
+/// clippy's strict-gate cognitive-complexity ceiling.
+fn fire_due_cadence(
+    sink: &dyn PatchSink,
+    letter: uffs_mft::platform::DriveLetter,
+    cursor: u64,
+    save_trigger: &mut SaveTrigger,
+    apply_trigger: &mut ApplyTrigger,
+    config: &JournalLoopConfig,
+) {
+    if let Some(reason) =
+        save_trigger.evaluate(config.save_threshold_events, config.save_threshold_age)
+    {
+        // A save drains + applies the buffer AND writes the body to
+        // disk + persists the cursor — so it subsumes the apply tick.
+        sink.trigger_save(letter, reason, cursor);
+        apply_trigger.reset_after_save();
+        tracing::info!(
+            drive = %letter,
+            ?reason,
+            cursor,
+            "Journal poll: triggered background compact-cache save"
+        );
+    } else if apply_trigger.evaluate(config.apply_interval) {
+        // No save this tick: patch the in-memory body so search sees
+        // the change within the apply interval, leaving disk
+        // persistence to a later save tick.
+        sink.trigger_apply(letter);
+        tracing::debug!(
+            drive = %letter,
+            "Journal poll: triggered near-live body apply"
+        );
+    }
 }
 
 /// Handle returned by [`spawn_journal_loop`] for cancellation +

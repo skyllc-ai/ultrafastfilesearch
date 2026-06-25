@@ -43,7 +43,9 @@
 
 use core::time::Duration;
 
-use super::super::{PatchSink, SaveReason, SaveTrigger, process_tick};
+use super::super::{
+    ApplyTrigger, JournalLoopConfig, PatchSink, SaveReason, SaveTrigger, process_tick,
+};
 use super::{RecordingSink, one_change};
 use crate::index::tests::tracing_capture::{CapturedEvent, EventLog};
 
@@ -71,21 +73,30 @@ fn compact_cache_save_log_message_pins_string_target_and_level() {
     tracing::callsite::rebuild_interest_cache();
 
     let sink = RecordingSink::new();
-    let mut trigger = SaveTrigger::new();
+    let mut save_trigger = SaveTrigger::new();
+    let mut apply_trigger = ApplyTrigger::new();
 
     // Force the events-threshold path: three changes against a
     // threshold of one crosses on the first evaluate() call.
     // Age threshold set generously so it can't be the path that
-    // fires (we want a deterministic `EventsExceeded` reason).
+    // fires (we want a deterministic `EventsExceeded` reason), and
+    // the apply interval is disabled so the save path is the only one
+    // that can fire on this tick.
+    let config = JournalLoopConfig {
+        save_threshold_events: 1, // tight — crosses on the first evaluate
+        save_threshold_age: Duration::from_hours(1), // generous
+        apply_interval: Duration::from_hours(1), // disabled for this test
+        ..JournalLoopConfig::default()
+    };
     let changes = [one_change(10), one_change(11), one_change(12)];
     process_tick(
         &sink as &dyn PatchSink,
         uffs_mft::platform::DriveLetter::C,
         100, // cursor
         &changes,
-        &mut trigger,
-        1,                       // save_threshold_events — tight
-        Duration::from_hours(1), // save_threshold_age — generous
+        &mut save_trigger,
+        &mut apply_trigger,
+        &config,
     );
 
     // The sink saw the trigger_save callback once with the expected

@@ -161,15 +161,70 @@ impl IndexManager {
         reason: &str,
         changes: Vec<FileChange>,
     ) -> bool {
+        match self.apply_to_body(letter, reason, changes).await {
+            BodyApplyOutcome::Applied(new_body) => {
+                spawn_compact_cache_save_task(letter, new_body);
+                true
+            }
+            BodyApplyOutcome::NoOp => true,
+            BodyApplyOutcome::Failed => false,
+        }
+    }
+
+    /// Apply-tick sibling of [`IndexManager::handle_journal_save`]:
+    /// patch the in-memory body and Arc-swap it into the registry,
+    /// **without** the compact-cache disk write.
+    ///
+    /// The per-shard journal loop fires this on the short apply cadence
+    /// (default ~2 s, [`crate::cache::journal_loop`]) so newly created /
+    /// renamed / deleted files become searchable within a couple of
+    /// seconds, while the heavy disk persistence stays on the rare
+    /// `handle_journal_save` cadence (50k events / 5 min).  The apply
+    /// path deliberately does **not** persist the journal cursor: only a
+    /// real body save advances the on-disk cursor, so a cold start
+    /// re-replays from the last saved cursor and the idempotent patcher
+    /// re-applies the in-between deltas — identical to the pre-split
+    /// cold-boot window.
+    ///
+    /// Returns `true` when the body was patched + swapped (or the batch
+    /// was empty — a no-op), `false` only on a hard failure (shard not
+    /// registered / not warm, patch task aborted, or the swap lost a
+    /// demote race).  See [`IndexManager::handle_journal_save`] for the
+    /// per-failure breakdown.
+    pub(crate) async fn handle_journal_apply(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: &str,
+        changes: Vec<FileChange>,
+    ) -> bool {
+        !matches!(
+            self.apply_to_body(letter, reason, changes).await,
+            BodyApplyOutcome::Failed
+        )
+    }
+
+    /// Shared core of [`IndexManager::handle_journal_save`] and
+    /// [`IndexManager::handle_journal_apply`]: clone the warm body,
+    /// apply the buffered batch, and Arc-swap the result into the
+    /// registry.  Returns the patched body on success so the save-tick
+    /// caller can hand it to the background disk-save task; the
+    /// apply-tick caller discards it.  Stops short of any disk I/O —
+    /// disk persistence is the save tick's responsibility alone.
+    async fn apply_to_body(
+        &self,
+        letter: uffs_mft::platform::DriveLetter,
+        reason: &str,
+        changes: Vec<FileChange>,
+    ) -> BodyApplyOutcome {
         if changes.is_empty() {
             log_save_empty_batch(letter, reason);
-            return true;
+            return BodyApplyOutcome::NoOp;
         }
 
         let change_count = changes.len();
         let Some(shard) = self.snapshot_shard_for_letter(letter).await else {
             log_save_no_shard(letter, reason, change_count);
-            return false;
+            return BodyApplyOutcome::Failed;
         };
 
         let (new_body, stats) = match self
@@ -179,9 +234,9 @@ impl IndexManager {
             PatchTaskOutcome::Applied(body, stats) => (body, stats),
             PatchTaskOutcome::ShardNotWarm => {
                 log_save_shard_demoted(letter, reason, change_count);
-                return false;
+                return BodyApplyOutcome::Failed;
             }
-            PatchTaskOutcome::TaskAborted => return false,
+            PatchTaskOutcome::TaskAborted => return BodyApplyOutcome::Failed,
         };
 
         log_save_patch_applied(letter, reason, change_count, &stats);
@@ -190,11 +245,10 @@ impl IndexManager {
             .apply_journal_body(letter, reason, Arc::clone(&new_body))
             .await
         {
-            return false;
+            return BodyApplyOutcome::Failed;
         }
 
-        spawn_compact_cache_save_task(letter, new_body);
-        true
+        BodyApplyOutcome::Applied(new_body)
     }
 
     /// Snapshot the shard for `letter` from the registry read-lock,
@@ -413,8 +467,27 @@ fn spawn_compact_cache_save_task(
     });
 }
 
+/// Outcome of [`IndexManager::apply_to_body`] — the shared body-patch
+/// core behind the save tick and the apply tick.  Carries the patched
+/// body on success so the save-tick caller can persist it while the
+/// apply-tick caller drops it; keeps the empty-batch no-op distinct
+/// from a hard failure so each caller maps it to the right `bool`.
+enum BodyApplyOutcome {
+    /// Body cloned, patched, and Arc-swapped into the registry.  The
+    /// save tick hands the inner Arc to the background disk-save task;
+    /// the apply tick discards it (in-memory swap is all it owes).
+    Applied(Arc<uffs_core::compact::DriveCompactIndex>),
+    /// The batch was empty — nothing to apply.  Both ticks treat this
+    /// as success (a save with no churn is a no-op, not a failure).
+    NoOp,
+    /// A hard failure: shard not registered / not warm, the patch task
+    /// aborted, or the swap lost a demote race.  Already logged at the
+    /// failure site; both ticks surface it as `false`.
+    Failed,
+}
+
 /// Three-way classification of the surgical-patch blocking task's
-/// `JoinHandle` result — lets [`IndexManager::handle_journal_save`]
+/// `JoinHandle` result — lets [`IndexManager::apply_to_body`]
 /// match each outcome with its own diagnostic + control-flow
 /// without resorting to the `Option<Option<T>>` shape `clippy`
 /// (rightly) flags as a smell.

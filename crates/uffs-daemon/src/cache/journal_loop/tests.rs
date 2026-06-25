@@ -45,6 +45,7 @@ use super::{
     CursorStore, JournalLoopConfig, JournalPollResult, JournalSource, PatchSink, SaveReason,
 };
 
+mod apply_cadence;
 mod backoff;
 mod basics;
 mod integration;
@@ -175,6 +176,11 @@ struct RecordingSink {
     /// a successful body save.  Lets the loop-level tests assert the
     /// cursor reaches the sink without coupling to persistence.
     save_cursors: Mutex<Vec<u64>>,
+    /// One entry per `trigger_apply()` call: `letter`.  The
+    /// apply-cadence surface — lets tests assert the near-live body
+    /// apply fires on the short interval (and that a save tick
+    /// suppresses a redundant apply on the same buffer).
+    apply_calls: Mutex<Vec<uffs_mft::platform::DriveLetter>>,
     /// One entry per `journal_wrapped()` call: `letter`.
     /// Phase 7-D surface — lets tests assert the wrap-detection
     /// state machine fires when `journal_id` changes between
@@ -192,6 +198,7 @@ impl RecordingSink {
             calls: Mutex::new(Vec::new()),
             save_calls: Mutex::new(Vec::new()),
             save_cursors: Mutex::new(Vec::new()),
+            apply_calls: Mutex::new(Vec::new()),
             wrap_calls: Mutex::new(Vec::new()),
             accept_outcome: Mutex::new(true),
         }
@@ -207,6 +214,10 @@ impl RecordingSink {
 
     fn save_cursors(&self) -> Vec<u64> {
         lock_or_recover(&self.save_cursors).clone()
+    }
+
+    fn apply_calls(&self) -> Vec<uffs_mft::platform::DriveLetter> {
+        lock_or_recover(&self.apply_calls).clone()
     }
 
     fn wrap_calls(&self) -> Vec<uffs_mft::platform::DriveLetter> {
@@ -228,6 +239,10 @@ impl PatchSink for RecordingSink {
     ) {
         lock_or_recover(&self.save_calls).push((letter, reason));
         lock_or_recover(&self.save_cursors).push(cursor);
+    }
+
+    fn trigger_apply(&self, letter: uffs_mft::platform::DriveLetter) {
+        lock_or_recover(&self.apply_calls).push(letter);
     }
 
     fn journal_wrapped(&self, letter: uffs_mft::platform::DriveLetter) {
@@ -313,6 +328,10 @@ fn fast_config() -> JournalLoopConfig {
         initial_cursor: 0,
         save_threshold_events: u64::MAX,
         save_threshold_age: Duration::from_hours(24),
+        // Disabled by default so the generic tick / cancel / cursor
+        // tests don't accidentally fire an apply; the apply-cadence
+        // tests override this with a short interval.
+        apply_interval: Duration::from_hours(24),
     }
 }
 

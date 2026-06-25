@@ -64,8 +64,15 @@ const LOG_SPEC: &str = "info,uffs_core::compact_loader=trace,uffs_daemon=debug";
 /// visible (`Size` column should read this, not 0).
 const ALPHA_BYTES: usize = 5000;
 
-/// `~/bin/uffs[.exe]` — the canonical user-installed binary, matching the
-/// convention in the sibling sweep / validation scripts.
+/// `~/bin/uffs.exe` — the canonical user-installed **Rust** binary.
+///
+/// Pinned to the explicit `uffs.exe` filename on purpose: a bare `uffs`
+/// on Windows resolves through `PATHEXT`, where `.com` precedes `.exe`,
+/// so if the C++ build (`uffs.com`) is also on `PATH` it would shadow
+/// the Rust `uffs.exe` we are trying to exercise.  Returning the full
+/// path and handing it to `Command::new` bypasses `PATHEXT` resolution
+/// entirely, so this script always runs the Rust build under test.
+/// Never "simplify" this to a bare `uffs`.
 fn uffs_bin() -> PathBuf {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -73,6 +80,14 @@ fn uffs_bin() -> PathBuf {
         .expect("USERPROFILE or HOME must be set");
     let name = if cfg!(windows) { "uffs.exe" } else { "uffs" };
     home.join("bin").join(name)
+}
+
+/// Display name for the cosmetic `$ ...` echo lines.  Uses the same
+/// `uffs.exe` the script actually spawns so a shared transcript is
+/// copy-paste-safe: pasting `uffs <args>` into a shell could hit the
+/// C++ `uffs.com` (see [`uffs_bin`]), but `uffs.exe <args>` cannot.
+fn uffs_display() -> &'static str {
+    if cfg!(windows) { "uffs.exe" } else { "uffs" }
 }
 
 /// Home directory (`~`) — the scratch tree lives at `~/usntest`.
@@ -86,7 +101,7 @@ fn home_dir() -> PathBuf {
 /// Run a `uffs` subcommand inheriting stdout/stderr (for `--status`, daemon
 /// control) — the user sees exactly what they would running it by hand.
 fn run(uffs: &Path, args: &[&str]) -> Result<()> {
-    println!("\n$ uffs {}", args.join(" "));
+    println!("\n$ {} {}", uffs_display(), args.join(" "));
     Command::new(uffs)
         .args(args)
         .status()
@@ -114,7 +129,7 @@ fn capture(uffs: &Path, args: &[&str], out: &Path, expect: &str) -> Result<()> {
         .take(8)
         .collect();
 
-    println!("\n$ uffs {}", args.join(" "));
+    println!("\n$ {} {}", uffs_display(), args.join(" "));
     println!("   expect: {expect}");
     println!("   got:    {rows} row(s)  {names:?}");
     println!("   saved:  {}", out.display());
@@ -148,7 +163,10 @@ fn main() -> Result<()> {
     // ── Restart the daemon with debug+trace logging into the artifacts dir ──
     let _ = Command::new(&uffs).args(["--daemon", "stop"]).status();
     sleep(KILL_SETTLE);
-    println!("\n$ uffs --daemon start   (UFFS_LOG={LOG_SPEC})");
+    println!(
+        "\n$ {} --daemon start   (UFFS_LOG={LOG_SPEC})",
+        uffs_display()
+    );
     let status = Command::new(&uffs)
         .args(["--daemon", "start"])
         .env("UFFS_LOG", LOG_SPEC)

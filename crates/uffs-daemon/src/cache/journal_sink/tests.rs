@@ -223,6 +223,93 @@ async fn trigger_save_with_no_pending_sends_empty_changes() {
     );
 }
 
+/// Pin: `trigger_apply` drains the pending buffer for `letter`
+/// and ships it inside `ApplyMsg::Apply { changes }` — the
+/// near-live body-patch path, carrying NO cursor (the apply tick
+/// never advances the on-disk cursor).  The buffer for `letter` is
+/// cleared after the drain.
+#[tokio::test]
+async fn trigger_apply_drains_pending_into_apply_message() {
+    let (sink, mut rx) = RegistryPatchSink::new_for_test();
+
+    sink.accept(uffs_mft::platform::DriveLetter::C, &[
+        make_change(20),
+        make_change(21),
+    ]);
+    sink.trigger_apply(uffs_mft::platform::DriveLetter::C);
+
+    let ApplyMsg::Apply { letter, changes } =
+        rx.try_recv().expect("trigger_apply must enqueue Apply")
+    else {
+        panic!("expected ApplyMsg::Apply");
+    };
+    assert_eq!(letter, uffs_mft::platform::DriveLetter::C);
+    assert_eq!(
+        changes
+            .iter()
+            .map(|change| change.frs.raw())
+            .collect::<Vec<_>>(),
+        [20, 21],
+        "Apply must carry the buffered changes in send order",
+    );
+
+    // Pending buffer for 'C' is gone after the drain.
+    assert!(
+        pending_frs_for_letter(&sink, uffs_mft::platform::DriveLetter::C).is_none(),
+        "trigger_apply must remove the per-letter pending entry",
+    );
+}
+
+/// Pin: `trigger_apply` on a letter with no buffered events is a
+/// pure no-op — it enqueues NO message (unlike `trigger_save`,
+/// which always ships a Save so the cursor can advance on the
+/// rare save cadence).  An empty apply has nothing to patch and
+/// no cursor to move, so spending a channel slot + an applier
+/// wake-up on it would be wasted work on every quiescent tick.
+#[tokio::test]
+async fn trigger_apply_with_no_pending_enqueues_nothing() {
+    let (sink, mut rx) = RegistryPatchSink::new_for_test();
+
+    sink.trigger_apply(uffs_mft::platform::DriveLetter::Z);
+
+    assert!(
+        rx.try_recv().is_err(),
+        "an empty trigger_apply must not enqueue an ApplyMsg",
+    );
+}
+
+/// Lockstep safety pin: the apply tick must NEVER persist the
+/// cursor — only a real on-disk body save advances it.  Even on a
+/// successful in-memory patch the on-disk cursor stays pinned to
+/// the last save, so a cold start re-replays the apply-only deltas
+/// idempotently.  Here the letter is unregistered (the patch
+/// no-ops), but the contract holds on the success path too: the
+/// apply dispatch never calls `cursor_store.store`.
+#[tokio::test]
+async fn apply_tick_never_persists_cursor() {
+    let idx = fresh_index_manager(); // no drives registered
+    let cursor_store = RecordingCursorStore::new();
+    let (sink, applier) = RegistryPatchSink::spawn_with_applier(
+        &idx,
+        Arc::clone(&cursor_store) as Arc<dyn CursorStore>,
+    );
+
+    sink.accept(uffs_mft::platform::DriveLetter::C, &[make_change(1)]);
+    sink.trigger_apply(uffs_mft::platform::DriveLetter::C);
+
+    drop(sink);
+    let join_result = tokio::time::timeout(core::time::Duration::from_secs(5), applier).await;
+    join_result
+        .expect("applier must exit within 5 s")
+        .expect("applier must not panic");
+
+    assert!(
+        cursor_store.store_log().is_empty(),
+        "the apply tick must never persist the cursor; got {:?}",
+        cursor_store.store_log(),
+    );
+}
+
 /// Pin: `journal_wrapped` clears the pending buffer for the
 /// letter and emits `ApplyMsg::Wrap`.  A subsequent
 /// `trigger_save` then sees an empty buffer (no replay of the

@@ -574,13 +574,14 @@ async fn spawn_journal_loops_for_warm_shards(
         RegistryPatchSink::spawn_with_applier(idx, Arc::clone(&cursor_store));
     let sink_dyn: Arc<dyn PatchSink> = sink;
 
-    let config = JournalLoopConfig::default();
+    let config = JournalLoopConfig::from_env();
     let letters = idx.loaded_drive_letters().await;
     tracing::info!(
         target: "shard.journal",
         count = letters.len(),
         letters = ?letters,
         poll_interval_ms = config.poll_interval.as_millis(),
+        apply_interval_ms = config.apply_interval.as_millis(),
         save_threshold_events = config.save_threshold_events,
         save_threshold_age_secs = config.save_threshold_age.as_secs(),
         "Spawning per-shard journal loops",

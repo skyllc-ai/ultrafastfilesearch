@@ -32,6 +32,21 @@
 //! head reset, so any pending events are stale relative to the new
 //! cursor) and falls back to the Phase-7 full-reload path.
 //!
+//! ## Apply / save cadence split (search-freshness)
+//!
+//! Draining the buffer only on the save tick (50k events / 5 min) left
+//! freshly created / renamed / deleted files invisible to search for
+//! up to 5 minutes.  `trigger_apply` decouples the two cadences: the
+//! loop fires it on a short interval (default ~2 s) to drain the buffer
+//! into [`ApplyMsg::Apply`], which patches + swaps the in-memory body
+//! (search goes near-live) but **skips** the compact-cache disk write
+//! and the cursor persist.  `trigger_save` keeps doing the full
+//! patch-plus-persist on its rare cadence, so a save tick subsumes an
+//! apply.  The loop never fires both on the same poll; whichever fires
+//! drains the buffer.  Because only a real body save advances the
+//! on-disk cursor, a cold start re-replays the apply-only deltas from
+//! the last saved cursor — idempotent against the freshly loaded body.
+//!
 //! Properties of the buffered design:
 //!
 //! 1. Preserves FIFO ordering (per-letter and across letters).
@@ -96,6 +111,23 @@ enum ApplyMsg {
         /// on-disk cursor in lockstep with the on-disk body (a parked
         /// shard's save is a no-op, so its cursor must not advance).
         cursor: u64,
+    },
+    /// `trigger_apply` callback — the short apply-cadence sibling of
+    /// `Save`.  The applier runs the same surgical
+    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`] +
+    /// `replace_warm_body` over the drained per-letter buffer so the
+    /// in-memory body (and therefore search) goes near-live, but
+    /// **skips** the compact-cache disk write and the cursor persist.
+    /// Disk persistence stays on the rarer `Save` tick; the cursor only
+    /// advances on a real body save, so a cold start re-replays the
+    /// in-between deltas idempotently.
+    Apply {
+        /// Drive letter to patch.
+        letter: uffs_mft::platform::DriveLetter,
+        /// Drained per-letter event buffer.  Empty when no churn
+        /// accumulated since the last apply / save (the surgical-patch
+        /// path short-circuits to a no-op).
+        changes: Vec<FileChange>,
     },
     /// `journal_wrapped` callback — the journal head reset so any
     /// pending events are stale; the applier discards them in the
@@ -263,17 +295,18 @@ impl PatchSink for RegistryPatchSink {
         buffered.extend_from_slice(changes);
         let pending_total = buffered.len();
         drop(guard);
-        // USNFIX: prove the buffer-until-save behaviour. `accept` only
-        // appends here; the body is NOT patched until `trigger_save` drains
-        // this buffer (on the 50k-event / 5-min threshold). Remove with the
-        // rest of the USNFIX instrumentation.
+        // USNFIX: trace the buffer step. `accept` only appends here; the
+        // body is patched when the loop next drains this buffer — on the
+        // short apply tick (default ~2 s, `trigger_apply`) or the rarer
+        // save tick (`trigger_save`), whichever fires first. Remove with
+        // the rest of the USNFIX instrumentation.
         if !changes.is_empty() {
             tracing::info!(
                 marker = "USNFIX",
                 drive = %letter,
                 buffered_now = changes.len(),
                 pending_total,
-                "USNFIX accept: BUFFERED only (body not patched until save tick)"
+                "USNFIX accept: BUFFERED (body patched on next apply/save tick)"
             );
         }
         true
@@ -310,6 +343,40 @@ impl PatchSink for RegistryPatchSink {
             reason,
             changes: drained,
             cursor,
+        });
+    }
+
+    fn trigger_apply(&self, letter: uffs_mft::platform::DriveLetter) {
+        // Drain the per-letter buffer just like `trigger_save`, but
+        // route it to the apply-only path: the body is patched +
+        // swapped (search goes live) without the compact-cache disk
+        // write or the cursor persist.  Whichever tick (apply or save)
+        // fires drains the buffer; a save tick subsumes the apply, so
+        // the loop never fires both on the same poll.
+        let drained = {
+            let mut guard = self.lock_pending();
+            guard.remove(&letter).unwrap_or_default()
+        };
+        if drained.is_empty() {
+            // Nothing accumulated since the last drain — no work, no
+            // log noise.  (The loop only calls this when its
+            // event-count says there *should* be churn, so an empty
+            // drain here just means a save tick beat us to it.)
+            return;
+        }
+        // USNFIX: prove the near-live apply cadence — this fires on the
+        // short apply interval (default ~2 s) and patches the body well
+        // before the rare save tick. Remove with the rest of the USNFIX
+        // instrumentation.
+        tracing::info!(
+            marker = "USNFIX",
+            drive = %letter,
+            drained = drained.len(),
+            "USNFIX trigger_apply: draining buffer → apply (body patched now, no disk save)"
+        );
+        let _ignore = self.apply_tx.send(ApplyMsg::Apply {
+            letter,
+            changes: drained,
         });
     }
 
@@ -389,6 +456,17 @@ async fn dispatch_msg(idx: &Arc<IndexManager>, cursor_store: &dyn CursorStore, m
             if applied {
                 cursor_store.store(letter, cursor);
             }
+        }
+        ApplyMsg::Apply { letter, changes } => {
+            // Apply tick: patch the body + swap it into the registry so
+            // search goes live, but do NOT persist the compact cache or
+            // advance the on-disk cursor.  Disk persistence + cursor
+            // advance stay on the rarer `Save` tick; a cold start
+            // re-replays the in-between deltas idempotently from the
+            // last saved cursor.
+            let _applied = idx
+                .handle_journal_apply(letter, "apply-tick", changes)
+                .await;
         }
         ApplyMsg::Wrap { letter } => {
             // Wrap stays on the Phase-7 full-reload path.  The

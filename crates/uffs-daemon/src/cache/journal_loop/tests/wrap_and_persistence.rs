@@ -90,6 +90,7 @@ async fn cursor_handed_to_sink_on_save_trigger() {
         initial_cursor: 0,
         save_threshold_events: 5,
         save_threshold_age: Duration::from_hours(24),
+        apply_interval: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,

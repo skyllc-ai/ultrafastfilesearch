@@ -42,6 +42,7 @@ async fn events_threshold_triggers_save() {
         initial_cursor: 0,
         save_threshold_events: 5,
         save_threshold_age: Duration::from_hours(24),
+        apply_interval: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,
@@ -91,6 +92,7 @@ async fn age_threshold_triggers_save_with_pending_events() {
         initial_cursor: 0,
         save_threshold_events: u64::MAX,
         save_threshold_age: Duration::from_millis(30),
+        apply_interval: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,
@@ -150,6 +152,7 @@ async fn zero_events_drive_does_not_trigger_save() {
         initial_cursor: 0,
         save_threshold_events: 1,
         save_threshold_age: Duration::from_millis(20),
+        apply_interval: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,
@@ -202,6 +205,7 @@ async fn counter_resets_after_save() {
         initial_cursor: 0,
         save_threshold_events: 5,
         save_threshold_age: Duration::from_hours(24),
+        apply_interval: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,
