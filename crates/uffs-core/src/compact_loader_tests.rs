@@ -236,6 +236,85 @@ fn apply_usn_patch_renamed_record_has_new_name_in_blob() {
     );
 }
 
+/// Regression (v0.6.13 field report): a rename that changes the
+/// extension (`charlie.log` → `charlie.pdf`) must re-intern the new
+/// extension so the record is findable by `--ext pdf` and drops out of
+/// `--ext log`. The rename branch used to update only `name_offset` /
+/// `name_len`, leaving the stale `extension_id` behind.
+#[test]
+fn apply_usn_patch_rename_reinterns_extension() {
+    let mut drive = make_synthetic_drive();
+    // FRS 11 → compact_idx 2 ("bar.rs"). Rename it to "bar.pdf".
+    let changes = vec![FileChange {
+        frs: 11_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "bar.pdf".to_owned(),
+        renamed: true,
+        ..FileChange::default()
+    }];
+    apply_usn_patch(&mut drive, &changes);
+
+    let pdf_ids = drive.resolve_ext_ids(&["pdf".to_owned()]);
+    assert_eq!(pdf_ids.len(), 1, "'pdf' must be interned after the rename");
+    let pdf_id = *pdf_ids.first().expect("one id");
+    let record = drive.records.as_slice().get(2).expect("record 2");
+    assert_eq!(
+        record.extension_id, pdf_id,
+        "renamed record must carry the new 'pdf' extension_id"
+    );
+    assert_eq!(
+        record.name_first_byte, b'b',
+        "first-byte cache must reflect the renamed name"
+    );
+    assert!(
+        drive.ext_index.get(pdf_id).contains(&2),
+        "ExtensionIndex.get(pdf) must include the renamed record"
+    );
+}
+
+/// Regression (v0.6.13 field report): FRS reuse. NTFS reuses an MFT
+/// record number after a delete, so a `created` event can land on a
+/// slot whose mapping still points at a *live* (stale) record — e.g.
+/// when the prior delete was coalesced away. The create must REPLACE
+/// that slot with the new file's identity, not silently skip it (which
+/// dropped the new file and was the root of the "delta.pdf vanished"
+/// and "recreate after delete loses files" reports).
+#[test]
+fn apply_usn_patch_create_replaces_live_reused_slot() {
+    let mut drive = make_synthetic_drive();
+    // FRS 11 → compact_idx 2 ("bar.rs", a LIVE record, name_len 6).
+    // A create for FRS 11 means the record number was reused.
+    let new_idx = 2_usize;
+    let changes = vec![FileChange {
+        frs: 11_u64.into(),
+        parent_frs: 5_u64.into(),
+        filename: "reused.pdf".to_owned(),
+        created: true,
+        ..FileChange::default()
+    }];
+    apply_usn_patch(&mut drive, &changes);
+
+    let record = drive.records.as_slice().get(new_idx).expect("record 2");
+    let name_start = record.name_offset as usize;
+    let name_end = name_start + record.name_len as usize;
+    let name_bytes = drive
+        .names
+        .as_slice()
+        .get(name_start..name_end)
+        .expect("name slice in blob");
+    assert_eq!(
+        name_bytes, b"reused.pdf",
+        "reused slot must hold the NEW file's name"
+    );
+    let pdf_ids = drive.resolve_ext_ids(&["pdf".to_owned()]);
+    let pdf_id = *pdf_ids.first().expect("'pdf' interned");
+    assert_eq!(record.extension_id, pdf_id, "reused slot tagged 'pdf'");
+    assert!(
+        drive.ext_index.get(pdf_id).contains(&2),
+        "ExtensionIndex.get(pdf) must include the reused record"
+    );
+}
+
 /// Create contract: a newly-created FRS that doesn't map to an
 /// existing compact slot (`frs_to_compact[frs] == u32::MAX`) appends
 /// a fresh record at the end with the correct `parent_idx`,

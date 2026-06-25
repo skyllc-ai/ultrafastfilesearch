@@ -235,10 +235,15 @@ impl UsnRecord {
     /// Categorizes this USN record into a `ChangeType`.
     #[must_use]
     pub const fn change_type(&self) -> ChangeType {
-        if self.reason & reason::FILE_CREATE != 0 {
-            ChangeType::Created
-        } else if self.reason & reason::FILE_DELETE != 0 {
+        // DELETE before CREATE: a single close record can carry both bits
+        // when a file is created and removed within one open→close cycle
+        // (e.g. a transient temp file). The net is "gone", so it must
+        // classify as Deleted. Distinct create/delete events (the FRS-reuse
+        // case) arrive as separate records and are unaffected by this order.
+        if self.reason & reason::FILE_DELETE != 0 {
             ChangeType::Deleted
+        } else if self.reason & reason::FILE_CREATE != 0 {
+            ChangeType::Created
         } else if self.reason & reason::RENAME_NEW_NAME != 0 {
             ChangeType::Renamed
         } else if self.reason & (reason::DATA_EXTEND | reason::DATA_TRUNCATION) != 0 {
@@ -302,10 +307,28 @@ pub fn aggregate_changes(records: &[UsnRecord]) -> HashMap<Frs, FileChange> {
         if !record.filename.is_empty() {
             entry.filename.clone_from(&record.filename);
         }
+        // Records arrive in USN (time) order. The create/delete/rename flags
+        // are mutually exclusive *net states* for the slot: the LAST such
+        // event wins, so reusing an MFT record number (delete old → create
+        // new, same masked FRS) nets to a create, and a transient temp file
+        // (create → delete) nets to a delete. Size/metadata are independent
+        // and accumulate. Resolving order here keeps `apply_usn_patch`'s
+        // simple deleted/created/renamed branch dispatch correct.
         match record.change_type() {
-            ChangeType::Created => entry.created = true,
-            ChangeType::Deleted => entry.deleted = true,
-            ChangeType::Renamed => entry.renamed = true,
+            ChangeType::Created => {
+                entry.created = true;
+                entry.deleted = false;
+                entry.renamed = false;
+            }
+            ChangeType::Deleted => {
+                entry.deleted = true;
+                entry.created = false;
+                entry.renamed = false;
+            }
+            ChangeType::Renamed => {
+                entry.renamed = true;
+                entry.deleted = false;
+            }
             ChangeType::SizeChanged => entry.size_changed = true,
             ChangeType::MetadataChanged => entry.metadata_changed = true,
             ChangeType::Other => {}
@@ -431,5 +454,91 @@ mod tests {
         assert_eq!(seen.get(&Usn::new(1)), Some(&"first"));
         assert_eq!(seen.get(&Usn::new(2)), Some(&"second"));
         assert_eq!(seen.get(&Usn::new(3)), None);
+    }
+
+    // ── aggregate_changes net-state resolution (was untested) ───────────
+    //
+    // The original aggregator OR-ed independent created/deleted/renamed
+    // bools, losing the time order of the USN stream. NTFS reuses an MFT
+    // record number after a delete, so a "delete old, create new" pair
+    // lands on the same masked FRS in one poll window — and the net result
+    // must reflect the LAST event, not both. These pin that.
+
+    use super::{ChangeType, UsnRecord, aggregate_changes, reason};
+    use crate::frs::{Frs, ParentFrs};
+
+    /// Build a minimal `UsnRecord` for a given FRS, reason mask, and name.
+    fn rec(frs: u64, reason_mask: u32, name: &str) -> UsnRecord {
+        UsnRecord {
+            frs: Frs::new(frs),
+            parent_frs: ParentFrs::new(5),
+            usn: Usn::new(0),
+            reason: reason_mask,
+            file_attributes: 0,
+            filename: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn aggregate_delete_then_create_reuse_nets_to_created() {
+        // FRS 42 deleted (old.txt), then the record number is reused by a
+        // newly-created new.pdf — the journal emits both for masked FRS 42.
+        // Net: the slot now holds new.pdf. Must NOT report a delete (that
+        // would tombstone the brand-new file in apply_usn_patch).
+        let records = vec![
+            rec(42, reason::FILE_DELETE | reason::CLOSE, "old.txt"),
+            rec(42, reason::FILE_CREATE | reason::CLOSE, "new.pdf"),
+        ];
+        let changes = aggregate_changes(&records);
+        let change = changes.get(&Frs::new(42)).expect("FRS 42 present");
+        assert!(change.created, "net of delete→create reuse is a create");
+        assert!(!change.deleted, "must not also report a delete");
+        assert_eq!(change.filename, "new.pdf", "carries the new name");
+    }
+
+    #[test]
+    fn aggregate_create_then_delete_nets_to_deleted() {
+        // A transient file: created then deleted in one window. Net: gone.
+        let records = vec![
+            rec(7, reason::FILE_CREATE, "temp.tmp"),
+            rec(7, reason::FILE_DELETE | reason::CLOSE, "temp.tmp"),
+        ];
+        let changes = aggregate_changes(&records);
+        let change = changes.get(&Frs::new(7)).expect("FRS 7 present");
+        assert!(change.deleted, "net of create→delete is a delete");
+        assert!(!change.created, "must not also report a create");
+    }
+
+    #[test]
+    fn change_type_prefers_delete_when_create_and_delete_coincide() {
+        // A single close record can carry create+delete in one reason mask
+        // (file created and removed within one open→close cycle). The net
+        // is "gone", so it must classify as Deleted, not Created.
+        let record = rec(
+            1,
+            reason::FILE_CREATE | reason::FILE_DELETE | reason::CLOSE,
+            "x",
+        );
+        assert!(matches!(record.change_type(), ChangeType::Deleted));
+    }
+
+    #[test]
+    fn aggregate_keeps_unrelated_frs_separate() {
+        // Sanity: two distinct FRS values never cross-contaminate.
+        let records = vec![
+            rec(10, reason::FILE_CREATE | reason::CLOSE, "a.pdf"),
+            rec(20, reason::FILE_DELETE | reason::CLOSE, "b.dll"),
+        ];
+        let changes = aggregate_changes(&records);
+        assert!(
+            changes
+                .get(&Frs::new(10))
+                .is_some_and(|chg| chg.created && !chg.deleted)
+        );
+        assert!(
+            changes
+                .get(&Frs::new(20))
+                .is_some_and(|chg| chg.deleted && !chg.created)
+        );
     }
 }

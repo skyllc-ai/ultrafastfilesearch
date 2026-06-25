@@ -454,6 +454,191 @@ pub fn load_mft_file(
     load_drive(&MftSource::File(mft_path.to_path_buf(), drive), no_cache)
 }
 
+/// A USN-created file's identity, staged into the index's names blob +
+/// extension table via a mutable `drive` borrow BEFORE any record borrow.
+///
+/// All fields are `Copy`, so the caller can take a `&mut CompactRecord`
+/// after this returns without a borrow conflict.
+struct StagedCreate {
+    /// Byte offset of the staged name in `drive.names`.
+    name_offset: u32,
+    /// UTF-8 byte length of the staged name.
+    name_len: u16,
+    /// Cached first byte of the name (hot-path metafile gate).
+    name_first_byte: u8,
+    /// Interned extension id for the new name (`0` = no extension).
+    extension_id: u16,
+    /// Compact index of the parent directory (`u32::MAX` if unmapped).
+    parent_idx: u32,
+}
+
+/// Append `change`'s filename to the names blob and intern its extension,
+/// resolving the parent's compact index.  Mutably borrows `drive`, so it
+/// must run before any `&mut CompactRecord` borrow.
+fn stage_create(drive: &mut DriveCompactIndex, change: &uffs_mft::usn::FileChange) -> StagedCreate {
+    let extension_id = drive.intern_extension(&change.filename);
+    let name_start = drive.names.len();
+    drive
+        .names
+        .as_mut_vec()
+        .extend_from_slice(change.filename.as_bytes());
+    let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs.raw());
+    let parent_idx = drive
+        .frs_to_compact
+        .get(parent_frs_usize)
+        .copied()
+        .unwrap_or(u32::MAX);
+    StagedCreate {
+        name_offset: uffs_mft::len_to_u32(name_start),
+        name_len: uffs_mft::len_to_u16(change.filename.len()),
+        name_first_byte: change.filename.as_bytes().first().copied().unwrap_or(0),
+        extension_id,
+        parent_idx,
+    }
+}
+
+/// Overwrite an existing compact slot with a reused/re-animated file's
+/// identity, resetting the per-file metrics (a USN `FileChange` carries
+/// only name + parent; size/timestamps are backfilled by a later re-warm).
+const fn overwrite_slot(rec: &mut CompactRecord, staged: &StagedCreate) {
+    rec.name_offset = staged.name_offset;
+    rec.name_len = staged.name_len;
+    rec.name_first_byte = staged.name_first_byte;
+    rec.extension_id = staged.extension_id;
+    rec.parent_idx = staged.parent_idx;
+    rec.size = 0;
+    rec.allocated = 0;
+    rec.treesize = 0;
+    rec.tree_allocated = 0;
+    rec.created = 0;
+    rec.modified = 0;
+    rec.accessed = 0;
+    rec.descendants = 0;
+    rec.flags = 0;
+    rec.path_len = 0;
+}
+
+/// Apply a delete change: tombstone the slot (`name_len = 0`, parent
+/// unmapped so the CSR rebuild drops it) and unmap its FRS so a later batch
+/// can't re-animate the tombstone.
+fn apply_delete(
+    drive: &mut DriveCompactIndex,
+    frs_usize: usize,
+    compact_idx: u32,
+    stats: &mut PatchStats,
+) {
+    if compact_idx == u32::MAX {
+        stats.skipped += 1;
+        return;
+    }
+    if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
+        rec.name_len = 0;
+        rec.parent_idx = u32::MAX;
+        if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
+            *slot = u32::MAX;
+        }
+        stats.deleted += 1;
+    }
+}
+
+/// Apply a create change: overwrite the mapped slot when the MFT record
+/// number was reused (tombstone OR stale live record), or append a fresh
+/// record + register its FRS mapping when the slot is new.
+fn apply_create(
+    drive: &mut DriveCompactIndex,
+    change: &uffs_mft::usn::FileChange,
+    frs_usize: usize,
+    compact_idx: u32,
+    stats: &mut PatchStats,
+) {
+    if change.filename.is_empty() {
+        stats.skipped += 1;
+        return;
+    }
+    // Stage name + interned extension up front (mutable index borrow) so the
+    // per-record write can take a `&mut CompactRecord` without conflict.
+    let staged = stage_create(drive, change);
+    if compact_idx == u32::MAX {
+        // Brand-new record: append, then register the FRS mapping. NTFS
+        // reuses freed record numbers and a long-running daemon can outgrow
+        // the build-time table, so extend + sentinel-fill any gap.
+        let new_rec = CompactRecord {
+            size: 0,
+            allocated: 0,
+            treesize: 0,
+            tree_allocated: 0,
+            created: 0,
+            modified: 0,
+            accessed: 0,
+            name_offset: staged.name_offset,
+            flags: 0,
+            parent_idx: staged.parent_idx,
+            descendants: 0,
+            name_len: staged.name_len,
+            extension_id: staged.extension_id,
+            // path_len filled by `compute_path_lengths` post-loop.
+            path_len: 0,
+            name_first_byte: staged.name_first_byte,
+            _pad: [0; 1],
+        };
+        let new_compact_idx = uffs_mft::len_to_u32(drive.records.len());
+        drive.records.as_mut_vec().push(new_rec);
+        if frs_usize >= drive.frs_to_compact.len() {
+            drive
+                .frs_to_compact
+                .resize(frs_usize.saturating_add(1), u32::MAX);
+        }
+        if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
+            *slot = new_compact_idx;
+        }
+        stats.created += 1;
+    } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
+        // The record number is already mapped. A `created` event means NTFS
+        // reused that slot for a NEW file — the old occupant (a tombstone, OR
+        // a stale live record whose delete was coalesced/missed) no longer
+        // exists. Overwrite it wholesale. Skipping a live slot here is what
+        // dropped FRS-reused recreates (the "delta.pdf vanished" report).
+        overwrite_slot(rec, &staged);
+        stats.created += 1;
+    }
+}
+
+/// Apply a rename change: re-point the name, **re-intern the extension** (a
+/// rename can change it: `foo.log` → `foo.pdf`), refresh the first-byte
+/// cache, and update `parent_idx`. The FRS keeps its slot, so the mapping is
+/// unchanged.
+fn apply_rename(
+    drive: &mut DriveCompactIndex,
+    change: &uffs_mft::usn::FileChange,
+    compact_idx: u32,
+    stats: &mut PatchStats,
+) {
+    if compact_idx == u32::MAX || change.filename.is_empty() {
+        stats.skipped += 1;
+        return;
+    }
+    let extension_id = drive.intern_extension(&change.filename);
+    let name_start = drive.names.len();
+    drive
+        .names
+        .as_mut_vec()
+        .extend_from_slice(change.filename.as_bytes());
+    let new_parent_frs = uffs_mft::frs_to_usize(change.parent_frs.raw());
+    let new_parent_compact = drive
+        .frs_to_compact
+        .get(new_parent_frs)
+        .copied()
+        .unwrap_or(u32::MAX);
+    if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
+        rec.name_offset = uffs_mft::len_to_u32(name_start);
+        rec.name_len = uffs_mft::len_to_u16(change.filename.len());
+        rec.extension_id = extension_id;
+        rec.name_first_byte = change.filename.as_bytes().first().copied().unwrap_or(0);
+        rec.parent_idx = new_parent_compact;
+        stats.renamed += 1;
+    }
+}
+
 /// Apply USN changes in-place to the compact index.
 ///
 /// Mutates records (`parent_idx`, names, flags) and the
@@ -489,17 +674,6 @@ pub fn load_mft_file(
 /// looks up to `u32::MAX` and the function increments `skipped` for
 /// the whole batch \u2014 the surgical patch silently degrades to a
 /// no-op so the caller's full-reload fallback path runs.
-#[expect(
-    clippy::too_many_lines,
-    reason = "Phase 8 surgical-patch loop: the create / delete / rename \
-              branches each mutate `drive.frs_to_compact` in a \
-              variant-specific way (delete tombstones the slot, create \
-              extends + registers, rename leaves it intact); splitting \
-              into per-variant helpers would scatter the FRS-mapping \
-              invariant across functions and obscure the symmetric \
-              treatment that's central to the surgical-patch correctness \
-              contract."
-)]
 pub fn apply_usn_patch(
     drive: &mut DriveCompactIndex,
     changes: &[uffs_mft::usn::FileChange],
@@ -508,10 +682,9 @@ pub fn apply_usn_patch(
 
     for change in changes {
         // Typed `Frs` → raw `u64` lift at the frs_to_compact CSR lookup
-        // boundary.  The mapping table is `Vec<u32>` indexed by
-        // `usize`, so demoting once per change keeps the inner index
-        // arithmetic on raw values without leaking raw FRS into the
-        // outer `FileChange` API.
+        // boundary.  The mapping table is `Vec<u32>` indexed by `usize`,
+        // so demoting once per change keeps the inner index arithmetic on
+        // raw values without leaking raw FRS into the `FileChange` API.
         let frs_usize = uffs_mft::frs_to_usize(change.frs.raw());
         let compact_idx = drive
             .frs_to_compact
@@ -519,145 +692,29 @@ pub fn apply_usn_patch(
             .copied()
             .unwrap_or(u32::MAX);
 
+        // Per-change disposition trace — enable with `--log-level trace` to
+        // see exactly which branch each USN event takes and the slot it
+        // resolved to (the field-debug hook for USN-delta investigations).
+        tracing::trace!(
+            drive = %drive.letter,
+            frs = change.frs.raw(),
+            name = %change.filename,
+            created = change.created,
+            deleted = change.deleted,
+            renamed = change.renamed,
+            compact_idx,
+            mapped = (compact_idx != u32::MAX),
+            "usn apply: change"
+        );
+
+        // The flags are mutually-exclusive net states (resolved in
+        // `aggregate_changes`), so a simple priority dispatch is correct.
         if change.deleted {
-            if compact_idx == u32::MAX {
-                stats.skipped += 1;
-            } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
-                rec.name_len = 0;
-                // Clear parent so CSR rebuild excludes this record.
-                rec.parent_idx = u32::MAX;
-                // Phase 8: mark the FRS slot unmapped so a future
-                // batch can't re-animate the tombstone via the
-                // `compact_idx != u32::MAX` create branch below.
-                if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
-                    *slot = u32::MAX;
-                }
-                stats.deleted += 1;
-            }
+            apply_delete(drive, frs_usize, compact_idx, &mut stats);
         } else if change.created {
-            if compact_idx != u32::MAX {
-                // Re-animate a previously deleted slot. Only a tombstone
-                // (name_len == 0) is revived; a live slot is left untouched.
-                let is_tombstone = drive
-                    .records
-                    .as_slice()
-                    .get(compact_idx as usize)
-                    .is_some_and(|rec| rec.name_len == 0);
-                if is_tombstone && !change.filename.is_empty() {
-                    // Re-intern the extension from the NEW name BEFORE taking
-                    // the record borrow (intern_extension mutably borrows the
-                    // index); a revived slot otherwise keeps its pre-delete
-                    // extension_id and drops out of `--ext` for its new name.
-                    let extension_id = drive.intern_extension(&change.filename);
-                    let name_start = drive.names.len();
-                    drive
-                        .names
-                        .as_mut_vec()
-                        .extend_from_slice(change.filename.as_bytes());
-                    if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
-                        rec.name_offset = uffs_mft::len_to_u32(name_start);
-                        rec.name_len = uffs_mft::len_to_u16(change.filename.len());
-                        rec.extension_id = extension_id;
-                        rec.name_first_byte =
-                            change.filename.as_bytes().first().copied().unwrap_or(0);
-                    }
-                }
-                stats.skipped += 1;
-            } else if !change.filename.is_empty() {
-                // Intern the extension first (mutable index borrow) so the new
-                // record carries the SAME extension_id a full rebuild would —
-                // the rebuilt ExtensionIndex below groups by this field, and a
-                // hardcoded 0 made USN-created files invisible to `--ext <x>`.
-                let extension_id = drive.intern_extension(&change.filename);
-                let name_start = drive.names.len();
-                drive
-                    .names
-                    .as_mut_vec()
-                    .extend_from_slice(change.filename.as_bytes());
-
-                // Typed `ParentFrs` → raw `u64` lift at the
-                // frs_to_compact CSR lookup boundary (same rationale as
-                // the `change.frs.raw()` lift above).
-                let parent_frs_usize = uffs_mft::frs_to_usize(change.parent_frs.raw());
-                let parent_compact = drive
-                    .frs_to_compact
-                    .get(parent_frs_usize)
-                    .copied()
-                    .unwrap_or(u32::MAX);
-
-                let new_rec = CompactRecord {
-                    size: 0,
-                    allocated: 0,
-                    treesize: 0,
-                    tree_allocated: 0,
-                    created: 0,
-                    modified: 0,
-                    accessed: 0,
-                    name_offset: uffs_mft::len_to_u32(name_start),
-                    flags: 0,
-                    parent_idx: parent_compact,
-                    descendants: 0,
-                    name_len: uffs_mft::len_to_u16(change.filename.len()),
-                    extension_id,
-                    // path_len is set to 0 here; the full-array
-                    // `compute_path_lengths` call after the USN loop
-                    // will populate the correct value for all records.
-                    path_len: 0,
-                    name_first_byte: change.filename.as_bytes().first().copied().unwrap_or(0),
-                    _pad: [0; 1],
-                };
-
-                let new_compact_idx = uffs_mft::len_to_u32(drive.records.len());
-                drive.records.as_mut_vec().push(new_rec);
-
-                // Phase 8: register the new FRS → compact_idx mapping
-                // so future batches that reference this FRS find the
-                // correct slot.  Extend the table if needed (the FRS
-                // may exceed the build-time max — e.g. NTFS reuses
-                // freed FRS slots after deletes, and a long-running
-                // daemon can outgrow the original `frs_to_idx`
-                // capacity).  Sentinel-fill any intermediate gap so
-                // skipped FRS values still report `u32::MAX`.
-                if frs_usize >= drive.frs_to_compact.len() {
-                    drive
-                        .frs_to_compact
-                        .resize(frs_usize.saturating_add(1), u32::MAX);
-                }
-                if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
-                    *slot = new_compact_idx;
-                }
-                stats.created += 1;
-            } else {
-                stats.skipped += 1;
-            }
+            apply_create(drive, change, frs_usize, compact_idx, &mut stats);
         } else if change.renamed {
-            if compact_idx == u32::MAX {
-                stats.skipped += 1;
-            } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
-                if !change.filename.is_empty() {
-                    let name_start = drive.names.len();
-                    drive
-                        .names
-                        .as_mut_vec()
-                        .extend_from_slice(change.filename.as_bytes());
-                    rec.name_offset = uffs_mft::len_to_u32(name_start);
-                    rec.name_len = uffs_mft::len_to_u16(change.filename.len());
-                }
-
-                // Typed `ParentFrs` → raw lift on the rename path.
-                let new_parent_frs = uffs_mft::frs_to_usize(change.parent_frs.raw());
-                let new_parent_compact = drive
-                    .frs_to_compact
-                    .get(new_parent_frs)
-                    .copied()
-                    .unwrap_or(u32::MAX);
-
-                // Update parent_idx — CSR rebuild picks this up.
-                rec.parent_idx = new_parent_compact;
-                // Rename keeps the FRS in the same compact slot;
-                // mapping is unchanged.
-                stats.renamed += 1;
-            }
+            apply_rename(drive, change, compact_idx, &mut stats);
         } else {
             stats.skipped += 1;
         }
@@ -674,6 +731,23 @@ pub fn apply_usn_patch(
     drive.trigram = TrigramIndex::build(&drive.records, &drive.names, drive.fold);
     // Rebuild extension inverted index so --ext queries reflect USN changes.
     drive.ext_index = crate::compact::ExtensionIndex::build(&drive.records);
+
+    // Batch summary — at DEBUG so a `--log-level debug` daemon shows how each
+    // USN poll mutated the index (created/deleted/renamed/skipped + the new
+    // record + ext-index totals) without the per-change TRACE firehose.
+    if !changes.is_empty() {
+        tracing::debug!(
+            drive = %drive.letter,
+            changes = changes.len(),
+            created = stats.created,
+            deleted = stats.deleted,
+            renamed = stats.renamed,
+            skipped = stats.skipped,
+            records = drive.records.len(),
+            ext_index_entries = drive.ext_index.total_entries(),
+            "usn apply: batch applied"
+        );
+    }
 
     stats
 }
