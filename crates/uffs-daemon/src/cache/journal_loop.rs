@@ -173,17 +173,18 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
         cursor: u64,
     );
 
-    /// Patch the in-memory body for `letter` on the short apply
-    /// cadence — the near-live sibling of [`PatchSink::trigger_save`].
+    /// Patch the in-memory body for `letter` on the apply cadence — the
+    /// near-live sibling of [`PatchSink::trigger_save`].
     ///
     /// The loop calls this (via the per-shard [`ApplyTrigger`]) when
     /// buffered changes exist and at least
     /// [`JournalLoopConfig::apply_interval`] has elapsed since the last
     /// apply / save.  Production drains the same pending buffer
     /// `trigger_save` uses and runs the surgical patch + body swap so
-    /// search sees the change within a couple of seconds, but **skips**
-    /// the compact-cache disk write and the cursor persist — disk
-    /// persistence stays the rarer `trigger_save` tick's job.
+    /// search sees the change — promptly after a quiet period (the
+    /// interval is already satisfied), or within one apply interval under
+    /// sustained churn — but **skips** the compact-cache disk write and
+    /// the cursor persist, which stay the rarer `trigger_save` tick's job.
     ///
     /// Unlike `trigger_save` this takes **no cursor**: the on-disk
     /// cursor must only advance in lockstep with a real on-disk body
@@ -271,8 +272,7 @@ pub(crate) struct JournalLoopConfig {
     /// thresholds above.  When buffered changes exist and this long
     /// has elapsed since the last apply / save, the loop patches the
     /// in-memory body via [`PatchSink::trigger_apply`] so the change
-    /// is searchable within a couple of seconds.  Default
-    /// [`DEFAULT_APPLY_INTERVAL_MS`] (2 s).
+    /// becomes searchable.  Default [`DEFAULT_APPLY_INTERVAL_MS`] (30 s).
     pub(crate) apply_interval: Duration,
 }
 
@@ -704,7 +704,7 @@ fn process_tick(
 ///   [`PatchSink::trigger_save`] (passing `cursor` so the sink persists it in
 ///   lockstep with the on-disk body), then [`ApplyTrigger::reset_after_save`]
 ///   so the loop doesn't redundantly re-apply the just-drained buffer.
-/// * **Apply tick** (frequent — default 2 s): when no save fired, fire
+/// * **Apply tick** (default 30 s): when no save fired, fire
 ///   [`PatchSink::trigger_apply`] so the in-memory body (and search) goes
 ///   near-live without the disk write.
 ///

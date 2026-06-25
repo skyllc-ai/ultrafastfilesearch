@@ -61,8 +61,10 @@ use anyhow::{Context, Result, bail};
 const POLL_SETTLE: Duration = Duration::from_secs(3);
 /// Apply-cadence override (ms) for the test daemon — pins
 /// `UFFS_USN_APPLY_INTERVAL_MS` low so the near-live body patch fires
-/// promptly and deterministically instead of relying on the 2 s default
-/// landing inside [`POLL_SETTLE`].
+/// promptly and deterministically within [`POLL_SETTLE`].  The
+/// production default is 30 s (tuned so constant FS churn stays
+/// background noise); the harness pins it to 500 ms so the short
+/// create / rename / delete rounds don't have to wait that out.
 const APPLY_INTERVAL_MS: &str = "500";
 /// Settle time after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);

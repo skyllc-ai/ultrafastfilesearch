@@ -10,9 +10,9 @@
 //! * [`SaveTrigger`] — the rare, expensive **disk save** (default 50k events /
 //!   5 min).  Crossing either threshold patches the body AND persists the
 //!   compact cache + cursor.
-//! * [`ApplyTrigger`] — the frequent, cheap **in-memory apply** (default 2 s).
-//!   Buffered churn plus an elapsed interval patches the body so a freshly
-//!   created / renamed / deleted file is searchable within seconds, without
+//! * [`ApplyTrigger`] — the more frequent, disk-free **in-memory apply**
+//!   (default 30 s).  Buffered churn plus an elapsed interval patches the body
+//!   so a freshly created / renamed / deleted file becomes searchable, without
 //!   touching disk.
 //!
 //! A save subsumes an apply (it drains + applies the same buffer), so
@@ -47,27 +47,33 @@ pub(crate) const DEFAULT_SAVE_THRESHOLD_EVENTS: u64 = 50_000;
 /// path without changing the operator-visible recovery window.
 pub(crate) const DEFAULT_SAVE_THRESHOLD_AGE: Duration = Duration::from_mins(5);
 
-/// Default apply interval for the per-shard journal loop — 2 seconds.
+/// Default apply interval for the per-shard journal loop — 30 seconds.
 ///
 /// This is the **search-freshness** knob, decoupled from the much
 /// rarer disk-save cadence above.  When buffered changes exist and at
 /// least this long has elapsed since the last apply / save, the loop
 /// patches the in-memory body (via [`super::PatchSink::trigger_apply`])
-/// so a freshly created / renamed / deleted file becomes searchable
-/// within a couple of seconds — instead of waiting up to
-/// [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min) for a disk-save tick to also
-/// apply it.
+/// so a freshly created / renamed / deleted file becomes searchable —
+/// instead of waiting up to [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min) for a
+/// disk-save tick to also apply it.
 ///
-/// Two seconds balances freshness against the per-apply rebuild cost
-/// (cloning the body + rebuilding the children / trigram / extension
-/// indexes is ~600 ms on a 7M-record drive): on a churning drive the
-/// loop spends a bounded fraction of a background core keeping search
-/// live; on an idle drive no apply fires at all (the event counter
-/// stays at zero).  Overridable at runtime via the
-/// `UFFS_USN_APPLY_INTERVAL_MS` environment variable, mirroring
-/// `UFFS_USN_POLL_INTERVAL_MS`, so soak tests can dial freshness up or
-/// down without recompiling.
-pub(crate) const DEFAULT_APPLY_INTERVAL_MS: u64 = 2_000;
+/// Thirty seconds is tuned for the per-apply rebuild cost: each apply
+/// clones the body and rebuilds the children / trigram / extension
+/// indexes (~600 ms on a 7M-record drive, **independent of batch
+/// size**).  On a filesystem with constant churn that throttles the
+/// rebuild to background noise (~600 ms / 30 s ≈ 2 % of one core per
+/// active drive) instead of a continuous drag.  Crucially it does *not*
+/// blunt the common case: because the trigger fires as soon as the
+/// interval has elapsed *since the last apply*, the first change after
+/// any quiet period is applied within a poll or two — only sustained,
+/// back-to-back churn is batched onto the 30 s cadence.  On an idle
+/// drive no apply fires at all (the event counter stays at zero).
+///
+/// Overridable at runtime via the `UFFS_USN_APPLY_INTERVAL_MS`
+/// environment variable, mirroring `UFFS_USN_POLL_INTERVAL_MS`, so soak
+/// tests and latency-sensitive setups can dial freshness up or down
+/// without recompiling.
+pub(crate) const DEFAULT_APPLY_INTERVAL_MS: u64 = 30_000;
 
 /// Why a [`super::PatchSink::trigger_save`] call fired.
 ///
@@ -163,10 +169,11 @@ impl SaveTrigger {
 /// counterpart to [`SaveTrigger`].
 ///
 /// Where `SaveTrigger` governs the rare, expensive disk save (50k
-/// events / 5 min), this governs the frequent, in-memory body patch
-/// (default 2 s, [`DEFAULT_APPLY_INTERVAL_MS`]).  Decoupling the two
-/// is the whole point: a file created now must be searchable in
-/// seconds, but the compact-cache disk write should stay rare.
+/// events / 5 min), this governs the more frequent, in-memory body
+/// patch (default 30 s, [`DEFAULT_APPLY_INTERVAL_MS`]).  Decoupling the
+/// two is the whole point: a created / renamed / deleted file must
+/// become searchable quickly, but the compact-cache disk write should
+/// stay rare.
 ///
 /// The trigger is purely time-gated with a "has churn" guard — it
 /// fires when at least one event has been recorded since the last

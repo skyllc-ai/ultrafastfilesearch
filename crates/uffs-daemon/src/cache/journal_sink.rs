@@ -37,7 +37,7 @@
 //! Draining the buffer only on the save tick (50k events / 5 min) left
 //! freshly created / renamed / deleted files invisible to search for
 //! up to 5 minutes.  `trigger_apply` decouples the two cadences: the
-//! loop fires it on a short interval (default ~2 s) to drain the buffer
+//! loop fires it on the apply interval (default ~30 s) to drain the buffer
 //! into [`ApplyMsg::Apply`], which patches + swaps the in-memory body
 //! (search goes near-live) but **skips** the compact-cache disk write
 //! and the cursor persist.  `trigger_save` keeps doing the full
