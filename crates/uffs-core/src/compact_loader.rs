@@ -758,12 +758,8 @@ pub fn apply_usn_patch(
     stats
 }
 
-/// Emit the per-batch USN-apply summary (how the poll mutated the index).
-///
-/// At DEBUG for normal operation; also at INFO behind the temporary
-/// `USNFIX` marker so a live run sees the apply without needing a
-/// per-target filter directive. Remove the USNFIX line with the rest of
-/// the USNFIX instrumentation.
+/// Emit the per-batch USN-apply summary (how the poll mutated the index)
+/// at DEBUG.
 fn log_batch_summary(drive: &DriveCompactIndex, changes: usize, stats: &PatchStats) {
     tracing::debug!(
         drive = %drive.letter,
@@ -775,17 +771,6 @@ fn log_batch_summary(drive: &DriveCompactIndex, changes: usize, stats: &PatchSta
         records = drive.records.len(),
         ext_index_entries = drive.ext_index.total_entries(),
         "usn apply: batch applied"
-    );
-    tracing::info!(
-        marker = "USNFIX",
-        drive = %drive.letter,
-        changes,
-        created = stats.created,
-        deleted = stats.deleted,
-        renamed = stats.renamed,
-        skipped = stats.skipped,
-        records = drive.records.len(),
-        "USNFIX apply_usn_patch: body patched"
     );
 }
 

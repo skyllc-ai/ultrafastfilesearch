@@ -70,13 +70,6 @@ pub(crate) fn log_daemon_starting(config: &DaemonConfig) {
         no_retire = config.no_retire,
         "uffsd starting"
     );
-    // USNFIX: temporary build marker so a live run can confirm it is the
-    // usn-delta-correctness + metadata-backfill build (grep the log for
-    // "USNFIX"). Remove the whole USNFIX instrumentation set before merge.
-    tracing::info!(
-        marker = "USNFIX",
-        "USNFIX build active — usn delete/rename/FRS-reuse + metadata backfill; live apply traced below"
-    );
 }
 
 /// Publish the [`events::DaemonEvent::DaemonStarting`] notification

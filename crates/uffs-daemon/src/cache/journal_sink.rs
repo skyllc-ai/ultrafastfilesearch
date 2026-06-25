@@ -291,24 +291,8 @@ impl PatchSink for RegistryPatchSink {
             "Journal accept (buffered for next save tick)",
         );
         let mut guard = self.lock_pending();
-        let buffered = guard.entry(letter).or_default();
-        buffered.extend_from_slice(changes);
-        let pending_total = buffered.len();
+        guard.entry(letter).or_default().extend_from_slice(changes);
         drop(guard);
-        // USNFIX: trace the buffer step. `accept` only appends here; the
-        // body is patched when the loop next drains this buffer — on the
-        // short apply tick (default ~2 s, `trigger_apply`) or the rarer
-        // save tick (`trigger_save`), whichever fires first. Remove with
-        // the rest of the USNFIX instrumentation.
-        if !changes.is_empty() {
-            tracing::info!(
-                marker = "USNFIX",
-                drive = %letter,
-                buffered_now = changes.len(),
-                pending_total,
-                "USNFIX accept: BUFFERED (body patched on next apply/save tick)"
-            );
-        }
         true
     }
 
@@ -326,18 +310,6 @@ impl PatchSink for RegistryPatchSink {
             let mut guard = self.lock_pending();
             guard.remove(&letter).unwrap_or_default()
         };
-        // USNFIX: this is where the buffered changes finally reach the
-        // applier (apply_usn_patch + replace_warm_body). It fires only on
-        // the 50k-event / 5-min save threshold — the gap between this and
-        // the accept lines above is the search-visibility lag. Remove with
-        // the rest of the USNFIX instrumentation.
-        tracing::info!(
-            marker = "USNFIX",
-            drive = %letter,
-            ?reason,
-            drained = drained.len(),
-            "USNFIX trigger_save: draining buffer → apply (body patched now)"
-        );
         let _ignore = self.apply_tx.send(ApplyMsg::Save {
             letter,
             reason,
@@ -358,22 +330,12 @@ impl PatchSink for RegistryPatchSink {
             guard.remove(&letter).unwrap_or_default()
         };
         if drained.is_empty() {
-            // Nothing accumulated since the last drain — no work, no
-            // log noise.  (The loop only calls this when its
-            // event-count says there *should* be churn, so an empty
-            // drain here just means a save tick beat us to it.)
+            // Nothing accumulated since the last drain — no work.  (The
+            // loop only calls this when its event-count says there
+            // *should* be churn, so an empty drain here just means a save
+            // tick beat us to it.)
             return;
         }
-        // USNFIX: prove the near-live apply cadence — this fires on the
-        // short apply interval (default ~2 s) and patches the body well
-        // before the rare save tick. Remove with the rest of the USNFIX
-        // instrumentation.
-        tracing::info!(
-            marker = "USNFIX",
-            drive = %letter,
-            drained = drained.len(),
-            "USNFIX trigger_apply: draining buffer → apply (body patched now, no disk save)"
-        );
         let _ignore = self.apply_tx.send(ApplyMsg::Apply {
             letter,
             changes: drained,
