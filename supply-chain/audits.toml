@@ -91,6 +91,12 @@ criteria = "safe-to-deploy"
 delta = "0.1.16 -> 0.1.17"
 notes = """Delta audit (cargo vet diff 0.1.16 -> 0.1.17). Cargo.toml(.orig): version bump + redox_syscall dep 0.7 -> 0.8. src/lib.rs: (a) cosmetic reorder of a libc MSG_* re-export list (no semantic change); (b) adds one Redox kernel FFI binding redox_relpathat_v0(dirfd, fd, dst_base, dst_len) -> RawResult plus the safe wrappers Fd::relpathat / call::relpathat, mirroring the existing redox_fpath_v1 binding exactly (Error::demux over an unsafe extern call using the caller-provided &mut [u8] buffer's ptr+len). The single new unsafe block is a like-for-like copy of the adjacent fpath binding. libredox is the Redox stable-ABI shim, reachable only via redox_users on target_os="redox"; the extern symbols are never linked on UFFS shipping targets (Windows/macOS). No network/FS-path/process/env additions. Publisher 4lDO2 (Redox maintainer)."""
 
+[[audits.memmap2]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.10 -> 0.9.11"
+notes = "Delta audit (cargo vet diff 0.9.10 -> 0.9.11), full diff reviewed across all 7 files. This is the RUSTSEC-2026-0186 remediation. Core fix in src/unix.rs + src/windows.rs MmapInner: the range methods (flush_range / flush_async_range / advise / advise_range) now bounds-check `offset > self.len || len > self.len - offset` and return InvalidInput BEFORE the pointer arithmetic — closing the unchecked-pointer-offset unsoundness. Pointer math switched from `self.ptr.offset(-(x as isize))` to `self.ptr.sub(x)` / `.add(x)` (equivalent, with SAFETY comments), the mremap success path swaps via std::mem::replace + mem::forget instead of raw ptr::write, and every FFI/pointer op is wrapped in an explicit `unsafe {}` under a new crate-level #![deny(unsafe_op_in_unsafe_fn)]; `advise`/`unchecked_advise` gain explicit `# Safety` docs. src/lib.rs only forwards those unsafe contracts; Cargo.toml/.orig bump MSRV 1.63->1.65; CHANGELOG + one doc typo. No new dependencies, no new capability (extern/network/FS) surface; the only behavioral change is stricter input validation, which can reject previously-UB calls but never newly accepts. Publisher de-vri-es (memmap2 co-maintainer)."
+
 [[audits.mimalloc]]
 who = "Robert Nio <robert_nio@intuit.com>"
 criteria = "safe-to-deploy"
