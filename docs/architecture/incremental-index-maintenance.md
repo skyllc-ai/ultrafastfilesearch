@@ -5,7 +5,7 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # Incremental Index Maintenance — Two-Tier Base + Delta (LSM-style)
 
-**Status:** Phase 1 complete (incremental `compute_path_lengths`) — Phase 2 next (trigram delta)
+**Status:** Phases 1 + 2 complete (incremental paths + trigram base+delta). `compact.rs` decomposed. Phase 3 next (Arc-share the clone), pending WIN timing of Phase 2b.
 **Owner:** _(assign)_
 **Branch:** `feat/incremental-index-maintenance`
 **Dev marker:** `IDXDELTA` (all temporary dev-only logging / timing carries this token; grep-and-remove before merge — see §9)
@@ -452,10 +452,12 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 | 0 | Per-step apply timing (clone/loop/rebuild) | ✅ done | `629966bc2` | µs integers |
 | 0 | `idx-delta-verify.rs` WIN rig + baseline (§8, §10) | ✅ done | `629966bc2` | ≈1367 ms |
 | 0 | `IndexDelta` type | ✅ done | `61dfde09d` | `compact/delta.rs`, unit-tested; posting/tombstone overlay |
-| 0 | `delta: Option<IndexDelta>` field on `DriveCompactIndex` | ☐ deferred → Phase 2 | | wired with `trigram_search` so each of ~20 ctor sites is touched once, not twice |
-| 0 | Oracle harness (§7) | ◐ partial | `9806bc339` | path-len oracle landed (`compact_loader_path_oracle_tests.rs`); generic `IndexDelta` harness still todo |
-| **1** | **Incremental `compute_path_lengths` (§5.5)** | ✅ done | `9806bc339` | 623 ms → ~O(changed); oracle byte-identical incl. dir-rename subtree Δ |
-| 2 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | 378 ms |
+| 0 | `delta: Option<IndexDelta>` field on `DriveCompactIndex` | ✅ done | `1cf72d589` | wired with `trigram_search` (Phase 2a) so each of ~20 ctor sites was touched once |
+| 0 | Oracle harness (§7) | ✅ done | `9806bc339`, `b7c688e09` | path-len oracle + trigram base+delta oracle (overlay ≡ compacted rebuild) |
+| **1** | **Incremental `compute_path_lengths` (§5.5)** | ✅ done | `9806bc339` | 623 ms → ~O(changed); WIN-validated 0.005 ms; oracle byte-identical incl. dir-rename subtree Δ |
+| **2a** | **`trigram_search` base+delta choke point (plumbing)** | ✅ done | `1cf72d589` | zero-behavior-change; field + 3 caller migration; rename-visibility unit-tested |
+| **2b** | **Apply populates trigram delta; no per-tick rebuild** | ✅ done | `b7c688e09` | 338 ms → ~0 (compaction at 50k touched); end-to-end oracle; awaiting WIN timing |
+| — | *Decompose `compact.rs` 1363 → 385* (refactor) | ✅ done | `c3728b0c1` | 5 submodules; off file-size exception list |
 | 3 | Shrink clone — Arc-share base CSR indexes | ☐ todo | | 166 ms |
 | 4 | Extension + children delta (`records_with_ext` / `children_of`) | ☐ todo | | 84 + 54 ms; children highest care |
 | 5 | Unify; retire per-apply rebuild; re-tune apply interval | ☐ todo | | 30 s → ~2 s |
