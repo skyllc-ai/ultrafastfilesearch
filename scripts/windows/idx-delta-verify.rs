@@ -53,13 +53,16 @@ const APPLY_INTERVAL_MS: &str = "1500";
 const SETTLE: Duration = Duration::from_secs(6);
 /// Settle after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);
+/// Poll cadence while waiting for a burst's files to become search-visible.
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// `info` enables the daemon build marker AND the `IDXDELTA-TIMING` apply line
 /// (both logged at INFO); core trace adds per-change detail if needed.
 const LOG_SPEC: &str = "info,uffs_core=info,uffs_daemon=info";
-/// Escalating create-burst sizes — bigger bursts = bigger apply batches, so the
-/// rebuild timing is sampled across change counts (the rebuild is O(records),
-/// ~flat in batch size, which the baseline should confirm).
-const BURSTS: &[usize] = &[10, 100, 1000];
+/// Escalating create-burst sizes — bigger bursts exercise bigger apply batches.
+/// The 100k burst crosses `TRIGRAM_COMPACT_THRESHOLD` (50k) so it also measures
+/// a delta compaction (full trigram refold) under load, while the smaller
+/// bursts measure the steady-state delta-overlay apply (trigram_us ≈ 0).
+const BURSTS: &[usize] = &[1_000, 10_000, 100_000];
 
 /// `~/bin/uffs.exe` — the canonical user-installed **Rust** binary.  Pinned to
 /// the explicit `.exe` so a bare `uffs` can't resolve the C++ `uffs.com` via
@@ -233,6 +236,29 @@ fn search(uffs: &Path, term: &str) -> Result<(usize, String)> {
     Ok((rows, text))
 }
 
+/// Poll `search(term)` until at least `expected` rows are visible or `max_wait`
+/// elapses. Returns `(rows_seen, latency, timed_out)` — the wall-clock from the
+/// first poll to visibility is the true apply-to-searchable latency (vs. the old
+/// fixed-sleep probe which only measured the settle constant).
+fn poll_until_visible(
+    uffs: &Path,
+    term: &str,
+    expected: usize,
+    max_wait: Duration,
+) -> Result<(usize, Duration, bool)> {
+    let start = Instant::now();
+    loop {
+        let (rows, _) = search(uffs, term)?;
+        if rows >= expected {
+            return Ok((rows, start.elapsed(), false));
+        }
+        if start.elapsed() >= max_wait {
+            return Ok((rows, start.elapsed(), true));
+        }
+        sleep(POLL_INTERVAL);
+    }
+}
+
 fn main() -> Result<()> {
     let uffs = uffs_bin();
 
@@ -321,25 +347,34 @@ fn main() -> Result<()> {
     }
 
     // ── 2 + 3. CHURN, TIMING, FRESHNESS ─────────────────────────────────────
+    // Each burst is measured independently via a per-round filename prefix so
+    // the poll target is exactly that burst's `count` (not the running total),
+    // and creation throughput is reported apart from apply-to-visible latency.
     let mut total_created = 0usize;
     for (round, &count) in BURSTS.iter().enumerate() {
         println!("\n== Burst {}: create {count} files ==", round + 1);
-        let burst_start = Instant::now();
+        let create_start = Instant::now();
         for i in 0..count {
             fs::write(base.join(format!("idx_{round}_{i}.tmp")), b"x")
                 .with_context(|| format!("write idx_{round}_{i}.tmp"))?;
         }
+        let create_elapsed = create_start.elapsed();
         total_created += count;
 
-        // Freshness probe: poll search until the burst's files are visible (or
-        // SETTLE elapses), recording the wall-clock from file-op to visible.
-        sleep(SETTLE);
-        let (rows, _) = search(&uffs, "idx_")?;
-        let visible_after = burst_start.elapsed();
+        // Visibility budget scales with batch size: file-creation IO + USN poll
+        // + apply + (for the 100k burst) a delta compaction. ~20 s floor plus
+        // ~1 s per 5k files → 100k allows ~40 s before flagging a backlog.
+        let max_wait = Duration::from_secs(20 + (count as u64) / 5_000);
+        let term = format!("idx_{round}_");
+        let (rows, latency, timed_out) = poll_until_visible(&uffs, &term, count, max_wait)?;
+        let rate = (count as f64) / create_elapsed.as_secs_f64().max(0.001);
         println!(
-            "   created {count} (total {total_created}); search 'idx_' -> {rows} row(s); \
-             visible within ~{:.1}s",
-            visible_after.as_secs_f64()
+            "   created {count} in {:.1}s ({:.0} files/s); '{term}' -> {rows}/{count} \
+             visible after {:.1}s{}",
+            create_elapsed.as_secs_f64(),
+            rate,
+            latency.as_secs_f64(),
+            if timed_out { "  <<< TIMED OUT (apply backlog)" } else { "" },
         );
     }
 
