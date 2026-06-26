@@ -22,7 +22,6 @@ use super::PatchStats;
 use crate::compact::{
     ChildrenIndex, DriveCompactIndex, ExtensionIndex, PathChange, update_path_lengths_incremental,
 };
-use crate::trigram::TrigramIndex;
 
 /// Above this many touched records, the per-change incremental path update
 /// loses to a single O(total) BFS (each create/rename re-walks parents), so we
@@ -41,6 +40,7 @@ pub(super) fn rebuild_derived_and_log(
     stats: &PatchStats,
     loop_elapsed: core::time::Duration,
     path_changes: &[PathChange],
+    tombstones: &[u32],
 ) {
     let loop_us = dur_us(loop_elapsed);
 
@@ -74,9 +74,14 @@ pub(super) fn rebuild_derived_and_log(
         );
     }
     let paths_us = dur_us(t_paths.elapsed());
-    // Rebuild trigram index using CaseFold — no names_lower clone needed.
+    // Phase 2b: overlay this batch's trigrams onto the delta instead of
+    // rebuilding the ~340 ms trigram base.  `apply_trigram_delta` adds each
+    // created/renamed record's new-name trigrams and masks the tombstoned ones,
+    // folding back to a fresh base only when the delta crosses the compaction
+    // threshold (so `trigram_us` is ~0 on most applies, a full build on the
+    // occasional compaction tick).
     let t_trigram = Instant::now();
-    drive.trigram = TrigramIndex::build(&drive.records, &drive.names, drive.fold);
+    let compacted = drive.apply_trigram_delta(path_changes, tombstones);
     let trigram_us = dur_us(t_trigram.elapsed());
     // Rebuild extension inverted index so --ext queries reflect USN changes.
     let t_ext = Instant::now();
@@ -93,6 +98,7 @@ pub(super) fn rebuild_derived_and_log(
             children_us,
             paths_us,
             trigram_us,
+            compacted,
             ext_us,
             rebuild_us = children_us
                 .saturating_add(paths_us)
@@ -103,7 +109,8 @@ pub(super) fn rebuild_derived_and_log(
                 .saturating_add(paths_us)
                 .saturating_add(trigram_us)
                 .saturating_add(ext_us),
-            "IDXDELTA-TIMING apply: per-change loop + full index rebuild (baseline)"
+            "IDXDELTA-TIMING apply: loop + children/ext rebuild + trigram delta \
+             (paths incremental; trigram_us≈0 unless compacted)"
         );
         log_batch_summary(drive, changes_len, stats);
     }
