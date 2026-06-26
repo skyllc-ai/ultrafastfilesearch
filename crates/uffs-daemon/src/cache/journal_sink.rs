@@ -370,7 +370,18 @@ async fn applier_task(
     idx_weak: Weak<IndexManager>,
     cursor_store: Arc<dyn CursorStore>,
 ) {
-    while let Some(msg) = rx.recv().await {
+    // A message pulled off the channel during apply-coalescing that did not
+    // belong to the merged run (different letter, or a Save/Wrap); processed
+    // on the next iteration before blocking on `recv`.
+    let mut carried: Option<ApplyMsg> = None;
+    loop {
+        let msg = match carried.take() {
+            Some(held) => held,
+            None => match rx.recv().await {
+                Some(received) => received,
+                None => break,
+            },
+        };
         let Some(idx_strong) = idx_weak.upgrade() else {
             tracing::debug!(
                 target: "shard.journal",
@@ -378,12 +389,58 @@ async fn applier_task(
             );
             return;
         };
-        dispatch_msg(&idx_strong, cursor_store.as_ref(), msg).await;
+        // Coalesce a run of consecutive same-letter `Apply` messages into a
+        // single body patch.  When apply ticks fire faster than the O(n)
+        // rebuild drains them (e.g. a tiny `UFFS_USN_APPLY_INTERVAL_MS` on a
+        // huge, busy drive), the channel backs up with many small applies;
+        // merging collapses N rebuilds into one and bounds the apply rate to
+        // the rebuild rate.  No change is dropped — FIFO order is preserved by
+        // appending in receive order.  Save / Wrap are never merged (they
+        // carry their own cursor / reload semantics) and fall through.
+        let to_dispatch = if let ApplyMsg::Apply { letter, changes } = msg {
+            let (merged, leftover) = coalesce_apply_run(letter, changes, &mut rx);
+            carried = leftover;
+            ApplyMsg::Apply {
+                letter,
+                changes: merged,
+            }
+        } else {
+            msg
+        };
+        dispatch_msg(&idx_strong, cursor_store.as_ref(), to_dispatch).await;
     }
     tracing::debug!(
         target: "shard.journal",
         "Sink channel closed; applier task exiting",
     );
+}
+
+/// Greedily merge the run of consecutive same-`letter` [`ApplyMsg::Apply`]
+/// messages currently queued behind a first apply into one change vector,
+/// collapsing a backlog of apply ticks into a single body rebuild.
+///
+/// Drains via non-blocking [`mpsc::UnboundedReceiver::try_recv`], appending
+/// each same-letter batch in receive order (FIFO preserved, so create →
+/// delete → create-into-reused-FRS sequences still apply correctly).  Stops
+/// at the first message that is **not** a same-letter `Apply` — a different
+/// letter, or a `Save` / `Wrap` — and returns it as the "carried" leftover
+/// for the caller to process next, so no message is reordered past a Save or
+/// dropped.
+fn coalesce_apply_run(
+    letter: uffs_mft::platform::DriveLetter,
+    mut changes: Vec<FileChange>,
+    rx: &mut mpsc::UnboundedReceiver<ApplyMsg>,
+) -> (Vec<FileChange>, Option<ApplyMsg>) {
+    loop {
+        match rx.try_recv() {
+            Ok(ApplyMsg::Apply {
+                letter: next_letter,
+                changes: more,
+            }) if next_letter == letter => changes.extend(more),
+            Ok(other) => return (changes, Some(other)),
+            Err(_) => return (changes, None),
+        }
+    }
 }
 
 /// Dispatch a single drained [`ApplyMsg`] to the appropriate

@@ -52,20 +52,26 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-/// Time to let the per-shard USN loop ingest a batch and patch the live
-/// body.  With [`APPLY_INTERVAL_MS`] pinned to 500 ms below, the apply
-/// tick fires on essentially the first poll that sees the new events, so
-/// 3 s is a comfortable margin (the body is searchable well under 1 s
-/// after the file op in practice).  No 5-minute disk-save wait is needed
-/// — the apply tick is decoupled from the rare compact-cache save.
-const POLL_SETTLE: Duration = Duration::from_secs(3);
-/// Apply-cadence override (ms) for the test daemon — pins
-/// `UFFS_USN_APPLY_INTERVAL_MS` low so the near-live body patch fires
-/// promptly and deterministically within [`POLL_SETTLE`].  The
-/// production default is 30 s (tuned so constant FS churn stays
-/// background noise); the harness pins it to 500 ms so the short
-/// create / rename / delete rounds don't have to wait that out.
-const APPLY_INTERVAL_MS: &str = "500";
+/// Time to let the full USN pipeline settle before searching: journal
+/// poll → buffer → apply tick → O(n) index rebuild → body swap.  On a
+/// large, busy volume (a multi-million-record C:) that end-to-end latency
+/// is a couple of seconds, not sub-second — the per-apply rebuild alone is
+/// ~600 ms on a ~4M-record drive.  6 s gives a comfortable margin so a
+/// search never races an in-flight apply (a 3 s settle sat right on the
+/// edge and intermittently read pre-rename/-delete state).  No 5-minute
+/// disk-save wait is needed — the apply tick is decoupled from the rare
+/// compact-cache save.
+const POLL_SETTLE: Duration = Duration::from_secs(6);
+/// Apply-cadence override (ms) for the test daemon (`UFFS_USN_APPLY_INTERVAL_MS`).
+///
+/// The production default is 30 s (tuned so constant FS churn stays
+/// background noise); the harness pins it lower so the short create /
+/// rename / delete rounds don't wait that out.  Kept **above** the
+/// per-apply rebuild cost (~600 ms on a multi-million-record drive) so
+/// apply ticks don't outrun the rebuild and pile up — the daemon also
+/// coalesces a backlog of apply ticks into one rebuild, but giving the
+/// interval real headroom keeps the test deterministic regardless.
+const APPLY_INTERVAL_MS: &str = "1500";
 /// Settle time after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);
 /// Tracing directive: per-change USN trace + daemon-side debug (backfill,

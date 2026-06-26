@@ -566,3 +566,115 @@ async fn no_warm_shard_save_does_not_persist_cursor() {
         cursor_store.store_log(),
     );
 }
+
+/// Pin: `coalesce_apply_run` merges a run of consecutive same-letter
+/// `Apply` messages into one change vector, in FIFO order, draining the
+/// channel — collapsing an apply backlog into a single rebuild.
+#[tokio::test]
+async fn coalesce_merges_consecutive_same_letter_applies() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<ApplyMsg>();
+    // The "first" apply (10) is passed by value; (11), (12) are queued.
+    tx.send(ApplyMsg::Apply {
+        letter: uffs_mft::platform::DriveLetter::C,
+        changes: vec![make_change(11)],
+    })
+    .unwrap();
+    tx.send(ApplyMsg::Apply {
+        letter: uffs_mft::platform::DriveLetter::C,
+        changes: vec![make_change(12)],
+    })
+    .unwrap();
+
+    let (merged, leftover) = coalesce_apply_run(
+        uffs_mft::platform::DriveLetter::C,
+        vec![make_change(10)],
+        &mut rx,
+    );
+
+    assert_eq!(
+        merged
+            .iter()
+            .map(|change| change.frs.raw())
+            .collect::<Vec<_>>(),
+        [10, 11, 12],
+        "merged changes must preserve FIFO order across the coalesced run",
+    );
+    assert!(
+        leftover.is_none(),
+        "channel fully drained → no carried message"
+    );
+}
+
+/// Pin: coalescing stops at a different-letter `Apply` and returns it as
+/// the carried leftover (never merged into the wrong letter's batch).
+#[tokio::test]
+async fn coalesce_stops_at_other_letter() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<ApplyMsg>();
+    tx.send(ApplyMsg::Apply {
+        letter: uffs_mft::platform::DriveLetter::C,
+        changes: vec![make_change(2)],
+    })
+    .unwrap();
+    tx.send(ApplyMsg::Apply {
+        letter: uffs_mft::platform::DriveLetter::D,
+        changes: vec![make_change(9)],
+    })
+    .unwrap();
+
+    let (merged, leftover) = coalesce_apply_run(
+        uffs_mft::platform::DriveLetter::C,
+        vec![make_change(1)],
+        &mut rx,
+    );
+
+    assert_eq!(
+        merged
+            .iter()
+            .map(|change| change.frs.raw())
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let Some(ApplyMsg::Apply { letter, changes }) = leftover else {
+        panic!("expected carried Apply for 'D'");
+    };
+    assert_eq!(letter, uffs_mft::platform::DriveLetter::D);
+    assert_eq!(
+        changes
+            .iter()
+            .map(|change| change.frs.raw())
+            .collect::<Vec<_>>(),
+        [9]
+    );
+}
+
+/// Pin: a `Save` is never merged into an apply run — it carries cursor /
+/// persistence semantics, so coalescing stops and returns it intact.
+#[tokio::test]
+async fn coalesce_does_not_swallow_save() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<ApplyMsg>();
+    tx.send(ApplyMsg::Save {
+        letter: uffs_mft::platform::DriveLetter::C,
+        reason: SaveReason::EventsExceeded,
+        changes: vec![make_change(5)],
+        cursor: 42,
+    })
+    .unwrap();
+
+    let (merged, leftover) = coalesce_apply_run(
+        uffs_mft::platform::DriveLetter::C,
+        vec![make_change(1)],
+        &mut rx,
+    );
+
+    assert_eq!(
+        merged
+            .iter()
+            .map(|change| change.frs.raw())
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    assert!(
+        matches!(leftover, Some(ApplyMsg::Save { cursor: 42, .. })),
+        "Save must be carried out intact, not merged into the apply batch",
+    );
+}
