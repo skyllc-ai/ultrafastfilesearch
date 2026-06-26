@@ -1113,7 +1113,7 @@ jobs:
         # invoked via `push: tags: v*` (where `inputs.commit_sha`
         # is unset — the tag already exists so this field is
         # ignored anyway).
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: ${{ needs.release-preparation.outputs.tag }}
           target_commitish: ${{ inputs.commit_sha || github.sha }}
