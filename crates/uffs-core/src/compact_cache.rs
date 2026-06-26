@@ -806,6 +806,9 @@ where
         // covers the future-format edge case where a new cache
         // version omits the section.
         frs_to_compact: parsed.frs_to_compact_loaded.unwrap_or_default(),
+        // Cache load is always delta-free — the on-disk format stores base only
+        // (compact before save), so a freshly loaded index has no overlay.
+        delta: None,
     };
 
     // Phase 4 Commit D — v9+ caches embed the bloom + trie directly,

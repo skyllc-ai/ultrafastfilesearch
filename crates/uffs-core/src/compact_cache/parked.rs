@@ -518,6 +518,7 @@ mod tests {
             bloom: None,
             path_trie: None,
             frs_to_compact: Vec::new(),
+            delta: None,
         };
         index.bloom = Some(index.build_bloom());
         index.path_trie = Some(index.build_path_trie());

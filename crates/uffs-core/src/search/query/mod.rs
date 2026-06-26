@@ -424,7 +424,7 @@ pub(crate) fn search_compact_drive(
 
     let t_tri = std::time::Instant::now();
     let candidates = if !case_sensitive && trigram_needle.len() >= 3 {
-        drive.trigram.search(&trigram_needle, fold)
+        drive.trigram_search(&trigram_needle)
     } else {
         None
     };

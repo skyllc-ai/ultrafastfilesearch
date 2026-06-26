@@ -83,6 +83,7 @@ fn make_test_index() -> DriveCompactIndex {
         bloom: None,
         path_trie: None,
         frs_to_compact,
+        delta: None,
     }
 }
 

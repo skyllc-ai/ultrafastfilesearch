@@ -213,6 +213,7 @@ mod tests {
             bloom: None,
             path_trie: None,
             frs_to_compact: Vec::new(),
+            delta: None,
         }
     }
 
@@ -332,6 +333,7 @@ mod tests {
             bloom: None,
             path_trie: None,
             frs_to_compact: Vec::new(),
+            delta: None,
         };
 
         let bloom = drive.build_bloom();

@@ -124,11 +124,56 @@ fn sorted_insert(list: &mut Vec<u32>, value: u32) {
     }
 }
 
-// NOTE (Phase 2, design §5.2): the per-key `base ∪ delta − tombstones`
-// sorted-merge that `DriveCompactIndex::trigram_search` will compose lands in
-// the Phase-2 commit, wired directly into that accessor (so it is exercised the
-// moment it exists, never dead scaffolding). The sorted/deduped posting
-// invariant this type maintains is what makes that merge a linear pass.
+/// Sorted-union merge of a base posting list with delta additions — the
+/// per-trigram building block of
+/// [`crate::compact::DriveCompactIndex::trigram_search`]. Both inputs are
+/// sorted and deduped, as is the result.
+///
+/// Tombstones are deliberately **not** applied here: a renamed record is
+/// tombstoned in base yet legitimately re-added in `delta` under its new name,
+/// so tombstone validity can only be decided on the final intersected candidate
+/// set (see `trigram_search`), never per posting list.
+#[must_use]
+pub(crate) fn merge_postings(base: &[u32], delta: &[u32]) -> Vec<u32> {
+    if delta.is_empty() {
+        return base.to_vec();
+    }
+    if base.is_empty() {
+        return delta.to_vec();
+    }
+    let mut out = Vec::with_capacity(base.len() + delta.len());
+    let mut base_it = base.iter().copied().peekable();
+    let mut delta_it = delta.iter().copied().peekable();
+    loop {
+        let next = match (base_it.peek().copied(), delta_it.peek().copied()) {
+            (Some(bv), Some(dv)) if bv < dv => {
+                base_it.next();
+                bv
+            }
+            (Some(bv), Some(dv)) if bv > dv => {
+                delta_it.next();
+                dv
+            }
+            (Some(bv), Some(_)) => {
+                base_it.next();
+                delta_it.next();
+                bv // equal — emit once
+            }
+            (Some(bv), None) => {
+                base_it.next();
+                bv
+            }
+            (None, Some(dv)) => {
+                delta_it.next();
+                dv
+            }
+            (None, None) => return out,
+        };
+        if out.last() != Some(&next) {
+            out.push(next);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -185,5 +230,18 @@ mod tests {
         delta.add_record(4, &[1, 2], 0, 1);
         assert_eq!(delta.len(), 2);
         assert!(!delta.is_empty());
+    }
+
+    #[test]
+    fn merge_postings_is_sorted_deduped_union() {
+        use super::merge_postings;
+        assert_eq!(merge_postings(&[1, 3, 5, 7], &[2, 5, 6]), vec![
+            1, 2, 3, 5, 6, 7
+        ]);
+        assert_eq!(merge_postings(&[], &[2, 4]), vec![2, 4]);
+        assert_eq!(merge_postings(&[1, 3], &[]), vec![1, 3]);
+        assert_eq!(merge_postings(&[], &[]), Vec::<u32>::new());
+        // full overlap dedups to one copy.
+        assert_eq!(merge_postings(&[1, 2, 3], &[1, 2, 3]), vec![1, 2, 3]);
     }
 }
