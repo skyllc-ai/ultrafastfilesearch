@@ -14,7 +14,6 @@ crates/uffs-mft/src/reader/index_read.rs|PERMANENT: Single impl MftReader block 
 crates/uffs-diag/src/bin/compare_scan_parity.rs|PERMANENT: Standalone diagnostic binary; single-file readability outweighs LOC policy for tooling
 crates/uffs-mcp/src/cookbook.rs|PERMANENT: Declarative JSON data (curated agent cookbook examples); splitting by line count would fragment the cohesive narrative
 crates/uffs-core/src/compact_cache.rs|PERMANENT: Serialize/deserialize pipeline for compact index cache (heap path + Phase 2b runtime mmap path), tightly coupled with shared parse_compact_body + assemble_compact_index helpers; tests already extracted to compact_cache/tests.rs sibling module
-crates/uffs-core/src/compact.rs|PERMANENT: Core compact index data structures + builder; only 13 over limit
 crates/uffs-daemon/src/index/aggregation.rs|PERMANENT: Daemon-side aggregation dispatch; tightly coupled helpers, only 54 over limit
 crates/uffs-client/src/protocol/tests.rs|PERMANENT: Wire format round-trip test suite; splitting fragments test cohesion
 crates/uffs-core/src/search/backend_tests.rs|PERMANENT: Backend sort/filter integration test suite; shared fixtures require cohesion
