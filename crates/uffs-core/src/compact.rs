@@ -495,6 +495,18 @@ pub struct DriveCompactIndex {
     /// silently degrades to the full-reload fallback.  See the
     /// v9 → v10 cache format bump in `compact_cache::COMPACT_VERSION`.
     pub frs_to_compact: Vec<u32>,
+    /// Incremental-index-maintenance overlay (design §5.1).
+    ///
+    /// `None` on a freshly built / freshly compacted / cache-loaded index:
+    /// the base CSR indexes ([`Self::trigram`], [`Self::children`],
+    /// [`Self::ext_index`]) are authoritative and search reads them with zero
+    /// overhead. Once [`crate::compact_loader::apply_usn_patch`] starts
+    /// overlaying USN deltas (Phase 2b) this becomes `Some`, and the search
+    /// choke points ([`Self::trigram_search`], …) merge base ∪ delta minus
+    /// tombstones. Compaction folds the delta into a fresh base and resets it
+    /// to `None`. Never serialized — the on-disk cache is always delta-free
+    /// (compact before save), so a cache load yields `None`.
+    pub delta: Option<IndexDelta>,
 }
 
 /// Per-component heap footprint of a [`DriveCompactIndex`].
@@ -529,6 +541,73 @@ impl AsRef<Self> for DriveCompactIndex {
 }
 
 impl DriveCompactIndex {
+    /// Trigram candidate search through the base ∪ delta overlay (design §5.2).
+    ///
+    /// The single choke point every trigram caller goes through. When
+    /// [`Self::delta`] is `None` (fresh / compacted index) it delegates to the
+    /// base [`TrigramIndex::search`] with **zero** overhead. When a delta is
+    /// present it merges, per needle-trigram, the base posting with the delta
+    /// posting, intersects across the needle's trigrams (the trigram AND), then
+    /// resolves tombstones on the final candidate set.
+    ///
+    /// **Tombstone correctness:** a candidate whose record is tombstoned is
+    /// kept **iff** it appears in the delta posting of *every* needle
+    /// trigram — i.e. it was re-added (renamed-in) under a name that still
+    /// contains the needle. A deleted record (tombstoned, no re-add) and a
+    /// renamed-away record matched only via its stale base postings are
+    /// both dropped. Filtering the final set (not per posting list) is what
+    /// lets a renamed file remain visible under its new name while
+    /// disappearing from its old one.
+    ///
+    /// Returns `None` for needles under 3 codepoints (caller falls back to a
+    /// linear scan), mirroring [`TrigramIndex::search`].
+    #[must_use]
+    pub fn trigram_search(&self, needle: &str) -> Option<Vec<u32>> {
+        let Some(delta) = &self.delta else {
+            return self.trigram.search(needle, self.fold);
+        };
+        let trigrams = crate::trigram::needle_trigrams(needle, self.fold)?;
+        if trigrams.is_empty() {
+            return Some(Vec::new());
+        }
+
+        // Per needle-trigram effective posting = base ∪ delta. An absent trigram
+        // (empty in both) is skipped, never zeroing the result — the trigram
+        // index is a candidate pre-filter, exactly as the base search treats it.
+        let mut lists: Vec<Vec<u32>> = Vec::with_capacity(trigrams.len());
+        for &tri in &trigrams {
+            let base = self.trigram.get_posting(tri).unwrap_or(&[]);
+            let merged = delta::merge_postings(base, delta.trigram_postings(tri));
+            if !merged.is_empty() {
+                lists.push(merged);
+            }
+        }
+        if lists.is_empty() {
+            return Some(Vec::new());
+        }
+
+        lists.sort_unstable_by_key(Vec::len);
+        let mut result = lists.first().cloned().unwrap_or_default();
+        for list in lists.iter().skip(1) {
+            crate::trigram::intersect_in_place(&mut result, list);
+            if result.is_empty() {
+                break;
+            }
+        }
+
+        // Final tombstone resolution: keep a tombstoned candidate only if it was
+        // re-added under a name covering every needle trigram (see doc above).
+        if !delta.tombstones.is_empty() {
+            result.retain(|&idx| {
+                !delta.is_tombstoned(idx)
+                    || trigrams
+                        .iter()
+                        .all(|&tri| delta.trigram_postings(tri).binary_search(&idx).is_ok())
+            });
+        }
+        Some(result)
+    }
+
     /// Compute the total heap footprint of this index (in bytes).
     ///
     /// This measures *capacity* (what the allocator reserved), not *len*
@@ -1163,6 +1242,9 @@ pub fn build_compact_index(
         bloom: None,
         path_trie: None,
         frs_to_compact: index.frs_to_idx.clone(),
+        // Freshly built from the MFT — base CSR indexes are authoritative,
+        // no overlay yet. apply_usn_patch (Phase 2b) starts the delta.
+        delta: None,
     };
 
     // Phase 4: populate bloom + path_trie from the freshly-built
@@ -1275,3 +1357,7 @@ fn log_upcase_comparison(
 #[cfg(test)]
 #[path = "compact_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compact_trigram_delta_tests.rs"]
+mod trigram_delta_tests;

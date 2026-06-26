@@ -79,6 +79,7 @@ fn build_nested_fixture() -> DriveCompactIndex {
         bloom: None,
         path_trie: None,
         frs_to_compact,
+        delta: None,
     };
     // Cold-load init of path_lens (the full BFS the apply path replaces).
     compute_path_lengths(drive.records.as_mut_slice(), &drive.names, drive.letter);

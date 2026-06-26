@@ -99,6 +99,7 @@ fn make_test_body(letter: uffs_mft::platform::DriveLetter) -> DriveCompactIndex 
         bloom: None,
         path_trie: None,
         frs_to_compact,
+        delta: None,
     }
 }
 

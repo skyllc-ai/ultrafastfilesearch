@@ -236,9 +236,13 @@ impl TrigramIndex {
         self.keys.len()
     }
 
-    /// Look up the posting list for a single packed char-trigram key.
+    /// Look up the base posting list for a single packed char-trigram key.
+    ///
+    /// `pub(crate)` so [`crate::compact::DriveCompactIndex::trigram_search`]
+    /// can merge a base posting with its delta overlay (incremental-index
+    /// §5.2) without re-deriving the CSR lookup.
     #[must_use]
-    fn get_posting(&self, packed: u64) -> Option<&[u32]> {
+    pub(crate) fn get_posting(&self, packed: u64) -> Option<&[u32]> {
         let idx = self.keys.binary_search(&packed).ok()?;
         let start = *self.offsets.get(idx)? as usize;
         let end = *self.offsets.get(idx + 1)? as usize;
@@ -252,23 +256,7 @@ impl TrigramIndex {
     /// linear scan).
     #[must_use]
     pub fn search(&self, needle: &str, fold: CaseFold) -> Option<Vec<u32>> {
-        let folded: Vec<u16> = needle.chars().map(|ch| fold.fold_char(ch)).collect();
-        if folded.len() < 3 {
-            return None;
-        }
-
-        let mut seen = rustc_hash::FxHashSet::default();
-        let mut trigrams: Vec<u64> = Vec::new();
-        for window in folded.windows(3) {
-            let Some(&[cp0, cp1, cp2]) = window.first_chunk::<3>() else {
-                continue;
-            };
-            let packed = pack_char_trigram(cp0, cp1, cp2);
-            if seen.insert(packed) {
-                trigrams.push(packed);
-            }
-        }
-
+        let trigrams = needle_trigrams(needle, fold)?;
         if trigrams.is_empty() {
             return Some(Vec::new());
         }
@@ -299,15 +287,37 @@ impl TrigramIndex {
     }
 }
 
+/// The deduped packed char-trigrams of a search needle, or `None` if the needle
+/// folds to fewer than 3 codepoints (caller falls back to a linear scan).
+///
+/// Shared by [`TrigramIndex::search`] and the base+delta
+/// [`crate::compact::DriveCompactIndex::trigram_search`] so the needle→trigram
+/// packing has exactly one definition.
+#[must_use]
+pub(crate) fn needle_trigrams(needle: &str, fold: CaseFold) -> Option<Vec<u64>> {
+    let folded: Vec<u16> = needle.chars().map(|ch| fold.fold_char(ch)).collect();
+    if folded.len() < 3 {
+        return None;
+    }
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut trigrams: Vec<u64> = Vec::new();
+    for window in folded.windows(3) {
+        let Some(&[cp0, cp1, cp2]) = window.first_chunk::<3>() else {
+            continue;
+        };
+        let packed = pack_char_trigram(cp0, cp1, cp2);
+        if seen.insert(packed) {
+            trigrams.push(packed);
+        }
+    }
+    Some(trigrams)
+}
+
 /// Intersect a sorted `Vec<u32>` with a sorted slice **in place**.
 ///
 /// Retains only elements present in both, preserving sorted order.
 /// Shrinks `result` via `truncate` — no allocation, no new `Vec`.
-#[expect(
-    clippy::single_call_fn,
-    reason = "separated for clarity — hot-path intersection logic"
-)]
-fn intersect_in_place(result: &mut Vec<u32>, other: &[u32]) {
+pub(crate) fn intersect_in_place(result: &mut Vec<u32>, other: &[u32]) {
     let mut write = 0_usize;
     let mut j = 0_usize;
     for i in 0..result.len() {

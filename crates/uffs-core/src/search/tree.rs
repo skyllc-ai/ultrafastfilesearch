@@ -528,7 +528,7 @@ fn trigram_filtered_records(
     limit: usize,
     mut predicate: impl FnMut(&crate::compact::CompactRecord) -> bool,
 ) -> Vec<u32> {
-    let candidates = drive.trigram.search(needle, drive.fold);
+    let candidates = drive.trigram_search(needle);
     match candidates {
         None => drive
             .records

@@ -112,6 +112,7 @@ fn make_synthetic_drive() -> DriveCompactIndex {
         bloom: None,
         path_trie: None,
         frs_to_compact,
+        delta: None,
     }
 }
 
