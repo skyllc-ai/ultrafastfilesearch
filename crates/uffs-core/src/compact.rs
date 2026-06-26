@@ -899,6 +899,117 @@ pub(crate) fn compute_path_lengths(
     }
 }
 
+/// A record whose `path_len` a USN apply must refresh, plus whether the change
+/// can shift its whole subtree.
+///
+/// Phase 1 of incremental-index-maintenance (design doc §5.5): instead of the
+/// O(total) [`compute_path_lengths`] BFS every apply, refresh only the records
+/// a batch touched.  A **directory rename** moves every descendant's path by a
+/// constant Δ, so `subtree` requests the descendant walk; creates and file
+/// renames are a single O(1) refresh.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PathChange {
+    /// Compact index of the created / renamed record.
+    pub idx: u32,
+    /// `true` for a directory rename (propagate Δ to descendants); `false` for
+    /// creates and file renames (refresh this record only).
+    pub subtree: bool,
+}
+
+/// Refresh `path_len` for only the records a USN batch touched, instead of the
+/// O(total-records) [`compute_path_lengths`] BFS — the Phase-1 lever of
+/// incremental-index-maintenance (design doc §5.5).
+///
+/// `children` must be the **freshly rebuilt** CSR so a directory rename can
+/// walk its subtree.  Caller falls back to the full [`compute_path_lengths`]
+/// for cold loads and for batches large enough that incremental loses
+/// (see the threshold in `compact_loader/rebuild.rs`).
+pub(crate) fn update_path_lengths_incremental(
+    records: &mut [CompactRecord],
+    names: &[u8],
+    drive_letter: uffs_mft::platform::DriveLetter,
+    children: &ChildrenIndex,
+    changed: &[PathChange],
+) {
+    // `DriveLetter` is ASCII A–Z by construction, so the drive prefix is always
+    // "X:" = 2 chars (matches `compute_path_lengths`).
+    let _: uffs_mft::platform::DriveLetter = drive_letter;
+    let drive_prefix_chars: u32 = 1 /* letter */ + 1 /* ':' */;
+
+    for change in changed {
+        let idx = change.idx as usize;
+        let Some(rec) = records.get(idx) else {
+            continue;
+        };
+        // Skip a slot tombstoned within the same batch (create then delete):
+        // `apply_delete` set name_len=0 + parent=MAX.
+        if rec.name_len == 0 && rec.parent_idx == u32::MAX {
+            continue;
+        }
+        let old_pl = u32::from(rec.path_len);
+        let new_pl = path_len_from_parent(records, names, drive_prefix_chars, change.idx);
+        if let Some(slot) = records.get_mut(idx) {
+            slot.path_len = uffs_mft::len_to_u16(new_pl as usize);
+        }
+        if change.subtree {
+            let delta = i64::from(new_pl) - i64::from(old_pl);
+            if delta != 0 {
+                shift_subtree_path_len(records, children, change.idx, delta);
+            }
+        }
+    }
+}
+
+/// `path_len` for `idx` from its (current) parent's `path_len` + own name —
+/// the per-node arithmetic of [`compute_path_lengths`]'s BFS, in isolation.
+fn path_len_from_parent(
+    records: &[CompactRecord],
+    names: &[u8],
+    drive_prefix_chars: u32,
+    idx: u32,
+) -> u32 {
+    let Some(rec) = records.get(idx as usize) else {
+        return 0;
+    };
+    let name_chars = name_char_count(rec, names);
+    if rec.parent_idx == u32::MAX {
+        // Root level: "C:\" (no name) or "C:\<name>".
+        if name_chars == 0 {
+            drive_prefix_chars.saturating_add(1)
+        } else {
+            drive_prefix_chars
+                .saturating_add(1)
+                .saturating_add(name_chars)
+        }
+    } else {
+        let parent_pl = records
+            .get(rec.parent_idx as usize)
+            .map_or(0, |parent| u32::from(parent.path_len));
+        parent_pl.saturating_add(1).saturating_add(name_chars)
+    }
+}
+
+/// Add `delta` to every descendant of `root`'s `path_len` (a directory rename
+/// shifts each descendant's full path by the same amount).  Iterative DFS over
+/// the children CSR — pure arithmetic, no name/string walk.
+fn shift_subtree_path_len(
+    records: &mut [CompactRecord],
+    children: &ChildrenIndex,
+    root: u32,
+    delta: i64,
+) {
+    let mut stack: Vec<u32> = children.get(root as usize).to_vec();
+    while let Some(idx) = stack.pop() {
+        if let Some(rec) = records.get_mut(idx as usize) {
+            let shifted = i64::from(rec.path_len)
+                .saturating_add(delta)
+                .clamp(0, i64::from(u16::MAX));
+            rec.path_len = u16::try_from(shifted).unwrap_or(u16::MAX);
+        }
+        stack.extend_from_slice(children.get(idx as usize));
+    }
+}
+
 /// Count the number of Unicode characters in a record's filename.
 ///
 /// Falls back to `name_len` (byte count) if the name slice is not valid
