@@ -535,7 +535,25 @@ impl ShardEntry {
         // `frs_to_compact` mapping rides along on the clone so
         // `apply_usn_patch` can patch it in lock-step with the
         // records.
+        // IDXDELTA-TIMING: the whole-body deep clone (records + names + every
+        // CSR index) the Arc-swap requires before patching.  On a multi-million-
+        // record drive this is a large memory copy and a real fraction of the
+        // per-apply cost that the rebuild timing alone does not capture.  The
+        // base+delta design should shrink it (share the immutable base CSR via
+        // Arc, clone only the small delta), so baseline it now.  Remove with the
+        // rest of the IDXDELTA dev instrumentation in Phase 5.
+        let t_clone = std::time::Instant::now();
         let mut owned: DriveCompactIndex = (**body_arc).clone();
+        if !changes.is_empty() {
+            tracing::info!(
+                marker = "IDXDELTA-TIMING",
+                drive = %owned.letter,
+                records = owned.records.len(),
+                changes = changes.len(),
+                clone_us = u64::try_from(t_clone.elapsed().as_micros()).unwrap_or(u64::MAX),
+                "IDXDELTA-TIMING apply: whole-body clone (baseline)"
+            );
+        }
         let stats = uffs_core::compact_loader::apply_usn_patch(&mut owned, changes);
         Some((Arc::new(owned), stats))
     }

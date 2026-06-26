@@ -70,6 +70,17 @@ pub(crate) fn log_daemon_starting(config: &DaemonConfig) {
         no_retire = config.no_retire,
         "uffsd starting"
     );
+    // IDXDELTA: dev build stamp for the incremental-index-maintenance flow.
+    // Lets the idx-delta-verify WIN test-script confirm WHICH build it is
+    // exercising (grep the log for "IDXDELTA build active"). `UFFS_GIT_SHA`
+    // is emitted by this crate's build.rs; "unknown" when git is unavailable.
+    // Remove with the rest of the IDXDELTA dev instrumentation in Phase 5.
+    tracing::info!(
+        marker = "IDXDELTA",
+        version = env!("CARGO_PKG_VERSION"),
+        git = option_env!("UFFS_GIT_SHA").unwrap_or("unknown"),
+        "IDXDELTA build active — incremental-index-maintenance dev build"
+    );
 }
 
 /// Publish the [`events::DaemonEvent::DaemonStarting`] notification

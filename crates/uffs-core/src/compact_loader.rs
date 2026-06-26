@@ -11,10 +11,9 @@ use std::time::Instant;
 
 use uffs_mft::index::MftIndex;
 
-use crate::compact::{
-    ChildrenIndex, CompactRecord, DriveCompactIndex, INDEX_TTL_SECONDS, build_compact_index,
-};
-use crate::trigram::TrigramIndex;
+use crate::compact::{CompactRecord, DriveCompactIndex, INDEX_TTL_SECONDS, build_compact_index};
+
+mod rebuild;
 
 /// What produced a given `DriveCompactIndex`.
 #[derive(Clone)]
@@ -699,6 +698,9 @@ pub fn apply_usn_patch(
 ) -> PatchStats {
     let mut stats = PatchStats::default();
 
+    // IDXDELTA-TIMING: the O(changed) per-change mutation loop, measured apart
+    // from the O(total) rebuild below so the baseline shows where the time goes.
+    let t_loop = Instant::now();
     for change in changes {
         // Typed `Frs` → raw `u64` lift at the frs_to_compact CSR lookup
         // boundary.  The mapping table is `Vec<u32>` indexed by `usize`,
@@ -739,39 +741,13 @@ pub fn apply_usn_patch(
         }
     }
 
-    // Rebuild derived structures from updated records + names.
-    // Children CSR: ~100ms for 7M records. Trigram: ~500ms for 7M records.
-    // Both are necessary so newly created/renamed files appear in tree
-    // traversal AND trigram search.
-    drive.children = ChildrenIndex::build(&drive.records);
-    // Recompute path_len for all records (picks up creates + renames).
-    crate::compact::compute_path_lengths(&mut drive.records, &drive.names, drive.letter);
-    // Rebuild trigram index using CaseFold — no names_lower clone needed.
-    drive.trigram = TrigramIndex::build(&drive.records, &drive.names, drive.fold);
-    // Rebuild extension inverted index so --ext queries reflect USN changes.
-    drive.ext_index = crate::compact::ExtensionIndex::build(&drive.records);
-
-    if !changes.is_empty() {
-        log_batch_summary(drive, changes.len(), &stats);
-    }
+    // Rebuild the derived structures (children CSR, path lengths, trigram,
+    // extension index) from the mutated records + names, with per-step
+    // IDXDELTA-TIMING.  Extracted to `rebuild.rs` — see that module + the
+    // incremental-index-maintenance design doc.
+    rebuild::rebuild_derived_and_log(drive, changes.len(), &stats, t_loop.elapsed());
 
     stats
-}
-
-/// Emit the per-batch USN-apply summary (how the poll mutated the index)
-/// at DEBUG.
-fn log_batch_summary(drive: &DriveCompactIndex, changes: usize, stats: &PatchStats) {
-    tracing::debug!(
-        drive = %drive.letter,
-        changes,
-        created = stats.created,
-        deleted = stats.deleted,
-        renamed = stats.renamed,
-        skipped = stats.skipped,
-        records = drive.records.len(),
-        ext_index_entries = drive.ext_index.total_entries(),
-        "usn apply: batch applied"
-    );
 }
 
 #[cfg(test)]
