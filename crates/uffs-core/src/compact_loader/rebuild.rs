@@ -52,11 +52,17 @@ pub(super) fn rebuild_derived_and_log(
     let t_children = Instant::now();
     drive.children = ChildrenIndex::build(&drive.records);
     let children_us = dur_us(t_children.elapsed());
-    // Phase 1: refresh path_len only for the touched records (O(changed)),
-    // falling back to the full O(total) BFS for cold loads (empty change set)
-    // and pathologically large batches.  Children must already be rebuilt.
+    // Phase 1: refresh path_len only for the touched records (O(changed)).
+    // An EMPTY change set here means the batch touched no record's path_len
+    // (e.g. a delete-only batch — a delete tombstones its record and never
+    // shifts any surviving record's path_len), so the correct work is *none*:
+    // `update_path_lengths_incremental` is a no-op over an empty slice.  The
+    // full O(total) BFS is reserved for the cold-load builder
+    // (`build_compact_index`); reaching it from a live apply was a 0.5 s
+    // regression on delete-only batches.  The only apply-time fallback is a
+    // pathologically huge batch where the per-record re-walk loses to one BFS.
     let t_paths = Instant::now();
-    if path_changes.is_empty() || path_changes.len() > FULL_PATH_RECOMPUTE_THRESHOLD {
+    if path_changes.len() > FULL_PATH_RECOMPUTE_THRESHOLD {
         crate::compact::compute_path_lengths(&mut drive.records, &drive.names, drive.letter);
     } else {
         update_path_lengths_incremental(

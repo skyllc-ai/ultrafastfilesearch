@@ -4,8 +4,9 @@
 //! Mutable overlay over the immutable base CSR indexes
 //! (incremental-index-maintenance §5.1).
 //!
-//! The base [`crate::trigram::TrigramIndex`] / [`super::ChildrenIndex`] /
-//! [`super::ExtensionIndex`] are compressed-sparse-row structures: fast to
+//! The base [`crate::trigram::TrigramIndex`] /
+//! [`crate::compact::ChildrenIndex`] / [`crate::compact::ExtensionIndex`] are
+//! compressed-sparse-row structures: fast to
 //! query, immutable, and **expensive to rebuild** (the per-apply rebuild is the
 //! cost this project removes). [`IndexDelta`] holds the postings *added* since
 //! the last compaction plus a tombstone set for records whose base postings are
@@ -27,8 +28,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Mutable overlay over the immutable base CSR indexes. A `None`
-/// `delta` on [`super::DriveCompactIndex`] means "freshly compacted — pure
-/// base, zero query overhead".
+/// `delta` on [`crate::compact::DriveCompactIndex`] means "freshly compacted —
+/// pure base, zero query overhead".
 #[derive(Debug, Default, Clone)]
 pub struct IndexDelta {
     /// packed-trigram → sorted, deduped record indices added since compaction.
@@ -48,7 +49,7 @@ pub struct IndexDelta {
 impl IndexDelta {
     /// Register a newly created / renamed-in record's postings across every
     /// index overlay. `trigrams` is the packed-trigram set of the record's name
-    /// (deduped by the caller is fine — [`sorted_insert`] dedups anyway).
+    /// (deduped by the caller is fine — `sorted_insert` dedups anyway).
     ///
     /// A renamed record is `tombstone`d at its stale base postings first, then
     /// `add_record`ed at its new ones; create is `add_record` only.

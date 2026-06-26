@@ -25,10 +25,11 @@ use crate::compact::{
 use crate::compact_storage::ColumnStorage;
 use crate::trigram::TrigramIndex;
 
-#[test]
-fn incremental_path_len_matches_full_rebuild_oracle() {
-    // Nested fixture: top dir "C" (frs 5) → dir "sub" (frs 6) → "deep.txt"
-    // (frs 7).  Names: C[0..1] sub[1..4] deep.txt[4..12].
+/// Nested fixture: top dir "C" (frs 5) → dir "sub" (frs 6) → "deep.txt"
+/// (frs 7).  Names: C[0..1] sub[1..4] deep.txt[4..12].  `path_len`s are
+/// initialised via the cold-load BFS so the apply path takes over from a
+/// correct baseline, exactly as it does after a real cold load.
+fn build_nested_fixture() -> DriveCompactIndex {
     let names = b"Csubdeep.txt".to_vec();
     let records = vec![
         CompactRecord {
@@ -81,6 +82,44 @@ fn incremental_path_len_matches_full_rebuild_oracle() {
     };
     // Cold-load init of path_lens (the full BFS the apply path replaces).
     compute_path_lengths(drive.records.as_mut_slice(), &drive.names, drive.letter);
+    drive
+}
+
+/// Assert the live (incremental) `path_len`s on `drive` equal a from-scratch
+/// `compute_path_lengths` BFS over the same (now-mutated) records.
+///
+/// Only **live** records are compared: a tombstoned record
+/// (`name_len == 0 && parent_idx == u32::MAX`, set by `apply_delete`) never
+/// surfaces in search or path resolution, so its `path_len` is meaningless —
+/// the incremental path leaves it stale while a full BFS recomputes it as a
+/// root. That divergence is correct, so it is excluded.
+fn assert_path_len_matches_full_rebuild(drive: &mut DriveCompactIndex) {
+    let is_live = |rec: &CompactRecord| !(rec.name_len == 0 && rec.parent_idx == u32::MAX);
+    let incremental: Vec<(usize, u16)> = drive
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, rec)| is_live(rec))
+        .map(|(idx, rec)| (idx, rec.path_len))
+        .collect();
+    compute_path_lengths(drive.records.as_mut_slice(), &drive.names, drive.letter);
+    let full_rebuild: Vec<(usize, u16)> = drive
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, rec)| is_live(rec))
+        .map(|(idx, rec)| (idx, rec.path_len))
+        .collect();
+    assert_eq!(
+        incremental, full_rebuild,
+        "incremental path_len must equal the full rebuild for live records; \
+         incremental={incremental:?} full={full_rebuild:?}",
+    );
+}
+
+#[test]
+fn incremental_path_len_matches_full_rebuild_oracle() {
+    let mut drive = build_nested_fixture();
 
     // Apply a batch that exercises every path op: directory rename (subtree Δ),
     // a fresh create, and a file rename.
@@ -109,14 +148,29 @@ fn incremental_path_len_matches_full_rebuild_oracle() {
     ]);
 
     // `apply_usn_patch` used the INCREMENTAL path update (batch < threshold).
-    let incremental: Vec<u16> = drive.records.iter().map(|rec| rec.path_len).collect();
-    // Ground truth: a from-scratch BFS over the now-mutated records.
-    compute_path_lengths(drive.records.as_mut_slice(), &drive.names, drive.letter);
-    let full_rebuild: Vec<u16> = drive.records.iter().map(|rec| rec.path_len).collect();
+    assert_path_len_matches_full_rebuild(&mut drive);
+}
 
-    assert_eq!(
-        incremental, full_rebuild,
-        "incremental path_len must equal the full rebuild (incl. directory-rename \
-         subtree propagation); incremental={incremental:?} full={full_rebuild:?}",
-    );
+/// Regression guard for the delete-only batch: a delete pushes **no**
+/// `PathChange` (it tombstones its record and shifts no surviving record's
+/// `path_len`), so the apply's `path_changes` slice is empty.  The path update
+/// must then be a *no-op* — NOT a fall-back to the full O(total) BFS, which on
+/// a live 3.9 M-record drive was a 0.5 s per-apply regression.  Surviving
+/// records' `path_len`s must still equal a full rebuild afterwards.
+#[test]
+fn delete_only_batch_leaves_path_lengths_correct_without_full_recompute() {
+    let mut drive = build_nested_fixture();
+
+    // Delete the leaf "deep.txt" (frs 7).  No create / rename → empty
+    // path_changes → must take the no-op incremental branch.
+    apply_usn_patch(&mut drive, &[FileChange {
+        frs: 7_u64.into(),
+        parent_frs: 6_u64.into(),
+        deleted: true,
+        ..FileChange::default()
+    }]);
+
+    // "C" and "sub" are untouched survivors; their path_len must match a full
+    // rebuild over the post-delete record set.
+    assert_path_len_matches_full_rebuild(&mut drive);
 }
