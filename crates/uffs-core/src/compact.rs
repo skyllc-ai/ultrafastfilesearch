@@ -276,6 +276,17 @@ impl DriveCompactIndex {
     /// [`TRIGRAM_COMPACT_THRESHOLD`] and triggered a [`Self::compact_base`]
     /// fold this call.
     pub(crate) fn apply_trigram_delta(&mut self, adds: &[PathChange], tombstones: &[u32]) -> bool {
+        // Fast path for a batch that will cross the compaction threshold anyway
+        // (e.g. a 100k-file burst): populating the delta only to discard it is
+        // pure waste. Refold the base directly from the records — which already
+        // reflect every change in this batch — and drop any prior overlay.
+        let pending = self.delta.as_ref().map_or(0, IndexDelta::len);
+        let batch = u32::try_from(adds.len().saturating_add(tombstones.len())).unwrap_or(u32::MAX);
+        if pending.saturating_add(batch) > TRIGRAM_COMPACT_THRESHOLD {
+            self.compact_base();
+            return true;
+        }
+
         let mut delta = self.delta.take().unwrap_or_default();
         for &idx in tombstones {
             delta.tombstone(idx);
@@ -297,16 +308,10 @@ impl DriveCompactIndex {
                 delta.add_record(change.idx, &trigrams, rec.extension_id, rec.parent_idx);
             }
         }
-        if delta.len() > TRIGRAM_COMPACT_THRESHOLD {
-            // Drop the accumulated overlay; compact_base rebuilds the base from
-            // the current records (which include every change just applied).
-            self.delta = Some(delta);
-            self.compact_base();
-            true
-        } else {
-            self.delta = Some(delta);
-            false
-        }
+        // The early check above guarantees `pending + batch ≤ threshold`, and
+        // the populated delta can only be ≤ that, so no compaction is due here.
+        self.delta = Some(delta);
+        false
     }
 
     /// Compute the total heap footprint of this index (in bytes).
