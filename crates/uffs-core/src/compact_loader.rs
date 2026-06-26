@@ -557,6 +557,7 @@ fn apply_create(
     frs_usize: usize,
     compact_idx: u32,
     stats: &mut PatchStats,
+    path_changes: &mut Vec<crate::compact::PathChange>,
 ) {
     if change.filename.is_empty() {
         stats.skipped += 1;
@@ -598,6 +599,11 @@ fn apply_create(
         if let Some(slot) = drive.frs_to_compact.get_mut(frs_usize) {
             *slot = new_compact_idx;
         }
+        // A new record has no descendants yet → O(1) path refresh, no subtree.
+        path_changes.push(crate::compact::PathChange {
+            idx: new_compact_idx,
+            subtree: false,
+        });
         stats.created += 1;
     } else if let Some(rec) = drive.records.as_mut_slice().get_mut(compact_idx as usize) {
         // The record number is already mapped. A `created` event means NTFS
@@ -606,6 +612,12 @@ fn apply_create(
         // exists. Overwrite it wholesale. Skipping a live slot here is what
         // dropped FRS-reused recreates (the "delta.pdf vanished" report).
         overwrite_slot(rec, &staged);
+        // FRS-reuse overwrite: treat as a fresh record (its old subtree, if
+        // any, was deleted/remapped and is handled by its own changes).
+        path_changes.push(crate::compact::PathChange {
+            idx: compact_idx,
+            subtree: false,
+        });
         stats.created += 1;
     }
 }
@@ -619,6 +631,7 @@ fn apply_rename(
     change: &uffs_mft::usn::FileChange,
     compact_idx: u32,
     stats: &mut PatchStats,
+    path_changes: &mut Vec<crate::compact::PathChange>,
 ) {
     if compact_idx == u32::MAX || change.filename.is_empty() {
         stats.skipped += 1;
@@ -653,6 +666,12 @@ fn apply_rename(
             rec.accessed = meta.accessed;
             rec.flags = meta.flags;
         }
+        // A directory rename shifts every descendant's path by a constant Δ;
+        // a file rename only refreshes this record.
+        path_changes.push(crate::compact::PathChange {
+            idx: compact_idx,
+            subtree: rec.is_directory(),
+        });
         stats.renamed += 1;
     }
 }
@@ -698,6 +717,11 @@ pub fn apply_usn_patch(
 ) -> PatchStats {
     let mut stats = PatchStats::default();
 
+    // Phase 1: collect the records whose path_len must be refreshed so the
+    // post-loop rebuild can do an O(changed) path update instead of the
+    // O(total) BFS (incremental-index-maintenance §5.5).
+    let mut path_changes: Vec<crate::compact::PathChange> = Vec::new();
+
     // IDXDELTA-TIMING: the O(changed) per-change mutation loop, measured apart
     // from the O(total) rebuild below so the baseline shows where the time goes.
     let t_loop = Instant::now();
@@ -733,9 +757,16 @@ pub fn apply_usn_patch(
         if change.deleted {
             apply_delete(drive, frs_usize, compact_idx, &mut stats);
         } else if change.created {
-            apply_create(drive, change, frs_usize, compact_idx, &mut stats);
+            apply_create(
+                drive,
+                change,
+                frs_usize,
+                compact_idx,
+                &mut stats,
+                &mut path_changes,
+            );
         } else if change.renamed {
-            apply_rename(drive, change, compact_idx, &mut stats);
+            apply_rename(drive, change, compact_idx, &mut stats, &mut path_changes);
         } else {
             stats.skipped += 1;
         }
@@ -745,7 +776,13 @@ pub fn apply_usn_patch(
     // extension index) from the mutated records + names, with per-step
     // IDXDELTA-TIMING.  Extracted to `rebuild.rs` — see that module + the
     // incremental-index-maintenance design doc.
-    rebuild::rebuild_derived_and_log(drive, changes.len(), &stats, t_loop.elapsed());
+    rebuild::rebuild_derived_and_log(
+        drive,
+        changes.len(),
+        &stats,
+        t_loop.elapsed(),
+        &path_changes,
+    );
 
     stats
 }
@@ -753,3 +790,7 @@ pub fn apply_usn_patch(
 #[cfg(test)]
 #[path = "compact_loader_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compact_loader_path_oracle_tests.rs"]
+mod path_oracle_tests;

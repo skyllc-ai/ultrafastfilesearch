@@ -19,8 +19,17 @@
 use std::time::Instant;
 
 use super::PatchStats;
-use crate::compact::{ChildrenIndex, DriveCompactIndex, ExtensionIndex};
+use crate::compact::{
+    ChildrenIndex, DriveCompactIndex, ExtensionIndex, PathChange, update_path_lengths_incremental,
+};
 use crate::trigram::TrigramIndex;
+
+/// Above this many touched records, the per-change incremental path update
+/// loses to a single O(total) BFS (each create/rename re-walks parents), so we
+/// fall back to the full [`crate::compact::compute_path_lengths`].  Sized well
+/// above a normal USN poll batch; the 50k disk-save threshold is the practical
+/// ceiling on a single apply anyway.
+const FULL_PATH_RECOMPUTE_THRESHOLD: usize = 50_000;
 
 /// Rebuild the derived indexes from the mutated records + names and emit the
 /// per-batch summary.  `loop_elapsed` is how long the caller's O(changed)
@@ -31,18 +40,33 @@ pub(super) fn rebuild_derived_and_log(
     changes_len: usize,
     stats: &PatchStats,
     loop_elapsed: core::time::Duration,
+    path_changes: &[PathChange],
 ) {
     let loop_us = dur_us(loop_elapsed);
 
     // IDXDELTA-TIMING: per-index full-rebuild cost of one apply — the
     // O(total-records) baseline the incremental (base+delta) work drives
     // toward O(changed).  Remove with the IDXDELTA dev instrumentation (Phase 5).
+    // Children CSR is rebuilt FIRST so the incremental path update below can
+    // walk a directory rename's subtree against current adjacency.
     let t_children = Instant::now();
     drive.children = ChildrenIndex::build(&drive.records);
     let children_us = dur_us(t_children.elapsed());
-    // Recompute path_len for all records (picks up creates + renames).
+    // Phase 1: refresh path_len only for the touched records (O(changed)),
+    // falling back to the full O(total) BFS for cold loads (empty change set)
+    // and pathologically large batches.  Children must already be rebuilt.
     let t_paths = Instant::now();
-    crate::compact::compute_path_lengths(&mut drive.records, &drive.names, drive.letter);
+    if path_changes.is_empty() || path_changes.len() > FULL_PATH_RECOMPUTE_THRESHOLD {
+        crate::compact::compute_path_lengths(&mut drive.records, &drive.names, drive.letter);
+    } else {
+        update_path_lengths_incremental(
+            drive.records.as_mut_slice(),
+            &drive.names,
+            drive.letter,
+            &drive.children,
+            path_changes,
+        );
+    }
     let paths_us = dur_us(t_paths.elapsed());
     // Rebuild trigram index using CaseFold — no names_lower clone needed.
     let t_trigram = Instant::now();
