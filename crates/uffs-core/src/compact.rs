@@ -28,6 +28,11 @@ use crate::compact_storage::ColumnStorage;
 use crate::path_trie::PathTrie;
 use crate::trigram::TrigramIndex;
 
+/// Mutable delta overlay over the immutable base CSR indexes (Phase 2+).
+pub mod delta;
+
+pub use delta::IndexDelta;
+
 /// Compact per-record data for in-memory search, filter, and sort.
 ///
 /// 80 bytes per record (76 data + 4 explicit tail padding).
