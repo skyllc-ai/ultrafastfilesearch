@@ -15,9 +15,14 @@
 //! `_run/`.
 //!
 //! What it does:
+//!   0. BIN SYNC — copies the freshly built `uffs`/`uffsd` (+ broker/mcp if
+//!      present) from **the build dir cargo actually uses** (`cargo metadata`'s
+//!      `target_directory`, honouring `CARGO_TARGET_DIR` / `.cargo/*.toml`;
+//!      override with `UFFS_RELEASE_DIR`) into `~/bin`, so the rig can never run
+//!      a stale daemon.  Build, then run — no manual copy step.
 //!   1. BUILD CONFIRMATION — restarts the daemon with logging, then asserts the
-//!      log contains `IDXDELTA build active` and prints the version + git SHA.
-//!      (We hit a stale-binary trap during USN testing; this fails fast on it.)
+//!      log contains `IDXDELTA build active`, prints the version + git SHA, and
+//!      asserts that SHA equals repo HEAD (hard stale-daemon guard).
 //!   2. CHURN + TIMING — creates files in escalating bursts so each apply fires
 //!      the O(n) full rebuild, captures every `IDXDELTA-TIMING apply` line, and
 //!      summarises the per-index rebuild cost (children / trigram / ext / total)
@@ -81,6 +86,127 @@ fn home_dir() -> PathBuf {
         .expect("USERPROFILE or HOME must be set")
 }
 
+/// Binaries the rig depends on, copied fresh from the build dir into `~/bin`.
+/// `uffs` + `uffsd` are required (the daemon under test); the broker is
+/// optional (only present once `uffs-broker` has been built) and copied
+/// best-effort so a non-elevated box still re-syncs the two it needs.
+const REQUIRED_BINS: &[&str] = &["uffs", "uffsd"];
+const OPTIONAL_BINS: &[&str] = &["uffs-broker", "uffsmcp"];
+
+/// Add the platform executable suffix (`.exe` on Windows).
+fn exe(name: &str) -> String {
+    if cfg!(windows) { format!("{name}.exe") } else { name.to_owned() }
+}
+
+/// Resolve the `release/` dir of **the build cargo actually uses** — honouring
+/// `CARGO_TARGET_DIR`, `.cargo/*.toml` `build.target-dir`, etc. — so the rig
+/// copies the binary that was just built, not a stale `~/bin` copy (the
+/// stale-binary trap that has bitten this dev loop repeatedly).
+///
+/// Order: explicit `UFFS_RELEASE_DIR` override → `cargo metadata`'s
+/// `target_directory` + `release`.
+fn release_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("UFFS_RELEASE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let out = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .context("failed to run `cargo metadata` to locate the build dir")?;
+    if !out.status.success() {
+        bail!(
+            "`cargo metadata` failed ({}). Run the rig from inside the repo, or set \
+             UFFS_RELEASE_DIR to your build's release dir.",
+            out.status
+        );
+    }
+    let json = String::from_utf8_lossy(&out.stdout);
+    let target = parse_target_directory(&json).context(
+        "could not find target_directory in `cargo metadata` output; \
+         set UFFS_RELEASE_DIR explicitly",
+    )?;
+    Ok(PathBuf::from(target).join("release"))
+}
+
+/// Extract the JSON string value of `"target_directory"` from one-line
+/// `cargo metadata` output, unescaping `\\`/`\"`/`\/` (Windows paths arrive as
+/// `C:\\rust-target\\ttapi`).  No serde dependency — a focused hand-scan.
+fn parse_target_directory(json: &str) -> Option<String> {
+    let key = "\"target_directory\":\"";
+    let start = json.find(key)? + key.len();
+    let mut out = String::new();
+    let mut chars = json[start..].chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                other => out.push(other), // \\ -> \, \" -> ", \/ -> /
+            },
+            other => out.push(other),
+        }
+    }
+    None
+}
+
+/// Short HEAD SHA of the repo (`git rev-parse --short HEAD`), for the
+/// build-id match guard.  `None` if git is unavailable.
+fn git_head_short() -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .filter(|sha| !sha.is_empty())
+}
+
+/// Copy freshly built binaries from the cargo build dir into `~/bin` so the rig
+/// always exercises the just-built daemon.  Required bins missing → bail with a
+/// "build first" hint; optional bins are copied only if present.
+fn sync_bins(bin_dir: &Path) -> Result<()> {
+    let src_dir = release_dir()?;
+    println!("\n== Bin sync ==");
+    println!("  build dir: {}", src_dir.display());
+    println!("  dest:      {}", bin_dir.display());
+    fs::create_dir_all(bin_dir).with_context(|| format!("create {}", bin_dir.display()))?;
+
+    for name in REQUIRED_BINS {
+        let src = src_dir.join(exe(name));
+        if !src.exists() {
+            bail!(
+                "required binary {} not found — build first \
+                 (e.g. `cargo build --release -p uffs-cli -p uffs-daemon`).",
+                src.display()
+            );
+        }
+        copy_bin(&src, &bin_dir.join(exe(name)))?;
+    }
+    for name in OPTIONAL_BINS {
+        let src = src_dir.join(exe(name));
+        if src.exists() {
+            copy_bin(&src, &bin_dir.join(exe(name)))?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy one binary, reporting its source build mtime so a stale build is
+/// visible at a glance.
+fn copy_bin(src: &Path, dest: &Path) -> Result<()> {
+    let built = src
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.elapsed().ok())
+        .map_or_else(|| "?".to_owned(), |age| format!("{}s ago", age.as_secs()));
+    fs::copy(src, dest)
+        .with_context(|| format!("copy {} -> {}", src.display(), dest.display()))?;
+    println!("  copied {}  (built {built})", dest.display());
+    Ok(())
+}
+
 /// Run a `uffs.exe` subcommand inheriting stdout/stderr.
 fn run(uffs: &Path, args: &[&str]) -> Result<()> {
     println!("\n$ {} {}", uffs_display(), args.join(" "));
@@ -109,10 +235,17 @@ fn search(uffs: &Path, term: &str) -> Result<(usize, String)> {
 
 fn main() -> Result<()> {
     let uffs = uffs_bin();
+
+    // Sync freshly built bins from the actual cargo build dir into ~/bin so the
+    // rig never runs a stale daemon.  Capture HEAD so the build-confirmation
+    // step can assert the running uffsd is THIS commit.
+    let bin_dir = home_dir().join("bin");
+    sync_bins(&bin_dir)?;
+    let head_sha = git_head_short();
+
     if !uffs.exists() {
         bail!(
-            "uffs binary not found at {}\n\
-             Copy your freshly built target\\release\\{{uffs,uffsd}}.exe into ~/bin first.",
+            "uffs binary not found at {} even after bin sync — check the build dir.",
             uffs.display()
         );
     }
@@ -156,13 +289,35 @@ fn main() -> Result<()> {
         .lines()
         .find(|line| line.contains("IDXDELTA build active"))
         .map(str::to_owned);
-    match build_line {
-        Some(line) => println!("  OK — {}", line.trim()),
+    let build_line = match build_line {
+        Some(line) => {
+            println!("  OK — {}", line.trim());
+            line
+        }
         None => bail!(
             "no `IDXDELTA build active` line in {} — the running uffsd.exe is NOT an \
-             IDXDELTA build. Rebuild + copy target\\release\\uffsd.exe into ~/bin.",
+             IDXDELTA build. Rebuild then re-run (the rig re-syncs ~/bin for you).",
             log_path.display()
         ),
+    };
+
+    // Build-id match guard: the running daemon's git SHA must equal repo HEAD,
+    // else a stale uffsd is being exercised (the trap that has cost several
+    // 30-min WIN cycles).  `git="<sha>"` is emitted by the IDXDELTA marker.
+    if let Some(head) = &head_sha {
+        let logged = build_line
+            .split("git=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or("");
+        if logged != head {
+            bail!(
+                "STALE DAEMON: running uffsd is git={logged:?} but repo HEAD is {head:?}.\n\
+                 The bin sync copied HEAD's build, so a daemon from an earlier build is \
+                 still resident. Stop it (`uffs --daemon stop`) and re-run.",
+            );
+        }
+        println!("  build-id match: uffsd git={logged} == HEAD {head}");
     }
 
     // ── 2 + 3. CHURN, TIMING, FRESHNESS ─────────────────────────────────────
