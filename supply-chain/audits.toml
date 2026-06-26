@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.anyhow]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.102 -> 1.0.103"
+notes = "Delta audit (cargo vet diff). Source changes: src/error.rs + src/lib.rs (test_context.rs is test-only). error.rs reworks the two type-erased downcast helpers to replace intermediate reference creation (deref() then &_object.context/error) with raw-pointer field projection (ptr::addr_of! + Ref::from_raw(NonNull::new_unchecked(..))) -- a soundness improvement that avoids forming references into a possibly-aliased erased object; downcast logic otherwise identical. lib.rs is only the html_root_url version bump. No new unsafe blocks, no new fs/net/process/FFI/ambient-capability surface. Patch release by dtolnay (anyhow maintainer)."
+
 [[audits.assert_cmd]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-run"
@@ -307,11 +313,23 @@ criteria = "safe-to-deploy"
 delta = "1.6.0 -> 1.7.0"
 notes = "Inspected 1.6.0->1.7.0 source diff (8 .rs files, ~50 lines of net change). No new unsafe blocks, no new fs/net/process/FFI surface, no crypto/auth/permission changes. Notable shifts: (a) JsonRpcError.id widened to Option<RequestId> per MCP 2025-11-25 error-response spec; (b) PromptMessageContent::Resource flattened to fix a JSON shape bug (with regression test); (c) async_rw transport switched from FramedRead to BufReader + manual line decode, adding parse-error recovery (sends JSON-RPC -32700 and continues instead of terminating) AND UTF-8 BOM stripping (RFC 8259 §8.1); (d) Cargo.toml narrows chrono to default-features=false + only the 'now' feature (surface reduction). All changes match the published CHANGELOG and are robustness improvements."
 
+[[audits.rmcp]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.7.0 -> 1.8.0"
+notes = 'Delta audit (cargo vet diff, 17 src files). Verified zero `unsafe` in src/ in BOTH versions, build.rs byte-identical, and every powerful-import count unchanged (std::process=1, Command::new=5, std::net=0, std::fs=0, from_raw=3, include_str=1, include_bytes=0) -- no new ambient authority. Changes: (a) new handler/server/common.rs::schema_for_input which generates a JSON schema, validates the root is type "object" per MCP spec and strips top-level title/description, caches per-TypeId and returns Result (the error rmcp-macros now unwraps); (b) MCP protocol/model refinements (model/capabilities, elicitation_schema, tool; service client/server); (c) transport/auth.rs (OAuth2 client) refactor that ADDS hardening -- a 30s request timeout, a 1 MiB cap on OAuth HTTP response bodies, and an explicit OAuthHttpRedirectPolicy; reqwest was already a 1.7.0 dependency; (d) streamable-http and unix-socket client transports treat an empty 2xx success as 202 Accepted for notification/response/error messages (spec compatibility). New regression tests added. No new unsafe, fs, process, or net capability. Minor release by alexhancock (rmcp maintainer).'
+
 [[audits.rmcp-macros]]
 who = "Robert Nio <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.6.0 -> 1.7.0"
 notes = "Pure version-sync release: zero source code changes between 1.6.0 and 1.7.0 (verified via 'diff -qr' over the src/ trees). Only .cargo_vcs_info.json, CHANGELOG.md, Cargo.lock, and the version string in Cargo.toml differ. rmcp-macros is bumped in lockstep with the parent rmcp crate's 1.7.0 release."
+
+[[audits.rmcp-macros]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.7.0 -> 1.8.0"
+notes = "Delta audit (cargo vet diff). Single source change: src/tool.rs -- the tool proc-macro now emits rmcp::handler::server::common::schema_for_input::<T>().unwrap_or_else(|e| panic!(..)) in place of schema_for_type::<T>(), so the generated tool-registration code fails fast with a clear message when an input schema is invalid. Generated code adds no unsafe/fs/net/process surface (a schema lookup plus a dev-facing panic at registration time). Lockstep release with rmcp 1.8.0 by alexhancock (rmcp maintainer)."
 
 [[audits.rustls]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
@@ -373,11 +391,23 @@ criteria = "safe-to-deploy"
 delta = "1.23.2 -> 1.23.3"
 notes = "Patch bump reviewed: src/error.rs REMOVES an unsafe std::str::from_utf8_unchecked in the parse-error formatter (uses the already-safe &str input instead) — a net safety improvement; equivalent slice-pattern refactor; parser.rs adds parse-error tests; remainder is version/doc/WASM-dev-fixture bumps. No new unsafe, network, fs, or process surface."
 
+[[audits.uuid]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.23.3 -> 1.23.4"
+notes = "Delta audit (cargo vet diff). Source changes: src/lib.rs adds a docsrs-gated #![cfg_attr(docsrs, feature(doc_cfg))] (affects only docs.rs builds) plus version/html_root_url string bumps; src/external/serde_support.rs is intra-doc-link doc-comment fixes only. No runtime/logic change, no new unsafe, network, fs, process, or FFI surface. Patch release by KodrAus (uuid maintainer)."
+
 [[audits.which]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "8.0.2 -> 8.0.3"
 notes = "Reviewed full diff (4 files). Only code change: cfg-gated fallback is_valid_executable returning Ok(false) on targets that are not unix/windows/wasi/redox, enabling compilation there; conservative default, no unsafe, no new I/O or capabilities. Rest is changelog + version metadata."
+
+[[audits.which]]
+who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "8.0.3 -> 8.0.4"
+notes = "Delta audit (cargo vet diff). Source changes: src/error.rs adds a new NonFatalError::PathExtNotPopulated variant (the enum is #[non_exhaustive]) plus its Display arm; src/finder.rs reports it via the non-fatal error handler when, on Windows, PATHEXT is empty AND the queried name has no extension. Reuses already-available inputs (Sys::env_windows_path_ext, PathBuf::extension); purely additive diagnostic. No new unsafe, I/O, process, or ambient-capability surface. Patch release by Xaeroxe (which maintainer)."
 
 [[audits.yoke]]
 who = "Robert M1 <50460704+githubrobbi@users.noreply.github.com>"
