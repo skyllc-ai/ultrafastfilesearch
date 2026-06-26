@@ -5,7 +5,7 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # Incremental Index Maintenance — Two-Tier Base + Delta (LSM-style)
 
-**Status:** Design — Phase 0 (scaffolding)
+**Status:** Phase 1 complete (incremental `compute_path_lengths`) — Phase 2 next (trigram delta)
 **Owner:** _(assign)_
 **Branch:** `feat/incremental-index-maintenance`
 **Dev marker:** `IDXDELTA` (all temporary dev-only logging / timing carries this token; grep-and-remove before merge — see §9)
@@ -452,8 +452,8 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 | 0 | Per-step apply timing (clone/loop/rebuild) | ✅ done | `629966bc2` | µs integers |
 | 0 | `idx-delta-verify.rs` WIN rig + baseline (§8, §10) | ✅ done | `629966bc2` | ≈1367 ms |
 | 0 | `IndexDelta` type + `delta: None` field | ☐ todo | | no behavior change |
-| 0 | Oracle harness (§7) | ☐ todo | | gates all later phases |
-| **1** | **Incremental `compute_path_lengths` (§5.5)** | ☐ **next** | | **623 ms → ~0; #1 win** |
+| 0 | Oracle harness (§7) | ◐ partial | `9806bc339` | path-len oracle landed (`compact_loader_path_oracle_tests.rs`); generic `IndexDelta` harness still todo |
+| **1** | **Incremental `compute_path_lengths` (§5.5)** | ✅ done | `9806bc339` | 623 ms → ~O(changed); oracle byte-identical incl. dir-rename subtree Δ |
 | 2 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | 378 ms |
 | 3 | Shrink clone — Arc-share base CSR indexes | ☐ todo | | 166 ms |
 | 4 | Extension + children delta (`records_with_ext` / `children_of`) | ☐ todo | | 84 + 54 ms; children highest care |
