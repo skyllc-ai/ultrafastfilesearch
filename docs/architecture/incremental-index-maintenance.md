@@ -15,16 +15,33 @@ Copyright (c) 2025-2026 SKY, LLC.
 ## 1. Problem
 
 Every live USN apply (`uffs_core::compact_loader::apply_usn_patch`) mutates the
-record columns in place (O(changed)), then **rebuilds three derived indexes from
-scratch (O(total records))**:
+record columns in place (O(changed)), then **rebuilds the derived structures
+from scratch (O(total records))**.
 
-| Index | Type | Rebuild cost @ ~4M records |
-|-------|------|----------------------------|
-| `ChildrenIndex` | CSR (`offsets`, `values`) | ~100 ms |
-| `TrigramIndex`  | CSR inverted index (`keys`, `offsets`, `values`) | **~500 ms** |
-| `ExtensionIndex`| CSR (`offsets`, `values`) | ~tens of ms |
+### Measured baseline (Phase 0, build `629966bc2`, live C: = 3,889,117 records)
 
-So a single-file change pays a **~600 ms full rebuild**. Consequences already
+Captured by `scripts/windows/idx-delta-verify.rs` — mean over 12 applies
+(`docs/architecture/baselines/` once committed):
+
+| Step | Mean | Kind | Incremental target |
+|------|-----:|------|--------------------|
+| **`compute_path_lengths`** | **623 ms** | per-record path-len recompute | **#1 — only changed records + renamed subtree** |
+| `TrigramIndex::build` | 378 ms | CSR inverted index | base + delta overlay |
+| whole-body **clone** (Arc-swap) | 166 ms | deep copy in `shard.rs` | Arc-share the immutable base CSR |
+| `ExtensionIndex::build` | 84 ms | CSR | base + delta overlay |
+| per-change **loop** | 62 ms | O(changed) | already incremental |
+| `ChildrenIndex::build` | 54 ms | CSR | base + delta overlay |
+| **rebuild subtotal** | **1140 ms** | | |
+| **full apply (clone+loop+rebuild)** | **≈ 1367 ms** | | **the number to beat** |
+
+> **Baseline overturned the original assumption.** This doc first guessed
+> *trigram* was the ~80 % win (~500 ms of ~600 ms). The measurement says the
+> full apply is **~1.37 s** (not ~600 ms), and **`compute_path_lengths` (623 ms)
+> is the single biggest cost — larger than trigram (378 ms)**. Instrumenting the
+> *clone* separately (166 ms) was also load-bearing: the rebuild timing alone
+> hid it. The phase order in §4 is sequenced from this data, not the guess.
+
+So a single-file change pays a **~1.37 s** full apply. Consequences already
 observed in production / the verify harness:
 
 - **Apply backlog** when the apply interval drops below the rebuild cost
@@ -131,39 +148,60 @@ on the existing background `spawn_blocking` applier path, never on a query.
 > "done" only when the oracle test passes and the baseline (§8) shows no search
 > regression.
 
-- **Phase 0 — scaffolding (this branch, first):**
-  - This design doc.
-  - `IndexDelta` struct + `delta: Option<IndexDelta>` field on `DriveCompactIndex`
-    (unused at first; `None` everywhere → zero behavior change).
-  - Oracle test harness (§7) + the dev test-script (§10) + dev markers/build-id
-    (§9) + baseline capture (§8).
-  - **Acceptance:** workspace builds; all existing tests green; oracle harness
-    exists and passes against the all-`None` (pure-base) implementation.
+Order is by **measured cost** (§1), biggest lever first, cheapest/riskiest last.
+Cumulative "apply after this phase" assumes a small change batch on the 3.89M
+baseline (clone+loop are constant-ish; each phase removes one rebuild term).
 
-- **Phase 1 — trigram delta (the ~500 ms / ~80 % win):**
-  - Implement `IndexDelta.trigram` + tombstones + `DriveCompactIndex::trigram_search`.
-  - `apply_usn_patch`: stop rebuilding `trigram`; update the delta instead.
-    Children + ext **still full-rebuild** this phase (keeps the diff small).
-  - Migrate the 3 trigram callers to `trigram_search`.
-  - Compaction folds the trigram delta.
-  - **Acceptance:** oracle passes; apply latency drops to ~100 ms (children+ext
-    rebuild only); trigram search latency within baseline + ε.
+- **Phase 0 — scaffolding (✅ done on this branch):**
+  - Design doc; build-id stamp + per-step `IDXDELTA-TIMING` (§9); WIN rig +
+    baseline (§8, §10). **Done:** baseline captured (≈1367 ms).
+  - **Still in Phase 0 (next):** `IndexDelta` struct + `delta: Option<IndexDelta>`
+    field on `DriveCompactIndex` (unused, `None` everywhere → zero behavior
+    change) + the oracle harness (§7). Gate for every phase below.
 
-- **Phase 2 — extension delta:** same shape for `ext_index` → `records_with_ext`.
-  Apply stops rebuilding ext.
+- **Phase 1 — incremental `compute_path_lengths` (623 ms → ~O(changed); the #1 win):**
+  This is *not* a base+delta overlay — `path_len` is a per-`CompactRecord`
+  field (`= parent.path_len + 1 separator + name_len`), so it is updated
+  surgically. Approach (§5.5):
+  - **create / file-rename:** recompute just that record's `path_len` from its
+    (unchanged) parent's `path_len` + new `name_len` — O(1).
+  - **directory rename:** `Δ = new_dir_path_len − old_dir_path_len`; walk the
+    renamed dir's subtree via the (still-fresh) children CSR and add `Δ` to each
+    descendant's `path_len` — O(subtree), cheap arithmetic, no string walk.
+  - **delete:** record is tombstoned; `path_len` irrelevant.
+  - Children + trigram + ext **still full-rebuild** this phase (keeps the diff
+    small and gives a valid children CSR for the subtree walk).
+  - **Acceptance:** oracle passes (path resolution identical to a full rebuild);
+    `paths_us` drops from ~623 ms to sub-ms for small batches; apply ≈ 744 ms.
 
-- **Phase 3 — children delta:** same shape for `children` → `children_of`.
-  Highest care: feeds `FastPathResolver` (path reconstruction) — exercise the
-  path-resolver oracle heavily.
+- **Phase 2 — trigram delta (378 ms; base + delta overlay):**
+  `IndexDelta.trigram` + tombstones + `DriveCompactIndex::trigram_search` (§3.2,
+  §5.1–5.3); apply stops rebuilding trigram; migrate the 3 trigram callers;
+  compaction folds the delta. **Acceptance:** oracle passes; trigram search
+  within baseline + ε; apply ≈ 366 ms.
 
-- **Phase 4 — unify + retire per-apply rebuild:** apply is now O(changes) for all
-  three indexes; the full rebuild runs only at compaction. Re-evaluate the
-  production apply-interval default (candidate: drop 30 s → 2 s or event-driven).
-  Remove the now-dead per-apply rebuild branch.
+- **Phase 3 — shrink the clone (166 ms; Arc-share the base CSR):**
+  Hold the immutable base indexes as `Arc<TrigramIndex>` / `Arc<ChildrenIndex>` /
+  `Arc<ExtensionIndex>` on `DriveCompactIndex` so the per-apply whole-body clone
+  copies records + names + the small delta, **not** the large inverted indexes
+  (pointer-clone the Arcs). **Acceptance:** `clone_us` drops materially; oracle
+  unaffected (pure representation change). Best done after Phase 2 makes trigram
+  a shareable base.
 
-- **Phase 5 — cleanup:** grep-remove every `IDXDELTA` dev marker (§9); fold the
-  baseline numbers into a committed perf-regression test; delete the dev
-  test-script or graduate it into `tests/`.
+- **Phase 4 — extension + children delta (84 + 54 ms):** same overlay shape for
+  `ext_index` → `records_with_ext` and `children` → `children_of`. **Children is
+  the highest-care** index — it feeds `FastPathResolver` *and* the Phase-1 subtree
+  walk; exercise the path-resolver oracle heavily and keep the children full
+  rebuild until its delta + the Phase-1 walk are reconciled.
+
+- **Phase 5 — unify + retire per-apply rebuild + re-tune:** apply is now O(changed)
+  end-to-end; the full rebuild runs only at compaction. Re-evaluate the production
+  apply-interval default (candidate: 30 s → ~2 s or event-driven). Remove the dead
+  per-apply rebuild branch.
+
+- **Phase 6 — cleanup:** grep-remove every `IDXDELTA` dev marker + the build.rs
+  stamp + the dev script timing (§9); fold the baseline into a committed
+  perf-regression test; graduate `idx-delta-verify.rs` into `tests/` or delete.
 
 ## 5. Detailed implementation guidelines (junior-dev executable)
 
@@ -241,6 +279,71 @@ path-lengths), then `drive.delta = None`.
 The compact-cache (`compact_cache.rs`) serializes **base only**. Before a disk
 save, **compact first** (fold delta → base), then serialize. So the on-disk
 format is unchanged and always delta-free. (Cold load → `delta = None`.)
+
+### 5.5 Phase 1 — incremental `compute_path_lengths` (the #1 lever)
+
+`compute_path_lengths` today (`compact.rs`) builds a parent→children adjacency
+and BFS-recomputes **every** record's `path_len` where
+`path_len = parent.path_len + 1 (separator) + name_char_count`. That O(n) BFS is
+the 623 ms. The incremental version only touches what changed.
+
+**Inputs.** `apply_usn_patch`'s per-change loop already knows each touched
+record's compact idx and disposition. Collect them into a small list as the loop
+runs (no extra pass): `Vec<(u32 idx, PathOp)>` where
+`PathOp = { Created, FileRenamed, DirRenamed, Deleted }`. The directory bit comes
+from `CompactRecord::flags` (`FILE_ATTRIBUTE_DIRECTORY`).
+
+**New fn** (e.g. `compact.rs::update_path_lengths_incremental`):
+
+```rust
+pub(crate) fn update_path_lengths_incremental(
+    records: &mut [CompactRecord],
+    names: &[u8],
+    drive_letter: DriveLetter,
+    children: &ChildrenIndex,          // the freshly-rebuilt CSR (Phase 1 keeps it)
+    changed: &[(u32, PathOp)],
+) {
+    for &(idx, op) in changed {
+        match op {
+            PathOp::Deleted => {}      // tombstoned; path_len irrelevant
+            PathOp::Created | PathOp::FileRenamed => {
+                // parent is unchanged → its path_len is valid. O(1).
+                set_path_len_from_parent(records, names, drive_letter, idx);
+            }
+            PathOp::DirRenamed => {
+                let old = records[idx as usize].path_len;
+                set_path_len_from_parent(records, names, drive_letter, idx);
+                let delta = i32::from(records[idx as usize].path_len) - i32::from(old);
+                if delta != 0 {
+                    // every descendant's path runs *through* this dir, so its
+                    // path_len shifts by exactly `delta`.  DFS/BFS the subtree
+                    // via the children CSR; pure arithmetic, no name walk.
+                    shift_subtree_path_len(records, children, idx, delta);
+                }
+            }
+        }
+    }
+}
+```
+
+- `set_path_len_from_parent`: `path_len = parent.path_len + 1 + name_char_count`
+  (root/drive cases identical to the BFS seed in `compute_path_lengths`).
+- `shift_subtree_path_len`: stack/queue over `children.get(idx)` recursively,
+  `rec.path_len = (rec.path_len as i32 + delta) as u16` (saturating).
+
+**Wiring** (`compact_loader/rebuild.rs`): in Phase 1 keep the children/trigram/ext
+full rebuilds, but **replace the `compute_path_lengths(...)` call with
+`update_path_lengths_incremental(..., changed)`**. Children must be rebuilt
+*before* the path update so the subtree walk sees current adjacency. Gate behind
+a `changed.len() < FULL_RECOMPUTE_THRESHOLD` fallback to the full BFS for
+pathological huge batches (and for the cold-load path, which still calls the full
+`compute_path_lengths`).
+
+**Edge cases the oracle (§7) must cover:** rename a directory with a deep subtree
+(Δ propagation); FRS-reuse (create into a just-deleted slot); a file whose parent
+was itself renamed in the same batch (process parents before children — sort
+`changed` by depth, or rely on the BFS order the children CSR already gives);
+case-only rename (`name_char_count` unchanged → Δ = 0, no subtree walk).
 
 ## 6. Risk register
 
@@ -344,17 +447,18 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 
 | Phase | Item | Status | PR | Notes |
 |-------|------|--------|----|----|
-| 0 | Design doc | ✅ done | _(this)_ | |
+| 0 | Design doc (+ measured baseline + data-driven re-order) | ✅ done | `2e57d6013`, this | |
+| 0 | Dev markers + build-id stamp (§9) | ✅ done | `629966bc2` | `IDXDELTA` |
+| 0 | Per-step apply timing (clone/loop/rebuild) | ✅ done | `629966bc2` | µs integers |
+| 0 | `idx-delta-verify.rs` WIN rig + baseline (§8, §10) | ✅ done | `629966bc2` | ≈1367 ms |
 | 0 | `IndexDelta` type + `delta: None` field | ☐ todo | | no behavior change |
 | 0 | Oracle harness (§7) | ☐ todo | | gates all later phases |
-| 0 | Dev markers + build-id (§9) | ☐ todo | | `IDXDELTA` |
-| 0 | Baseline capture (§8) | ☐ todo | | pure-base numbers |
-| 0 | `idx-delta-verify.rs` (§10) | ☐ todo | | WIN test-script |
-| 1 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | the ~80 % win |
-| 2 | Extension delta + `records_with_ext` | ☐ todo | | |
-| 3 | Children delta + `children_of` (path resolver) | ☐ todo | | highest care |
-| 4 | Unify; retire per-apply rebuild; re-tune apply interval | ☐ todo | | |
-| 5 | Remove `IDXDELTA` dev helpers; graduate baseline → perf test | ☐ todo | | grep-and-remove |
+| **1** | **Incremental `compute_path_lengths` (§5.5)** | ☐ **next** | | **623 ms → ~0; #1 win** |
+| 2 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | 378 ms |
+| 3 | Shrink clone — Arc-share base CSR indexes | ☐ todo | | 166 ms |
+| 4 | Extension + children delta (`records_with_ext` / `children_of`) | ☐ todo | | 84 + 54 ms; children highest care |
+| 5 | Unify; retire per-apply rebuild; re-tune apply interval | ☐ todo | | 30 s → ~2 s |
+| 6 | Remove `IDXDELTA` dev helpers (+ build.rs); graduate baseline → perf test | ☐ todo | | grep-and-remove |
 
 **Done-definition (whole project):** apply is O(changes); oracle green; no search
 latency regression vs baseline; production apply interval reduced; all `IDXDELTA`

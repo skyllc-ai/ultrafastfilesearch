@@ -1,0 +1,26 @@
+{
+  "_comment": "Incremental-index-maintenance per-apply timing baseline (design §8). Captured by scripts/windows/idx-delta-verify.rs on a live Windows MFT. Later phases diff against this to detect a timing regression. Means over the captured applies; values in milliseconds.",
+  "build_git": "629966bc2",
+  "version": "0.6.14",
+  "captured": "2026-06-26",
+  "drive": "C",
+  "drive_records": 3889117,
+  "apply_samples": 12,
+  "per_apply_ms": {
+    "clone": 165.576,
+    "loop": 61.797,
+    "children": 54.058,
+    "paths": 623.464,
+    "trigram": 377.988,
+    "ext": 84.426,
+    "rebuild_subtotal": 1139.936,
+    "full_apply": 1367.309
+  },
+  "targets_by_phase": {
+    "1_paths_incremental": "623 -> ~0 for small batches",
+    "2_trigram_delta": "378 -> base+delta merge cost",
+    "3_clone_arc_share": "166 -> records+names+delta only",
+    "4_ext_children_delta": "84 + 54 -> overlay",
+    "regression_tolerance_pct": 15
+  }
+}
