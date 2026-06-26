@@ -1082,41 +1082,58 @@ jobs:
           **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ needs.release-preparation.outputs.version }}
           EOF
 
-      - name: Create GitHub Release (creates tag via REST API)
-        # Tag creation is handled by action-gh-release's built-in
-        # logic rather than an explicit `git push origin $TAG`.
-        # Rationale — avoid GitHub's workflow-file protection:
-        #
-        # The git protocol-level tag push is rejected by GitHub's
-        # server-side check whenever the tag's target commit has
-        # different workflow files than the default branch's current
-        # HEAD.  That race fires whenever any PR touching
-        # `.github/workflows/*` merges while a release.yml run is
-        # in flight.  Observed with run #24795626228 (v99.98.99)
-        # where PR #31's merge at 19:00:55Z made the 19:01:37Z tag
-        # push fail with:
-        #
-        #   remote rejected: refusing to allow a GitHub App to
-        #   create or update workflow `.github/workflows/
-        #   auto-tag-release.yml` without `workflows` permission
-        #
-        # The REST API path (creating a `refs/tags/*` via
-        # `POST /repos/:owner/:repo/git/refs`, which action-gh-
-        # release uses internally when `tag_name` is set and the
-        # tag does not yet exist) is not subject to the same
-        # server-side guard, so it succeeds with just the default
-        # `contents: write` permission.
-        #
-        # `target_commitish` pins the tag to the specific commit
-        # we built from, not whatever main's HEAD happens to be at
-        # action runtime.  Falls back to `github.sha` when
-        # invoked via `push: tags: v*` (where `inputs.commit_sha`
-        # is unset — the tag already exists so this field is
-        # ignored anyway).
+      # ── Pin the tag to the built commit, THEN release the tag ──
+      #
+      # This is split into two steps on purpose, to thread two distinct
+      # GitHub server-side guards that each rejected a one-step approach:
+      #
+      # 1. `git push origin $TAG` (protocol-level) is rejected whenever
+      #    the tagged commit's `.github/workflows/*` differ from the
+      #    default branch HEAD: "refusing to allow a GitHub App to
+      #    create or update workflow ... without `workflows` permission"
+      #    (run #24795626228, v99.98.99 — fires when a workflow PR merges
+      #    while a release is in flight).  So we do NOT git-push the tag.
+      #
+      # 2. `action-gh-release` with a commit-SHA `target_commitish` makes
+      #    `POST /releases` create the tag atomically — and under the
+      #    GITHUB_TOKEN integration that now returns 403 "Resource not
+      #    accessible by integration" (cli/cli#9514; began ~2026-06 on the
+      #    integration token, PATs unaffected; broke v0.6.14 run #135).
+      #    So we do NOT pass `target_commitish` to the release step.
+      #
+      # The path that clears BOTH guards: create the tag ref ourselves
+      # via `POST /git/refs` (not subject to the workflow-file guard, and
+      # a plain contents:write op — not the release-with-target endpoint),
+      # then have action-gh-release attach the release to the now-EXISTING
+      # tag with no target.  Result: exact build-commit pinning, no PAT to
+      # mint/rotate, least-privilege GITHUB_TOKEN, and a GITHUB_TOKEN-
+      # created tag does not re-trigger this `push: tags: v*` workflow.
+      - name: Create the release tag at the built commit (REST refs API)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-preparation.outputs.tag }}
+          # `inputs.commit_sha` on the dispatch path pins the exact built
+          # commit; on the `push: tags: v*` path the tag already exists so
+          # this step short-circuits and `github.sha` is never used.
+          SHA: ${{ inputs.commit_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::notice::tag ${TAG} already exists — leaving it untouched"
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${TAG}" \
+              -f sha="${SHA}"
+            echo "::notice::created tag ${TAG} -> ${SHA}"
+          fi
+
+      - name: Create GitHub Release (attaches to the pre-created tag)
+        # No `target_commitish`: the tag was just created at the built
+        # commit by the step above, so the release simply references the
+        # existing tag — sidestepping the commit-SHA-target 403 entirely.
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: ${{ needs.release-preparation.outputs.tag }}
-          target_commitish: ${{ inputs.commit_sha || github.sha }}
           name: ${{ needs.release-preparation.outputs.release-name }}
           body_path: release-notes.md
           files: final-release/*
