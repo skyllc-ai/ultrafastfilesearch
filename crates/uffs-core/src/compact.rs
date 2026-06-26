@@ -48,6 +48,13 @@ pub(crate) use path_len::{PathChange, compute_path_lengths, update_path_lengths_
 pub(crate) use record::NTFS_METAFILE_NAMES;
 pub use record::{CompactRecord, is_ntfs_metafile_name};
 
+/// Touched-record count (adds + tombstones since the last compaction) above
+/// which [`DriveCompactIndex::apply_trigram_delta`] folds the delta back into a
+/// fresh trigram base (design §5.4). Sized to amortize the ~340 ms base rebuild
+/// across many small USN applies while bounding delta memory + per-search merge
+/// cost; tune from the `IDXDELTA-TIMING` WIN baseline.
+pub(crate) const TRIGRAM_COMPACT_THRESHOLD: u32 = 50_000;
+
 /// A loaded drive with compact index.
 #[derive(Clone)]
 pub struct DriveCompactIndex {
@@ -240,6 +247,66 @@ impl DriveCompactIndex {
             });
         }
         Some(result)
+    }
+
+    /// Fold the delta overlay back into a fresh base and clear it (design §5.4
+    /// compaction). Rebuilds the trigram base from the current records — which
+    /// already reflect every applied mutation — then resets `delta = None` so
+    /// subsequent searches take the zero-overhead base fast path.
+    ///
+    /// O(total records); the per-apply path drives toward this running only
+    /// occasionally (every [`TRIGRAM_COMPACT_THRESHOLD`] touched records) or
+    /// before serialization (the on-disk cache is always delta-free).
+    ///
+    /// Phase 4 will also rebuild the extension + children bases here once they
+    /// gain delta overlays; today those are rebuilt every apply, so compaction
+    /// only needs to refold the trigram base.
+    pub(crate) fn compact_base(&mut self) {
+        self.trigram = TrigramIndex::build(&self.records, &self.names, self.fold);
+        self.delta = None;
+    }
+
+    /// Phase-2b trigram maintenance for one USN apply: overlay the batch's
+    /// changes onto the delta instead of rebuilding the trigram base.
+    ///
+    /// `adds` are the created / renamed / reused records (their post-mutation
+    /// name's trigrams are added); `tombstones` are the deleted / renamed-away
+    /// / reused-slot records (their stale base postings are masked).
+    /// Returns `true` if the accumulated delta crossed
+    /// [`TRIGRAM_COMPACT_THRESHOLD`] and triggered a [`Self::compact_base`]
+    /// fold this call.
+    pub(crate) fn apply_trigram_delta(&mut self, adds: &[PathChange], tombstones: &[u32]) -> bool {
+        let mut delta = self.delta.take().unwrap_or_default();
+        for &idx in tombstones {
+            delta.tombstone(idx);
+        }
+        let fold = self.fold;
+        for change in adds {
+            let Some(rec) = self.records.get(change.idx as usize) else {
+                continue;
+            };
+            // A record tombstoned this same batch (e.g. created-then-deleted) is
+            // not searchable; skip its add.
+            if rec.name_len == 0 {
+                continue;
+            }
+            // Names < 3 codepoints have no trigrams (found via linear scan, not
+            // the trigram pre-filter) — `needle_trigrams` returns None, matching
+            // the base build which also skips them.
+            if let Some(trigrams) = crate::trigram::needle_trigrams(rec.name(&self.names), fold) {
+                delta.add_record(change.idx, &trigrams, rec.extension_id, rec.parent_idx);
+            }
+        }
+        if delta.len() > TRIGRAM_COMPACT_THRESHOLD {
+            // Drop the accumulated overlay; compact_base rebuilds the base from
+            // the current records (which include every change just applied).
+            self.delta = Some(delta);
+            self.compact_base();
+            true
+        } else {
+            self.delta = Some(delta);
+            false
+        }
     }
 
     /// Compute the total heap footprint of this index (in bytes).
