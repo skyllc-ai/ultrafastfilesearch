@@ -75,6 +75,13 @@ on:
     # `reopened` covers the reopen-after-close case so a closed-then-
     # reopened PR re-evaluates fresh.
     types: [opened, edited, synchronize, reopened]
+  # `merge_group` makes this a queue-compatible REQUIRED check: GitHub's
+  # merge queue requires every required status check to also report on
+  # the `merge_group` event, but that event carries no PR title.  We
+  # recover the PR from the queue ref (`gh-readonly-queue/<base>/pr-<N>-
+  # <sha>`) and re-lint its title (the squash subject that will land).
+  # Without this, a title-required check would deadlock the queue.
+  merge_group:
 
 # Comment posting requires write access to the PR (which is the
 # `pull-requests` scope, not `contents`).  Read on contents is implicit
@@ -87,7 +94,10 @@ permissions:
 # arrives.  Title edits land in bursts (typo → realize → fix); we only
 # care about the latest state.
 concurrency:
-  group: commitlint-${{ github.event.pull_request.number }}
+  # Keyed per-PR on `pull_request`, and per-queue-ref on `merge_group`
+  # (each merge-group ref is unique, so queue validations never cancel
+  # one another — only successive title edits on the same PR do).
+  group: commitlint-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -98,15 +108,23 @@ jobs:
     # Skip on PRs from forks: forked PRs don't have write tokens, so
     # `gh pr comment` would fail.  Forks are advised separately via the
     # CONTRIBUTING.md docs; they get a hint from the PR template instead.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # `merge_group` always originates from an in-repo PR that already
+    # reached the queue, so it is never a fork — let it through.
+    if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Validate PR title against Conventional Commits
         env:
           # `pull_request.title` is the canonical squash-merge subject.
           # We deliberately do NOT inspect commits on the branch — those
           # get squashed away on merge and are noise for release-plz.
+          # (Empty on `merge_group`; that path derives the title below.)
           TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Which event fired — drives the title-source branch below.
+          EVENT_NAME: ${{ github.event_name }}
+          # Queue ref on `merge_group`, e.g.
+          # `gh-readonly-queue/main/pr-472-<sha>`; empty on pull_request.
+          MERGE_GROUP_REF: ${{ github.event.merge_group.head_ref }}
           # `github.token` is the workflow's ephemeral GITHUB_TOKEN.
           # The `gh` CLI auto-detects this env var.
           GH_TOKEN: ${{ github.token }}
@@ -125,6 +143,40 @@ jobs:
           # CONTRIBUTING.md in the same PR (and ideally cliff.toml's
           # commit_parsers in Phase R2).
           PATTERN='^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9-]+\))?!?: .{1,}$'
+
+          # ── Merge-queue path (merge_group event) ───────────────────
+          # The merge_group event has no PR payload, so recover the PR
+          # number from the queue ref and re-lint its title (the squash
+          # subject that will land on main).  No sticky comment here —
+          # that already happened at PR-open time on the pull_request
+          # run; the queue only needs a pass/fail gate.  The queue is
+          # configured for single-PR groups (max_entries_to_{build,
+          # merge}=1), so the ref always names exactly one PR.
+          if [ "${EVENT_NAME}" = "merge_group" ]; then
+            PR_NUMBER=$(printf '%s' "${MERGE_GROUP_REF}" \
+              | sed -nE 's#.*/pr-([0-9]+)-[0-9a-fA-F]+$#\1#p')
+            if [ -z "${PR_NUMBER}" ]; then
+              echo "::error::cannot parse a PR number from merge_group ref '${MERGE_GROUP_REF}'"
+              exit 1
+            fi
+            TITLE=$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json title --jq .title)
+            {
+              echo "## 📝 Commitlint — queued PR title check"
+              echo ""
+              echo "| Field | Value |"
+              echo "| --- | --- |"
+              echo "| PR | #${PR_NUMBER} |"
+              echo "| Title | \`${TITLE}\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if printf '%s' "${TITLE}" | grep -qE "${PATTERN}"; then
+              echo "::notice::queued PR #${PR_NUMBER} title conforms: ${TITLE}"
+              echo "| Result | ✅ conforms |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::queued PR #${PR_NUMBER} title does not conform: ${TITLE}"
+            echo "| Result | 🔴 does not conform — blocking the queue |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
           # Group redirects to avoid the SC2129 shellcheck warning
           # and minimise filesystem churn on the GitHub Actions side.
