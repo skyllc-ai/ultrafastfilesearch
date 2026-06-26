@@ -451,7 +451,8 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 | 0 | Dev markers + build-id stamp (§9) | ✅ done | `629966bc2` | `IDXDELTA` |
 | 0 | Per-step apply timing (clone/loop/rebuild) | ✅ done | `629966bc2` | µs integers |
 | 0 | `idx-delta-verify.rs` WIN rig + baseline (§8, §10) | ✅ done | `629966bc2` | ≈1367 ms |
-| 0 | `IndexDelta` type + `delta: None` field | ☐ todo | | no behavior change |
+| 0 | `IndexDelta` type | ✅ done | `61dfde09d` | `compact/delta.rs`, unit-tested; posting/tombstone overlay |
+| 0 | `delta: Option<IndexDelta>` field on `DriveCompactIndex` | ☐ deferred → Phase 2 | | wired with `trigram_search` so each of ~20 ctor sites is touched once, not twice |
 | 0 | Oracle harness (§7) | ◐ partial | `9806bc339` | path-len oracle landed (`compact_loader_path_oracle_tests.rs`); generic `IndexDelta` harness still todo |
 | **1** | **Incremental `compute_path_lengths` (§5.5)** | ✅ done | `9806bc339` | 623 ms → ~O(changed); oracle byte-identical incl. dir-rename subtree Δ |
 | 2 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | 378 ms |
