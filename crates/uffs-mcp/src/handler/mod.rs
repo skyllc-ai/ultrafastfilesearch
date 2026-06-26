@@ -350,6 +350,14 @@ impl ServerHandler for UffsMcpServer {
     )]
     async fn on_roots_list_changed(&self, context: rmcp::service::NotificationContext<RoleServer>) {
         // Ask the client for the current list of roots.
+        #[expect(
+            deprecated,
+            reason = "rmcp 1.8.0 deprecated Peer::list_roots per MCP SEP-2577 (the Roots \
+                      capability is being phased out). It still functions, and uffs-mcp's \
+                      roots -> NTFS-prefix mapping depends on it; there is no replacement API \
+                      yet. Migrate or drop the roots feature when rmcp removes the method (at \
+                      which point this becomes a hard error, not a silenced warning)."
+        )]
         match context.peer.list_roots().await {
             Ok(result) => {
                 let mut state = self.roots.write().await;
