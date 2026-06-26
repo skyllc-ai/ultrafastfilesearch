@@ -1,0 +1,361 @@
+<!--
+SPDX-License-Identifier: MPL-2.0
+Copyright (c) 2025-2026 SKY, LLC.
+-->
+
+# Incremental Index Maintenance — Two-Tier Base + Delta (LSM-style)
+
+**Status:** Design — Phase 0 (scaffolding)
+**Owner:** _(assign)_
+**Branch:** `feat/incremental-index-maintenance`
+**Dev marker:** `IDXDELTA` (all temporary dev-only logging / timing carries this token; grep-and-remove before merge — see §9)
+
+---
+
+## 1. Problem
+
+Every live USN apply (`uffs_core::compact_loader::apply_usn_patch`) mutates the
+record columns in place (O(changed)), then **rebuilds three derived indexes from
+scratch (O(total records))**:
+
+| Index | Type | Rebuild cost @ ~4M records |
+|-------|------|----------------------------|
+| `ChildrenIndex` | CSR (`offsets`, `values`) | ~100 ms |
+| `TrigramIndex`  | CSR inverted index (`keys`, `offsets`, `values`) | **~500 ms** |
+| `ExtensionIndex`| CSR (`offsets`, `values`) | ~tens of ms |
+
+So a single-file change pays a **~600 ms full rebuild**. Consequences already
+observed in production / the verify harness:
+
+- **Apply backlog** when the apply interval drops below the rebuild cost
+  (mitigated, not removed, by the apply-coalescing guard in `fix/usn-apply-coalesce`).
+- **Churn CPU**: a continuously-active drive burns a bounded fraction of a core
+  on rebuilds.
+- **Freshness/CPU tradeoff**: the production apply interval is pinned at **30 s**
+  precisely to keep rebuild churn down — i.e. we trade search freshness for CPU
+  *because* each apply is O(n).
+
+These CSR structures are **immutable / read-optimized**: inserting one record's
+postings means shifting the flat `values`/`offsets` arrays — the same cost as a
+rebuild. **You cannot cheaply mutate them in place.** This is fundamental, not a
+missing optimization.
+
+## 2. Goal
+
+Turn apply from **O(total records)** into **O(changed records)** without
+regressing search correctness or latency:
+
+- Sub-second search freshness becomes cheap (apply interval can drop to ~1 s or
+  event-driven).
+- Churn CPU drops to ~proportional-to-changes.
+- The existing full rebuild survives, but only as an **occasional compaction
+  step**, not a per-apply tax. (This also speeds the save-tick path.)
+
+**Non-goals:** changing the on-disk compact-cache format (the base CSR is still
+what we serialize); changing search semantics/results; touching the
+Windows-only I/O path.
+
+## 3. Architecture — two-tier (base + delta + tombstones)
+
+The Lucene-segment / LSM pattern:
+
+```
+DriveCompactIndex
+├── records / names                 (mutated in place — already O(changed))
+├── frs_to_compact                  (mutated in place — already O(changed))
+├── trigram:  TrigramIndex   (BASE)  ─┐
+├── children: ChildrenIndex  (BASE)   │ immutable CSR, rebuilt only at compaction
+├── ext_index:ExtensionIndex (BASE)  ─┘
+└── delta: Option<IndexDelta>        (NEW — small mutable overlay)
+        ├── trigram:  HashMap<u64 (packed trigram), Vec<u32 idx>>
+        ├── ext:      HashMap<u16 (ext_id),         Vec<u32 idx>>
+        ├── children: HashMap<u32 (parent idx),     Vec<u32 idx>>
+        └── tombstones: FxHashSet<u32 idx>          (records whose BASE postings are stale)
+```
+
+- **Base layer** — the current immutable CSR indexes. Built at cold-load and at
+  compaction; never mutated between.
+- **Delta layer** — per-index mutable overlays holding postings for records
+  created/renamed *since the last compaction*.
+- **Tombstones** — record indices whose **base** postings are stale (deleted, or
+  renamed and re-added to the delta with a new name). Search subtracts them.
+
+### 3.1 Semantics by operation
+
+| USN op | records/names | tombstone (base idx) | delta postings |
+|--------|---------------|----------------------|----------------|
+| **create** | append new record (new idx) | — (idx not in base) | add new idx → trigram/ext/children |
+| **delete** | mark record removed | tombstone the mapped base idx; if idx was a recent create, drop it from delta instead | remove from delta if present |
+| **rename** | update name/ext/parent in place | tombstone the base idx (old-name base postings now stale) | add the same idx → trigram/ext/children **with the new name** |
+
+Key invariant: **a record index appears in search results iff** it is
+`(in base AND not tombstoned) OR (in delta)`. A renamed record is *both*
+tombstoned-in-base (old name suppressed) *and* present-in-delta (new name found)
+— same idx, no data duplication.
+
+### 3.2 Search integration (the hot path — highest risk)
+
+Every read that consults a base index must consult `base ∪ delta` and subtract
+tombstones. Wrap each at a single choke point on `DriveCompactIndex`:
+
+| Base call (today) | New delta-aware accessor | Callers to migrate |
+|-------------------|--------------------------|--------------------|
+| `self.trigram.search(needle, fold) -> Option<Vec<u32>>` | `self.trigram_search(needle) -> Option<Vec<u32>>` | `search/tree.rs`, `search/query/mod.rs`, `search/query/prefix_search.rs` |
+| `self.children.get(idx) -> &[u32]` | `self.children_of(idx) -> SmallVec/Cow<[u32]>` | `FastPathResolver`, directory listing, tree search |
+| `self.ext_index.get(ext_id) -> &[u32]` | `self.records_with_ext(ext_id) -> Cow<[u32]>` | `--ext` filter dispatch |
+
+- **Trigram** intersects posting lists across the needle's trigrams. For each
+  trigram `t`, the effective posting list is `base.get_posting(t) ∪ delta.trigram[t]`
+  (sorted-merge, dedup). Intersect across trigrams as today; **filter tombstones
+  on the final result** (cheap — one `FxHashSet` lookup per surviving idx).
+- **Ext / children** return `base.get(k)` filtered through tombstones, with
+  `delta[k]` appended. When the delta is empty (`delta == None`), every accessor
+  is a zero-overhead passthrough to the base — *no regression for the common,
+  freshly-compacted case.*
+
+### 3.3 Compaction
+
+Fold the delta back into a fresh base CSR (this **is** today's
+`apply_usn_patch` rebuild path, reused verbatim) when any trigger fires:
+
+- delta record count `> COMPACT_THRESHOLD_RECORDS` (start at 50 000), **or**
+- delta record count `> COMPACT_THRESHOLD_FRACTION` of base (start at 5 %), **or**
+- the save tick fires (we already pay a rebuild there — fold the delta in then).
+
+After compaction: new base, `delta = None`, tombstones cleared. Compaction runs
+on the existing background `spawn_blocking` applier path, never on a query.
+
+## 4. Phases (each is independently shippable + reversible)
+
+> Each phase keeps the **full-rebuild path as the oracle** (see §7). A phase is
+> "done" only when the oracle test passes and the baseline (§8) shows no search
+> regression.
+
+- **Phase 0 — scaffolding (this branch, first):**
+  - This design doc.
+  - `IndexDelta` struct + `delta: Option<IndexDelta>` field on `DriveCompactIndex`
+    (unused at first; `None` everywhere → zero behavior change).
+  - Oracle test harness (§7) + the dev test-script (§10) + dev markers/build-id
+    (§9) + baseline capture (§8).
+  - **Acceptance:** workspace builds; all existing tests green; oracle harness
+    exists and passes against the all-`None` (pure-base) implementation.
+
+- **Phase 1 — trigram delta (the ~500 ms / ~80 % win):**
+  - Implement `IndexDelta.trigram` + tombstones + `DriveCompactIndex::trigram_search`.
+  - `apply_usn_patch`: stop rebuilding `trigram`; update the delta instead.
+    Children + ext **still full-rebuild** this phase (keeps the diff small).
+  - Migrate the 3 trigram callers to `trigram_search`.
+  - Compaction folds the trigram delta.
+  - **Acceptance:** oracle passes; apply latency drops to ~100 ms (children+ext
+    rebuild only); trigram search latency within baseline + ε.
+
+- **Phase 2 — extension delta:** same shape for `ext_index` → `records_with_ext`.
+  Apply stops rebuilding ext.
+
+- **Phase 3 — children delta:** same shape for `children` → `children_of`.
+  Highest care: feeds `FastPathResolver` (path reconstruction) — exercise the
+  path-resolver oracle heavily.
+
+- **Phase 4 — unify + retire per-apply rebuild:** apply is now O(changes) for all
+  three indexes; the full rebuild runs only at compaction. Re-evaluate the
+  production apply-interval default (candidate: drop 30 s → 2 s or event-driven).
+  Remove the now-dead per-apply rebuild branch.
+
+- **Phase 5 — cleanup:** grep-remove every `IDXDELTA` dev marker (§9); fold the
+  baseline numbers into a committed perf-regression test; delete the dev
+  test-script or graduate it into `tests/`.
+
+## 5. Detailed implementation guidelines (junior-dev executable)
+
+### 5.1 New types (`crates/uffs-core/src/compact/delta.rs`, new file)
+
+```rust
+/// Mutable overlay over the immutable base CSR indexes. `None` on
+/// DriveCompactIndex means "freshly compacted — pure base, zero overhead".
+#[derive(Debug, Default, Clone)]
+pub struct IndexDelta {
+    /// packed-trigram -> sorted, deduped record indices added since compaction.
+    pub trigram: rustc_hash::FxHashMap<u64, Vec<u32>>,
+    /// ext_id -> record indices added since compaction.
+    pub ext: rustc_hash::FxHashMap<u16, Vec<u32>>,
+    /// parent record idx -> child record indices added since compaction.
+    pub children: rustc_hash::FxHashMap<u32, Vec<u32>>,
+    /// record indices whose BASE postings are stale (deleted / renamed-away).
+    pub tombstones: rustc_hash::FxHashSet<u32>,
+    /// running count of distinct records touched (compaction trigger input).
+    pub touched_records: u32,
+}
+```
+
+- All postings kept **sorted + deduped** on insert (binary-search insert) so the
+  base∪delta merge is a linear sorted-merge.
+- Provide: `add_record(idx, trigrams: &[u64], ext_id, parent_idx)`,
+  `tombstone(idx)`, `is_tombstoned(idx)`, `len()` (for compaction trigger).
+
+### 5.2 `DriveCompactIndex` accessors (single choke point)
+
+Implement on `DriveCompactIndex` (in `compact.rs`), each a passthrough when
+`self.delta.is_none()`:
+
+```rust
+pub fn trigram_search(&self, needle: &str) -> Option<Vec<u32>> {
+    let base = self.trigram.search(needle, self.fold)?;        // existing logic
+    let Some(delta) = &self.delta else { return Some(base); }; // fast path
+    // merge per-trigram postings from delta, re-intersect, filter tombstones
+    // (helper: merge_and_filter — see delta.rs)
+    Some(self.merge_trigram(needle, base, delta))
+}
+```
+
+> **Correctness note for trigram:** because trigram search is an **AND
+> intersection** across the needle's trigrams, a delta record only survives if it
+> is in the delta posting for *every* trigram of the needle. Since `add_record`
+> inserts the idx into all of the record's name-trigrams, this holds. Tombstone
+> filtering is applied to the final intersected set, never per-list (a base idx
+> may legitimately appear in some lists; only the final membership matters).
+
+### 5.3 `apply_usn_patch` changes (`compact_loader.rs`)
+
+Today (per phase, replace the rebuild for the migrated index):
+
+```rust
+// BEFORE (per apply):
+drive.trigram = TrigramIndex::build(&drive.records, &drive.names, drive.fold); // ~500ms
+
+// AFTER (per apply):
+let delta = drive.delta.get_or_insert_with(IndexDelta::default);
+for &idx in &created_or_renamed_idxs {
+    delta.add_record(idx, &trigrams_for(idx), ext_of(idx), parent_of(idx));
+}
+for &idx in &deleted_or_renamed_old {
+    delta.tombstone(idx);
+}
+if delta.len() > COMPACT_THRESHOLD { compact(drive); }       // occasional full rebuild
+```
+
+Keep `compact(drive)` = the *current* full rebuild (children+trigram+ext+
+path-lengths), then `drive.delta = None`.
+
+### 5.4 Serialization
+
+The compact-cache (`compact_cache.rs`) serializes **base only**. Before a disk
+save, **compact first** (fold delta → base), then serialize. So the on-disk
+format is unchanged and always delta-free. (Cold load → `delta = None`.)
+
+## 6. Risk register
+
+| Risk | Mitigation |
+|------|------------|
+| Search correctness drift (base∪delta ≠ truth) | Oracle test (§7) is mandatory per phase; property-based over random op sequences. |
+| Hot-path latency regression (delta merge cost) | Passthrough when `delta == None`; baseline timing gate (§8); keep delta small via compaction threshold. |
+| Tombstone leak (memory grows on churny drive) | Compaction threshold bounds delta+tombstone size; `touched_records` trigger. |
+| Rename edge cases (FRS reuse, case-only rename) | Dedicated oracle scenarios; reuse the USN net-state resolution already in `uffs-mft::usn`. |
+| Path resolver fed stale children (Phase 3) | Path-resolver-specific oracle; Phase 3 isolated + last. |
+
+## 7. Oracle test harness (the core correctness guarantee)
+
+**Invariant:** for any sequence of USN ops, the two-tier index must be
+**observationally identical** to a freshly-rebuilt full index.
+
+Location: `crates/uffs-core/src/compact/delta_oracle_tests.rs`.
+
+```
+fn oracle(ops: &[Op]) {
+    let mut incremental = base_index();   // two-tier (delta path)
+    let mut rebuilt     = base_index();   // control (full rebuild every apply)
+    for op in ops {
+        apply_incremental(&mut incremental, op);   // delta path
+        apply_full_rebuild(&mut rebuilt, op);      // O(n) control
+        for q in QUERY_BATTERY {                    // name / --ext / prefix / tree / path-resolve
+            assert_eq!(sorted(incremental.query(q)), sorted(rebuilt.query(q)),
+                       "divergence after {op:?} on query {q:?}");
+        }
+    }
+    // After a forced compaction, the base CSR must be byte-identical to a
+    // from-scratch rebuild of the same record set.
+    incremental.compact();
+    assert_eq!(incremental.trigram, rebuilt.trigram);      // byte-identical
+    assert_eq!(incremental.children, rebuilt.children);
+    assert_eq!(incremental.ext_index, rebuilt.ext_index);
+}
+```
+
+- **Query battery:** exact-name, substring (trigram), `--ext`, prefix, tree/glob,
+  and **path resolution** (FastPathResolver) — one assertion per query type.
+- **Op generation:** both hand-written regression scenarios (create→rename→delete,
+  FRS reuse, case-only rename, delete-then-recreate-into-same-dir) **and** a
+  `proptest`/seeded-random generator over `{create, delete, rename}` with a small
+  name alphabet (so trigrams collide and intersections are exercised).
+- Runs cross-platform (no live MFT — synthetic records), so it gates every PR.
+
+## 8. Baseline + timing-regression detection
+
+- Add an env-gated micro-benchmark (`cargo bench` or a `#[ignore]` timing test)
+  that, on a synthetic N-record drive, measures: **apply latency**, **trigram /
+  ext / children search latency** at delta sizes `{0, 1k, 10k, 50k}`, and
+  **compaction latency**.
+- Capture a **baseline JSON** (`docs/architecture/baselines/incremental-index-<date>.json`)
+  committed at the end of Phase 0 (pure-base numbers) and refreshed per phase.
+- The dev test-script (§10) prints a **timing table** tagged `IDXDELTA-TIMING`
+  and diffs against the committed baseline, flagging any search latency that
+  regresses beyond a tolerance (start at +15 %). This is how we catch a "delta
+  merge made search slower" regression on the Windows box, live.
+
+## 9. Dev instrumentation — `IDXDELTA` marker (removable)
+
+Mirror the `USNFIX` convention used for the live-USN debugging:
+
+- **Build identifier:** at daemon start, log
+  `tracing::info!(marker = "IDXDELTA", build = env!("...GIT_SHA or version"), "IDXDELTA build active")`
+  so the test-script can confirm *which* build it exercised (we hit the wrong-build
+  trap during USN testing — do not repeat it).
+- **Per-apply timing:** `IDXDELTA-TIMING apply: delta_add=… tombstone=… compact=…(ms)`.
+- **Per-search timing:** `IDXDELTA-TIMING search: base=… delta_merge=… total=…(ms) delta_len=…`.
+- **Compaction events:** `IDXDELTA compact: folded delta_len=… into base records=… in …ms`.
+- All such lines carry the literal token `IDXDELTA`. **Phase 5 removal:**
+  `grep -rn IDXDELTA crates/ scripts/` → delete every hit; the only survivors
+  become permanent `debug!`/metrics if we decide to keep them (decided in Phase 5,
+  not before).
+
+## 10. Dev test-script — `scripts/windows/idx-delta-verify.rs`
+
+Modeled on `scripts/windows/usn-verify.rs` (same `~/bin/uffs.exe` resolution,
+`~/idxtest` scratch, `_run/` artifact dir, daemon-restart-with-logging pattern).
+What it adds beyond usn-verify:
+
+1. **Build confirmation** — assert the daemon log contains `IDXDELTA build active`
+   and print the build id (fail fast on a stale binary).
+2. **Churn generator** — create / rename / delete in escalating bursts (10, 100,
+   1 000, 10 000 files) so the delta grows and compaction triggers, capturing each
+   search's result set to `_run/NN-*.csv` (correctness) AND the `IDXDELTA-TIMING`
+   lines to `_run/timing.log` (perf).
+3. **Freshness probe** — after a burst, measure wall-clock from file-op to
+   search-visible (should be ≈ apply interval, no backlog).
+4. **Timing-regression gate** — parse `_run/timing.log`, build a table, diff
+   against the committed baseline (§8), and print `PASS`/`REGRESSION` per metric.
+5. **Oracle cross-check (optional, on-box)** — re-run a search with the daemon
+   forced to compact, and confirm identical results pre/post compaction (the
+   live analogue of §7).
+
+Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we can
+"push → pull on WIN → run → share `_run/`" each iteration.
+
+## 11. Tracking
+
+| Phase | Item | Status | PR | Notes |
+|-------|------|--------|----|----|
+| 0 | Design doc | ✅ done | _(this)_ | |
+| 0 | `IndexDelta` type + `delta: None` field | ☐ todo | | no behavior change |
+| 0 | Oracle harness (§7) | ☐ todo | | gates all later phases |
+| 0 | Dev markers + build-id (§9) | ☐ todo | | `IDXDELTA` |
+| 0 | Baseline capture (§8) | ☐ todo | | pure-base numbers |
+| 0 | `idx-delta-verify.rs` (§10) | ☐ todo | | WIN test-script |
+| 1 | Trigram delta + `trigram_search` + caller migration | ☐ todo | | the ~80 % win |
+| 2 | Extension delta + `records_with_ext` | ☐ todo | | |
+| 3 | Children delta + `children_of` (path resolver) | ☐ todo | | highest care |
+| 4 | Unify; retire per-apply rebuild; re-tune apply interval | ☐ todo | | |
+| 5 | Remove `IDXDELTA` dev helpers; graduate baseline → perf test | ☐ todo | | grep-and-remove |
+
+**Done-definition (whole project):** apply is O(changes); oracle green; no search
+latency regression vs baseline; production apply interval reduced; all `IDXDELTA`
+dev scaffolding removed.
