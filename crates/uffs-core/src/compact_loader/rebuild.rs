@@ -16,6 +16,7 @@
 //! under the workspace 800-LOC policy and to house the temporary IDXDELTA
 //! timing in one place for Phase-5 removal.
 
+use alloc::sync::Arc;
 use std::time::Instant;
 
 use super::PatchStats;
@@ -50,7 +51,7 @@ pub(super) fn rebuild_derived_and_log(
     // Children CSR is rebuilt FIRST so the incremental path update below can
     // walk a directory rename's subtree against current adjacency.
     let t_children = Instant::now();
-    drive.children = ChildrenIndex::build(&drive.records);
+    drive.children = Arc::new(ChildrenIndex::build(&drive.records));
     let children_us = dur_us(t_children.elapsed());
     // Phase 1: refresh path_len only for the touched records (O(changed)).
     // An EMPTY change set here means the batch touched no record's path_len
@@ -85,7 +86,7 @@ pub(super) fn rebuild_derived_and_log(
     let trigram_us = dur_us(t_trigram.elapsed());
     // Rebuild extension inverted index so --ext queries reflect USN changes.
     let t_ext = Instant::now();
-    drive.ext_index = ExtensionIndex::build(&drive.records);
+    drive.ext_index = Arc::new(ExtensionIndex::build(&drive.records));
     let ext_us = dur_us(t_ext.elapsed());
 
     if changes_len != 0 {

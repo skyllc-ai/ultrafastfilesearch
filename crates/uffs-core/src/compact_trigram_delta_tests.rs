@@ -11,6 +11,7 @@
 //! its new name yet vanish from its old one — which is exactly why tombstone
 //! filtering is applied to the final candidate set, never per posting list.
 
+use alloc::sync::Arc;
 use std::path::PathBuf;
 
 use uffs_text::case_fold::CaseFold;
@@ -64,9 +65,9 @@ fn build_drive(file_names: &[&str]) -> DriveCompactIndex {
         letter: uffs_mft::platform::DriveLetter::T,
         records: ColumnStorage::from_vec(records),
         names: ColumnStorage::from_vec(names),
-        trigram,
-        children,
-        ext_index,
+        trigram: Arc::new(trigram),
+        children: Arc::new(children),
+        ext_index: Arc::new(ext_index),
         fold,
         ext_names: vec![Box::from("")],
         source: IndexSource::MftFile(PathBuf::from("T:")),

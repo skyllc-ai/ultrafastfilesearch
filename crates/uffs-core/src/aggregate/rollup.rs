@@ -194,6 +194,8 @@ pub(crate) fn resolve_rollup_key(key: u32, mode: RollupMode, drive: &DriveCompac
     reason = "tests assert against fixtures with known shape; indexing panic = test failure"
 )]
 mod tests {
+    use alloc::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -315,9 +317,9 @@ mod tests {
             letter: uffs_mft::platform::DriveLetter::C,
             records: crate::compact_storage::ColumnStorage::from_vec(records),
             names: crate::compact_storage::ColumnStorage::from_vec(names_blob),
-            trigram: TrigramIndex::empty(),
-            children,
-            ext_index: ExtensionIndex::build(&[]),
+            trigram: Arc::new(TrigramIndex::empty()),
+            children: Arc::new(children),
+            ext_index: Arc::new(ExtensionIndex::build(&[])),
             fold: uffs_text::case_fold::CaseFold::default_table(),
             ext_names: vec![],
             source: IndexSource::MftFile(PathBuf::from("C:")),

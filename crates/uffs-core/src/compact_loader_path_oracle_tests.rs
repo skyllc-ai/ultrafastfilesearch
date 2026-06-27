@@ -13,6 +13,7 @@
 //! Kept in a dedicated sibling submodule so neither `compact_loader.rs` nor
 //! `compact_loader_tests.rs` crosses the workspace 800-LOC policy ceiling.
 
+use alloc::sync::Arc;
 use std::path::PathBuf;
 
 use uffs_mft::usn::FileChange;
@@ -69,9 +70,9 @@ fn build_nested_fixture() -> DriveCompactIndex {
         letter: uffs_mft::platform::DriveLetter::T,
         records: ColumnStorage::from_vec(records.clone()),
         names: ColumnStorage::from_vec(names.clone()),
-        trigram: TrigramIndex::build(&records, &names, fold),
-        children: ChildrenIndex::build(&records),
-        ext_index: ExtensionIndex::build(&records),
+        trigram: Arc::new(TrigramIndex::build(&records, &names, fold)),
+        children: Arc::new(ChildrenIndex::build(&records)),
+        ext_index: Arc::new(ExtensionIndex::build(&records)),
         fold,
         ext_names: vec![Box::from("")],
         source: IndexSource::MftFile(PathBuf::from("T:")),
