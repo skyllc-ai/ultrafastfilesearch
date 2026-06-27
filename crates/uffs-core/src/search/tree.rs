@@ -419,7 +419,7 @@ pub(crate) fn tree_search(
         } else {
             let mut next_dirs = Vec::new();
             for &dir_idx in &candidate_dirs {
-                for &child_idx in drive.children.get(dir_idx as usize) {
+                for &child_idx in drive.children_of(dir_idx).iter() {
                     if let Some(child_rec) = drive.records.get(child_idx as usize)
                         && child_rec.is_directory()
                     {
@@ -449,7 +449,7 @@ pub(crate) fn tree_search(
         }
     } else {
         for &dir_idx in &candidate_dirs {
-            for &child_idx in drive.children.get(dir_idx as usize) {
+            for &child_idx in drive.children_of(dir_idx).iter() {
                 if let Some(child_rec) = drive.records.get(child_idx as usize) {
                     let child_name = fold.fold_into(child_rec.name(&drive.names), &mut fold_buf);
                     if name_matches(child_name, leaf_pattern) {
@@ -476,7 +476,7 @@ fn collect_descendant_dirs(
     if out.len() >= max {
         return;
     }
-    for &child_idx in drive.children.get(dir_idx as usize) {
+    for &child_idx in drive.children_of(dir_idx).iter() {
         if let Some(child_rec) = drive.records.get(child_idx as usize)
             && child_rec.is_directory()
             && child_rec.name_len > 0
@@ -500,7 +500,7 @@ fn collect_all_descendants(
     if out.len() >= max {
         return;
     }
-    for &child_idx in drive.children.get(dir_idx as usize) {
+    for &child_idx in drive.children_of(dir_idx).iter() {
         if let Some(child_rec) = drive.records.get(child_idx as usize)
             && child_rec.name_len > 0
         {

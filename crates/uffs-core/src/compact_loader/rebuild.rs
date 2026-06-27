@@ -16,13 +16,10 @@
 //! under the workspace 800-LOC policy and to house the temporary IDXDELTA
 //! timing in one place for Phase-5 removal.
 
-use alloc::sync::Arc;
 use std::time::Instant;
 
 use super::PatchStats;
-use crate::compact::{
-    ChildrenIndex, DriveCompactIndex, PathChange, update_path_lengths_incremental,
-};
+use crate::compact::{DriveCompactIndex, PathChange, update_path_lengths_incremental};
 
 /// Above this many touched records, the per-change incremental path update
 /// loses to a single O(total) BFS (each create/rename re-walks parents), so we
@@ -45,23 +42,28 @@ pub(super) fn rebuild_derived_and_log(
 ) {
     let loop_us = dur_us(loop_elapsed);
 
-    // IDXDELTA-TIMING: per-index full-rebuild cost of one apply — the
-    // O(total-records) baseline the incremental (base+delta) work drives
-    // toward O(changed).  Remove with the IDXDELTA dev instrumentation (Phase 5).
-    // Children CSR is rebuilt FIRST so the incremental path update below can
-    // walk a directory rename's subtree against current adjacency.
-    let t_children = Instant::now();
-    drive.children = Arc::new(ChildrenIndex::build(&drive.records));
-    let children_us = dur_us(t_children.elapsed());
-    // Phase 1: refresh path_len only for the touched records (O(changed)).
-    // An EMPTY change set here means the batch touched no record's path_len
-    // (e.g. a delete-only batch — a delete tombstones its record and never
-    // shifts any surviving record's path_len), so the correct work is *none*:
-    // `update_path_lengths_incremental` is a no-op over an empty slice.  The
-    // full O(total) BFS is reserved for the cold-load builder
-    // (`build_compact_index`); reaching it from a live apply was a 0.5 s
-    // regression on delete-only batches.  The only apply-time fallback is a
+    // Phase 2b + 4a + 4b: overlay this batch's trigram + extension + children
+    // postings onto the delta instead of rebuilding those bases. This runs
+    // FIRST so the path subtree walk below sees the batch's new children
+    // (creates/moves into a renamed directory). `apply_index_delta` masks the
+    // tombstoned trigrams and folds back to fresh bases only when the delta
+    // crosses the compaction threshold (so `trigram_us` is ~0 on most applies,
+    // a full refold on the occasional compaction tick). children + ext are
+    // served through the base ∪ delta accessors, so no per-apply rebuild of
+    // either — `children_us` / `ext_us` now report ~0.
+    let t_trigram = Instant::now();
+    let compacted = drive.apply_index_delta(path_changes, tombstones);
+    let trigram_us = dur_us(t_trigram.elapsed());
+    let children_us = 0_u64;
+    let ext_us = 0_u64;
+
+    // Phase 1: refresh path_len only for the records this batch touched
+    // (O(changed)). An EMPTY change set means the batch touched no record's
+    // path_len (e.g. a delete-only batch), so the work is *none* — the
+    // incremental update is a no-op over an empty slice. The full O(total) BFS
+    // is reserved for the cold-load builder; the only apply-time fallback is a
     // pathologically huge batch where the per-record re-walk loses to one BFS.
+    // The subtree walk reads the base ∪ delta children just populated above.
     let t_paths = Instant::now();
     if path_changes.len() > FULL_PATH_RECOMPUTE_THRESHOLD {
         crate::compact::compute_path_lengths(&mut drive.records, &drive.names, drive.letter);
@@ -71,23 +73,11 @@ pub(super) fn rebuild_derived_and_log(
             &drive.names,
             drive.letter,
             &drive.children,
+            drive.delta.as_ref(),
             path_changes,
         );
     }
     let paths_us = dur_us(t_paths.elapsed());
-    // Phase 2b + 4a: overlay this batch's trigram + extension postings onto the
-    // delta instead of rebuilding the ~340 ms trigram and ~58 ms ext bases.
-    // `apply_index_delta` adds each created/renamed record's postings and masks
-    // tombstoned trigrams, folding back to fresh bases only when the delta
-    // crosses the compaction threshold (so `trigram_us` is ~0 on most applies,
-    // a full build on the occasional compaction tick). Ext is served through
-    // `records_with_ext` (base ∪ delta), so no per-apply ext rebuild.
-    let t_trigram = Instant::now();
-    let compacted = drive.apply_index_delta(path_changes, tombstones);
-    let trigram_us = dur_us(t_trigram.elapsed());
-    // `ext_us` retained in the IDXDELTA-TIMING line for baseline comparison;
-    // the rebuild is gone (Phase 4a), so it now measures ~0.
-    let ext_us = 0_u64;
 
     if changes_len != 0 {
         tracing::info!(

@@ -165,7 +165,7 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
             // Enqueue children BEFORE the filter check — a directory
             // that fails the filter (e.g. `FilesOnly` drops dirs) may
             // still contain matching descendants that must be visited.
-            let child_slice = drive.children.get(idx as usize);
+            let child_slice = drive.children_of(idx);
             if !child_slice.is_empty() {
                 let mut sorted_children = child_slice.to_vec();
                 sort_indices_by_name(&mut sorted_children, drive, sort_desc);

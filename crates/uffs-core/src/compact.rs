@@ -270,13 +270,51 @@ impl DriveCompactIndex {
     /// O(total records); the per-apply path drives toward this running only
     /// occasionally (every [`TRIGRAM_COMPACT_THRESHOLD`] touched records) or
     /// before serialization (the on-disk cache is always delta-free).
-    ///
-    /// `children` is still rebuilt every apply (Phase 4b will move it onto the
-    /// overlay), so compaction does not need to touch it here.
     pub(crate) fn compact_base(&mut self) {
         self.trigram = Arc::new(TrigramIndex::build(&self.records, &self.names, self.fold));
         self.ext_index = Arc::new(ExtensionIndex::build(&self.records));
+        self.children = Arc::new(ChildrenIndex::build(&self.records));
         self.delta = None;
+    }
+
+    /// Invoke `f` for each live child record index of `parent`, through the
+    /// base ∪ delta overlay (Phase 4b). Zero allocation.
+    ///
+    /// When [`Self::delta`] is `None` the base CSR is authoritative (it was
+    /// built from the current records and nothing has moved since) so it is
+    /// iterated directly. With a delta present, base ∪ delta children are
+    /// sorted-merged and each is validated against the live records — kept iff
+    /// `records[c].parent_idx == parent` and the record is live. That records
+    /// check is what makes a moved-away or deleted child correct **without** a
+    /// children tombstone.
+    pub fn for_each_child<F: FnMut(u32)>(&self, parent: u32, mut visit: F) {
+        let base = self.children.get(parent as usize);
+        let Some(delta) = &self.delta else {
+            for &child in base {
+                visit(child);
+            }
+            return;
+        };
+        let is_valid = |child: u32| {
+            self.records
+                .get(child as usize)
+                .is_some_and(|rec| rec.parent_idx == parent && rec.name_len != 0)
+        };
+        delta::merge_filter(base, delta.child_postings(parent), is_valid, visit);
+    }
+
+    /// Live child record indices of `parent`, through the base ∪ delta overlay
+    /// (Phase 4b) — the slice-returning form of [`Self::for_each_child`] for
+    /// callers that need an owned/borrowed list. Zero-alloc `Cow::Borrowed`
+    /// when [`Self::delta`] is `None`.
+    #[must_use]
+    pub fn children_of(&self, parent: u32) -> Cow<'_, [u32]> {
+        if self.delta.is_none() {
+            return Cow::Borrowed(self.children.get(parent as usize));
+        }
+        let mut out = Vec::new();
+        self.for_each_child(parent, |child| out.push(child));
+        Cow::Owned(out)
     }
 
     /// Record indices whose extension is `ext_id`, through the base ∪ delta

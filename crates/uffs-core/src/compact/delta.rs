@@ -124,6 +124,54 @@ fn sorted_insert(list: &mut Vec<u32>, value: u32) {
     }
 }
 
+/// Sorted-union merge of a base posting list with delta additions, calling
+/// `emit` for each value that passes `is_valid` — the zero-alloc building block
+/// of the children / extension overlays (Phase 4). Both inputs are sorted +
+/// deduped; each merged value is emitted at most once.
+///
+/// `is_valid` is the per-candidate liveness check against the current records
+/// (e.g. `records[c].parent_idx == parent`), which is what lets the children /
+/// ext overlays drop a moved-away or deleted record without a tombstone — a
+/// stale base posting simply fails the check.
+pub(crate) fn merge_filter<V: Fn(u32) -> bool, E: FnMut(u32)>(
+    base: &[u32],
+    delta: &[u32],
+    is_valid: V,
+    mut emit: E,
+) {
+    let mut base_it = base.iter().copied().peekable();
+    let mut delta_it = delta.iter().copied().peekable();
+    loop {
+        let next = match (base_it.peek().copied(), delta_it.peek().copied()) {
+            (Some(bv), Some(dv)) if bv < dv => {
+                base_it.next();
+                bv
+            }
+            (Some(bv), Some(dv)) if bv > dv => {
+                delta_it.next();
+                dv
+            }
+            (Some(bv), Some(_)) => {
+                base_it.next();
+                delta_it.next();
+                bv
+            }
+            (Some(bv), None) => {
+                base_it.next();
+                bv
+            }
+            (None, Some(dv)) => {
+                delta_it.next();
+                dv
+            }
+            (None, None) => return,
+        };
+        if is_valid(next) {
+            emit(next);
+        }
+    }
+}
+
 /// Sorted-union merge of a base posting list with delta additions — the
 /// per-trigram building block of
 /// [`crate::compact::DriveCompactIndex::trigram_search`]. Both inputs are

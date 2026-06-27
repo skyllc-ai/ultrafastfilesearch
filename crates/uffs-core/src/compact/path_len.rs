@@ -106,15 +106,18 @@ pub(crate) struct PathChange {
 /// O(total-records) [`compute_path_lengths`] BFS — the Phase-1 lever of
 /// incremental-index-maintenance (design doc §5.5).
 ///
-/// `children` must be the **freshly rebuilt** CSR so a directory rename can
-/// walk its subtree.  Caller falls back to the full [`compute_path_lengths`]
-/// for cold loads and for batches large enough that incremental loses
-/// (see the threshold in `compact_loader/rebuild.rs`).
+/// `children` is the base CSR; `delta` is the overlay (Phase 4b) — together
+/// they give the **current** child adjacency a directory rename walks to shift
+/// its subtree, even for children created in the same batch. Caller falls back
+/// to the full [`compute_path_lengths`] for cold loads and for batches large
+/// enough that incremental loses (see the threshold in
+/// `compact_loader/rebuild.rs`).
 pub(crate) fn update_path_lengths_incremental(
     records: &mut [CompactRecord],
     names: &[u8],
     drive_letter: uffs_mft::platform::DriveLetter,
     children: &ChildrenIndex,
+    delta: Option<&crate::compact::IndexDelta>,
     changed: &[PathChange],
 ) {
     // `DriveLetter` is ASCII A–Z by construction, so the drive prefix is always
@@ -138,9 +141,9 @@ pub(crate) fn update_path_lengths_incremental(
             slot.path_len = uffs_mft::len_to_u16(new_pl as usize);
         }
         if change.subtree {
-            let delta = i64::from(new_pl) - i64::from(old_pl);
-            if delta != 0 {
-                shift_subtree_path_len(records, children, change.idx, delta);
+            let shift = i64::from(new_pl) - i64::from(old_pl);
+            if shift != 0 {
+                shift_subtree_path_len(records, children, delta, change.idx, shift);
             }
         }
     }
@@ -175,25 +178,62 @@ fn path_len_from_parent(
     }
 }
 
-/// Add `delta` to every descendant of `root`'s `path_len` (a directory rename
-/// shifts each descendant's full path by the same amount).  Iterative DFS over
-/// the children CSR — pure arithmetic, no name/string walk.
+/// Add `shift` to every descendant of `root`'s `path_len` (a directory rename
+/// moves each descendant's full path by the same amount).
+///
+/// Two passes so the read of the child adjacency (which validates against
+/// `records`) never overlaps the write of `path_len`: pass 1 collects every
+/// descendant over the base ∪ delta children (Phase 4b), pass 2 shifts each.
+/// Pure arithmetic, no name/string walk.
 fn shift_subtree_path_len(
     records: &mut [CompactRecord],
     children: &ChildrenIndex,
+    delta: Option<&crate::compact::IndexDelta>,
     root: u32,
-    delta: i64,
+    shift: i64,
 ) {
-    let mut stack: Vec<u32> = children.get(root as usize).to_vec();
+    // Pass 1 — collect descendants (read-only over records + children + delta).
+    let mut descendants: Vec<u32> = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    push_children(records, children, delta, root, &mut stack);
     while let Some(idx) = stack.pop() {
+        descendants.push(idx);
+        push_children(records, children, delta, idx, &mut stack);
+    }
+    // Pass 2 — shift each descendant's path_len (mutates records).
+    for idx in descendants {
         if let Some(rec) = records.get_mut(idx as usize) {
             let shifted = i64::from(rec.path_len)
-                .saturating_add(delta)
+                .saturating_add(shift)
                 .clamp(0, i64::from(u16::MAX));
             rec.path_len = u16::try_from(shifted).unwrap_or(u16::MAX);
         }
-        stack.extend_from_slice(children.get(idx as usize));
     }
+}
+
+/// Push the live children of `parent` (base ∪ delta, validated against
+/// `records`) onto `stack`. The read-only adjacency primitive of the subtree
+/// walk; mirrors [`crate::compact::DriveCompactIndex::for_each_child`].
+fn push_children(
+    records: &[CompactRecord],
+    children: &ChildrenIndex,
+    delta: Option<&crate::compact::IndexDelta>,
+    parent: u32,
+    stack: &mut Vec<u32>,
+) {
+    let base = children.get(parent as usize);
+    let Some(overlay) = delta else {
+        stack.extend_from_slice(base);
+        return;
+    };
+    let is_valid = |child: u32| {
+        records
+            .get(child as usize)
+            .is_some_and(|rec| rec.parent_idx == parent && rec.name_len != 0)
+    };
+    crate::compact::delta::merge_filter(base, overlay.child_postings(parent), is_valid, |child| {
+        stack.push(child);
+    });
 }
 
 /// Count the number of Unicode characters in a record's filename.

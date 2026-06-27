@@ -559,7 +559,7 @@ fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
 
     // Pre-state sanity: root (compact_idx 0) starts with three
     // children — compact_idx 1 ("foo.txt"), 2 ("bar.rs"), 3 ("baz.md").
-    let initial_root_children: Vec<u32> = drive.children.get(0).to_vec();
+    let initial_root_children: Vec<u32> = drive.children_of(0).into_owned();
     assert_eq!(
         initial_root_children.len(),
         3,
@@ -574,7 +574,7 @@ fn apply_usn_patch_rebuilds_children_csr_excluding_deletes() {
 
     apply_usn_patch(&mut drive, &changes);
 
-    let post_root_children: Vec<u32> = drive.children.get(0).to_vec();
+    let post_root_children: Vec<u32> = drive.children_of(0).into_owned();
     assert!(
         !post_root_children.contains(&1),
         "deleted compact_idx 1 must not appear in root's children CSR after rebuild"

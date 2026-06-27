@@ -484,7 +484,7 @@ fn expand_directory_descendants(drive: &DriveCompactIndex, indices: &mut Vec<u32
         {
             stack.push(idx);
             while let Some(dir_idx) = stack.pop() {
-                for &child_idx in drive.children.get(dir_idx as usize) {
+                for &child_idx in drive.children_of(dir_idx).iter() {
                     extra.push(child_idx);
                     if let Some(child_rec) = drive.records.get(child_idx as usize)
                         && child_rec.is_directory()

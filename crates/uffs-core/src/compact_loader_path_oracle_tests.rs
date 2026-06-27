@@ -176,3 +176,38 @@ fn delete_only_batch_leaves_path_lengths_correct_without_full_recompute() {
     // rebuild over the post-delete record set.
     assert_path_len_matches_full_rebuild(&mut drive);
 }
+
+/// Phase-4b ordering guard: a directory rename (subtree Δ) **and** a child
+/// created inside that directory in the **same batch**. The subtree walk reads
+/// the base ∪ delta children, and the delta is populated *before* the path
+/// walk, so the same-batch create must be found and shifted (or get the right
+/// `path_len` directly) regardless of intra-batch order. The created child's
+/// `path_len` must equal a full rebuild — which it only can if the walk sees
+/// the delta-added child.
+#[test]
+fn dir_rename_with_same_batch_child_create_matches_full_rebuild() {
+    let mut drive = build_nested_fixture();
+
+    apply_usn_patch(&mut drive, &[
+        // Rename dir "sub" (frs 6) → "subdirectory" (longer → Δ > 0).
+        FileChange {
+            frs: 6_u64.into(),
+            parent_frs: 5_u64.into(),
+            filename: "subdirectory".to_owned(),
+            renamed: true,
+            ..FileChange::default()
+        },
+        // Create "inside.txt" (frs 8) as a child of that same dir (frs 6).
+        FileChange {
+            frs: 8_u64.into(),
+            parent_frs: 6_u64.into(),
+            filename: "inside.txt".to_owned(),
+            created: true,
+            ..FileChange::default()
+        },
+    ]);
+
+    // Every live record (incl. the same-batch create under the renamed dir)
+    // must have the byte-identical path_len of a from-scratch BFS.
+    assert_path_len_matches_full_rebuild(&mut drive);
+}

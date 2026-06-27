@@ -109,9 +109,7 @@ impl IndexManager {
                                 return Some(Self::build_info_json(drive, rec, &resolved));
                             }
                             // Collect children for next segment.
-                            next_candidates.extend_from_slice(
-                                drive.children.get(uffs_mft::u32_as_usize(root_idx)),
-                            );
+                            next_candidates.extend_from_slice(&drive.children_of(root_idx));
                         }
                     }
                 }
@@ -130,9 +128,7 @@ impl IndexManager {
                                 );
                                 return Some(Self::build_info_json(drive, rec, &resolved));
                             }
-                            next_candidates.extend_from_slice(
-                                drive.children.get(uffs_mft::u32_as_usize(child_idx)),
-                            );
+                            next_candidates.extend_from_slice(&drive.children_of(child_idx));
                         }
                     }
                 }

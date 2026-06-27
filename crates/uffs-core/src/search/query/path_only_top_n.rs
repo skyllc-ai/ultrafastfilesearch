@@ -267,7 +267,7 @@ fn walk_drive_asc(
         if output.len() >= limit {
             return;
         }
-        let child_slice = drive.children.get(dir_idx as usize);
+        let child_slice = drive.children_of(dir_idx);
         if child_slice.is_empty() {
             continue;
         }
@@ -382,7 +382,7 @@ fn walk_drive_desc(
                 );
             }
             DescTask::Recurse(dir_idx) => {
-                let child_slice = drive.children.get(dir_idx as usize);
+                let child_slice = drive.children_of(dir_idx);
                 if child_slice.is_empty() {
                     continue;
                 }

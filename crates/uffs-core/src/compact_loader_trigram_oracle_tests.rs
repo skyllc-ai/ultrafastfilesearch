@@ -231,3 +231,106 @@ fn apply_batch_delta_search_equals_compacted_rebuild_oracle() {
         );
     }
 }
+
+/// Phase-4b children oracle, exercising the hardest case — a file **moving
+/// between directories** (a rename that changes `parent_idx`). The base
+/// children CSR is frozen (no per-apply rebuild), so `children_of` must merge
+/// base ∪ delta and validate each candidate against the live records: the
+/// moved file must leave its old parent's child list and join the new one.
+/// `children_of` through the overlay must equal the compacted rebuild for every
+/// parent, across move + create + delete.
+/// Nested fixture for the children oracle: root C(frs5,idx0) → dirs
+/// alpha(6,1) beta(7,2); moved.txt(8,3) under alpha, stay.txt(9,4) under beta.
+fn build_nested_dir_fixture() -> DriveCompactIndex {
+    let mut names = Vec::new();
+    let mut records = Vec::new();
+    let mut frs = Vec::new();
+    push_record(&mut names, &mut records, &mut frs, "C", 5, u32::MAX, true);
+    push_record(&mut names, &mut records, &mut frs, "alpha", 6, 0, true);
+    push_record(&mut names, &mut records, &mut frs, "beta", 7, 0, true);
+    push_record(&mut names, &mut records, &mut frs, "moved.txt", 8, 1, false);
+    push_record(&mut names, &mut records, &mut frs, "stay.txt", 9, 2, false);
+
+    let fold = CaseFold::default_table();
+    let trigram = TrigramIndex::build(&records, &names, fold);
+    let children = ChildrenIndex::build(&records);
+    let ext_index = ExtensionIndex::build(&records);
+    DriveCompactIndex {
+        letter: uffs_mft::platform::DriveLetter::T,
+        records: ColumnStorage::from_vec(records),
+        names: ColumnStorage::from_vec(names),
+        trigram: Arc::new(trigram),
+        children: Arc::new(children),
+        ext_index: Arc::new(ext_index),
+        fold,
+        ext_names: vec![Box::from("")],
+        source: IndexSource::MftFile(PathBuf::from("T:")),
+        source_epoch: 1,
+        bloom: None,
+        path_trie: None,
+        frs_to_compact: frs,
+        delta: None,
+    }
+}
+
+#[test]
+fn children_overlay_equals_compacted_rebuild_oracle() {
+    let mut drive = build_nested_dir_fixture();
+
+    apply_usn_patch(&mut drive, &[
+        // Move moved.txt (frs8) from alpha(6) to beta(7) — same name, new parent.
+        FileChange {
+            frs: 8_u64.into(),
+            parent_frs: 7_u64.into(),
+            filename: "moved.txt".to_owned(),
+            renamed: true,
+            ..FileChange::default()
+        },
+        // Create fresh.txt (frs10) under alpha(6).
+        FileChange {
+            frs: 10_u64.into(),
+            parent_frs: 6_u64.into(),
+            filename: "fresh.txt".to_owned(),
+            created: true,
+            ..FileChange::default()
+        },
+        // Delete stay.txt (frs9).
+        FileChange {
+            frs: 9_u64.into(),
+            parent_frs: 7_u64.into(),
+            deleted: true,
+            ..FileChange::default()
+        },
+    ]);
+
+    assert!(
+        drive.delta.is_some(),
+        "apply must have populated the children delta"
+    );
+    let mut compacted = drive.clone();
+    compacted.compact_base();
+
+    // children_of must match the compacted rebuild for every record index.
+    let record_count = u32::try_from(drive.records.len()).expect("fits u32");
+    for parent in 0..record_count {
+        let overlay = drive.children_of(parent).into_owned();
+        let rebuilt = compacted.children_of(parent).into_owned();
+        assert_eq!(
+            overlay, rebuilt,
+            "children_of({parent}): overlay {overlay:?} != compacted {rebuilt:?}",
+        );
+    }
+
+    // Concrete semantics: moved.txt(3) left alpha(1) for beta(2); fresh.txt(5)
+    // joined alpha; stay.txt(4) deleted from beta.
+    assert_eq!(
+        drive.children_of(1).into_owned(),
+        vec![5],
+        "alpha = {{fresh.txt}}"
+    );
+    assert_eq!(
+        drive.children_of(2).into_owned(),
+        vec![3],
+        "beta = {{moved.txt}}"
+    );
+}
