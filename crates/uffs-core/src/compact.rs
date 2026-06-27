@@ -15,6 +15,7 @@
 //! computation, and the MFT→compact builder from focused submodules
 //! (`record`, `children`, `extension`, `path_len`, `builder`, `delta`).
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 
 use crate::bloom::Bloom;
@@ -51,8 +52,8 @@ pub(crate) use record::NTFS_METAFILE_NAMES;
 pub use record::{CompactRecord, is_ntfs_metafile_name};
 
 /// Touched-record count (adds + tombstones since the last compaction) above
-/// which [`DriveCompactIndex::apply_trigram_delta`] folds the delta back into a
-/// fresh trigram base (design §5.4). Sized to amortize the ~340 ms base rebuild
+/// which [`DriveCompactIndex::apply_index_delta`] folds the delta back into
+/// fresh bases (design §5.4). Sized to amortize the ~340 ms base rebuild
 /// across many small USN applies while bounding delta memory + per-search merge
 /// cost; tune from the `IDXDELTA-TIMING` WIN baseline.
 pub(crate) const TRIGRAM_COMPACT_THRESHOLD: u32 = 50_000;
@@ -260,33 +261,65 @@ impl DriveCompactIndex {
         Some(result)
     }
 
-    /// Fold the delta overlay back into a fresh base and clear it (design §5.4
-    /// compaction). Rebuilds the trigram base from the current records — which
-    /// already reflect every applied mutation — then resets `delta = None` so
-    /// subsequent searches take the zero-overhead base fast path.
+    /// Fold the delta overlay back into fresh bases and clear it (design §5.4
+    /// compaction). Rebuilds the trigram (Phase 2b) and extension (Phase 4a)
+    /// bases from the current records — which already reflect every applied
+    /// mutation — then resets `delta = None` so subsequent searches take the
+    /// zero-overhead base fast path.
     ///
     /// O(total records); the per-apply path drives toward this running only
     /// occasionally (every [`TRIGRAM_COMPACT_THRESHOLD`] touched records) or
     /// before serialization (the on-disk cache is always delta-free).
     ///
-    /// Phase 4 will also rebuild the extension + children bases here once they
-    /// gain delta overlays; today those are rebuilt every apply, so compaction
-    /// only needs to refold the trigram base.
+    /// `children` is still rebuilt every apply (Phase 4b will move it onto the
+    /// overlay), so compaction does not need to touch it here.
     pub(crate) fn compact_base(&mut self) {
         self.trigram = Arc::new(TrigramIndex::build(&self.records, &self.names, self.fold));
+        self.ext_index = Arc::new(ExtensionIndex::build(&self.records));
         self.delta = None;
     }
 
-    /// Phase-2b trigram maintenance for one USN apply: overlay the batch's
-    /// changes onto the delta instead of rebuilding the trigram base.
+    /// Record indices whose extension is `ext_id`, through the base ∪ delta
+    /// overlay (Phase 4a). The choke point every `--ext` query goes through.
+    ///
+    /// When [`Self::delta`] is `None` this borrows the base CSR posting slice
+    /// with **zero** allocation. With a delta present it merges the base and
+    /// delta postings, then validates each candidate against the live records —
+    /// keeping `idx` only if `records[idx].extension_id == ext_id` and the
+    /// record is live (`name_len != 0`). That records check is what makes a
+    /// renamed extension (`foo.log` → `foo.pdf`) and a delete correct
+    /// **without** a separate ext tombstone: a stale base posting fails the
+    /// check.
+    #[must_use]
+    pub fn records_with_ext(&self, ext_id: u16) -> Cow<'_, [u32]> {
+        let base = self.ext_index.get(ext_id);
+        let Some(delta) = &self.delta else {
+            return Cow::Borrowed(base);
+        };
+        let merged = delta::merge_postings(base, delta.ext_postings(ext_id));
+        let filtered: Vec<u32> = merged
+            .into_iter()
+            .filter(|&idx| {
+                self.records
+                    .get(idx as usize)
+                    .is_some_and(|rec| rec.extension_id == ext_id && rec.name_len != 0)
+            })
+            .collect();
+        Cow::Owned(filtered)
+    }
+
+    /// Overlay one USN apply's changes onto the base+delta index instead of
+    /// rebuilding the trigram (Phase 2b) and extension (Phase 4a) bases.
     ///
     /// `adds` are the created / renamed / reused records (their post-mutation
-    /// name's trigrams are added); `tombstones` are the deleted / renamed-away
-    /// / reused-slot records (their stale base postings are masked).
+    /// name trigrams + extension + parent are added to the delta); `tombstones`
+    /// are the deleted / renamed-away / reused-slot records (their stale base
+    /// **trigram** postings are masked — the ext/children overlays validate
+    /// candidates against the live records instead, so they need no tombstone).
     /// Returns `true` if the accumulated delta crossed
     /// [`TRIGRAM_COMPACT_THRESHOLD`] and triggered a [`Self::compact_base`]
     /// fold this call.
-    pub(crate) fn apply_trigram_delta(&mut self, adds: &[PathChange], tombstones: &[u32]) -> bool {
+    pub(crate) fn apply_index_delta(&mut self, adds: &[PathChange], tombstones: &[u32]) -> bool {
         // Fast path for a batch that will cross the compaction threshold anyway
         // (e.g. a 100k-file burst): populating the delta only to discard it is
         // pure waste. Refold the base directly from the records — which already
@@ -308,16 +341,18 @@ impl DriveCompactIndex {
                 continue;
             };
             // A record tombstoned this same batch (e.g. created-then-deleted) is
-            // not searchable; skip its add.
+            // gone; skip its add entirely.
             if rec.name_len == 0 {
                 continue;
             }
-            // Names < 3 codepoints have no trigrams (found via linear scan, not
-            // the trigram pre-filter) — `needle_trigrams` returns None, matching
-            // the base build which also skips them.
-            if let Some(trigrams) = crate::trigram::needle_trigrams(rec.name(&self.names), fold) {
-                delta.add_record(change.idx, &trigrams, rec.extension_id, rec.parent_idx);
-            }
+            // Trigram postings only for names ≥ 3 codepoints (shorter names are
+            // found via linear scan, not the trigram pre-filter — matching the
+            // base build); but the extension + children overlays are added for
+            // EVERY record regardless of name length, so an `--ext` / tree query
+            // never misses a short-named create/rename.
+            let trigrams =
+                crate::trigram::needle_trigrams(rec.name(&self.names), fold).unwrap_or_default();
+            delta.add_record(change.idx, &trigrams, rec.extension_id, rec.parent_idx);
         }
         // The early check above guarantees `pending + batch ≤ threshold`, and
         // the populated delta can only be ≤ that, so no compaction is due here.

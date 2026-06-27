@@ -215,7 +215,7 @@ fn scan_ext_fast_path(
     state: &mut DriveTopN,
 ) {
     for &ext_id in &filters.resolved_ext_ids {
-        for &rec_idx_u32 in drive.ext_index.get(ext_id) {
+        for &rec_idx_u32 in drive.records_with_ext(ext_id).iter() {
             let rec_idx = rec_idx_u32 as usize;
             let Some(rec) = drive.records.get(rec_idx) else {
                 continue;
