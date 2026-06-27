@@ -165,6 +165,29 @@ fn git_head_short() -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
+/// Whether the diff between the running daemon's build SHA and HEAD touches any
+/// **build-affecting** path (crate source or a Cargo manifest), i.e. the binary
+/// is genuinely stale. A HEAD that advanced only through `scripts/` or `docs/`
+/// (e.g. a verify-rig tweak) leaves the daemon binary current, so it is NOT
+/// stale. Defaults to `true` (assume stale) if git can't answer — fail safe.
+fn build_is_stale(daemon_sha: &str, head_sha: &str) -> bool {
+    let Ok(out) = Command::new("git")
+        .args(["diff", "--name-only", daemon_sha, head_sha])
+        .output()
+    else {
+        return true;
+    };
+    if !out.status.success() {
+        return true;
+    }
+    String::from_utf8_lossy(&out.stdout).lines().any(|path| {
+        path.starts_with("crates/")
+            || path == "Cargo.toml"
+            || path == "Cargo.lock"
+            || path.starts_with("rust-toolchain")
+    })
+}
+
 /// Copy freshly built binaries from the cargo build dir into `~/bin` so the rig
 /// always exercises the just-built daemon.  Required bins missing → bail with a
 /// "build first" hint; optional bins are copied only if present.
@@ -341,14 +364,22 @@ fn main() -> Result<()> {
             .nth(1)
             .and_then(|rest| rest.split('"').next())
             .unwrap_or("");
-        if logged != head {
+        if logged == head {
+            println!("  build-id match: uffsd git={logged} == HEAD {head}");
+        } else if build_is_stale(logged, head) {
             bail!(
-                "STALE DAEMON: running uffsd is git={logged:?} but repo HEAD is {head:?}.\n\
-                 The bin sync copied HEAD's build, so a daemon from an earlier build is \
-                 still resident. Stop it (`uffs --daemon stop`) and re-run.",
+                "STALE DAEMON: running uffsd is git={logged:?} but HEAD is {head:?} and \
+                 crate source / Cargo manifests differ between them — rebuild + re-run \
+                 (the rig re-syncs ~/bin, but you must `cargo build --release` first).",
+            );
+        } else {
+            // HEAD advanced only through scripts/docs (e.g. this rig itself);
+            // the daemon binary is still current with the crate source.
+            println!(
+                "  build-id OK: uffsd git={logged}, HEAD={head} differ only in \
+                 non-source files — binary is current."
             );
         }
-        println!("  build-id match: uffsd git={logged} == HEAD {head}");
     }
 
     // ── 2 + 3. CHURN, TIMING, FRESHNESS ─────────────────────────────────────
