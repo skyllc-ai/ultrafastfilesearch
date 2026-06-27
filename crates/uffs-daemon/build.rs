@@ -12,14 +12,12 @@
 
 //! Build script for `uffs-daemon`.
 //!
-//! Emits `UFFS_GIT_SHA` — the short commit the daemon was built from — so the
-//! startup log can stamp **which build** is running. This exists for the
-//! `IDXDELTA` development flow (incremental-index-maintenance): the USN
-//! testing earlier hit a "ran the wrong/stale binary" trap, and a definitive
-//! build stamp in the daemon log is how the WIN test-script confirms it
-//! exercised the binary it just compiled.  Remove this build script (and the
-//! `option_env!("UFFS_GIT_SHA")` read in `startup.rs`) when the IDXDELTA dev
-//! instrumentation is stripped in Phase 5.
+//! Emits `UFFS_GIT_SHA` — the short commit the daemon was built from, with a
+//! `-dirty` suffix when the working tree had uncommitted changes — so the
+//! startup log can stamp **which build** is running. A definitive build stamp
+//! in the daemon log is how a field log (or a WIN test-script) is tied back to
+//! the exact binary that produced it, closing the "ran the wrong/stale binary"
+//! trap. Read back via `option_env!("UFFS_GIT_SHA")` in `startup.rs`.
 
 use std::process::Command;
 

@@ -55,7 +55,7 @@ pub use record::{CompactRecord, is_ntfs_metafile_name};
 /// which [`DriveCompactIndex::apply_index_delta`] folds the delta back into
 /// fresh bases (design §5.4). Sized to amortize the ~340 ms base rebuild
 /// across many small USN applies while bounding delta memory + per-search merge
-/// cost; tune from the `IDXDELTA-TIMING` WIN baseline.
+/// cost; tune from the apply-cost bench + live USN-apply DEBUG summaries.
 pub(crate) const TRIGRAM_COMPACT_THRESHOLD: u32 = 50_000;
 
 /// A loaded drive with compact index.

@@ -5,10 +5,9 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # Incremental Index Maintenance — Two-Tier Base + Delta (LSM-style)
 
-**Status:** Phases 1–5 complete + WIN-validated — per-apply 1367 ms → ~200 ms (−85%): paths/trigram/ext/children all incremental/overlay-served, clone Arc-shared, apply cadence now debounce+max-wait (snappy + CPU-bounded). Phase 6 (remove IDXDELTA dev instrumentation, graduate baseline → perf test) is the only remaining item.
+**Status:** Phases 1–6 complete + WIN-validated — per-apply 1367 ms → ~200 ms (−85%): paths/trigram/ext/children all incremental/overlay-served, clone Arc-shared, apply cadence now debounce+max-wait (snappy + CPU-bounded). Phase 6 stripped the `IDXDELTA` dev instrumentation: the per-batch cost now lands as the `usn apply: batch applied` DEBUG summary, the git stamp graduated onto the `uffsd starting` banner, and the timing baseline became the cross-platform `apply_cost` Criterion bench (perf guard).
 **Owner:** _(assign)_
 **Branch:** `feat/incremental-index-maintenance`
-**Dev marker:** `IDXDELTA` (all temporary dev-only logging / timing carries this token; grep-and-remove before merge — see §9)
 
 ---
 
@@ -199,9 +198,11 @@ baseline (clone+loop are constant-ish; each phase removes one rebuild term).
   apply-interval default (candidate: 30 s → ~2 s or event-driven). Remove the dead
   per-apply rebuild branch.
 
-- **Phase 6 — cleanup:** grep-remove every `IDXDELTA` dev marker + the build.rs
-  stamp + the dev script timing (§9); fold the baseline into a committed
-  perf-regression test; graduate `idx-delta-verify.rs` into `tests/` or delete.
+- **Phase 6 — cleanup (done):** grep-removed every `IDXDELTA` dev marker; kept
+  the build.rs git stamp (folded into the `uffsd starting` banner) and the
+  per-apply timing (now the `usn apply: batch applied` DEBUG summary); folded the
+  baseline into the committed `apply_cost` perf bench; retargeted
+  `idx-delta-verify.rs` onto the graduated logs (§9, §10).
 
 ## 5. Detailed implementation guidelines (junior-dev executable)
 
@@ -399,26 +400,34 @@ fn oracle(ops: &[Op]) {
   **compaction latency**.
 - Capture a **baseline JSON** (`docs/architecture/baselines/incremental-index-<date>.json`)
   committed at the end of Phase 0 (pure-base numbers) and refreshed per phase.
-- The dev test-script (§10) prints a **timing table** tagged `IDXDELTA-TIMING`
-  and diffs against the committed baseline, flagging any search latency that
-  regresses beyond a tolerance (start at +15 %). This is how we catch a "delta
-  merge made search slower" regression on the Windows box, live.
+- **Committed perf guard (landed):** the cross-platform `apply_cost` Criterion
+  bench (`crates/uffs-core/benches/apply_cost.rs`) applies representative batches
+  (`creates/256`, `creates/4000`, `mixed/4000`, `deletes/4000`) to a ~500k-record
+  fixture and times the apply alone (clone excluded via `iter_batched`). Paired
+  with `overlay_read.rs` (search-under-churn), this is the regression guard the
+  `IDXDELTA-TIMING` baseline graduated into. The §10 WIN rig is the live
+  confirmation under real USN churn.
 
-## 9. Dev instrumentation — `IDXDELTA` marker (removable)
+## 9. Dev instrumentation — `IDXDELTA` marker (removed in Phase 6)
 
-Mirror the `USNFIX` convention used for the live-USN debugging:
+During the build-out, all temporary logging/timing carried the literal token
+`IDXDELTA` so it could be grep-and-removed in one pass. Phase 6 did exactly that
+(`grep -rn IDXDELTA crates/ scripts/` → zero hits). Two pieces graduated into
+permanent facilities instead of being deleted:
 
-- **Build identifier:** at daemon start, log
-  `tracing::info!(marker = "IDXDELTA", build = env!("...GIT_SHA or version"), "IDXDELTA build active")`
-  so the test-script can confirm *which* build it exercised (we hit the wrong-build
-  trap during USN testing — do not repeat it).
-- **Per-apply timing:** `IDXDELTA-TIMING apply: delta_add=… tombstone=… compact=…(ms)`.
-- **Per-search timing:** `IDXDELTA-TIMING search: base=… delta_merge=… total=…(ms) delta_len=…`.
-- **Compaction events:** `IDXDELTA compact: folded delta_len=… into base records=… in …ms`.
-- All such lines carry the literal token `IDXDELTA`. **Phase 5 removal:**
-  `grep -rn IDXDELTA crates/ scripts/` → delete every hit; the only survivors
-  become permanent `debug!`/metrics if we decide to keep them (decided in Phase 5,
-  not before).
+- **Build identifier** — the `git=<sha>` build stamp (emitted by
+  `uffs-daemon/build.rs` as `UFFS_GIT_SHA`) folded into the existing
+  `uffsd starting` INFO banner, so every field log still pins which binary
+  produced it (the wrong-build trap is closed permanently, not just for the dev
+  flow).
+- **Per-apply timing** — the per-step `IDXDELTA-TIMING apply` lines became the
+  single `usn apply: batch applied` DEBUG summary in `compact_loader/rebuild.rs`
+  (`changes / created / deleted / renamed / skipped / records / ext_index_entries
+  / compacted / apply_us`). The whole-body clone timing was dropped (the clone is
+  now Arc-shared and cheap — Phase 3).
+
+The per-search timing + compaction-event lines were never needed beyond the
+overlay bring-up and were removed outright.
 
 ## 10. Dev test-script — `scripts/windows/idx-delta-verify.rs`
 
@@ -426,19 +435,21 @@ Modeled on `scripts/windows/usn-verify.rs` (same `~/bin/uffs.exe` resolution,
 `~/idxtest` scratch, `_run/` artifact dir, daemon-restart-with-logging pattern).
 What it adds beyond usn-verify:
 
-1. **Build confirmation** — assert the daemon log contains `IDXDELTA build active`
-   and print the build id (fail fast on a stale binary).
-2. **Churn generator** — create / rename / delete in escalating bursts (10, 100,
-   1 000, 10 000 files) so the delta grows and compaction triggers, capturing each
-   search's result set to `_run/NN-*.csv` (correctness) AND the `IDXDELTA-TIMING`
-   lines to `_run/timing.log` (perf).
+1. **Build confirmation** — read the `git=` stamp off the `uffsd starting` banner
+   and assert it equals repo HEAD (fail fast on a stale binary).
+2. **Churn generator** — create / rename / delete in escalating bursts (1 000,
+   10 000, 100 000 files) so the delta grows and the 100k burst crosses the 50k
+   compaction threshold, capturing each `usn apply: batch applied` DEBUG line to
+   `_run/idx-timing.log` (perf) and a per-burst freshness probe (correctness).
 3. **Freshness probe** — after a burst, measure wall-clock from file-op to
-   search-visible (should be ≈ apply interval, no backlog).
-4. **Timing-regression gate** — parse `_run/timing.log`, build a table, diff
-   against the committed baseline (§8), and print `PASS`/`REGRESSION` per metric.
-5. **Oracle cross-check (optional, on-box)** — re-run a search with the daemon
-   forced to compact, and confirm identical results pre/post compaction (the
-   live analogue of §7).
+   search-visible (should be ≈ apply cadence, no backlog).
+4. **Per-apply summary** — parse the captured apply lines into `_run/baseline.txt`:
+   applies fired, changes coalesced, mean/max `apply_us`, and compaction count.
+   The cross-platform `apply_cost` Criterion bench is the committed perf guard;
+   this on-box summary is the live confirmation under real USN churn.
+5. **Mutate smoke** — rename + delete on unique sentinel names, asserting the new
+   name appears, the deleted name leaves, and the old name is gone (the live
+   analogue of the §7 oracle).
 
 Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we can
 "push → pull on WIN → run → share `_run/`" each iteration.
@@ -463,8 +474,8 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 | **4b** | **Children delta (`for_each_child` / `children_of`)** | ✅ done | `abe9ff115` | 60 → ~0 ms (WIN); apply reordered (delta before paths); move/create/delete + same-batch-create oracles |
 | — | *Overlay read-cost microbench* | ✅ done | `1a7eff444` | churn overhead measured: small (tree walk 0.7→2.1 ms); `for_each_child` lever ready |
 | **5** | **Apply cadence: debounce + max-wait (snappy + CPU-bounded)** | ✅ done | this | `ApplyTrigger` 30 s rate-limit → 250 ms debounce / 2 s max-wait; cadences evaluated every poll; full apply now ~200 ms (WIN, −85% from 1367) |
-| 6 | Remove `IDXDELTA` dev helpers (+ build.rs); graduate baseline → perf test | ☐ todo | | grep-and-remove |
+| **6** | **Remove `IDXDELTA` dev helpers; graduate baseline → perf test** | ✅ done | this | `grep -rn IDXDELTA crates/ scripts/` → 0; git stamp folded into `uffsd starting`; per-apply → `usn apply: batch applied` DEBUG; `apply_cost` bench is the committed perf guard; WIN rig retargeted |
 
 **Done-definition (whole project):** apply is O(changes); oracle green; no search
 latency regression vs baseline; production apply interval reduced; all `IDXDELTA`
-dev scaffolding removed.
+dev scaffolding removed. **All met.**

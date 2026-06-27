@@ -4,15 +4,15 @@
 //! anyhow = "1"
 //! ```
 //!
-//! idx-delta-verify.rs — measurement rig + baseline for the incremental-index-
-//! maintenance work (design: `docs/architecture/incremental-index-maintenance.md`).
+//! idx-delta-verify.rs — live WIN verification + perf guard for the incremental-
+//! index-maintenance work (design: `docs/architecture/incremental-index-maintenance.md`).
 //!
-//! Phase 0 goal: **before** any delta work, prove the rig works on the WIN box
-//! and capture a timing BASELINE so later phases can detect a regression.  It
-//! deliberately mirrors `scripts/windows/usn-verify.rs` (same `~/bin/uffs.exe`
-//! resolution, `~/idxtest` scratch, `_run/` artifacts, daemon-restart-with-
-//! logging) so the dev loop is identical: push -> pull on WIN -> run -> share
-//! `_run/`.
+//! Goal: on the WIN box, prove the delta-overlay apply stays correct (creates,
+//! renames, deletes become search-visible promptly) AND fast (per-apply cost
+//! tracks the batch, not the drive size). It deliberately mirrors
+//! `scripts/windows/usn-verify.rs` (same `~/bin/uffs.exe` resolution, `~/idxtest`
+//! scratch, `_run/` artifacts, daemon-restart-with-logging) so the dev loop is
+//! identical: push -> pull on WIN -> run -> share `_run/`.
 //!
 //! What it does:
 //!   0. BIN SYNC — copies the freshly built `uffs`/`uffsd` (+ broker/mcp if
@@ -20,21 +20,18 @@
 //!      `target_directory`, honouring `CARGO_TARGET_DIR` / `.cargo/*.toml`;
 //!      override with `UFFS_RELEASE_DIR`) into `~/bin`, so the rig can never run
 //!      a stale daemon.  Build, then run — no manual copy step.
-//!   1. BUILD CONFIRMATION — restarts the daemon with logging, then asserts the
-//!      log contains `IDXDELTA build active`, prints the version + git SHA, and
-//!      asserts that SHA equals repo HEAD (hard stale-daemon guard).
-//!   2. CHURN + TIMING — creates files in escalating bursts so each apply fires
-//!      the O(n) full rebuild, captures every `IDXDELTA-TIMING apply` line, and
-//!      summarises the per-index rebuild cost (children / trigram / ext / total)
-//!      at the drive's live record count.
+//!   1. BUILD CONFIRMATION — restarts the daemon with logging, then reads the
+//!      `git=` stamp off the `uffsd starting` line and asserts it equals repo
+//!      HEAD (hard stale-daemon guard).
+//!   2. CHURN + TIMING — creates files in escalating bursts so each apply fires,
+//!      captures every `usn apply: batch applied` DEBUG line, and summarises the
+//!      per-apply wall-clock + compaction count at the drive's live record count.
 //!   3. FRESHNESS — measures wall-clock from a create to the file being
-//!      search-visible (sanity: no backlog at the pinned apply interval).
-//!   4. BASELINE — writes `_run/baseline.txt` (the numbers to commit per the
-//!      design doc §8) + `_run/idx-timing.log` (the raw IDXDELTA-TIMING lines).
+//!      search-visible (sanity: no backlog at the pinned apply cadence).
+//!   4. BASELINE — writes `_run/baseline.txt` (the per-apply numbers) +
+//!      `_run/idx-timing.log` (the raw `usn apply` lines).
 //!
 //! Usage:  rust-script scripts\windows\idx-delta-verify.rs
-//!
-//! All `IDXDELTA` markers are dev-only; the design doc §9 / Phase 5 removes them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,8 +43,8 @@ use anyhow::{Context, Result, bail};
 
 /// Phase-5 apply **max-wait** cap (ms) for the test daemon — the ceiling under
 /// sustained churn. With apply now ~200 ms (Phases 1-4), the production default
-/// is 2 s; the rig pins it explicitly so the IDXDELTA-TIMING cadence is
-/// deterministic across runs.
+/// is 2 s; the rig pins it explicitly so the apply cadence is deterministic
+/// across runs.
 const APPLY_INTERVAL_MS: &str = "2000";
 /// Phase-5 apply **debounce / settle** window (ms) — the snappy half: a burst
 /// that goes quiet for this long is applied at once, so an idle→active change
@@ -57,13 +54,14 @@ const APPLY_DEBOUNCE_MS: &str = "250";
 const KILL_SETTLE: Duration = Duration::from_secs(2);
 /// Poll cadence while waiting for a burst's files to become search-visible.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// `info` enables the daemon build marker AND the `IDXDELTA-TIMING` apply line
-/// (both logged at INFO); core trace adds per-change detail if needed.
-const LOG_SPEC: &str = "info,uffs_core=info,uffs_daemon=info";
+/// `uffs_core=debug` surfaces the per-batch `usn apply: batch applied` summary
+/// (logged at DEBUG); `info` everywhere else keeps the daemon `uffsd starting`
+/// build stamp and the rest of the log readable.
+const LOG_SPEC: &str = "info,uffs_core=debug,uffs_daemon=info";
 /// Escalating create-burst sizes — bigger bursts exercise bigger apply batches.
-/// The 100k burst crosses `TRIGRAM_COMPACT_THRESHOLD` (50k) so it also measures
-/// a delta compaction (full trigram refold) under load, while the smaller
-/// bursts measure the steady-state delta-overlay apply (trigram_us ≈ 0).
+/// The 100k burst crosses `TRIGRAM_COMPACT_THRESHOLD` (50k) so it also forces a
+/// delta compaction (full base refold, `compacted=true`) under load, while the
+/// smaller bursts stay on the steady-state delta-overlay apply.
 const BURSTS: &[usize] = &[1_000, 10_000, 100_000];
 
 /// `~/bin/uffs.exe` — the canonical user-installed **Rust** binary.  Pinned to
@@ -361,7 +359,7 @@ fn main() -> Result<()> {
     println!("\n== Build confirmation ==");
     let build_line = read_log(&log_path)
         .lines()
-        .find(|line| line.contains("IDXDELTA build active"))
+        .find(|line| line.contains("uffsd starting"))
         .map(str::to_owned);
     let build_line = match build_line {
         Some(line) => {
@@ -369,15 +367,15 @@ fn main() -> Result<()> {
             line
         }
         None => bail!(
-            "no `IDXDELTA build active` line in {} — the running uffsd.exe is NOT an \
-             IDXDELTA build. Rebuild then re-run (the rig re-syncs ~/bin for you).",
+            "no `uffsd starting` line in {} — the daemon did not log a startup banner. \
+             Rebuild then re-run (the rig re-syncs ~/bin for you).",
             log_path.display()
         ),
     };
 
     // Build-id match guard: the running daemon's git SHA must equal repo HEAD,
     // else a stale uffsd is being exercised (the trap that has cost several
-    // 30-min WIN cycles).  `git="<sha>"` is emitted by the IDXDELTA marker.
+    // 30-min WIN cycles).  `git="<sha>"` is stamped on the `uffsd starting` line.
     if let Some(head) = &head_sha {
         let logged = build_line
             .split("git=\"")
@@ -476,95 +474,77 @@ fn main() -> Result<()> {
     let log = read_log(&log_path);
     let timing_lines: Vec<&str> = log
         .lines()
-        .filter(|line| line.contains("IDXDELTA-TIMING apply"))
+        .filter(|line| line.contains("usn apply: batch applied"))
         .collect();
     fs::write(run_dir.join("idx-timing.log"), timing_lines.join("\n"))?;
 
     let baseline = summarise(&timing_lines);
-    println!("\n== BASELINE (per-apply cost breakdown) ==");
+    println!("\n== BASELINE (per-apply cost) ==");
     println!("{baseline}");
     fs::write(run_dir.join("baseline.txt"), &baseline)?;
 
     println!("\n== Done ==");
     println!("Share: {}", run_dir.display());
-    println!(
-        "Key: baseline.txt (commit per design §8), idx-timing.log (raw IDXDELTA-TIMING), uffsd.log."
-    );
+    println!("Key: baseline.txt (per-apply numbers), idx-timing.log (raw apply lines), uffsd.log.");
     Ok(())
 }
 
-/// Mean (and sample count) of a numeric `key=value` tracing field across all
-/// lines that carry it.  Field-generic so new IDXDELTA-TIMING fields in later
-/// phases need no parser change.
-fn field_mean(lines: &[&str], key: &str) -> Option<(f64, usize)> {
+/// All numeric values of a `key=value` tracing field across the lines that
+/// carry it.  Field-generic so a new apply-summary field needs no parser change.
+fn field_values(lines: &[&str], key: &str) -> Vec<f64> {
     let prefix = format!("{key}=");
-    let vals: Vec<f64> = lines
+    lines
         .iter()
         .filter_map(|line| {
             line.split_whitespace()
                 .find_map(|tok| tok.strip_prefix(&prefix))
                 .and_then(|raw| raw.parse::<f64>().ok())
         })
-        .collect();
-    if vals.is_empty() {
-        None
-    } else {
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        Some((mean, vals.len()))
-    }
+        .collect()
 }
 
-/// Build the human-readable baseline: the mean of each per-apply cost field.
-/// The apply emits two lines (whole-body clone; per-change loop + rebuild), so
-/// `clone_ms` and the rebuild fields come from different lines — we report each
-/// mean and the implied full per-apply cost = clone + loop + rebuild.
+/// Build the human-readable baseline from the `usn apply: batch applied` lines:
+/// how many applies fired, the changes they coalesced, the per-apply wall-clock
+/// (mean + worst case), and how many crossed the compaction threshold. The
+/// per-apply `apply_us` is the number the perf guard watches — it must track the
+/// batch size, not the drive's record count.
 fn summarise(lines: &[&str]) -> String {
     if lines.is_empty() {
-        return "  (no `IDXDELTA-TIMING apply` lines captured — did any apply fire? \
-                check uffsd.log / the apply interval)"
+        return "  (no `usn apply: batch applied` lines captured — did any apply fire? \
+                check uffsd.log, the apply cadence, and that UFFS_LOG enables uffs_core=debug)"
             .to_owned();
     }
-    let records = lines
+    let records = field_values(lines, "records")
+        .into_iter()
+        .fold(0_f64, f64::max);
+    let changes = field_values(lines, "changes");
+    let total_changes: f64 = changes.iter().sum();
+    let mean_changes = total_changes / changes.len().max(1) as f64;
+
+    // `apply_us` is whole-microsecond (integer, per uffs-core's no-float policy);
+    // render as ms here (1 us = 0.001 ms).
+    let apply = field_values(lines, "apply_us");
+    let mean_apply_ms = apply.iter().sum::<f64>() / apply.len().max(1) as f64 / 1000.0;
+    let max_apply_ms = apply.iter().copied().fold(0_f64, f64::max) / 1000.0;
+
+    // `compacted=true` counts the applies that crossed TRIGRAM_COMPACT_THRESHOLD
+    // and refolded the bases (the O(total) path); the rest stayed O(changed).
+    let compactions = lines
         .iter()
-        .filter_map(|line| {
-            line.split_whitespace()
-                .find_map(|tok| tok.strip_prefix("records="))
-                .and_then(|raw| raw.parse::<u64>().ok())
-        })
-        .max()
-        .unwrap_or(0);
+        .filter(|line| line.split_whitespace().any(|tok| tok == "compacted=true"))
+        .count();
 
-    // The daemon logs whole-microsecond fields (`*_us`) — integer, to respect
-    // uffs-core's no-float policy; render them as ms here (1 us = 0.001 ms).
-    let row = |label: &str, key: &str| -> String {
-        match field_mean(lines, key) {
-            Some((mean_us, count)) => {
-                format!("  mean {label:<10} {:>8.3} ms   (n={count})\n", mean_us / 1000.0)
-            }
-            None => format!("  mean {label:<10}      -- (no samples)\n"),
-        }
-    };
-
-    let mean_us = |key: &str| field_mean(lines, key).map_or(0.0, |(mean, _)| mean);
-    let implied_ms = (mean_us("clone_us") + mean_us("loop_us") + mean_us("rebuild_us")) / 1000.0;
-
-    let mut out = format!(
-        "  apply lines:   {}\n  drive records: {records}\n",
+    format!(
+        "  apply lines:       {}\n  \
+         drive records:     {records:.0}\n  \
+         total changes:     {total_changes:.0}\n  \
+         mean changes/apply {mean_changes:>10.0}\n  \
+         compactions:       {compactions}  (compacted=true, full base refold)\n  \
+         ─────────────────────────────────\n  \
+         mean apply         {mean_apply_ms:>10.3} ms\n  \
+         max  apply         {max_apply_ms:>10.3} ms   <- worst per-apply cost\n",
         lines.len()
-    );
-    out.push_str(&row("clone", "clone_us"));
-    out.push_str(&row("loop", "loop_us"));
-    out.push_str(&row("children", "children_us"));
-    out.push_str(&row("paths", "paths_us"));
-    out.push_str(&row("trigram", "trigram_us"));
-    out.push_str(&row("ext", "ext_us"));
-    out.push_str(&row("rebuild", "rebuild_us"));
-    out.push_str(&format!(
-        "  ─────────────────────────────────\n  \
-         IMPLIED full apply ≈ clone+loop+rebuild = {implied_ms:>8.3} ms   \
-         <- the per-apply cost to beat\n"
-    ));
-    out
+    )
 }
 
 /// Read the daemon log, tolerating a missing file (returns empty).

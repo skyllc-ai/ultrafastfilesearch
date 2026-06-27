@@ -505,9 +505,9 @@ pub fn apply_usn_patch(
     // deletes, renames, and FRS-reuse overwrites.
     let mut tombstones: Vec<u32> = Vec::new();
 
-    // IDXDELTA-TIMING: the O(changed) per-change mutation loop, measured apart
-    // from the O(total) rebuild below so the baseline shows where the time goes.
-    let t_loop = Instant::now();
+    // Wall-clock the whole apply (O(changed) mutation loop + the post-loop
+    // overlay/path refresh) for the DEBUG batch summary.
+    let t_apply = Instant::now();
     for change in changes {
         // Typed `Frs` → raw `u64` lift at the frs_to_compact CSR lookup
         // boundary.  The mapping table is `Vec<u32>` indexed by `usize`,
@@ -563,18 +563,20 @@ pub fn apply_usn_patch(
         }
     }
 
-    // Rebuild the derived structures (children CSR, path lengths, trigram,
-    // extension index) from the mutated records + names, with per-step
-    // IDXDELTA-TIMING.  Extracted to `rebuild.rs` — see that module + the
-    // incremental-index-maintenance design doc.
-    rebuild::rebuild_derived_and_log(
-        drive,
-        changes.len(),
-        &stats,
-        t_loop.elapsed(),
-        &path_changes,
-        &tombstones,
-    );
+    // Overlay the batch onto the base ∪ delta indexes + refresh path lengths
+    // (incremental-index-maintenance); the occasional compaction folds the
+    // delta back into fresh bases.  Extracted to `rebuild.rs`.
+    let compacted = rebuild::rebuild_derived(drive, &path_changes, &tombstones);
+
+    if !changes.is_empty() {
+        rebuild::log_batch_summary(
+            drive,
+            changes.len(),
+            &stats,
+            compacted,
+            t_apply.elapsed().as_micros(),
+        );
+    }
 
     stats
 }
