@@ -105,6 +105,10 @@ harness = false
 name = "search_benchmarks"
 harness = false
 
+[[bench]]
+name = "overlay_read"
+harness = false
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Lints (inherit from workspace)
 # ─────────────────────────────────────────────────────────────────────────────
