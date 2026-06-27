@@ -189,7 +189,12 @@ fn sync_bins(bin_dir: &Path) -> Result<()> {
     for name in OPTIONAL_BINS {
         let src = src_dir.join(exe(name));
         if src.exists() {
-            copy_bin(&src, &bin_dir.join(exe(name)))?;
+            // Best-effort: the broker is a running LocalSystem service, so its
+            // exe is legitimately locked (os error 32). The rig only needs a
+            // fresh uffs + uffsd, so a locked/failed optional copy just warns.
+            if let Err(err) = copy_bin(&src, &bin_dir.join(exe(name))) {
+                println!("  skip {} ({err})", exe(name));
+            }
         }
     }
     Ok(())
@@ -350,7 +355,6 @@ fn main() -> Result<()> {
     // Each burst is measured independently via a per-round filename prefix so
     // the poll target is exactly that burst's `count` (not the running total),
     // and creation throughput is reported apart from apply-to-visible latency.
-    let mut total_created = 0usize;
     for (round, &count) in BURSTS.iter().enumerate() {
         println!("\n== Burst {}: create {count} files ==", round + 1);
         let create_start = Instant::now();
@@ -359,7 +363,6 @@ fn main() -> Result<()> {
                 .with_context(|| format!("write idx_{round}_{i}.tmp"))?;
         }
         let create_elapsed = create_start.elapsed();
-        total_created += count;
 
         // Visibility budget scales with batch size: file-creation IO + USN poll
         // + apply + (for the 100k burst) a delta compaction. ~20 s floor plus
