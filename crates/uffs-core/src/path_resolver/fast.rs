@@ -13,7 +13,7 @@
 //! value in the workspace ultimately demotes to a raw `u64` at the
 //! polars / CSV / JSON edge.
 //!
-//! As a result the internal [`FastEntry.parent_frs`], the
+//! As a result the internal [`FastEntry::parent_frs`], the
 //! [`FastPathResolver::path_cache`] key, and the
 //! [`FastPathResolver::max_frs`] field stay raw `u64`: they live one
 //! `for row_idx in 0..df.height()` loop downstream of the polars

@@ -113,7 +113,8 @@ impl DaemonChildHandle {
         }
     }
 
-    /// Returns the spawned daemon's PID, or `0` for [`Self::opaque`].
+    /// Returns the spawned daemon's PID, or `0` for `Self::opaque`
+    /// (Windows-only).
     #[must_use]
     pub(crate) const fn pid(&self) -> u32 {
         self.pid
@@ -126,8 +127,8 @@ impl DaemonChildHandle {
     ///   surface as `101`, clap parse errors as `2`, graceful exit as `0`).
     /// * `Err(err)` — the poll itself failed (treat as unknown, keep retrying).
     ///
-    /// For [`Self::opaque`] handles this is a no-op and always returns
-    /// `Ok(None)`.
+    /// For `Self::opaque` (Windows-only) handles this is a no-op and always
+    /// returns `Ok(None)`.
     ///
     /// # Errors
     ///

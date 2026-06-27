@@ -274,8 +274,9 @@ fn store_name_lossless(
 /// The parser call sites are spread across nine modules and do not thread a
 /// stats accumulator through their (hot-path) signatures, so the count is
 /// gathered here with a single relaxed atomic — cheap, lock-free, and read
-/// at index-build time into [`crate::index::stats::MftStats::lossy_name_count`]
-/// for the "N filenames were stored with U+FFFD" warning. `Relaxed` is
+/// at index-build time into the `lossy_name_count` field of
+/// [`crate::index::MftStats`] for the "N filenames were stored with
+/// U+FFFD" warning. `Relaxed` is
 /// sufficient: it is a monotonic diagnostic counter, not a synchronisation
 /// point.
 pub(crate) static LOSSY_NAME_COUNT: core::sync::atomic::AtomicU64 =

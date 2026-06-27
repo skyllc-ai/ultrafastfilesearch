@@ -7,7 +7,7 @@
 //! `forget` tests pin the eviction guard (busy-without-force vs.
 //! force-auto-hibernate), the registry-eviction step, the
 //! cache-cleaner side effect (verified via the
-//! [`crate::cache::cache_cleaner::CountingCacheCleaner`] fake), and
+//! `crate::cache::cache_cleaner::CountingCacheCleaner` fake), and
 //! the per-drive classification (`forgotten` vs. `already_absent`).
 //!
 //! `status_drives` tests pin the per-drive row builder: tier
@@ -16,7 +16,7 @@
 //! deterministic ascending sort.
 //!
 //! Every test uses [`super::IndexManager::with_lifecycle_hooks_for_test`]
-//! to inject a [`CountingCacheCleaner`] (and a [`FixedBodyLoader`]
+//! to inject a `CountingCacheCleaner` (and a [`FixedBodyLoader`]
 //! for the preload-then-forget sequences) so the host's real cache
 //! directory is **never** touched — a "forget drive C" call against
 //! the platform paths would be catastrophic in CI.

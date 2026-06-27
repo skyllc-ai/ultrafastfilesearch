@@ -479,7 +479,7 @@ jobs:
           shared-key: pr-fast-sanity
           save-if: 'false'
 
-      - run: cargo doc  --workspace --all-features --no-deps --locked
+      - run: cargo doc  --workspace --all-features --no-deps --locked --document-private-items
       - run: cargo test --doc --workspace --all-features --locked
 
   # ─────────────────────────────────────────────────────────────────────

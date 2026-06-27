@@ -327,10 +327,11 @@ impl UffsClientSync {
     ///
     /// # Deadline
     ///
-    /// On Windows, arms the [`crate::windows_deadline::WindowsDeadlineGuard`]
-    /// before any I/O and disarms it on return (success or error).
-    /// Using a [`DisarmOnDrop`] guard makes the disarm robust against
-    /// early-return paths, including `?` bubbling from the read loop.
+    /// On Windows, arms the `WindowsDeadlineGuard` (in
+    /// `crate::windows_deadline`) before any I/O and disarms it on return
+    /// (success or error). Using a `DisarmOnDrop` guard makes the disarm
+    /// robust against early-return paths, including `?` bubbling from the
+    /// read loop.
     ///
     /// On Unix, the deadline is enforced by `SO_RCVTIMEO` /
     /// `SO_SNDTIMEO` set at connect time and needs no per-call logic.
@@ -649,7 +650,8 @@ impl UffsClientSync {
     /// single `status` call, saving one full RPC round-trip per CLI
     /// invocation (~5–10 ms on Windows named pipes).  Skippable via
     /// `UFFS_CLIENT_SKIP_HEALTH_CHECK=1` (see
-    /// [`deep_health_check_enabled`]).  Cost: ~200–600 µs local IPC.
+    /// [`crate::daemon_ctl::deep_health_check_enabled`]).  Cost: ~200–600 µs
+    /// local IPC.
     ///
     /// # Errors
     ///

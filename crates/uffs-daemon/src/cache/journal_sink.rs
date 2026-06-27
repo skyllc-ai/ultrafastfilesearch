@@ -26,7 +26,7 @@
 //! to the buffer synchronously (no mpsc traffic).  `trigger_save` drains the
 //! buffer for that letter and ships the drained `Vec<FileChange>` into
 //! [`ApplyMsg::Save`] so the applier can run a *surgical*
-//! [`crate::cache::ShardEntry::apply_usn_patch_to_body`] instead of a
+//! [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] instead of a
 //! full [`uffs_core::compact_loader::load_drive_with_usn_refresh`].
 //! `journal_wrapped` discards the buffer (a wrap means the journal
 //! head reset, so any pending events are stale relative to the new
@@ -90,7 +90,7 @@ use crate::index::IndexManager;
 #[derive(Debug)]
 enum ApplyMsg {
     /// `trigger_save` callback — the applier runs a surgical
-    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`] over
+    /// [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] over
     /// the drained per-letter buffer, then `replace_warm_body` +
     /// `save_compact_cache_background`.  The applier converts
     /// [`SaveReason`] to a stable diagnostic string
@@ -114,7 +114,7 @@ enum ApplyMsg {
     },
     /// `trigger_apply` callback — the short apply-cadence sibling of
     /// `Save`.  The applier runs the same surgical
-    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`] +
+    /// [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] +
     /// `replace_warm_body` over the drained per-letter buffer so the
     /// in-memory body (and therefore search) goes near-live, but
     /// **skips** the compact-cache disk write and the cursor persist.
@@ -202,12 +202,11 @@ impl RegistryPatchSink {
     ///
     /// 1. **Producer is sync-non-blocking by contract.**  `accept` /
     ///    `trigger_save` / `journal_wrapped` are `fn`, not `async fn` — invoked
-    ///    synchronously from
-    ///    [`crate::cache::journal_loop::JournalLoop::process_tick`]. They
-    ///    cannot `.await` on a bounded `send`, so a bounded variant would have
-    ///    to use `try_send` + drop-on-full, which is operationally identical to
-    ///    the existing "dead applier silently absorbed" degraded path
-    ///    (documented on `apply_tx`).
+    ///    synchronously from the journal-loop `process_tick`. They cannot
+    ///    `.await` on a bounded `send`, so a bounded variant would have to use
+    ///    `try_send` + drop-on-full, which is operationally identical to the
+    ///    existing "dead applier silently absorbed" degraded path (documented
+    ///    on `apply_tx`).
     ///
     /// 2. **Producer cadence is throttled upstream by
     ///    [`crate::cache::journal_loop::SaveTrigger`].**  Save messages fire on

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! In-memory [`Host`] for deterministic, OS-independent unit tests.
+//! In-memory [`super::Host`] for deterministic, OS-independent unit tests.
 //!
 //! [`MockHost`] keeps an in-memory filesystem, records every call in order (so
 //! tests can assert *snapshot-before-mutate* ordering and that the command

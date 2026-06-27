@@ -113,7 +113,7 @@ const CODE: &[&str] = &[
 ///
 /// Dot-gated: dotfiles (`.bash_history`), dotless names (`README`), and
 /// trailing-dot names (`foo.`) all return `None`.  Visible to the rest
-/// of the crate so [`writer::write_display_row_columns`] can format the
+/// of the crate so [`crate::writer::write_row`] can format the
 /// `Extension` column with the same rule as the sort key (regression:
 /// T62 `--sort extension` MCP failure where `.bash_history`'s displayed
 /// `ext` disagreed with its sort position).

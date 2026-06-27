@@ -336,8 +336,9 @@ impl LifecycleManager {
 
     /// Check for stale PID file on startup. Returns `true` if safe to proceed.
     ///
-    /// Uses [`parse_pid_file`] for structured parsing and validates the exe
-    /// hash via [`expected_daemon_exe_hash`] to detect stale files from
+    /// Uses [`crate::lifecycle::LifecycleManager::parse_pid_file`] for
+    /// structured parsing and validates the exe
+    /// hash via [`crate::lifecycle::LifecycleManager::expected_daemon_exe_hash`] to detect stale files from
     /// different binaries.
     pub(crate) fn check_stale_pid(&self) -> bool {
         if !self.pid_path.exists() {

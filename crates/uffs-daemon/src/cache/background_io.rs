@@ -45,14 +45,14 @@
 //! [`crate::index::IndexManager`] holds the trait as
 //! `Arc<dyn BackgroundIoPriority>`.  Production wires
 //! [`PlatformBackgroundIoPriority`]; the Phase 5 unit tests inject
-//! [`tests::CountingBackgroundIoPriority`] so the test can assert
+//! `tests::CountingBackgroundIoPriority` so the test can assert
 //! `begin()` + `end()` pair exactly once per
 //! `tokio::task::spawn_blocking` closure that runs the periodic
 //! USN refresh tick.
 //!
 //! Production hooks the guard at the top of every per-letter
 //! closure spawned by
-//! [`crate::index::IndexManager::refresh_usn_for_warm_shards`] —
+//! [`crate::spawn_journal_loops_for_warm_shards`] —
 //! the periodic 5-min housekeeping tick that:
 //!
 //! * reads each Warm/Hot drive's USN journal (background read),
@@ -76,7 +76,7 @@ use std::io;
 /// Implementations are held as `Arc<dyn BackgroundIoPriority>` on
 /// [`crate::index::IndexManager`].  Called from inside the
 /// `tokio::task::spawn_blocking` closures of
-/// [`crate::index::IndexManager::refresh_usn_for_warm_shards`]
+/// [`crate::spawn_journal_loops_for_warm_shards`]
 /// (Phase 5 task 5.7).  Both methods operate on the **calling
 /// thread**, not the process, so concurrent USN refreshes for
 /// multiple drives each enter / leave background mode independently

@@ -7,7 +7,7 @@
 //!
 //! Each loaded shard owns one `tokio::task` polling its drive's USN
 //! journal at [`JournalLoopConfig::poll_interval`] cadence (default
-//! 500 ms, overridable via [`UFFS_USN_POLL_INTERVAL_MS`] for tests
+//! 500 ms, overridable via `UFFS_USN_POLL_INTERVAL_MS` for tests
 //! and benchmarks).  Per tick:
 //!
 //! 1. **Poll the journal** via the trait-object [`JournalSource`]. Returns
@@ -17,7 +17,7 @@
 //!    data).
 //! 2. **Apply to the shard** via the caller-supplied [`PatchSink`].  Production
 //!    wires this to a closure that calls
-//!    [`crate::cache::ShardEntry::apply_usn_patch_to_body`] +
+//!    [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] +
 //!    [`crate::cache::ShardRegistry::replace_warm_body`]; tests wire it to a
 //!    recording fake.
 //! 3. **Update cursor** so the next poll picks up only what's new.
@@ -29,10 +29,10 @@
 //! The trait is platform-agnostic; the **journal-source impl** is
 //! Windows-only (`WindowsJournalSource` wraps `read_usn_journal`).
 //! On macOS / Linux the production wire-up uses
-//! [`MacStubJournalSource`] which always returns empty changes —
-//! the loop ticks at the configured cadence but produces no patches.
-//! State-machine semantics (cancellation, cursor advance, no-op
-//! ticks) are exercised end-to-end on Mac via [`tests::FakeJournalSource`].
+//! [`crate::cache::journal_loop::sources::MacStubJournalSource`] which always
+//! returns empty changes — the loop ticks at the configured cadence but
+//! produces no patches. State-machine semantics (cancellation, cursor advance,
+//! no-op ticks) are exercised end-to-end on Mac via `tests::FakeJournalSource`.
 //!
 //! ## Phase 7 commit boundary
 //!
@@ -89,10 +89,11 @@ pub(crate) struct JournalPollResult {
 
 /// Pluggable USN-journal data source.
 ///
-/// Production wires [`MacStubJournalSource`] (always-empty) on
-/// macOS / Linux and `WindowsJournalSource` (cfg(windows), reads via
+/// Production wires
+/// [`crate::cache::journal_loop::sources::MacStubJournalSource`] (always-empty)
+/// on macOS / Linux and `WindowsJournalSource` (cfg(windows), reads via
 /// `FSCTL_READ_USN_JOURNAL`) on Windows.  Tests wire
-/// [`tests::FakeJournalSource`] (programmable event queue) to drive
+/// `tests::FakeJournalSource` (programmable event queue) to drive
 /// the [`JournalLoop`] state machine deterministically without a
 /// live MFT.
 ///
@@ -125,7 +126,7 @@ pub(crate) trait JournalSource: Send + Sync + 'static {
 /// Production wires this to a closure that:
 ///
 /// 1. Looks up the shard for `letter` in the registry.
-/// 2. Calls [`crate::cache::ShardEntry::apply_usn_patch_to_body`] on the
+/// 2. Calls [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] on the
 ///    current body.
 /// 3. Swaps the new body via
 ///    [`crate::cache::ShardRegistry::replace_warm_body`].
@@ -220,10 +221,10 @@ pub(crate) trait PatchSink: Send + Sync + 'static {
 
 /// Pluggable cursor-persistence surface (Phase 7 task 7.6).
 ///
-/// Production wires [`NullCursorStore`] (always-empty) as a
-/// fallback on platforms without a real persisted cursor and the
-/// disk-backed implementation lands in the activation commit.
-/// Tests wire [`tests::FakeCursorStore`] (in-memory `HashMap`)
+/// Production wires [`crate::cache::journal_loop::sources::NullCursorStore`]
+/// (always-empty) as a fallback on platforms without a real persisted cursor
+/// and the disk-backed implementation lands in the activation commit.
+/// Tests wire `tests::FakeCursorStore` (in-memory `HashMap`)
 /// to drive the load / store path deterministically.
 ///
 /// Both methods are **infallible** at the trait level: any

@@ -579,7 +579,7 @@ impl ShardRegistry {
     /// the next dispatch).
     ///
     /// Wired into the production refresh path by
-    /// [`crate::index::IndexManager::refresh_usn_for_warm_shards`].
+    /// [`crate::spawn_journal_loops_for_warm_shards`].
     #[must_use]
     pub(crate) fn replace_warm_body(
         &self,

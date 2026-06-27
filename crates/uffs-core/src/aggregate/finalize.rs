@@ -253,7 +253,7 @@ impl BucketRow {
 
 /// Finalize accumulated results into a response.
 /// Finalize aggregate results, optionally using a cross-drive
-/// [`ExtensionMap`] for correct extension key resolution.
+/// [`crate::aggregate::ExtensionMap`] for correct extension key resolution.
 pub(crate) fn finalize_with_ext_map(
     accumulators: Vec<GroupAccumulator>,
     _plan: &AggregatePlan,

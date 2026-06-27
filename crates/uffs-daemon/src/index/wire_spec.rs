@@ -7,9 +7,9 @@
 //! (`run_aggregations` and the duplicate-verifier glue) and the wire
 //! decoder can be read independently.  The decoder has no dependency
 //! on [`IndexManager`] state — every match arm is a pure
-//! [`AggregateSpecWire`] → [`AggregateSpec`] mapping — so isolating
-//! it makes the transport contract obvious without changing any
-//! call site.
+//! [`uffs_client::protocol::aggregate_wire::AggregateSpecWire`] →
+//! [`uffs_core::aggregate::AggregateSpec`] mapping — so isolating it makes the
+//! transport contract obvious without changing any call site.
 //!
 //! Public surface is unchanged: callers still write
 //! `IndexManager::convert_wire_spec(ws)`.
@@ -97,8 +97,9 @@ pub(crate) enum WireSpecError {
 }
 
 impl IndexManager {
-    /// Convert a wire-protocol [`AggregateSpecWire`] into one or more
-    /// core [`AggregateSpec`]s.
+    /// Convert a wire-protocol
+    /// [`uffs_client::protocol::aggregate_wire::AggregateSpecWire`] into one or
+    /// more core [`uffs_core::aggregate::AggregateSpec`]s.
     ///
     /// Presets expand to multiple specs; all other kinds produce
     /// exactly one.
@@ -112,8 +113,8 @@ impl IndexManager {
     /// pre-Phase-5d `String` payload so operator-facing log lines are
     /// unchanged.
     ///
-    /// [`AggregateSpec`]: uffs_core::aggregate::spec::AggregateSpec
-    /// [`AggregateSpecWire`]: uffs_client::protocol::AggregateSpecWire
+    /// [`uffs_core::aggregate::AggregateSpec`]: uffs_core::aggregate::spec::AggregateSpec
+    /// [`uffs_client::protocol::aggregate_wire::AggregateSpecWire`]: uffs_client::protocol::AggregateSpecWire
     #[expect(
         clippy::too_many_lines,
         reason = "straightforward match arms — one per wire kind"
@@ -282,7 +283,7 @@ fn require_field(
     })
 }
 
-/// Parse wire metric strings to [`BucketMetric`]s.
+/// Parse wire metric strings to [`uffs_core::aggregate::BucketMetric`]s.
 ///
 /// Empty input falls back to the default `[Count, TotalBytes]` pair so
 /// `terms` / `histogram` / `range` / `rollup` / `date_histogram`
@@ -309,7 +310,7 @@ fn parse_bucket_metrics(wire: &[String]) -> Vec<uffs_core::aggregate::spec::Buck
         .collect()
 }
 
-/// Parse wire metric strings to [`ScalarMetric`]s.
+/// Parse wire metric strings to [`uffs_core::aggregate::ScalarMetric`]s.
 ///
 /// Empty input expands to `[Sum, Min, Max, Avg]`, matching the
 /// behaviour every `stats` aggregation has shipped with since v0.5.

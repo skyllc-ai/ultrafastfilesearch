@@ -14,7 +14,7 @@
 //!   cross-platform tests can exercise the full loop flow without driving real
 //!   journal data.
 //!
-//! * [`WindowsJournalSource`] — production source on Windows, wrapping
+//! * `WindowsJournalSource` — production source on Windows, wrapping
 //!   `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL` via
 //!   [`uffs_mft::usn`].  Compile-gated to `cfg(windows)` so a misconfigured Mac
 //!   wiring is rejected at compile time rather than silently degrading to an

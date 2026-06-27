@@ -5,17 +5,17 @@
 //!
 //! Three closely-related accessors:
 //!
-//! * [`Self::stats`] — query-rate / latency aggregates plus
+//! * [`IndexManager::stats`] — query-rate / latency aggregates plus
 //!   [`uffs_core::aggregate::AggregateCache::stats`] hit-rate counters.
 //!   Returned by the `stats` RPC.
-//! * [`Self::status`] — broad daemon health snapshot (uptime, connections, PID,
-//!   version) plus per-drive heap breakdown and the OS-reported RSS / mimalloc
-//!   committed bytes from [`crate::telemetry::mem_snapshot`].  Returned by the
-//!   `status` RPC.
-//! * [`Self::total_index_heap_bytes`] — the per-drive heap sum on its own,
-//!   called by [`crate::telemetry::spawn_mem_snapshot_task`] for the
+//! * [`IndexManager::status`] — broad daemon health snapshot (uptime,
+//!   connections, PID, version) plus per-drive heap breakdown and the
+//!   OS-reported RSS / mimalloc committed bytes from
+//!   [`crate::telemetry::mem_snapshot`].  Returned by the `status` RPC.
+//! * [`IndexManager::total_index_heap_bytes`] — the per-drive heap sum on its
+//!   own, called by [`crate::telemetry::spawn_mem_snapshot_task`] for the
 //!   `mem.snapshot` heartbeat trace.  Avoids the per-drive `Vec` allocation
-//!   that [`Self::status`] does.
+//!   that [`IndexManager::status`] does.
 //!
 //! All three are read-only: they snapshot the registry once
 //! and walk every loaded drive (Hot / Warm / Parked / Cold)
@@ -80,11 +80,11 @@ impl IndexManager {
     /// Snapshots the `DaemonStatus` upfront via `.read().await.clone()`
     /// rather than holding the read guard across the inner awaits
     /// below.  Without the snapshot, the guard would be held across
-    /// [`Self::has_drives`], [`Self::total_records`], and
-    /// [`Self::snapshot`] — three independent `self.index.read().await`
+    /// [`IndexManager::has_drives`], [`IndexManager::total_records`], and
+    /// [`IndexManager::snapshot`] — three independent `self.index.read().await`
     /// acquisitions — blocking any concurrent
-    /// [`Self::set_ready`] / [`Self::set_loading_progress`] /
-    /// [`crate::index::refresh::IndexManager::refresh`] writer on
+    /// [`IndexManager::set_ready`] / `set_loading_progress` /
+    /// [`crate::index::IndexManager::refresh`] writer on
     /// `self.status` for the duration of the status RPC (which on a
     /// many-drive box with a slow snapshot path can be tens of
     /// milliseconds).  `DaemonStatus` is a small `Clone` enum
@@ -149,7 +149,7 @@ impl IndexManager {
     ///
     /// Used by [`crate::telemetry::spawn_mem_snapshot_task`] to emit
     /// the `mem.snapshot` tracing event without going through the full
-    /// [`Self::status`] path (which builds a per-drive `Vec` we don't
+    /// [`IndexManager::status`] path (which builds a per-drive `Vec` we don't
     /// need for the heartbeat).
     pub(crate) async fn total_index_heap_bytes(&self) -> u64 {
         let snap = self.snapshot().await;

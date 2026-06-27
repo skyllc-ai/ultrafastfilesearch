@@ -27,11 +27,11 @@
 //!
 //! ## The guard
 //!
-//! [`decide_strategy`] inspects the cheap signals only — the persisted
+//! `decide_strategy` inspects the cheap signals only — the persisted
 //! cursor (an 8-byte file read) and `FSCTL_QUERY_USN_JOURNAL` (a single
 //! ioctl) — and never touches the multi-hundred-MB `MftIndex`:
 //!
-//! * [`WarmLoadStrategy::FastFromCompactCache`] — the persisted cursor lies
+//! * `WarmLoadStrategy::FastFromCompactCache` — the persisted cursor lies
 //!   inside the live journal's valid window (`first_usn <= cursor <=
 //!   next_usn`).  The compact cache is at least as fresh as that cursor (the
 //!   journal loop writes body + cursor in lockstep, and full rebuilds write a
@@ -39,8 +39,8 @@
 //!   the background loop re-applies `[cursor, live)` — idempotent on any
 //!   overlap — and converges within ~one poll interval.
 //!
-//! * [`WarmLoadStrategy::FullRebuild`] — the cursor is absent (`0` sentinel:
-//!   cold boot / never persisted), predates the journal (`cursor < first_usn`:
+//! * `WarmLoadStrategy::FullRebuild` — the cursor is absent (`0` sentinel: cold
+//!   boot / never persisted), predates the journal (`cursor < first_usn`:
 //!   wrapped or long-downtime), or postdates it (`cursor > next_usn`: the
 //!   journal was deleted + recreated and is younger than the cursor).  In each
 //!   case the background loop cannot converge the existing cache from the
@@ -61,7 +61,7 @@
 #[cfg(windows)]
 use uffs_core::compact::DriveCompactIndex;
 
-/// Outcome of [`decide_strategy`]: how to materialise a drive's body on
+/// Outcome of `decide_strategy`: how to materialise a drive's body on
 /// a warm load.
 ///
 /// Compiled on Windows (the only platform with a USN journal) and under

@@ -6,9 +6,9 @@
 //! Three independent controllers, each spawned from
 //! [`crate::run_daemon`], share this module:
 //!
-//! 1. [`Self::demote_idle_shards`] — Phase 3 Commit D idle-tick demote.  Walks
-//!    the registry once per 30 s tick, demotes any shard whose `idle_secs`
-//!    exceeds its tier's TTL, and calls
+//! 1. [`IndexManager::demote_idle_shards`] — Phase 3 Commit D idle-tick demote.
+//!    Walks the registry once per 30 s tick, demotes any shard whose
+//!    `idle_secs` exceeds its tier's TTL, and calls
 //!    [`crate::cache::working_set::WorkingSetTrim::trim`] once per batch. Phase
 //!    6 Commit C wired the static-TTL lookup to the adaptive
 //!    [`crate::cache::policy::next_state_for_idle_with_thresholds`] helper:
@@ -18,12 +18,13 @@
 //!    `[shards.per_drive."X:"].min_tier` floor (plan tasks 6.4, 6.6).  Every
 //!    demote evaluation emits a `shard.ttl` tracing event with the chosen TTL,
 //!    the live rate, and a structured reason (plan task 6.7).
-//! 2. [`Self::cascade_demote_one_step`] (+ [`Self::subscribe_pressure`]) —
-//!    Phase 5 task 5.6 pressure-cascade.  Picks the LRU Warm shard, demotes it
-//!    Warm → Parked, and trims the working set; the subscriber loop in `lib.rs`
-//!    calls this in a tight loop while
-//!    [`crate::cache::pressure::PressureLevel`] reports `Critical`, yielding
-//!    between calls so the cascade stops as soon as the pressure clears.
+//! 2. [`IndexManager::cascade_demote_one_step`] (+
+//!    [`IndexManager::subscribe_pressure`]) — Phase 5 task 5.6
+//!    pressure-cascade.  Picks the LRU Warm shard, demotes it Warm → Parked,
+//!    and trims the working set; the subscriber loop in `lib.rs` calls this in
+//!    a tight loop while [`crate::cache::pressure::PressureLevel`] reports
+//!    `Critical`, yielding between calls so the cascade stops as soon as the
+//!    pressure clears.
 //!
 //! Phase 7 activation moved the third (USN-refresh) controller out
 //! of this module: the deleted `refresh_usn_for_warm_shards` global
@@ -37,7 +38,7 @@
 //! The two remaining controllers consume the same Arc-swap registry
 //! mutation primitives (`demote_letter`, `replace_warm_body`)
 //! exposed by [`crate::cache::registry::ShardRegistry`], and both
-//! call [`Self::bump_index_version`] after a successful mutation so
+//! call [`IndexManager::bump_index_version`] after a successful mutation so
 //! the aggregate cache drops stale entries.  Keeping them in one
 //! module keeps that contract visible.
 
@@ -157,7 +158,7 @@ impl IndexManager {
     /// current [`PressureLevel`] and waking on every transition.
     /// The daemon's `spawn_pressure_subscriber` (in `lib.rs`) is
     /// the sole production consumer; the Phase 5 task 5.10 test
-    /// uses [`Self::cascade_demote_one_step`] directly without
+    /// uses [`IndexManager::cascade_demote_one_step`] directly without
     /// going through the watch channel.
     ///
     /// [`PressureLevel`]: crate::cache::pressure::PressureLevel

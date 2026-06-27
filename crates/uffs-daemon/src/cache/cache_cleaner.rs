@@ -11,9 +11,9 @@
 //! * Production gets [`PlatformCacheCleaner`] which calls
 //!   [`uffs_core::compact_cache::compact_cache_path`] and friends to resolve
 //!   the real platform paths and unlinks them via [`std::fs::remove_file`].
-//! * Tests inject [`CountingCacheCleaner`] (and the temp-dir-backed helper
+//! * Tests inject `CountingCacheCleaner` (and the temp-dir-backed helper
 //!   [`delete_drive_cache_files`] is unit-tested directly with a
-//!   [`tempfile::TempDir`]) so the registry-eviction behaviour can be verified
+//!   `tempfile::TempDir`) so the registry-eviction behaviour can be verified
 //!   without ever touching the host's real cache directory — which would
 //!   otherwise be a destructive operation when a test asks the daemon to
 //!   "forget drive C".
@@ -21,7 +21,7 @@
 //! Mirrors the [`super::body_loader::BodyLoader`] /
 //! [`super::working_set::WorkingSetTrim`] hook pattern (Phase 5):
 //! one `Arc<dyn Trait>` field on
-//! [`crate::index::constructors::LifecycleHooks`], the production
+//! `LifecycleHooks`, the production
 //! impl is wired in [`super::body_loader::DiskBodyLoader`]-style at
 //! daemon bootstrap, and the test escape hatches stay narrow.
 
@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 /// Per-drive cache cleanup operation.
 ///
-/// Used by [`crate::index::IndexManager::forget_drive`] to delete
+/// Used by [`crate::index::IndexManager::forget_drives`] to delete
 /// every on-disk artefact tied to a specific drive letter once the
 /// shard has been evicted from the in-memory registry.
 ///
@@ -79,7 +79,7 @@ impl CacheCleaner for PlatformCacheCleaner {
 ///
 /// Exposed at module scope so the unit test in this file's `tests`
 /// submodule can drive [`delete_drive_cache_files`] against a
-/// [`tempfile::TempDir`] without dragging the platform paths into
+/// `tempfile::TempDir` without dragging the platform paths into
 /// the test fixture.
 fn drive_cache_paths(letter: uffs_mft::platform::DriveLetter) -> [PathBuf; 4] {
     [

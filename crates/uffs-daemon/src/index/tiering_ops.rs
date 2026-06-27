@@ -5,21 +5,22 @@
 //!
 //! Phase 8 commit-level decomposition (sub-phases 8-B / 8-C):
 //!
-//! * [`Self::hibernate_shards`] — sub-phase 8-B.  Walks every shard in the
-//!   registry (or a caller-supplied subset) and demotes each non-`Cold` shard
-//!   to `Cold` in a single write-lock batch. Mirrors the orchestration shape of
-//!   [`Self::demote_idle_shards`] (Phase 3 Commit D) — read-lock detect →
-//!   write-lock atomic batch → single `bump_index_version`. Hibernate
-//!   explicitly clears tier pins by virtue of rebuilding the shard as `Cold`
-//!   (the new `ShardEntry` starts with `pin_until_ms = 0`).
+//! * [`IndexManager::hibernate_shards`] — sub-phase 8-B.  Walks every shard in
+//!   the registry (or a caller-supplied subset) and demotes each non-`Cold`
+//!   shard to `Cold` in a single write-lock batch. Mirrors the orchestration
+//!   shape of [`IndexManager::demote_idle_shards`] (Phase 3 Commit D) —
+//!   read-lock detect → write-lock atomic batch → single `bump_index_version`.
+//!   Hibernate explicitly clears tier pins by virtue of rebuilding the shard as
+//!   `Cold` (the new `ShardEntry` starts with `pin_until_ms = 0`).
 //!
-//! * [`Self::preload_drive`] — sub-phase 8-C.  Promotes a single drive to `Hot`
-//!   via the existing per-letter single-flight body-load + `Prefetch::hint`
-//!   machinery ([`Self::load_or_join_in_flight`] from [`super::dispatch`]) and
-//!   arms the tier pin for `pin_minutes` minutes.  Source state can be `Cold`
-//!   (loads body from encrypted compact cache), `Parked` (loads body, dropping
-//!   the parked bloom + trie), `Warm` (clones the existing body), or `Hot`
-//!   (skips the rebuild and atomically extends the pin).
+//! * [`IndexManager::preload_drive`] — sub-phase 8-C.  Promotes a single drive
+//!   to `Hot` via the existing per-letter single-flight body-load +
+//!   `Prefetch::hint` machinery ([`IndexManager::load_or_join_in_flight`] from
+//!   [`super::dispatch`]) and arms the tier pin for `pin_minutes` minutes.
+//!   Source state can be `Cold` (loads body from encrypted compact cache),
+//!   `Parked` (loads body, dropping the parked bloom + trie), `Warm` (clones
+//!   the existing body), or `Hot` (skips the rebuild and atomically extends the
+//!   pin).
 //!
 //! Why a sibling file (instead of folding into
 //! [`super::transitions`]): the two background controllers in
@@ -108,7 +109,7 @@ impl IndexManager {
     /// daemon actually knew about).
     ///
     /// Three-phase orchestration mirroring
-    /// [`Self::demote_idle_shards`]:
+    /// [`IndexManager::demote_idle_shards`]:
     ///
     /// 1. **Read-lock detect.**  Single `self.index.read()` to enumerate the
     ///    (letter, from-state) tuples for every shard the call will touch. Cold
@@ -223,8 +224,8 @@ impl IndexManager {
     ///
     /// * `Cold` / `Parked`: drives the existing per-letter single-flight
     ///   body-load + `Prefetch::hint` machinery via
-    ///   [`Self::load_or_join_in_flight_for_preload`]; rebuilds the registry
-    ///   with a `Hot` `ShardEntry` via
+    ///   [`crate::index::IndexManager::load_or_join_in_flight`]; rebuilds the
+    ///   registry with a `Hot` `ShardEntry` via
     ///   [`crate::cache::ShardRegistry::promote_letter_to_hot`]; atomically
     ///   arms the pin on the new shard.
     /// * `Warm`: clones the live body, calls `Prefetch::hint` to pre-fault its
@@ -322,7 +323,7 @@ impl IndexManager {
     /// Atomic write-lock swap: rebuild the registry with `letter`
     /// in `Hot` carrying `body`, then arm the pin on the new shard.
     ///
-    /// Factored out of [`Self::preload_drive`] so the Warm-source
+    /// Factored out of [`IndexManager::preload_drive`] so the Warm-source
     /// and Cold/Parked-source code paths converge on a single
     /// rebuild + pin sequence — keeps the per-source-state logic
     /// readable above and the swap mechanics auditable here.
@@ -380,7 +381,7 @@ impl IndexManager {
     /// in memory.
     ///
     /// Mirrors the prefault block inside
-    /// [`Self::build_load_future`] but for the Warm-source preload
+    /// [`IndexManager::build_load_future`] but for the Warm-source preload
     /// path where the body is reused rather than freshly loaded.
     /// Fire-and-forget: any I/O error is logged at
     /// `target: "shard.transition"` and the preload continues.

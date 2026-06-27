@@ -16,7 +16,7 @@
 //!   persistence (`AtomicU64` does not derive `Serialize`/`Deserialize`).
 //! * The two `From` impls that move data between the live atomics and the
 //!   snapshot.
-//! * The test-only [`drive_stats_ema_value`] reader, which exists so the
+//! * The test-only `drive_stats_ema_value` reader, which exists so the
 //!   production `impl DriveStats` block carries no `#[cfg(test)]`-gated
 //!   methods.
 //!
@@ -209,7 +209,7 @@ impl DriveStats {
     /// Surfaced via the
     /// [`uffs_client::protocol::response::StatusDrivesResponse`] wire
     /// format's `promotions_total` field by
-    /// [`crate::index::status_drives::IndexManager::status_drives`].
+    /// [`crate::index::IndexManager::status_drives`].
     #[must_use]
     pub(crate) fn promotions_total(&self) -> u64 {
         self.promotions_total.load(Ordering::Relaxed)

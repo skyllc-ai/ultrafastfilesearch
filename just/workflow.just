@@ -21,8 +21,8 @@ phase1-test:
     @printf "\033[0;36m  → just test-doc\033[0m\n"
     just test-doc
     @printf "\033[0;34mStep 3b: Rustdoc link validation (FAST-FAIL)...\033[0m\n"
-    @printf "\033[0;36m  → RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps\033[0m\n"
-    RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps
+    @printf "\033[0;36m  → just rustdoc\033[0m\n"
+    just rustdoc
     @printf "\033[0;34mStep 4: Ultra-strict production code linting (FAST-FAIL)...\033[0m\n"
     @printf "\033[0;36m  → just lint-prod\033[0m\n"
     just lint-prod

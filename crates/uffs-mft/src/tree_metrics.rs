@@ -76,7 +76,7 @@ struct RecordSnapshot {
 /// exactly.
 ///
 /// **Important**: `name_info` must be the transformed index, NOT the raw
-/// `name_index`. Use [`compute_name_info`] to convert `name_index` to
+/// `name_index`. Use [`compute_name_info_checked`] to convert `name_index` to
 /// `name_info`.
 #[inline]
 const fn delta(value: u64, name_info: u32, total_names: u32) -> u64 {
@@ -120,9 +120,9 @@ const fn compute_name_info(name_index: u32, total_names: u32) -> u32 {
 
 /// Computes `name_info` with optional debug logging when clamping occurs.
 ///
-/// This is the debug-aware version of [`compute_name_info`] that logs when
-/// `name_index >= total_names`, which indicates a potential parity issue
-/// (two hardlinks mapping to the same `i` can skew totals).
+/// This is the debug-aware version of the test-only `compute_name_info` that
+/// logs when `name_index >= total_names`, which indicates a potential parity
+/// issue (two hardlinks mapping to the same `i` can skew totals).
 #[inline]
 #[expect(
     clippy::single_call_fn,

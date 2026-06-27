@@ -10,8 +10,8 @@
 //! * [`IndexManager::handle_journal_save`] (Phase 8) — clones the warm
 //!   `DriveCompactIndex` body, applies the buffered
 //!   [`uffs_mft::usn::FileChange`] batch via
-//!   [`crate::cache::ShardEntry::apply_usn_patch_to_body`], swaps the new Arc
-//!   into the registry, and persists via
+//!   [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`], swaps the
+//!   new Arc into the registry, and persists via
 //!   [`uffs_core::compact_cache::save_compact_cache_background`]. Fast path:
 //!   ~600 ms patch + ~5 s background save on a 7M-record drive, vs ~7 s for the
 //!   full reload.
@@ -129,14 +129,14 @@ impl IndexManager {
 
     /// Phase 8 surgical-patch path: clone the Warm body, apply the
     /// drained per-letter [`FileChange`] batch via
-    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`], swap
+    /// [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`], swap
     /// the new Arc into the registry, and persist the patched body
     /// via [`uffs_core::compact_cache::save_compact_cache_background`].
     ///
     /// Called by the [`crate::cache::journal_sink::RegistryPatchSink`]
     /// applier task on every `Save` message (events-exceeded /
     /// age-elapsed) — the *fast* counterpart to
-    /// [`Self::handle_journal_refresh`] (which the applier still
+    /// [`IndexManager::handle_journal_refresh`] (which the applier still
     /// uses for `Wrap` messages where the cursor reset invalidates
     /// the buffered batch).
     ///
@@ -324,7 +324,7 @@ impl IndexManager {
 
     /// Per-letter write-lock swap of a freshly-loaded body Arc.
     ///
-    /// Extracted from [`Self::handle_journal_refresh`] so the parent
+    /// Extracted from [`IndexManager::handle_journal_refresh`] so the parent
     /// stays under clippy's strict-gate cognitive-complexity ceiling.
     /// `replace_warm_body` returns `None` when the shard demoted to
     /// `Parked` / `Cold` between the threshold trigger and this swap
@@ -493,7 +493,7 @@ enum BodyApplyOutcome {
 /// (rightly) flags as a smell.
 enum PatchTaskOutcome {
     /// The task ran to completion and the shard's
-    /// [`crate::cache::ShardEntry::apply_usn_patch_to_body`] returned
+    /// [`crate::cache::shard::ShardEntry::apply_usn_patch_to_body`] returned
     /// a fresh body Arc + per-batch stats.  Caller swaps the body
     /// into the registry + spawns a background cache save.
     Applied(

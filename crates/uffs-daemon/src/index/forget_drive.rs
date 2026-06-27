@@ -7,8 +7,8 @@
 //! cleanup half ([`crate::cache::cache_cleaner::CacheCleaner`]).
 //!
 //! Three-phase orchestration mirrors the
-//! [`super::tiering_ops::IndexManager::hibernate_shards`] /
-//! [`super::tiering_ops::IndexManager::preload_drive`] pattern:
+//! [`crate::index::IndexManager::hibernate_shards`] /
+//! [`crate::index::IndexManager::preload_drive`] pattern:
 //!
 //! 1. **Read-lock detect.**  A single `self.index.read()` enumerates the
 //!    `(letter, current_tier)` tuples for every drive in the request.  If
@@ -17,7 +17,8 @@
 //!    [`uffs_client::protocol::ERR_DRIVE_BUSY`] so a typo on one of five drives
 //!    doesn't accidentally forget the other four.
 //! 2. **Optional auto-hibernate (force only).**  Each non-`Cold` drive is
-//!    demoted to `Cold` via [`super::IndexManager::demote_letter_with_reason`]
+//!    demoted to `Cold` via
+//!    [`crate::cache::registry::ShardRegistry::demote_letter_with_reason`]
 //!    tagged with [`crate::cache::registry::DemoteReason::OperatorHibernate`].
 //!    The pin is cleared as a side effect (the rebuilt `ShardEntry` starts with
 //!    `pin_until_ms = 0`).
@@ -42,9 +43,9 @@ use crate::cache::{ShardState, unix_now_ms};
 
 /// Outcome of a successful [`IndexManager::forget_drives`] call.
 ///
-/// Each drive in the input request lands in exactly one of
-/// [`Self::forgotten`] or [`Self::already_absent`] (unless an I/O
-/// error pushed it into [`Self::errors`] only).  Mirrors the
+/// Each drive in the input request lands in exactly one of the response's
+/// `forgotten` or `already_absent` lists (unless an I/O error pushed it into
+/// `errors` only).  Mirrors the
 /// [`uffs_client::protocol::response::ForgetResponse`] wire shape so
 /// the handler can build the wire response with one
 /// `serde::Serialize` call.

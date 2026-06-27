@@ -19,7 +19,7 @@
 //! The trait is held by [`crate::index::IndexManager`] as
 //! `Arc<dyn Prefetch>` so production wires the platform impl and
 //! the Phase 5 unit tests inject a recording fake (see
-//! [`tests::RecordingPrefetch`]) to assert the hook fires with the
+//! `tests::RecordingPrefetch`) to assert the hook fires with the
 //! right (records, names) regions on every promote.
 
 use std::io;

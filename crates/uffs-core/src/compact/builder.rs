@@ -367,7 +367,7 @@ pub(crate) const INDEX_TTL_SECONDS: u64 = 14400;
 /// Try to read the live `$UpCase` table from the NTFS volume for
 /// `drive_letter`. On success, log the result at `INFO` and any diffs
 /// from the compiled-in default at `WARN`. On failure, log at `WARN`
-/// and fall back to [`CaseFold::default_table()`].
+/// and fall back to [`uffs_text::case_fold::CaseFold::default_table()`].
 pub(crate) fn resolve_case_fold(
     drive_letter: uffs_mft::platform::DriveLetter,
 ) -> uffs_text::case_fold::CaseFold {

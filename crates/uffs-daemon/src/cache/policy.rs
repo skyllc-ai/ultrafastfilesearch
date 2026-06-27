@@ -217,7 +217,7 @@ pub(crate) fn usn_refresh_interval_secs() -> u64 {
 /// All three fields are seconds (`u64`) for direct comparison
 /// against `idle_secs = (now_ms - last_query_at_ms) / 1000`; the
 /// shared `_secs` postfix is the unit, not name redundancy, hence
-/// the [`clippy::struct_field_names`] expectation.
+/// the `clippy::struct_field_names` expectation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,

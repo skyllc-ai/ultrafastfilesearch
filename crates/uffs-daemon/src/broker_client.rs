@@ -7,18 +7,17 @@
 //! to obtain elevated volume handles instead of requiring its own elevation.
 //!
 //! Flow:
-//! 1. Check if the broker pipe exists ([`uffs_broker_protocol::PIPE_NAME`])
+//! 1. Check if the broker pipe exists (`uffs_broker_protocol::PIPE_NAME`)
 //! 2. Connect to it
-//! 3. Encode the drive letter via
-//!    [`uffs_broker_protocol::HandleRequest::encode`]
-//! 4. Decode the response via [`uffs_broker_protocol::HandleResponse::parse`]
+//! 3. Encode the drive letter via `uffs_broker_protocol::HandleRequest::encode`
+//! 4. Decode the response via `uffs_broker_protocol::HandleResponse::parse`
 //! 5. Use the handle for MFT reading
 //!
 //! The wire format used to be duplicated here as a `const BROKER_PIPE_NAME`
 //! plus hand-rolled byte-slicing with a `// must match
 //! uffs-broker/src/broker.rs` reviewer-comment as the only protection
 //! against drift.  F5 (issue #205) promoted those shared symbols to
-//! the dedicated [`uffs_broker_protocol`] crate, eliminating the
+//! the dedicated `uffs_broker_protocol` crate, eliminating the
 //! textual coupling.
 //!
 //! `uffs-broker-protocol` is scoped to

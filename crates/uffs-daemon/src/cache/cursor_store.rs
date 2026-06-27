@@ -19,11 +19,11 @@
 //!
 //! ## Mac / Linux fallback
 //!
-//! Production on macOS / Linux uses [`super::journal_loop::NullCursorStore`]
-//! instead — there is no NTFS USN journal, so there is no cursor
-//! to persist.  `DiskCursorStore` is built and wired only on
-//! Windows but its implementation is platform-agnostic so Mac
-//! tests can drive every code path against a `tempdir` root.
+//! Production on macOS / Linux uses
+//! [`crate::cache::journal_loop::sources::NullCursorStore`] instead — there is
+//! no NTFS USN journal, so there is no cursor to persist.  `DiskCursorStore` is
+//! built and wired only on Windows but its implementation is platform-agnostic
+//! so Mac tests can drive every code path against a `tempdir` root.
 //!
 //! [`CursorStore`]: super::journal_loop::CursorStore
 
@@ -46,10 +46,10 @@ pub(crate) struct DiskCursorStore {
 impl DiskCursorStore {
     /// Construct a store rooted at `cache_root`.
     ///
-    /// `cache_root` is created lazily by [`Self::store`] on the
-    /// first save (matching the existing compact-cache writer's
-    /// `create_secure_dir` pattern), so passing a not-yet-existing
-    /// path is fine.
+    /// `cache_root` is created lazily by
+    /// [`crate::cache::journal_loop::CursorStore::store`] on the first save
+    /// (matching the existing compact-cache writer's `create_secure_dir`
+    /// pattern), so passing a not-yet-existing path is fine.
     #[must_use]
     pub(crate) const fn new(cache_root: PathBuf) -> Self {
         Self { cache_root }

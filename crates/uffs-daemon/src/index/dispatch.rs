@@ -6,19 +6,20 @@
 //! Two pre-search hooks plus the single-flight promote machinery
 //! they share live here:
 //!
-//! * [`Self::record_search_dispatch`] — stamp `last_query_at_ms` on every
-//!   Warm/Hot shard so the demote controller sees a fresh idle clock.  Phase 3
-//!   Commit C wired this; Phase 6 reads the same timestamp via
+//! * [`IndexManager::record_search_dispatch`] — stamp `last_query_at_ms` on
+//!   every Warm/Hot shard so the demote controller sees a fresh idle clock.
+//!   Phase 3 Commit C wired this; Phase 6 reads the same timestamp via
 //!   `DriveStats::decay_ema_qpm` for the adaptive-TTL formulas.
-//! * [`Self::ensure_warm_for_dispatch`] — promote any Parked/Cold shards the
-//!   search will touch, before [`Self::snapshot`] reads the active subset.
-//!   Three-phase detect → load → swap orchestration with the bloom pre-check
-//!   (Phase 4 Commit F) and the per-letter single-flight dedup (PR-e).
+//! * [`IndexManager::ensure_warm_for_dispatch`] — promote any Parked/Cold
+//!   shards the search will touch, before [`IndexManager::snapshot`] reads the
+//!   active subset. Three-phase detect → load → swap orchestration with the
+//!   bloom pre-check (Phase 4 Commit F) and the per-letter single-flight dedup
+//!   (PR-e).
 //!
-//! The single-flight machinery — [`Self::load_or_join_in_flight`],
-//! [`Self::install_or_join_in_flight_slot`],
-//! [`Self::build_load_future`], and the
-//! [`Self::bloom_pre_check_should_promote`] decision helper —
+//! The single-flight machinery — [`IndexManager::load_or_join_in_flight`],
+//! [`IndexManager::install_or_join_in_flight_slot`],
+//! [`IndexManager::build_load_future`], and the
+//! [`IndexManager::bloom_pre_check_should_promote`] decision helper —
 //! lives in this module too because callers and helpers form a
 //! single cohesive cluster: the dedup-map slot manager spawns
 //! the body-load future, the body-load future drives the
@@ -53,7 +54,7 @@ impl IndexManager {
     /// [`crate::cache::shard::DriveStats::mark_query_at`] so the
     /// same hot-path write also stores the dispatch timestamp in
     /// `last_query_at_ms`; the demote controller in
-    /// [`Self::demote_idle_shards`] reads that timestamp to
+    /// [`IndexManager::demote_idle_shards`] reads that timestamp to
     /// compute `idle_secs`.  Phase 6 additionally feeds the EMA
     /// the adaptive-TTL formulas use — see
     /// [`crate::cache::shard::DriveStats::decay_ema_qpm`].
@@ -72,7 +73,7 @@ impl IndexManager {
 
     /// Phase 3 Commit C — promote any Parked/Cold shards that this
     /// search will dispatch to, before
-    /// [`Self::snapshot`] reads the active subset.
+    /// [`IndexManager::snapshot`] reads the active subset.
     ///
     /// Three-phase orchestrator (read-detect → spawn-blocking
     /// load → write-swap) — see implementation comments below.
@@ -131,7 +132,7 @@ impl IndexManager {
 
         // ── Phase 2: per-letter parallel body load with single-flight dedup ─
         // For each Parked/Cold letter, drive one
-        // [`Self::load_or_join_in_flight`] call in parallel via a
+        // [`IndexManager::load_or_join_in_flight`] call in parallel via a
         // [`futures::stream::FuturesUnordered`].  The helper
         // performs the I/O + decrypt + decompress + runtime-mmap
         // materialisation inside its inner `tokio::task::spawn_blocking`
@@ -181,7 +182,7 @@ impl IndexManager {
         // body Arc and leaves the canonical registry alone.
         //
         // The `JoinError` arm of the pre-PR-e implementation moved
-        // inside [`Self::load_or_join_in_flight`]'s inner
+        // inside [`IndexManager::load_or_join_in_flight`]'s inner
         // spawn-blocking handling: aborts surface as `None` here
         // with the same `shard.transition` warning.  No outcome is
         // observably different.
@@ -265,7 +266,7 @@ impl IndexManager {
     ///
     /// Takes Arc fields explicitly (rather than `&self`) so the
     /// helper can be called from a `FuturesUnordered`-driven
-    /// `async move` block in [`Self::ensure_warm_for_dispatch`]
+    /// `async move` block in [`IndexManager::ensure_warm_for_dispatch`]
     /// without forcing the surrounding loop to hold a borrow of
     /// `self` across the await.
     pub(super) async fn load_or_join_in_flight(
@@ -282,7 +283,7 @@ impl IndexManager {
         fut.await
     }
 
-    /// Synchronous slot manager for [`Self::load_or_join_in_flight`].
+    /// Synchronous slot manager for [`IndexManager::load_or_join_in_flight`].
     ///
     /// Either returns a clone of the existing per-letter
     /// [`InFlightLoad`] (the second-and-onwards concurrent caller
@@ -359,7 +360,7 @@ impl IndexManager {
     ///
     /// This is the future that gets wrapped in
     /// [`futures::future::Shared`] and stored in the in-flight
-    /// slot map by [`Self::load_or_join_in_flight`].  Factored out
+    /// slot map by [`IndexManager::load_or_join_in_flight`].  Factored out
     /// for readability — the inner async block carries non-trivial
     /// panic-recovery + prefetch-hint logic that would otherwise
     /// drown the dedup machinery in noise.

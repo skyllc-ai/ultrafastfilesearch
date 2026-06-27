@@ -10,13 +10,12 @@
 //!    file the operator passed via `--data-dir` on its own blocking thread;
 //!    when every file has been processed the daemon emits `DaemonReady`.
 //! 2. **`load_live_drives`** (Windows-only) — online mode.  Loads each NTFS
-//!    volume's live MFT in parallel, capped per-drive by
-//!    [`Self::DRIVE_LOAD_TIMEOUT`] so a single stuck drive can't hang the
-//!    daemon indefinitely.
+//!    volume's live MFT in parallel, capped per-drive by `DRIVE_LOAD_TIMEOUT`
+//!    so a single stuck drive can't hang the daemon indefinitely.
 //!
-//! Both paths funnel successful loads through [`Self::add_drive`]
+//! Both paths funnel successful loads through [`IndexManager::add_drive`]
 //! which performs the atomic registry pointer-swap and bumps the
-//! aggregate cache's `index_version`.  [`Self::replace_drive`]
+//! aggregate cache's `index_version`.  [`IndexManager::replace_drive`]
 //! lives in this module too because it mirrors `add_drive`'s swap
 //! semantics — used by the refresh path to update an
 //! already-loaded drive in place.
@@ -211,9 +210,9 @@ impl IndexManager {
     /// accurate incremental progress and cutting total wall time from
     /// `sum(per-drive)` to `max(per-drive)`.
     ///
-    /// Each drive has a [`Self::DRIVE_LOAD_TIMEOUT`] — if exceeded the drive
-    /// is skipped and an error is logged.  This prevents a single stuck
-    /// volume from making the daemon unkillable.
+    /// Each drive has a [`crate::index::IndexManager::DRIVE_LOAD_TIMEOUT`] — if
+    /// exceeded the drive is skipped and an error is logged.  This prevents
+    /// a single stuck volume from making the daemon unkillable.
     #[cfg(windows)]
     pub(crate) async fn load_live_drives(
         &self,
@@ -313,8 +312,9 @@ impl IndexManager {
     }
 
     /// Drain `join_set` until every drive task finishes or any single
-    /// task overruns [`Self::DRIVE_LOAD_TIMEOUT`].  Each completion
-    /// updates the daemon status so clients see incremental progress.
+    /// task overruns [`crate::index::IndexManager::DRIVE_LOAD_TIMEOUT`].  Each
+    /// completion updates the daemon status so clients see incremental
+    /// progress.
     #[cfg(windows)]
     async fn collect_drive_load_results(
         &self,
@@ -457,7 +457,7 @@ impl IndexManager {
     }
 
     /// Emit the post-load `DaemonReady` event and the cumulative heap
-    /// summary.  Extracted to keep [`Self::load_live_drives`] flat.
+    /// summary.  Extracted to keep [`IndexManager::load_live_drives`] flat.
     #[cfg(windows)]
     async fn emit_daemon_ready_summary(&self) {
         let snap = self.snapshot().await;

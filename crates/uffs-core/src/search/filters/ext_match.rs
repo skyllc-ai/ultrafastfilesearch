@@ -44,7 +44,7 @@ pub(in crate::search) fn extension_matches_filter(
 }
 
 /// Extract the filename's extension using the same rules as
-/// [`uffs_mft::index::base::MftIndex::intern_extension`]:
+/// [`uffs_mft::index::MftIndex::intern_extension`]:
 ///
 /// - Dotless names (e.g. `dbt`, `README`) have no extension.
 /// - Hidden files (e.g. `.gitignore`) have no extension.

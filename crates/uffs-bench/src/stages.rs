@@ -542,7 +542,7 @@ fn step_from_output(out: &ProcOutput, output_path: &Path, label: &str) -> StepRe
 /// Stage 1 — cross-tool head-to-head (run the harness).
 ///
 /// The daemon run-state restore (R1) is registered once, up front, in
-/// [`crate::run`] — before the daemon is first killed — so it is not re-taken
+/// [`crate::run()`] — before the daemon is first killed — so it is not re-taken
 /// per stage here (by stage time the as-found state is already gone).
 fn run_cross_tool(
     host: &dyn Host,
@@ -558,7 +558,7 @@ fn run_cross_tool(
 
 /// Stage 2 — per-drive parity (+R2 cache backup when purging, run the script).
 ///
-/// R1 daemon run-state is restored once via [`crate::run`] (see
+/// R1 daemon run-state is restored once via [`crate::run()`] (see
 /// [`run_cross_tool`]); only the per-drive cache backup is stage-local.
 fn run_parity(host: &dyn Host, guard: &mut RunGuard<'_>, cfg: &StageCfg) -> Result<StepResult> {
     if cfg.drop_cache {

@@ -3,8 +3,8 @@
 
 //! Index management: load drives, hold compact indices, refresh.
 //!
-//! The [`IndexManager`] is the daemon's core data structure. It holds
-//! the compact search indices for all loaded drives and delegates to
+//! The [`crate::index::IndexManager`] is the daemon's core data structure. It
+//! holds the compact search indices for all loaded drives and delegates to
 //! `uffs_core::search` for query execution.
 //!
 //! Each cluster of methods lives in its own sibling module — see the
@@ -73,7 +73,7 @@ type InFlightLoad = Shared<BoxFuture<'static, Option<Arc<uffs_core::compact::Dri
 ///    (panics inside an async runtime, see Tokio docs) or runtime-aware glue.
 ///
 /// Poison handling matches the rest of the daemon (see
-/// [`crate::lifecycle::DaemonHandle::verify_shutdown_nonce`]): the
+/// [`crate::lifecycle::LifecycleHandle::verify_shutdown_nonce`]): the
 /// `HashMap` stores no invariants that need recovery, so we recover
 /// the inner state via [`std::sync::PoisonError::into_inner`] rather
 /// than panicking on poisoning.
@@ -110,7 +110,7 @@ pub(crate) struct IndexManager {
     /// < 1 μs).  The registry caches an `Arc<DriveIndex>` over its
     /// active (Warm/Hot) subset so the search hot path stays one
     /// `Arc::clone` away from a usable backend — see
-    /// [`Self::snapshot`].
+    /// [`IndexManager::snapshot`].
     ///
     /// Phase 1 of the memory-tiering work replaced the previous
     /// `Arc<DriveIndex>` field with `Arc<ShardRegistry>`; every shard
@@ -142,12 +142,12 @@ pub(crate) struct IndexManager {
     /// Sizing: we target `max(2, (cpus × 26) / (drives × 10))` permits
     /// by default so the product `permits × drives ≈ 2.6 × cpus`, the
     /// empirically-best oversubscription on multi-drive boxes (see
-    /// [`Self::auto_concurrency_target`] for the measurement that
+    /// [`IndexManager::auto_concurrency_target`] for the measurement that
     /// landed on the 2.6× factor).  The `UFFS_SEARCH_MAX_CONCURRENCY`
     /// env var overrides the formula for benchmark sweeps or for
     /// operators who want to clamp down on oversubscription.  The
     /// semaphore is *replaced* (not mutated) when drive count changes
-    /// via [`Self::tune_concurrency`]; in-flight queries hold owned
+    /// via [`IndexManager::tune_concurrency`]; in-flight queries hold owned
     /// permits on the pre-swap instance and finish naturally.
     search_semaphore: RwLock<Arc<Semaphore>>,
     /// Cached CPU count for the concurrency formula.  Captured once at
@@ -183,44 +183,44 @@ pub(crate) struct IndexManager {
     /// promote-on-search.  Production paths use
     /// [`crate::cache::body_loader::DiskBodyLoader`]; the
     /// Commit-E integration tests inject fakes via
-    /// [`Self::with_body_loader_for_test`].
+    /// `IndexManager::with_body_loader_for_test`.
     body_loader: Arc<dyn crate::cache::body_loader::BodyLoader>,
     /// Process-level working-set trim hook (Phase 5 task 5.1).
     /// Called once at the end of every demote batch in
-    /// [`Self::demote_idle_shards`] (task 5.4).  Production wires
+    /// [`IndexManager::demote_idle_shards`] (task 5.4).  Production wires
     /// [`crate::cache::working_set::PlatformWorkingSetTrim`]
     /// (Mac/Linux no-op, Windows `EmptyWorkingSet`); the Phase 5
     /// tests inject
-    /// [`crate::cache::working_set::tests::CountingWorkingSetTrim`]
+    /// `crate::cache::working_set::tests::CountingWorkingSetTrim`
     /// to assert exactly-once invocation per batch.
     working_set_trim: Arc<dyn crate::cache::working_set::WorkingSetTrim>,
     /// Region kernel-prefetch hook (Phase 5 task 5.2).  Called
     /// inside the per-letter `spawn_blocking` task in
-    /// [`Self::ensure_warm_for_dispatch`] right after the body
+    /// [`IndexManager::ensure_warm_for_dispatch`] right after the body
     /// loader returns the freshly-loaded body (task 5.5), so the
     /// kernel can start paging in records + names while the
     /// orchestrator acquires the registry write-lock.  Production
     /// wires [`crate::cache::prefetch::PlatformPrefetch`] (Windows
     /// `PrefetchVirtualMemory`, Mac/Linux `posix_madvise`); the
     /// Phase 5 tests inject
-    /// [`crate::cache::prefetch::tests::RecordingPrefetch`] to assert the
+    /// `crate::cache::prefetch::tests::RecordingPrefetch` to assert the
     /// records + names regions reach the kernel.
     prefetch: Arc<dyn crate::cache::prefetch::Prefetch>,
     /// Memory-pressure signal source (Phase 5 task 5.3).  Held so
     /// the daemon's `spawn_pressure_subscriber` (in `lib.rs`) can
-    /// call [`Self::subscribe_pressure`] to obtain a
+    /// call [`IndexManager::subscribe_pressure`] to obtain a
     /// [`tokio::sync::watch::Receiver`] and react to `Low` events
     /// by cascade-demoting LRU Warm shards via
-    /// [`Self::cascade_demote_one_step`] (task 5.6).  Production
+    /// [`IndexManager::cascade_demote_one_step`] (task 5.6).  Production
     /// wires [`crate::cache::pressure::PlatformPressureSignal`]
     /// (Mac/Linux never-fires, Windows future watcher thread); the
     /// Phase 5 task 5.10 tests inject
-    /// [`crate::cache::pressure::tests::ControllablePressureSignal`]
+    /// `crate::cache::pressure::tests::ControllablePressureSignal`
     /// to broadcast deterministic transitions and assert the LRU
     /// cascade order.
     pressure: Arc<dyn crate::cache::pressure::PressureSignal>,
     /// Thread-level background-I/O priority hook (Phase 5 task 5.7).
-    /// Held so [`Self::handle_journal_refresh`] can wrap the
+    /// Held so [`IndexManager::handle_journal_refresh`] can wrap the
     /// per-letter `tokio::task::spawn_blocking` closure in a
     /// [`crate::cache::background_io::BackgroundIoScope`] so the USN
     /// catch-up + encrypted-cache write happen at Windows
@@ -229,25 +229,25 @@ pub(crate) struct IndexManager {
     /// wires [`crate::cache::background_io::PlatformBackgroundIoPriority`]
     /// (no-op on Mac/Linux, `SetThreadPriority` on Windows); the
     /// Phase 5 unit tests inject
-    /// [`crate::cache::background_io::tests::CountingBackgroundIoPriority`]
+    /// `crate::cache::background_io::tests::CountingBackgroundIoPriority`
     /// to assert the begin/end pair fires exactly once per refresh
     /// closure.
     ///
     /// Phase 7 activation moved the call site from the deleted
     /// `refresh_usn_for_warm_shards` global tick to
-    /// [`Self::handle_journal_refresh`] (per-shard, threshold-driven).
+    /// [`IndexManager::handle_journal_refresh`] (per-shard, threshold-driven).
     background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
     /// Per-drive cache-file cleanup hook (Phase 8-D `forget` RPC).
     ///
-    /// Called from [`Self::forget_drive`] after the in-memory
-    /// shard has been evicted from the registry, to delete every
+    /// Called from [`crate::index::IndexManager::forget_drives`] after the
+    /// in-memory shard has been evicted from the registry, to delete every
     /// per-drive on-disk artefact (encrypted compact body, USN
     /// cursor, MFT index, lock file).  Production wires
     /// [`crate::cache::cache_cleaner::PlatformCacheCleaner`] which
     /// resolves the canonical cache paths via
     /// [`uffs_core::compact_cache`] / [`uffs_mft::cache`] and
     /// unlinks each via [`std::fs::remove_file`]; tests inject
-    /// [`crate::cache::cache_cleaner::CountingCacheCleaner`] so
+    /// `crate::cache::cache_cleaner::CountingCacheCleaner` so
     /// registry-eviction behaviour can be verified deterministically
     /// without ever touching the host's cache directory.
     cache_cleaner: Arc<dyn crate::cache::cache_cleaner::CacheCleaner>,
@@ -269,11 +269,11 @@ pub(crate) struct IndexManager {
     /// Pre-fix RAM math (Windows v0.5.83 storm window): 8 × 1.3 GB
     /// transient × 4 drives ≈ 32 GB peak.  Post-fix: 1 × 1.3 GB
     /// per Parked drive in flight at any moment, ≈ 2 GB peak for
-    /// the same workload.  See [`Self::load_or_join_in_flight`].
+    /// the same workload.  See [`IndexManager::load_or_join_in_flight`].
     in_flight_promotes: InFlightPromotes,
     /// Phase 7 activation: per-letter [`JournalLoopHandle`] map.
     ///
-    /// Populated by [`Self::attach_journal_handle`] from the
+    /// Populated by [`IndexManager::attach_journal_handle`] from the
     /// per-shard journal-loop spawn site
     /// (`lib.rs::spawn_journal_loops_for_warm_shards`) after each
     /// [`crate::cache::journal_loop::spawn_journal_loop`] call.
@@ -294,10 +294,10 @@ pub(crate) struct IndexManager {
     /// because the critical section is microscopic — a
     /// [`std::collections::HashMap::insert`] on a map bounded by
     /// the loaded-drive count (≤ 26 entries).  Mirrors the
-    /// [`Self::in_flight_promotes`] field's lock-choice rationale
+    /// [`IndexManager::in_flight_promotes`] field's lock-choice rationale
     /// immediately above.
     ///
-    /// Poison handling matches [`Self::in_flight_promotes`] (the
+    /// Poison handling matches [`IndexManager::in_flight_promotes`] (the
     /// `HashMap` stores no invariants that need recovery, so we
     /// recover the inner state via [`std::sync::PoisonError::into_inner`]
     /// rather than panicking on poisoning).
@@ -315,7 +315,7 @@ pub(crate) struct IndexManager {
     /// Parsed `daemon.toml` (Phase 6).  Loaded once at
     /// [`crate::run_daemon`] startup via
     /// [`crate::config::Config::load_default`] and shared across
-    /// every controller — read by [`Self::demote_idle_shards`] for
+    /// every controller — read by [`IndexManager::demote_idle_shards`] for
     /// the per-drive [`TierThresholds`] sizing + per-drive
     /// `min_tier` clamp (plan tasks 6.1, 6.3, 6.6, 6.7).
     ///
@@ -341,7 +341,7 @@ impl IndexManager {
     ///
     /// Returns `None` if the semaphore was closed (daemon shutting
     /// down).  The permit is tied to the semaphore instance that was
-    /// current at acquisition time — if [`Self::tune_concurrency`]
+    /// current at acquisition time — if [`IndexManager::tune_concurrency`]
     /// swaps the semaphore while this permit is outstanding, the old
     /// instance stays alive until the permit is dropped, so in-flight
     /// queries always see a consistent admission slot.
@@ -355,7 +355,7 @@ impl IndexManager {
     ///
     /// Accepts any positive `usize`.  Invalid or empty values are
     /// ignored and the auto-tuned default is used instead.  Applied
-    /// every time [`Self::tune_concurrency`] runs, so the daemon can
+    /// every time [`IndexManager::tune_concurrency`] runs, so the daemon can
     /// be re-tuned at runtime by setting the env var and invoking an
     /// operation that re-tunes (e.g. a refresh).  Typical use is to
     /// set it before `uffs --daemon start` for benchmark sweeps:
@@ -400,7 +400,7 @@ impl IndexManager {
     /// the raw ratio can round down to 1 or 0).
     ///
     /// The `UFFS_SEARCH_MAX_CONCURRENCY` env var still overrides this
-    /// computation directly — see [`Self::tune_concurrency`].
+    /// computation directly — see [`IndexManager::tune_concurrency`].
     #[must_use]
     pub(crate) const fn auto_concurrency_target(cpus: usize, drives: usize) -> usize {
         // Clamp drives=0 → 1 so the pre-load admission window (before any
@@ -419,7 +419,7 @@ impl IndexManager {
     /// Re-size the search semaphore to match the currently loaded
     /// drive count.
     ///
-    /// **Default formula**: see [`Self::auto_concurrency_target`] —
+    /// **Default formula**: see [`IndexManager::auto_concurrency_target`] —
     /// roughly `max(2, 2.6 × cpus / drives)`.  The 30 % oversubscription
     /// vs. the simpler `2 × cpus / drives` lets the work-stealing
     /// scheduler chew through concurrent queries without serialising on
@@ -483,8 +483,8 @@ impl IndexManager {
     /// Increment `index_version` and notify the aggregate cache so it
     /// drops entries computed against the previous generation.
     ///
-    /// Called from every drive-mutating path ([`Self::add_drive`] and
-    /// [`Self::replace_drive`]).  Cheap: one atomic fetch-add plus a
+    /// Called from every drive-mutating path ([`IndexManager::add_drive`] and
+    /// [`IndexManager::replace_drive`]).  Cheap: one atomic fetch-add plus a
     /// single `Mutex::lock` inside the cache.
     fn bump_index_version(&self) {
         let new_version = self.index_version.fetch_add(1, Ordering::Relaxed) + 1;

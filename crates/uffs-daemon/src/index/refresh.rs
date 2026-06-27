@@ -7,7 +7,7 @@
 //! sequentially, reloads each drive's MFT (live on Windows or the
 //! original `.mft` snapshot on Mac/Linux) on a blocking thread,
 //! and atomically swaps the new compact index into the registry
-//! via [`Self::replace_drive`].
+//! via [`IndexManager::replace_drive`].
 //!
 //! Sequential — not parallel — because the typical refresh tick
 //! is operator-driven (`uffs refresh`) and the per-drive cost is
@@ -15,14 +15,14 @@
 //! drive).  A single-flight serial loop keeps the
 //! `RefreshStarted`/`RefreshComplete` event pair semantically
 //! tight (one tick = one operator action) and avoids the
-//! background-IO cascade the [`Self::refresh_usn_for_warm_shards`]
+//! background-IO cascade the [`crate::spawn_journal_loops_for_warm_shards`]
 //! controller already covers for incremental updates.
 //!
 //! The `live_refresh_supported` + `is_live_drive_marker` pair
 //! gates the platform-specific branch in
-//! [`Self::resolve_refresh_mft_source`]: a 2-char path like
+//! [`IndexManager::resolve_refresh_mft_source`]: a 2-char path like
 //! `"C:"` is the opaque marker for a live MFT volume that
-//! [`crate::index::loading::IndexManager::load_live_drives`]
+//! `load_live_drives`
 //! installs on Windows, while every other path length is an
 //! on-disk `.mft` snapshot reloadable from disk on any platform.
 
@@ -96,9 +96,10 @@ impl IndexManager {
     }
 
     /// Trace + dispatch the `Result<Result<_, _>, JoinError>` returned
-    /// by [`refresh_one_drive`]'s `spawn_blocking`.  On success defers
-    /// to [`apply_refresh_success`]; on either error arm emits the
-    /// matching error trace.
+    /// by [`crate::index::IndexManager::refresh_one_drive`]'s `spawn_blocking`.
+    /// On success defers
+    /// to [`crate::index::IndexManager::apply_refresh_success`]; on either
+    /// error arm emits the matching error trace.
     async fn apply_refresh_result(
         &self,
         letter: uffs_mft::platform::DriveLetter,
@@ -173,9 +174,9 @@ impl IndexManager {
     ///
     /// A path like `"C:"` (length ≤ 2) is an opaque marker for a
     /// live MFT scan — valid on Windows, rejected at the
-    /// [`Self::refresh_one_drive`] call site on every other platform via
-    /// [`Self::live_refresh_supported`].  Anything longer is an on-disk
-    /// `.mft` snapshot reloadable from disk on any platform.
+    /// [`IndexManager::refresh_one_drive`] call site on every other platform
+    /// via [`IndexManager::live_refresh_supported`].  Anything longer is an
+    /// on-disk `.mft` snapshot reloadable from disk on any platform.
     ///
     /// [`MftSource`]: uffs_core::compact::MftSource
     fn resolve_refresh_mft_source(

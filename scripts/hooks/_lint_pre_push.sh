@@ -238,7 +238,7 @@ if (( CODE_CHANGED )); then
     run_seq "lint-ci-no-default" just lint-ci-no-default
     run_seq "lint-prod" just lint-prod
     run_seq "lint-tests" just lint-tests
-    run_seq "rustdoc" env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked
+    run_seq "rustdoc" env RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --all-features --no-deps --locked --document-private-items
     run_seq "doc-tests" env RUSTDOCFLAGS=-Dwarnings cargo test --doc --workspace --all-features --locked
     run_seq "tests" cargo nextest run --workspace --all-targets --all-features --no-run --locked --hide-progress-bar
     run_seq "smoke" cargo nextest run --workspace --profile pre-push-smoke --locked

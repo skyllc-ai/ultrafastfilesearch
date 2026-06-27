@@ -40,8 +40,8 @@ pub use self::stats::{MftProgress, MftStats};
 /// `MftReader` dispatch to the correct pipeline without `#[cfg]` gates on
 /// every public method.
 ///
-/// The `LiveVolume` variant boxes its [`VolumeHandle`] so the enum stays
-/// compact (one pointer per variant) instead of allocating the
+/// The `LiveVolume` variant boxes its `VolumeHandle` (Windows-only) so the enum
+/// stays compact (one pointer per variant) instead of allocating the
 /// `VolumeHandle`-sized inline payload (~120 bytes including the NTFS
 /// volume-data block) on every `MftReader` instance — also silences the
 /// rustc `variant_size_differences` lint comparing against the

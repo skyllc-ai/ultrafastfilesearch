@@ -505,9 +505,15 @@ uninstall-hooks:
     @printf "\033[0;32m✅ Git hooks uninstalled — commits and pushes are no longer gated.\033[0m\n"
 
 # Validate rustdoc links and warnings (catches private-intra-doc-links etc.).
+#
+# `--document-private-items` is REQUIRED for the "catches private-intra-doc-links"
+# promise: without it rustdoc only validates links reachable from the public API
+# surface, so a broken `[`crate::path::pub_crate_item`]` (or a `//!` shortcut to a
+# private sibling) silently renders as dead text. Cross-platform: `#[cfg(windows)]`
+# items absent on the macOS/Linux host are referenced as code spans, not links.
 rustdoc:
     @printf "\033[0;34m📚 Rustdoc link validation...\033[0m\n"
-    RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps
+    RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps --document-private-items
 
 # Enforce oversized Rust file policy with explicit exceptions.
 file-size-policy:

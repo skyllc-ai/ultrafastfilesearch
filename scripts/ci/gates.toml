@@ -392,6 +392,7 @@ command = [
   "--all-features",
   "--no-deps",
   "--locked",
+  "--document-private-items",
 ]
 tiers = ["pre-push", "pr-fast"]
 gate_when = "rust_changed"
@@ -405,6 +406,13 @@ notes = """
 Catches broken doc-links, unresolved `[symbol]` references, and any
 intra-doc cross-reference drift.  pr-fast's `docs` job runs both
 this and `doc-tests` in one step.
+
+`--document-private-items` is REQUIRED: without it rustdoc validates
+only links reachable from the public API surface, so a broken
+`[`crate::path::pub_crate_item`]` (or a `//!` shortcut to a private
+sibling) silently renders as dead text instead of failing.  Cross-
+platform — `#[cfg(windows)]` items absent on the macOS/Linux runner
+are written as code spans, not links.
 """
 
 [[gate]]

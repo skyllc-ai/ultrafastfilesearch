@@ -5,8 +5,8 @@
 //! [`crate::connect::UffsClient`] (async variant).
 //!
 //! Extracted from `connect.rs` for file-size policy compliance.
-//! All items live on [`UffsClient`] via split `impl` blocks — no
-//! public surface moves.  Mirrors the sync-path split in
+//! All items live on [`crate::connect::UffsClient`] via split `impl` blocks —
+//! no public surface moves.  Mirrors the sync-path split in
 //! `connect_sync_platform.rs`.
 
 use tokio::io::BufReader;

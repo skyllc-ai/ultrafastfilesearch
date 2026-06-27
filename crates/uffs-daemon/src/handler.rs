@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2025-2026 SKY, LLC.
 
-//! JSON-RPC request handler: dispatches methods to [`IndexManager`].
+//! JSON-RPC request handler: dispatches methods to
+//! [`crate::index::IndexManager`].
 
 use uffs_client::protocol::response::{
     DEFAULT_PRELOAD_PIN_MINUTES, FacetValuesParams, FacetValuesResponse, ForgetParams,

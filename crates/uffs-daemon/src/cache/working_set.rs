@@ -16,7 +16,7 @@
 //! The trait is held by [`crate::index::IndexManager`] as
 //! `Arc<dyn WorkingSetTrim>` so production wires the platform impl
 //! and the Phase 5 unit tests inject a counting fake (see
-//! [`tests::CountingWorkingSetTrim`]) to assert the hook fires
+//! `tests::CountingWorkingSetTrim`) to assert the hook fires
 //! exactly once per demote batch.
 
 use std::io;

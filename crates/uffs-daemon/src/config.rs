@@ -40,7 +40,7 @@
 //!
 //! * **Commit B (this file):** types + serde + parser + tests.  No callers
 //!   wired yet.
-//! * **Commit C (next):** wire [`Config::load_from_path`] into
+//! * **Commit C (next):** wire [`crate::config::Config::load_from_path`] into
 //!   `crate::run_daemon` startup; replace `cache::policy`'s static getters with
 //!   config-driven readers; pass `TierThresholds` into
 //!   [`crate::cache::policy::next_state_for_idle_with_thresholds`] from
@@ -48,7 +48,7 @@
 //!
 //! ## Defaults
 //!
-//! [`Config::default()`] matches the Phase-3 static behavior
+//! [`crate::config::Config::default()`] matches the Phase-3 static behavior
 //! (plan task 6.8): missing `daemon.toml` ⇒ same idle thresholds as
 //! the bare [`crate::cache::policy`] module.  Production users opt
 //! into longer retention or per-drive constraints by writing an
@@ -427,7 +427,7 @@ impl Config {
     /// practice on every supported platform the answer is `Some`.
     ///
     /// Mirrors the conventions used by [`crate::ipc::IpcServer::socket_path`]
-    /// and [`crate::default_log_file`] so the `daemon.toml` lives
+    /// and [`crate::log_init::default_log_file`] so the `daemon.toml` lives
     /// alongside the lifecycle / log artifacts the daemon already
     /// writes there.
     #[must_use]
@@ -456,7 +456,7 @@ impl Config {
     }
 }
 
-/// Errors surfaced by [`Config::load_from_path`] /
+/// Errors surfaced by [`crate::config::Config::load_from_path`] /
 /// [`Config::from_toml`] / [`Config::to_toml`].
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {

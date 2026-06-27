@@ -168,7 +168,8 @@ impl RequestHandler {
     /// case-insensitively.  Multi-column projections, aggregation
     /// requests, projected-JSON mode, and custom sort clauses all
     /// disqualify the fast path — the response must still carry the
-    /// full [`SearchRow`] data for the CLI's row-based formatters.
+    /// full [`uffs_client::protocol::response::SearchRow`] data for the CLI's
+    /// row-based formatters.
     ///
     /// Also requires the caller to have explicitly opted into a
     /// text-shaped payload via [`Self::caller_opted_into_blob_payload`]

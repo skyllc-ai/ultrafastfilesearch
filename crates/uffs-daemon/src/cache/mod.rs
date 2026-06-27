@@ -7,26 +7,27 @@
 //! (`docs/refactor/memory-tiering-implementation-plan.md`).
 //!
 //! The cache layer wraps each loaded `DriveCompactIndex` in a
-//! [`ShardEntry`] that carries:
+//! [`crate::cache::shard::ShardEntry`] that carries:
 //!
-//! * a tier state ([`ShardState`]) — Phase 1 pins everything to
-//!   [`ShardState::Warm`]; Phase 3 wires real transitions.
-//! * per-drive query stats ([`DriveStats`]) — atomic counters plus an
-//!   exponentially-weighted moving average rate; consumed by the adaptive-TTL
-//!   formulas in Phase 6.
+//! * a tier state ([`crate::cache::shard::ShardState`]) — Phase 1 pins
+//!   everything to [`crate::cache::shard::ShardState::Warm`]; Phase 3 wires
+//!   real transitions.
+//! * per-drive query stats ([`crate::cache::shard::DriveStats`]) — atomic
+//!   counters plus an exponentially-weighted moving average rate; consumed by
+//!   the adaptive-TTL formulas in Phase 6.
 //! * the in-memory body, an `Arc<DriveCompactIndex>` cloned cheaply into the
 //!   per-search snapshot.
 //!
-//! [`ShardRegistry`] is the top-level container that the daemon swaps
-//! under `RwLock<Arc<...>>` in place of the old
+//! [`crate::cache::registry::ShardRegistry`] is the top-level container that
+//! the daemon swaps under `RwLock<Arc<...>>` in place of the old
 //! `Arc<uffs_core::search::backend::DriveIndex>`.  It maintains a
 //! cached `Arc<DriveIndex>` over the active (Warm/Hot) subset so the
 //! search hot path stays an `Arc::clone` away from a usable backend.
 //!
 //! Phase 1 keeps every shard in `Warm` so the active subset always
 //! matches the full registry; Phase 3 starts demoting and
-//! [`ShardRegistry::active_index`] begins to diverge from the full
-//! shard list.
+//! [`crate::cache::registry::ShardRegistry::active_index`] begins to diverge
+//! from the full shard list.
 
 pub(crate) mod background_io;
 pub(crate) mod body_loader;

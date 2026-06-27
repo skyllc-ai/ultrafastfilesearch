@@ -345,11 +345,14 @@ async fn tracked_parallel_validation_step(
                 "unused-crate-dependencies",
             ]),
             ("Dependency security", "cargo", vec!["deny", "check"]),
+            // `--document-private-items` validates links across the private
+            // surface too — see the matching note in `phases.rs`.
             ("Rustdoc link validation", "cargo", vec![
                 "doc",
                 "--workspace",
                 "--all-features",
                 "--no-deps",
+                "--document-private-items",
             ]),
         ];
         execute_parallel_with_env(parallel_commands, &[("RUSTDOCFLAGS", "-Dwarnings")], ctx).await

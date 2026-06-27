@@ -661,7 +661,7 @@ impl SearchFilters {
     /// Check derived/computed filters: name length, allocated, tree metrics,
     /// month.
     ///
-    /// Split from [`matches_record`] to keep each function under the
+    /// Split from [`Self::matches_record`] to keep each function under the
     /// `too_many_lines` lint threshold.
     fn matches_derived(&self, rec: &CompactRecord, names: &[u8]) -> bool {
         // ── Name-length filters (chars, not bytes) ─────────────────

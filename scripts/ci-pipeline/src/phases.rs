@@ -215,11 +215,16 @@ async fn phase1_fanout_validation(ctx: &PipelineContext) -> Result<()> {
         ("Anti-pattern gate", "bash", vec![
             "scripts/ci/anti_pattern_gate.sh",
         ]),
+        // `--document-private-items` is REQUIRED to validate links across the
+        // private surface (`pub(crate)` items, `//!` shortcuts to private
+        // siblings); without it rustdoc only checks the public API and a broken
+        // link silently renders as dead text. Mirrors `just rustdoc`.
         ("Rustdoc link validation", "cargo", vec![
             "doc",
             "--workspace",
             "--all-features",
             "--no-deps",
+            "--document-private-items",
         ]),
     ];
     execute_parallel_with_env(parallel_commands, &[("RUSTDOCFLAGS", "-Dwarnings")], ctx).await

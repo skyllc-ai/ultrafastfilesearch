@@ -34,7 +34,7 @@
 //! [`IndexManager`][im] holds the trait as
 //! `Arc<dyn PressureSignal>`.  Production wires
 //! [`PlatformPressureSignal`]; the Phase 5 unit tests inject
-//! [`tests::ControllablePressureSignal`] so the test can `set(Low)` /
+//! `tests::ControllablePressureSignal` so the test can `set(Low)` /
 //! `set(High)` and assert the cascade behaviour deterministically
 //! without any real OS pressure.
 //!
@@ -58,8 +58,8 @@ use tokio::sync::watch;
 /// `Low` and `High` are **platform-conditional** — they only exist
 /// on Windows (where the kernel's
 /// `LowMemoryResourceNotification` / `HighMemoryResourceNotification`
-/// surface them via [`windows_handles::watcher_loop`]) and under
-/// `cfg(test)` (so [`tests::ControllablePressureSignal`] can drive
+/// surface them via `windows_handles::watcher_loop`) and under
+/// `cfg(test)` (so `tests::ControllablePressureSignal` can drive
 /// deterministic transitions on every host).  Mac/Linux production
 /// builds expose only `Normal`: there is no portable process-wide
 /// memory-resource-notification API on those targets, and the
@@ -81,16 +81,16 @@ pub(crate) enum PressureLevel {
     /// Subscriber cascade-demotes LRU Warm shards.
     ///
     /// Only present on Windows production builds (constructed by
-    /// [`windows_handles::watcher_loop`]) and under `cfg(test)`
-    /// (constructed by [`tests::ControllablePressureSignal`]).
+    /// `windows_handles::watcher_loop`) and under `cfg(test)`
+    /// (constructed by `tests::ControllablePressureSignal`).
     #[cfg(any(target_os = "windows", test))]
     Low,
     /// Free RAM has risen back above the kernel's high-memory
     /// threshold; pressure cleared.  Subscriber stops the cascade.
     ///
     /// Only present on Windows production builds (constructed by
-    /// [`windows_handles::watcher_loop`]) and under `cfg(test)`
-    /// (constructed by [`tests::ControllablePressureSignal`]).
+    /// `windows_handles::watcher_loop`) and under `cfg(test)`
+    /// (constructed by `tests::ControllablePressureSignal`).
     #[cfg(any(target_os = "windows", test))]
     High,
 }

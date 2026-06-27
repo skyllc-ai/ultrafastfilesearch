@@ -524,8 +524,7 @@ fn spawn_idle_demote_controller(idx: Arc<index::IndexManager>) -> tokio::task::J
 /// docs for the full rationale.
 ///
 /// **Platform split**:
-/// * **Windows**: each letter gets a
-///   [`crate::cache::journal_loop::sources::WindowsJournalSource`] (real
+/// * **Windows**: each letter gets a `WindowsJournalSource` (real
 ///   `FSCTL_QUERY_USN_JOURNAL` + `FSCTL_READ_USN_JOURNAL`) and a
 ///   [`crate::cache::cursor_store::DiskCursorStore`] rooted at
 ///   `uffs_mft::cache::cache_dir()`.

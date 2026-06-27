@@ -13,9 +13,9 @@
 //! `FILE_FLAG_DELETE_ON_CLOSE` self-cleans, but the empty `<pid>/`
 //! directory wrapper still needs sweeping.
 //!
-//! [`sweep_runtime_tempfile_orphans`] runs once at daemon startup,
-//! after [`crate::bootstrap_lifecycle_manager`] (so the PID file
-//! proves we're the live daemon) and before any drive load (so the
+//! [`crate::runtime_orphans::sweep_runtime_tempfile_orphans`] runs once at
+//! daemon startup, after [`crate::startup::bootstrap_lifecycle_manager`] (so
+//! the PID file proves we're the live daemon) and before any drive load (so the
 //! sweep can't accidentally remove our own future runtime tempfile
 //! subdir).
 //!

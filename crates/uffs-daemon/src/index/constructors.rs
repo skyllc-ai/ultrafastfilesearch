@@ -3,24 +3,24 @@
 
 //! [`IndexManager`] constructors.
 //!
-//! Four entry points share the inner [`Self::new_with_lifecycle_hooks`]
+//! Four entry points share the inner [`IndexManager::new_with_lifecycle_hooks`]
 //! builder so the field-initialization list lives in one place:
 //!
-//! 1. [`Self::new`] — production constructor that takes an explicit
+//! 1. [`IndexManager::new`] — production constructor that takes an explicit
 //!    [`Arc<Config>`](crate::config::Config).  Used by [`crate::run_daemon`]
 //!    after [`crate::config::Config::load_default`] resolves the config (Phase
 //!    6 Commit C).  Tests that don't care about adaptive-TTL behaviour pass
 //!    `Arc::new(crate::config::Config::default())` and get the
 //!    Phase-3-equivalent ladder.
-//! 2. [`Self::new_with_lifecycle_hooks`] — module-private builder that takes
-//!    every hook bundled into a [`LifecycleHooks`] struct plus the config.
-//!    Production paths reach this via [`Self::new`]; tests reach it via the
-//!    `_for_test` variants below.
-//! 3. [`Self::with_body_loader_for_test`] — test-only entry point that swaps in
-//!    a custom body loader and keeps the platform defaults for the other hooks
-//!    (Phase 4 Commit E + earlier).
-//! 4. [`Self::with_lifecycle_hooks_for_test`] — test-only entry point that
-//!    swaps every lifecycle hook (Phase 5) and accepts an explicit
+//! 2. [`IndexManager::new_with_lifecycle_hooks`] — module-private builder that
+//!    takes every hook bundled into a [`LifecycleHooks`] struct plus the
+//!    config. Production paths reach this via [`IndexManager::new`]; tests
+//!    reach it via the `_for_test` variants below.
+//! 3. `IndexManager::with_body_loader_for_test` — test-only entry point that
+//!    swaps in a custom body loader and keeps the platform defaults for the
+//!    other hooks (Phase 4 Commit E + earlier).
+//! 4. `IndexManager::with_lifecycle_hooks_for_test` — test-only entry point
+//!    that swaps every lifecycle hook (Phase 5) and accepts an explicit
 //!    `Arc<Config>` (Phase 6).
 //!
 //! The hooks themselves live in a [`LifecycleHooks`] struct so the
@@ -49,7 +49,7 @@ use crate::events::EventSender;
 /// Reduces the constructor surface from five trait-object `Arc`
 /// parameters to a single struct.  This (a) keeps the constructor
 /// signatures under clippy's 7-argument ceiling and (b) lets test
-/// code build [`Self::production`] then override only the
+/// code build [`LifecycleHooks::production`] then override only the
 /// hook(s) the test cares about, e.g.
 ///
 /// ```ignore
@@ -76,7 +76,7 @@ pub(crate) struct LifecycleHooks {
     pub(crate) background_io: Arc<dyn crate::cache::background_io::BackgroundIoPriority>,
     /// Per-drive cache-file cleanup hook (Phase 8-D `forget` RPC).
     /// Production uses [`crate::cache::cache_cleaner::PlatformCacheCleaner`];
-    /// tests inject [`crate::cache::cache_cleaner::CountingCacheCleaner`]
+    /// tests inject a test-only `CountingCacheCleaner`
     /// so registry-eviction behaviour can be verified without
     /// touching the host's real cache directory.
     pub(crate) cache_cleaner: Arc<dyn crate::cache::cache_cleaner::CacheCleaner>,
@@ -85,8 +85,8 @@ pub(crate) struct LifecycleHooks {
 impl LifecycleHooks {
     /// Production hook bundle — every hook wired to its
     /// `crate::cache::*::Platform*` impl.  Used by
-    /// [`IndexManager::new`] / [`IndexManager::new_with_config`] and
-    /// as the spread base for the `_for_test` constructors when a
+    /// [`IndexManager::new`] (via [`IndexManager::new_with_lifecycle_hooks`])
+    /// and as the spread base for the `_for_test` constructors when a
     /// test only needs to override one hook.
     #[must_use]
     pub(crate) fn production() -> Self {
@@ -110,7 +110,7 @@ impl IndexManager {
     /// `Arc::new(crate::config::Config::default())` and get the
     /// Phase-3-equivalent ladder; tests that exercise per-drive
     /// `min_tier` overrides or non-default `TiersConfig` values
-    /// reach for [`Self::with_lifecycle_hooks_for_test`] so they
+    /// reach for the test-only `with_lifecycle_hooks_for_test` so they
     /// can also inject counting / recording fakes.
     #[must_use]
     pub(crate) fn new(
@@ -126,9 +126,9 @@ impl IndexManager {
     /// background-I/O priority) plus the parsed
     /// [`Config`](crate::config::Config).
     ///
-    /// Production code calls [`Self::new`] / [`Self::new_with_config`]
-    /// which wire the platform impls; the Phase 5 / Phase 6 unit tests
-    /// use this path through [`Self::with_lifecycle_hooks_for_test`]
+    /// Production code calls [`IndexManager::new`]
+    /// which wires the platform impls; the Phase 5 / Phase 6 unit tests
+    /// use this path through the test-only `with_lifecycle_hooks_for_test`
     /// to inject counting / recording / controllable fakes without
     /// touching the platform cache directory, the process working set,
     /// or the OS pressure-notification API, and to exercise per-drive

@@ -6,8 +6,8 @@
 //! # FRS wire-boundary policy (Phase 4 sub-phase 5d.4)
 //!
 //! The `frs: Vec<u64>` / `parent_frs: Vec<u64>` fields are the
-//! columnar staging buffers that feed
-//! [`crate::reader::dataframe_build`] and ultimately become
+//! columnar staging buffers that feed the reader's
+//! `dataframe_build` stage and ultimately become
 //! `polars::Series::new("frs", _)` columns.  They are deliberately
 //! raw `u64` because the polars column type is the FRS wire boundary
 //! by Phase-4 doctrine — every typed [`crate::Frs`] / [`crate::ParentFrs`]

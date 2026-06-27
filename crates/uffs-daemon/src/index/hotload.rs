@@ -6,22 +6,22 @@
 //! Two distinct entry points cover the runtime "load this drive
 //! now" surface:
 //!
-//! 1. [`Self::load_single_mft_file`] — a path-based hot-load. Used by the `add`
-//!    RPC and the file-watcher integration in `crate::lifecycle` when an
-//!    operator drops a new `*.mft` snapshot into `data_dir`.  Skips if the
+//! 1. [`IndexManager::load_single_mft_file`] — a path-based hot-load. Used by
+//!    the `add` RPC and the file-watcher integration in `crate::lifecycle` when
+//!    an operator drops a new `*.mft` snapshot into `data_dir`.  Skips if the
 //!    drive is already loaded (no replace).
-//! 2. [`Self::hot_load_drive`] — a letter-based hot-load.  Used by the `load`
-//!    RPC.  On Windows reads the live MFT directly; on Mac/Linux looks for a
-//!    snapshot under `data_dir/drive_X/`.  Replaces an already-loaded drive
-//!    (the operator wants a re-read).
+//! 2. [`IndexManager::hot_load_drive`] — a letter-based hot-load.  Used by the
+//!    `load` RPC.  On Windows reads the live MFT directly; on Mac/Linux looks
+//!    for a snapshot under `data_dir/drive_X/`.  Replaces an already-loaded
+//!    drive (the operator wants a re-read).
 //!
 //! Both paths share the per-drive blocking-load helper
-//! [`Self::blocking_load_drive`] which wraps
+//! [`IndexManager::blocking_load_drive`] which wraps
 //! [`uffs_core::compact::load_drive`] in `spawn_blocking` and
 //! reclaims allocator pages on completion.  Auto-discovery from
 //! the data directory is provided by
-//! [`Self::discover_and_load_drive`] /
-//! [`Self::ensure_drives_loaded`] so the search RPC can
+//! [`IndexManager::discover_and_load_drive`] /
+//! [`IndexManager::ensure_drives_loaded`] so the search RPC can
 //! transparently load drives the user named but didn't
 //! pre-mount.
 
