@@ -332,6 +332,7 @@ fn fast_config() -> JournalLoopConfig {
         // tests don't accidentally fire an apply; the apply-cadence
         // tests override this with a short interval.
         apply_interval: Duration::from_hours(24),
+        apply_debounce: Duration::from_hours(24),
     }
 }
 

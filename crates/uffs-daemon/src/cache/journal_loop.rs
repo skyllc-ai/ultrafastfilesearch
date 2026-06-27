@@ -47,10 +47,12 @@ use core::time::Duration;
 use tokio::sync::watch;
 use uffs_mft::usn::FileChange;
 
+mod poll;
 mod triggers;
 
+pub(crate) use poll::{MAX_POLL_BACKOFF, PollBackoff};
 pub(crate) use triggers::{
-    ApplyTrigger, DEFAULT_APPLY_INTERVAL_MS, DEFAULT_SAVE_THRESHOLD_AGE,
+    ApplyTrigger, DEFAULT_APPLY_DEBOUNCE_MS, DEFAULT_APPLY_INTERVAL_MS, DEFAULT_SAVE_THRESHOLD_AGE,
     DEFAULT_SAVE_THRESHOLD_EVENTS, SaveReason, SaveTrigger,
 };
 
@@ -268,12 +270,16 @@ pub(crate) struct JournalLoopConfig {
     /// when at least one event is pending.  Default
     /// [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min).
     pub(crate) save_threshold_age: Duration,
-    /// Search-freshness apply cadence — decoupled from the disk-save
-    /// thresholds above.  When buffered changes exist and this long
-    /// has elapsed since the last apply / save, the loop patches the
-    /// in-memory body via [`PatchSink::trigger_apply`] so the change
-    /// becomes searchable.  Default [`DEFAULT_APPLY_INTERVAL_MS`] (30 s).
+    /// Search-freshness apply **max-wait** cap (Phase 5) — the ceiling of the
+    /// debounce model. A burst that never settles is force-applied at least
+    /// this often, bounding both freshness lag and apply CPU under sustained
+    /// churn. Default [`DEFAULT_APPLY_INTERVAL_MS`] (2 s).
     pub(crate) apply_interval: Duration,
+    /// Search-freshness apply **debounce / settle** window (Phase 5) — once
+    /// buffered changes have been quiet this long, coalesce them into one
+    /// apply, so an idle→active transition goes searchable promptly. Default
+    /// [`DEFAULT_APPLY_DEBOUNCE_MS`] (250 ms).
+    pub(crate) apply_debounce: Duration,
 }
 
 impl Default for JournalLoopConfig {
@@ -284,6 +290,7 @@ impl Default for JournalLoopConfig {
             save_threshold_events: DEFAULT_SAVE_THRESHOLD_EVENTS,
             save_threshold_age: DEFAULT_SAVE_THRESHOLD_AGE,
             apply_interval: Duration::from_millis(DEFAULT_APPLY_INTERVAL_MS),
+            apply_debounce: Duration::from_millis(DEFAULT_APPLY_DEBOUNCE_MS),
         }
     }
 }
@@ -291,8 +298,12 @@ impl Default for JournalLoopConfig {
 /// Env var overriding [`JournalLoopConfig::poll_interval`] (milliseconds).
 pub(crate) const POLL_INTERVAL_ENV: &str = "UFFS_USN_POLL_INTERVAL_MS";
 
-/// Env var overriding [`JournalLoopConfig::apply_interval`] (milliseconds).
+/// Env var overriding [`JournalLoopConfig::apply_interval`] (the max-wait cap,
+/// milliseconds).
 pub(crate) const APPLY_INTERVAL_ENV: &str = "UFFS_USN_APPLY_INTERVAL_MS";
+
+/// Env var overriding [`JournalLoopConfig::apply_debounce`] (milliseconds).
+pub(crate) const APPLY_DEBOUNCE_ENV: &str = "UFFS_USN_APPLY_DEBOUNCE_MS";
 
 impl JournalLoopConfig {
     /// Build the production config: [`Self::default`] with the two
@@ -313,6 +324,9 @@ impl JournalLoopConfig {
         }
         if let Some(ms) = env_millis(APPLY_INTERVAL_ENV) {
             config.apply_interval = Duration::from_millis(ms);
+        }
+        if let Some(ms) = env_millis(APPLY_DEBOUNCE_ENV) {
+            config.apply_debounce = Duration::from_millis(ms);
         }
         config
     }
@@ -437,11 +451,11 @@ impl JournalLoop {
         };
         let mut backoff = PollBackoff::new(self.config.poll_interval, MAX_POLL_BACKOFF);
         loop {
-            if !wait_for_next_tick(&mut self.cancel_rx, backoff.current(), letter).await {
+            if !poll::wait_for_next_tick(&mut self.cancel_rx, backoff.current(), letter).await {
                 return;
             }
 
-            let result = match poll_blocking(Arc::clone(&self.source), cursor).await {
+            let result = match poll::poll_blocking(Arc::clone(&self.source), cursor).await {
                 Ok(result) => {
                     if backoff.on_success() {
                         tracing::info!(
@@ -453,7 +467,7 @@ impl JournalLoop {
                 }
                 Err(failure) => {
                     let streak = backoff.on_failure();
-                    log_poll_failure(letter, &failure, streak, backoff.current());
+                    poll::log_poll_failure(letter, &failure, streak, backoff.current());
                     continue;
                 }
             };
@@ -501,166 +515,6 @@ impl JournalLoop {
     }
 }
 
-/// Wait for the next poll deadline, racing the cancellation watch.
-///
-/// **Returns** `true` when the loop should proceed with a poll,
-/// `false` when cancellation has been observed and the loop
-/// should exit.
-async fn wait_for_next_tick(
-    cancel_rx: &mut watch::Receiver<bool>,
-    poll_interval: Duration,
-    letter: uffs_mft::platform::DriveLetter,
-) -> bool {
-    if *cancel_rx.borrow() {
-        tracing::debug!(drive = %letter, "Journal loop cancellation requested before tick");
-        return false;
-    }
-    tokio::select! {
-        () = tokio::time::sleep(poll_interval) => true,
-        changed = cancel_rx.changed() => {
-            if changed.is_ok() && *cancel_rx.borrow() {
-                tracing::debug!(
-                    drive = %letter,
-                    "Journal loop cancellation observed during sleep"
-                );
-                false
-            } else {
-                true
-            }
-        }
-    }
-}
-
-/// Upper bound on the journal-poll backoff cadence.
-///
-/// When the journal is unavailable the loop backs its cadence off geometrically
-/// (see [`PollBackoff`]) up to this ceiling, so a persistently unavailable
-/// journal — e.g. a non-elevated daemon whose USN handle isn't brokered yet
-/// (FU-2b) — polls at most this often instead of every `poll_interval`.  Small
-/// enough that a recovered journal is picked up promptly; large enough that an
-/// unavailable one stops flooding the log and the blocking pool.
-const MAX_POLL_BACKOFF: Duration = Duration::from_secs(30);
-
-/// Why a journal poll tick produced no result.
-struct PollFailure {
-    /// Human-readable cause for the log line.
-    cause: String,
-    /// `true` when the `spawn_blocking` task itself failed (panicked /
-    /// cancelled) rather than the source returning an I/O error.
-    aborted: bool,
-}
-
-/// Geometric backoff for the journal poll cadence.
-///
-/// The journal can be transiently unavailable (volume revocation, broker
-/// reconnect) or — for a non-elevated daemon without a brokered USN handle —
-/// persistently access-denied.  Polling every `base` interval in that state
-/// floods the log with one WARN per tick (~2/s) and burns a `spawn_blocking`
-/// plus an FSCTL per tick for nothing.  This doubles the cadence from `base`
-/// toward `cap` on each consecutive failure and snaps back to `base` on the
-/// first success, so a healthy journal keeps its tight cadence while an
-/// unavailable one goes quiet.
-struct PollBackoff {
-    /// Healthy cadence (the configured `poll_interval`).
-    base: Duration,
-    /// Maximum backed-off cadence.
-    cap: Duration,
-    /// Cadence the next tick will wait.
-    current: Duration,
-    /// Consecutive failures since the last success.
-    consecutive_failures: u32,
-}
-
-impl PollBackoff {
-    /// Start at the healthy `base` cadence, backing off no slower than `cap`.
-    const fn new(base: Duration, cap: Duration) -> Self {
-        Self {
-            base,
-            cap,
-            current: base,
-            consecutive_failures: 0,
-        }
-    }
-
-    /// Cadence the next tick should wait.
-    const fn current(&self) -> Duration {
-        self.current
-    }
-
-    /// Record a successful poll: reset to `base`.  Returns `true` when the loop
-    /// was previously backed off, so the caller can log a one-shot recovery.
-    const fn on_success(&mut self) -> bool {
-        let was_backed_off = self.consecutive_failures > 0;
-        self.consecutive_failures = 0;
-        self.current = self.base;
-        was_backed_off
-    }
-
-    /// Record a failed poll: double the cadence (saturating at `cap`).  Returns
-    /// the 1-based failure count in the current streak so the caller can log
-    /// the first failure loudly and demote the rest.
-    fn on_failure(&mut self) -> u32 {
-        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        self.current = self.current.saturating_mul(2).min(self.cap);
-        self.consecutive_failures
-    }
-}
-
-/// Run one journal poll on the blocking pool.
-///
-/// **Returns** `Ok(result)` on success, or `Err(PollFailure)` describing the
-/// cause — the caller logs it (with backoff-aware severity) and `continue`s.
-async fn poll_blocking(
-    source: Arc<dyn JournalSource>,
-    cursor: u64,
-) -> Result<JournalPollResult, PollFailure> {
-    match tokio::task::spawn_blocking(move || source.poll(cursor)).await {
-        Ok(Ok(res)) => Ok(res),
-        Ok(Err(io_err)) => Err(PollFailure {
-            cause: io_err.to_string(),
-            aborted: false,
-        }),
-        Err(join_err) => Err(PollFailure {
-            cause: join_err.to_string(),
-            aborted: true,
-        }),
-    }
-}
-
-/// Log a journal poll failure with backoff-aware severity: the **first**
-/// failure of a streak is a WARN (the operator should see the journal went
-/// away), every subsequent tick is DEBUG so an unavailable journal doesn't
-/// storm the log.
-fn log_poll_failure(
-    letter: uffs_mft::platform::DriveLetter,
-    failure: &PollFailure,
-    streak: u32,
-    next_interval: Duration,
-) {
-    let next_ms = u64::try_from(next_interval.as_millis()).unwrap_or(u64::MAX);
-    let what = if failure.aborted {
-        "Journal poll task aborted"
-    } else {
-        "Journal poll failed"
-    };
-    if streak <= 1 {
-        tracing::warn!(
-            drive = %letter,
-            error = %failure.cause,
-            next_poll_ms = next_ms,
-            "{what}; backing off until the journal recovers"
-        );
-    } else {
-        tracing::debug!(
-            drive = %letter,
-            error = %failure.cause,
-            streak,
-            next_poll_ms = next_ms,
-            "{what}; still backed off"
-        );
-    }
-}
-
 /// Buffer the post-poll change batch into `sink`, record it into both
 /// cadence triggers, and fire whichever is due via [`fire_due_cadence`]
 /// — or trace-log the no-op tick when `changes` is empty.
@@ -678,22 +532,26 @@ fn process_tick(
 ) {
     if changes.is_empty() {
         tracing::trace!(drive = %letter, "Journal poll: no changes");
-        return;
+    } else {
+        let accepted = sink.accept(letter, changes);
+        save_trigger.record(changes.len() as u64);
+        apply_trigger.record();
+        tracing::debug!(
+            drive = %letter,
+            accepted,
+            change_count = changes.len(),
+            cursor,
+            "Journal poll: buffered tick"
+        );
     }
-    let accepted = sink.accept(letter, changes);
-    let change_count = changes.len() as u64;
-    save_trigger.record(change_count);
-    apply_trigger.record(change_count);
 
+    // Phase 5: evaluate the cadences EVERY tick, not only on change-ticks. The
+    // apply debounce/settle and the age-based save must be able to fire on a
+    // QUIET tick (the first poll after a burst ends, or once a low-churn run
+    // has aged out) — not wait for the next new change. Both evaluations are
+    // cheap no-ops when nothing is pending, so an idle drive costs nothing
+    // beyond the poll itself.
     fire_due_cadence(sink, letter, cursor, save_trigger, apply_trigger, config);
-
-    tracing::debug!(
-        drive = %letter,
-        accepted,
-        change_count = changes.len(),
-        cursor,
-        "Journal poll: applied tick"
-    );
 }
 
 /// Fire whichever cadence is due this tick — **at most one**, since a
@@ -731,10 +589,10 @@ fn fire_due_cadence(
             cursor,
             "Journal poll: triggered background compact-cache save"
         );
-    } else if apply_trigger.evaluate(config.apply_interval) {
-        // No save this tick: patch the in-memory body so search sees
-        // the change within the apply interval, leaving disk
-        // persistence to a later save tick.
+    } else if apply_trigger.evaluate(config.apply_debounce, config.apply_interval) {
+        // No save this tick: patch the in-memory body so search goes near-live.
+        // Fires once a burst settles (debounce) or at the max-wait cap under
+        // sustained churn — disk persistence stays a later save tick's job.
         sink.trigger_apply(letter);
         tracing::debug!(
             drive = %letter,

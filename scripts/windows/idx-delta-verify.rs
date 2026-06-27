@@ -44,10 +44,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-/// Apply-cadence override (ms) for the test daemon.  Kept above the per-apply
-/// rebuild cost (~600 ms on a multi-million-record drive) so apply ticks don't
-/// outrun the rebuild and pile up — same rationale as the USN harness.
-const APPLY_INTERVAL_MS: &str = "1500";
+/// Phase-5 apply **max-wait** cap (ms) for the test daemon — the ceiling under
+/// sustained churn. With apply now ~200 ms (Phases 1-4), the production default
+/// is 2 s; the rig pins it explicitly so the IDXDELTA-TIMING cadence is
+/// deterministic across runs.
+const APPLY_INTERVAL_MS: &str = "2000";
+/// Phase-5 apply **debounce / settle** window (ms) — the snappy half: a burst
+/// that goes quiet for this long is applied at once, so an idle→active change
+/// is searchable well under a second.
+const APPLY_DEBOUNCE_MS: &str = "250";
 /// Settle after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);
 /// Poll cadence while waiting for a burst's files to become search-visible.
@@ -334,7 +339,7 @@ fn main() -> Result<()> {
     let _ = Command::new(&uffs).args(["--daemon", "stop"]).status();
     sleep(KILL_SETTLE);
     println!(
-        "\n$ {} --daemon start   (UFFS_LOG={LOG_SPEC}, UFFS_USN_APPLY_INTERVAL_MS={APPLY_INTERVAL_MS})",
+        "\n$ {} --daemon start   (UFFS_LOG={LOG_SPEC}, UFFS_USN_APPLY_INTERVAL_MS={APPLY_INTERVAL_MS}, UFFS_USN_APPLY_DEBOUNCE_MS={APPLY_DEBOUNCE_MS})",
         uffs_display()
     );
     let status = Command::new(&uffs)
@@ -342,6 +347,7 @@ fn main() -> Result<()> {
         .env("UFFS_LOG", LOG_SPEC)
         .env("UFFS_LOG_DIR", &run_dir)
         .env("UFFS_USN_APPLY_INTERVAL_MS", APPLY_INTERVAL_MS)
+        .env("UFFS_USN_APPLY_DEBOUNCE_MS", APPLY_DEBOUNCE_MS)
         .status()
         .context("failed to spawn `uffs --daemon start`")?;
     if !status.success() {

@@ -5,7 +5,7 @@ Copyright (c) 2025-2026 SKY, LLC.
 
 # Incremental Index Maintenance — Two-Tier Base + Delta (LSM-style)
 
-**Status:** Phases 1 + 2 complete (incremental paths + trigram base+delta). `compact.rs` decomposed. Phase 3 next (Arc-share the clone), pending WIN timing of Phase 2b.
+**Status:** Phases 1–5 complete + WIN-validated — per-apply 1367 ms → ~200 ms (−85%): paths/trigram/ext/children all incremental/overlay-served, clone Arc-shared, apply cadence now debounce+max-wait (snappy + CPU-bounded). Phase 6 (remove IDXDELTA dev instrumentation, graduate baseline → perf test) is the only remaining item.
 **Owner:** _(assign)_
 **Branch:** `feat/incremental-index-maintenance`
 **Dev marker:** `IDXDELTA` (all temporary dev-only logging / timing carries this token; grep-and-remove before merge — see §9)
@@ -458,9 +458,11 @@ Output: one shareable `~/idxtest/_run/` dir, exactly like the USN flow — so we
 | **2a** | **`trigram_search` base+delta choke point (plumbing)** | ✅ done | `1cf72d589` | zero-behavior-change; field + 3 caller migration; rename-visibility unit-tested |
 | **2b** | **Apply populates trigram delta; no per-tick rebuild** | ✅ done | `b7c688e09` | 338 ms → ~0 (compaction at 50k touched); end-to-end oracle; awaiting WIN timing |
 | — | *Decompose `compact.rs` 1363 → 385* (refactor) | ✅ done | `c3728b0c1` | 5 submodules; off file-size exception list |
-| 3 | Shrink clone — Arc-share base CSR indexes | ☐ todo | | 166 ms |
-| 4 | Extension + children delta (`records_with_ext` / `children_of`) | ☐ todo | | 84 + 54 ms; children highest care |
-| 5 | Unify; retire per-apply rebuild; re-tune apply interval | ☐ todo | | 30 s → ~2 s |
+| **3** | **Shrink clone — Arc-share base CSR indexes** | ✅ done | `33e754b04` | 166 → 78 ms (WIN); records/names/delta still copied |
+| **4a** | **Extension delta (`records_with_ext`)** | ✅ done | `42ff96b94` | 58 → ~0 ms (WIN); Cow overlay, records-validated (no ext tombstone) |
+| **4b** | **Children delta (`for_each_child` / `children_of`)** | ✅ done | `abe9ff115` | 60 → ~0 ms (WIN); apply reordered (delta before paths); move/create/delete + same-batch-create oracles |
+| — | *Overlay read-cost microbench* | ✅ done | `1a7eff444` | churn overhead measured: small (tree walk 0.7→2.1 ms); `for_each_child` lever ready |
+| **5** | **Apply cadence: debounce + max-wait (snappy + CPU-bounded)** | ✅ done | this | `ApplyTrigger` 30 s rate-limit → 250 ms debounce / 2 s max-wait; cadences evaluated every poll; full apply now ~200 ms (WIN, −85% from 1367) |
 | 6 | Remove `IDXDELTA` dev helpers (+ build.rs); graduate baseline → perf test | ☐ todo | | grep-and-remove |
 
 **Done-definition (whole project):** apply is O(changes); oracle green; no search

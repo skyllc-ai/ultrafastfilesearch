@@ -97,6 +97,7 @@ async fn ten_thousand_events_end_to_end() {
         save_threshold_events: SAVE_THRESHOLD_EVENTS,
         save_threshold_age: Duration::from_hours(24),
         apply_interval: Duration::from_hours(24),
+        apply_debounce: Duration::from_hours(24),
     };
     let handle = spawn_journal_loop(
         uffs_mft::platform::DriveLetter::C,

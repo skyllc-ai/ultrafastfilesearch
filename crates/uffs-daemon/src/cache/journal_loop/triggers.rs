@@ -10,10 +10,10 @@
 //! * [`SaveTrigger`] — the rare, expensive **disk save** (default 50k events /
 //!   5 min).  Crossing either threshold patches the body AND persists the
 //!   compact cache + cursor.
-//! * [`ApplyTrigger`] — the more frequent, disk-free **in-memory apply**
-//!   (default 30 s).  Buffered churn plus an elapsed interval patches the body
-//!   so a freshly created / renamed / deleted file becomes searchable, without
-//!   touching disk.
+//! * [`ApplyTrigger`] — the frequent, disk-free **in-memory apply** (Phase 5
+//!   debounce 250 ms / max-wait 2 s).  A settled burst — or the max-wait cap
+//!   under sustained churn — patches the body so a freshly created / renamed /
+//!   deleted file becomes searchable, without touching disk.
 //!
 //! A save subsumes an apply (it drains + applies the same buffer), so
 //! the loop fires at most one of the two per tick; see
@@ -47,33 +47,36 @@ pub(crate) const DEFAULT_SAVE_THRESHOLD_EVENTS: u64 = 50_000;
 /// path without changing the operator-visible recovery window.
 pub(crate) const DEFAULT_SAVE_THRESHOLD_AGE: Duration = Duration::from_mins(5);
 
-/// Default apply interval for the per-shard journal loop — 30 seconds.
+/// Default apply **max-wait** cap for the per-shard journal loop — 2 seconds
+/// (Phase 5).
 ///
-/// This is the **search-freshness** knob, decoupled from the much
-/// rarer disk-save cadence above.  When buffered changes exist and at
-/// least this long has elapsed since the last apply / save, the loop
-/// patches the in-memory body (via [`super::PatchSink::trigger_apply`])
-/// so a freshly created / renamed / deleted file becomes searchable —
-/// instead of waiting up to [`DEFAULT_SAVE_THRESHOLD_AGE`] (5 min) for a
-/// disk-save tick to also apply it.
+/// This is the ceiling of the debounce model in [`ApplyTrigger`]: under
+/// *sustained* back-to-back churn (a burst that never settles), the loop still
+/// applies at least every this long so search freshness never lags more than
+/// the cap. It is the CPU governor — each apply now costs ~200 ms on a multi-
+/// million-record drive (Phases 1-4 made paths/trigram/ext/children
+/// incremental), so a 2 s cap throttles a constantly-churning volume to
+/// ~200 ms / 2 s ≈ 10 % of one core instead of a continuous drag.
 ///
-/// Thirty seconds is tuned for the per-apply rebuild cost: each apply
-/// clones the body and rebuilds the children / trigram / extension
-/// indexes (~600 ms on a 7M-record drive, **independent of batch
-/// size**).  On a filesystem with constant churn that throttles the
-/// rebuild to background noise (~600 ms / 30 s ≈ 2 % of one core per
-/// active drive) instead of a continuous drag.  Crucially it does *not*
-/// blunt the common case: because the trigger fires as soon as the
-/// interval has elapsed *since the last apply*, the first change after
-/// any quiet period is applied within a poll or two — only sustained,
-/// back-to-back churn is batched onto the 30 s cadence.  On an idle
-/// drive no apply fires at all (the event counter stays at zero).
+/// The much shorter [`DEFAULT_APPLY_DEBOUNCE_MS`] is what makes the common
+/// case feel snappy; this cap only bites when changes never stop.
 ///
-/// Overridable at runtime via the `UFFS_USN_APPLY_INTERVAL_MS`
-/// environment variable, mirroring `UFFS_USN_POLL_INTERVAL_MS`, so soak
-/// tests and latency-sensitive setups can dial freshness up or down
-/// without recompiling.
-pub(crate) const DEFAULT_APPLY_INTERVAL_MS: u64 = 30_000;
+/// Overridable at runtime via `UFFS_USN_APPLY_INTERVAL_MS`, so soak tests and
+/// latency-sensitive setups can dial the cap up or down without recompiling.
+pub(crate) const DEFAULT_APPLY_INTERVAL_MS: u64 = 2_000;
+
+/// Default apply **debounce / settle** window — 250 ms (Phase 5).
+///
+/// The snappy half of the apply model: once a run of changes has been quiet for
+/// this long (the burst settled), the loop coalesces it into one apply and the
+/// new file is searchable. So an idle→active transition (saving one file,
+/// finishing an unzip) becomes visible in well under a second, while a
+/// continuous burst keeps re-arming the window and falls back to the
+/// [`DEFAULT_APPLY_INTERVAL_MS`] cap. Sized below the 500 ms poll cadence so
+/// the first quiet poll after a burst always satisfies it.
+///
+/// Overridable via `UFFS_USN_APPLY_DEBOUNCE_MS`.
+pub(crate) const DEFAULT_APPLY_DEBOUNCE_MS: u64 = 250;
 
 /// Why a [`super::PatchSink::trigger_save`] call fired.
 ///
@@ -168,76 +171,84 @@ impl SaveTrigger {
 /// Per-shard apply-cadence state machine — the search-freshness
 /// counterpart to [`SaveTrigger`].
 ///
-/// Where `SaveTrigger` governs the rare, expensive disk save (50k
-/// events / 5 min), this governs the more frequent, in-memory body
-/// patch (default 30 s, [`DEFAULT_APPLY_INTERVAL_MS`]).  Decoupling the
-/// two is the whole point: a created / renamed / deleted file must
-/// become searchable quickly, but the compact-cache disk write should
-/// stay rare.
+/// Where `SaveTrigger` governs the rare, expensive disk save (50k events /
+/// 5 min), this governs the frequent, in-memory body patch that makes a
+/// created / renamed / deleted file searchable. Decoupling the two is the
+/// whole point: search must go near-live promptly, but the compact-cache disk
+/// write should stay rare.
 ///
-/// The trigger is purely time-gated with a "has churn" guard — it
-/// fires when at least one event has been recorded since the last
-/// apply / save **and** [`Self::evaluate`]'s `apply_interval` has
-/// elapsed.  There is intentionally no event-count fast-path: a huge
-/// burst is already caught by `SaveTrigger`'s 50k threshold (a save
-/// applies too), so the apply tick only needs to bound *latency*, not
-/// volume.
+/// Phase 5 makes this a **debounce + max-wait** gate rather than a fixed
+/// rate-limit, so it is both snappy and CPU-bounded:
+///
+/// * **debounce / settle** ([`DEFAULT_APPLY_DEBOUNCE_MS`], 250 ms) — once a run
+///   of changes has been quiet for the debounce window, apply. An idle→active
+///   transition (one saved file, a finished unzip) becomes searchable in well
+///   under a second.
+/// * **max-wait** ([`DEFAULT_APPLY_INTERVAL_MS`], 2 s) — a burst that never
+///   settles is force-applied at the cap, so sustained churn collapses to one
+///   ~200 ms apply per cap (~10 % of a core) instead of thrashing.
+///
+/// On an idle drive nothing is ever pending, so [`Self::evaluate`] is a cheap
+/// no-op every poll.
 #[derive(Debug)]
 pub(crate) struct ApplyTrigger {
-    /// Wall-clock time of the last apply (or save, which also applies)
-    /// — or the loop spawn time before any fire.  Compared against
-    /// `Instant::now()` to rate-limit applies to one per
-    /// `apply_interval`.
-    last_apply_at: Instant,
-    /// Events accumulated since the last apply / save.  Non-zero is
-    /// the "there is something to apply" guard; the exact count does
-    /// not matter (no volume threshold here).
-    events_since_apply: u64,
+    /// When the first not-yet-applied change of the current run arrived, or
+    /// `None` when nothing is pending. The **max-wait** cap is measured from
+    /// here; `Some` is also the "there is something to apply" guard.
+    first_change_at: Option<Instant>,
+    /// When the most recent change arrived. The **debounce / settle** window is
+    /// measured from here; only meaningful while `first_change_at` is `Some`.
+    last_change_at: Instant,
 }
 
 impl ApplyTrigger {
-    /// Construct a fresh trigger with `last_apply_at` set to
-    /// `Instant::now()` so the first apply can't fire until
-    /// `apply_interval` has elapsed since loop spawn.
+    /// Construct a fresh trigger with nothing pending.
     pub(super) fn new() -> Self {
         Self {
-            last_apply_at: Instant::now(),
-            events_since_apply: 0,
+            first_change_at: None,
+            last_change_at: Instant::now(),
         }
     }
 
-    /// Record `change_count` events toward the "has churn" guard.
-    /// Saturating so a runaway drive can't wrap the counter back to
-    /// zero and suppress an apply.
-    pub(super) const fn record(&mut self, change_count: u64) {
-        self.events_since_apply = self.events_since_apply.saturating_add(change_count);
-    }
-
-    /// Evaluate the apply cadence.
-    ///
-    /// **Returns** `true` (and resets the counters) when there is
-    /// buffered churn and at least `apply_interval` has elapsed since
-    /// the last apply / save.  Returns `false` — without resetting —
-    /// otherwise, so a not-yet-due tick keeps accumulating.
-    pub(super) fn evaluate(&mut self, apply_interval: Duration) -> bool {
-        if self.events_since_apply == 0 {
-            return false;
-        }
+    /// Record that the latest poll observed at least one change: start the
+    /// max-wait clock on the first change of a pending run, and (re)arm the
+    /// debounce window. The exact count does not matter here — `SaveTrigger`
+    /// owns the volume threshold; this gate only bounds latency.
+    pub(super) fn record(&mut self) {
         let now = Instant::now();
-        if now.saturating_duration_since(self.last_apply_at) < apply_interval {
-            return false;
+        if self.first_change_at.is_none() {
+            self.first_change_at = Some(now);
         }
-        self.last_apply_at = now;
-        self.events_since_apply = 0;
-        true
+        self.last_change_at = now;
     }
 
-    /// Reset the trigger because a **save** tick just drained + applied
-    /// the buffer (a save subsumes an apply).  Clears the churn guard
-    /// and restarts the interval clock so the loop doesn't fire a
-    /// redundant apply on the same buffer right after a save.
-    pub(super) fn reset_after_save(&mut self) {
-        self.last_apply_at = Instant::now();
-        self.events_since_apply = 0;
+    /// Evaluate the debounce + max-wait gate.
+    ///
+    /// **Returns** `true` (and clears the pending run) when changes are pending
+    /// AND either the burst has **settled** (no change for `debounce`) or the
+    /// run has been pending past `max_wait`. Returns `false` — without
+    /// clearing — otherwise, so an unsettled, not-yet-capped run keeps
+    /// accumulating. Must be evaluated every poll (including quiet ones) so the
+    /// settle can fire on the first quiet tick after a burst ends.
+    pub(super) fn evaluate(&mut self, debounce: Duration, max_wait: Duration) -> bool {
+        let Some(first) = self.first_change_at else {
+            return false;
+        };
+        let now = Instant::now();
+        let settled = now.saturating_duration_since(self.last_change_at) >= debounce;
+        let capped = now.saturating_duration_since(first) >= max_wait;
+        if settled || capped {
+            self.first_change_at = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reset the trigger because a **save** tick just drained + applied the
+    /// buffer (a save subsumes an apply), so the loop doesn't redundantly
+    /// re-apply the just-drained run.
+    pub(super) const fn reset_after_save(&mut self) {
+        self.first_change_at = None;
     }
 }

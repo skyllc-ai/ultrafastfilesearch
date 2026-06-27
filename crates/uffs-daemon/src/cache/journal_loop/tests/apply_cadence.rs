@@ -46,6 +46,7 @@ fn apply_only_config() -> JournalLoopConfig {
         save_threshold_events: u64::MAX,
         save_threshold_age: Duration::from_hours(24),
         apply_interval: Duration::ZERO,
+        apply_debounce: Duration::ZERO,
         ..JournalLoopConfig::default()
     }
 }
@@ -94,6 +95,7 @@ fn save_tick_suppresses_redundant_apply() {
         save_threshold_events: 1,
         save_threshold_age: Duration::from_hours(24),
         apply_interval: Duration::ZERO,
+        apply_debounce: Duration::ZERO,
         ..JournalLoopConfig::default()
     };
 
@@ -157,6 +159,7 @@ async fn loop_applies_body_near_live_without_saving() {
         save_threshold_events: u64::MAX,
         save_threshold_age: Duration::from_hours(24),
         apply_interval: Duration::ZERO,
+        apply_debounce: Duration::ZERO,
         ..JournalLoopConfig::default()
     };
     let handle = spawn_journal_loop(
@@ -186,56 +189,73 @@ async fn loop_applies_body_near_live_without_saving() {
 #[test]
 fn apply_trigger_requires_churn() {
     let mut trigger = ApplyTrigger::new();
-    // No events recorded — even a zero interval must not fire.
+    // Nothing pending — neither the settle nor the cap path may fire.
     assert!(
-        !trigger.evaluate(Duration::ZERO),
+        !trigger.evaluate(Duration::ZERO, Duration::ZERO),
         "an apply must not fire without buffered churn",
     );
 }
 
 #[test]
-fn apply_trigger_fires_once_per_interval_then_resets() {
+fn apply_trigger_fires_on_settle_then_resets() {
     let mut trigger = ApplyTrigger::new();
-    trigger.record(3);
+    trigger.record();
+    // debounce = 0 → the burst counts as settled immediately, so the apply
+    // fires; max-wait far out so the cap is not what fires it.
     assert!(
-        trigger.evaluate(Duration::ZERO),
-        "churn present + interval elapsed must fire",
+        trigger.evaluate(Duration::ZERO, Duration::from_hours(1)),
+        "a settled burst must fire the apply",
     );
-    // The fire reset the churn counter, so a second evaluate with no
-    // new events must not fire again.
+    // The fire cleared the pending run, so a second evaluate without a new
+    // change must not fire again.
     assert!(
-        !trigger.evaluate(Duration::ZERO),
-        "evaluate must reset the churn counter after firing",
+        !trigger.evaluate(Duration::ZERO, Duration::from_hours(1)),
+        "evaluate must clear the pending run after firing",
     );
 }
 
 #[test]
-fn apply_trigger_respects_interval() {
+fn apply_trigger_holds_until_settle() {
     let mut trigger = ApplyTrigger::new();
-    trigger.record(3);
-    // Interval far in the future — churn exists but the rate limit
-    // holds the apply back.
+    trigger.record();
+    // debounce far out (burst not settled) AND max-wait far out (cap not hit):
+    // the apply is held back, and the pending run is retained.
     assert!(
-        !trigger.evaluate(Duration::from_hours(1)),
-        "an apply must wait for the interval even with churn pending",
+        !trigger.evaluate(Duration::from_hours(1), Duration::from_hours(1)),
+        "an unsettled, not-yet-capped run must hold the apply back",
     );
-    // The churn is retained (no reset on a held-back tick), so once the
-    // interval is satisfied the apply fires.
+    // Once the debounce is satisfied (0), the retained run fires.
     assert!(
-        trigger.evaluate(Duration::ZERO),
-        "retained churn must fire once the interval is satisfied",
+        trigger.evaluate(Duration::ZERO, Duration::from_hours(1)),
+        "the retained run must fire once it settles",
+    );
+}
+
+#[test]
+fn apply_trigger_max_wait_cap_fires_under_sustained_churn() {
+    let mut trigger = ApplyTrigger::new();
+    trigger.record();
+    // The burst never settles (debounce far out), but the max-wait cap (0)
+    // forces the apply so sustained churn can't starve search freshness.
+    assert!(
+        trigger.evaluate(Duration::from_hours(1), Duration::ZERO),
+        "the max-wait cap must fire even when the burst never settles",
+    );
+    assert!(
+        !trigger.evaluate(Duration::from_hours(1), Duration::ZERO),
+        "the cap fire must clear the pending run",
     );
 }
 
 #[test]
 fn reset_after_save_clears_pending_churn() {
     let mut trigger = ApplyTrigger::new();
-    trigger.record(5);
-    // A save tick drained + applied the buffer; the apply trigger must
-    // forget the churn so it doesn't redundantly re-apply.
+    trigger.record();
+    // A save tick drained + applied the buffer; the apply trigger must forget
+    // the run so it doesn't redundantly re-apply.
     trigger.reset_after_save();
     assert!(
-        !trigger.evaluate(Duration::ZERO),
-        "reset_after_save must clear the churn guard",
+        !trigger.evaluate(Duration::ZERO, Duration::ZERO),
+        "reset_after_save must clear the pending run",
     );
 }
