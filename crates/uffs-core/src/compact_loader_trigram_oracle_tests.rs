@@ -209,4 +209,25 @@ fn apply_batch_delta_search_equals_compacted_rebuild_oracle() {
         sorted_candidates(&drive, "alpha").is_empty(),
         "deleted gone"
     );
+
+    // Phase 4a ext oracle: records_with_ext through the overlay must equal the
+    // compacted rebuild for every extension id (the create interns ".log", the
+    // rename keeps ".txt", the delete drops ".txt"). Covers id 0 (no extension)
+    // up past the highest interned id.
+    let max_ext = drive
+        .records
+        .iter()
+        .map(|rec| rec.extension_id)
+        .max()
+        .unwrap_or(0);
+    for ext_id in 0..=max_ext {
+        let mut overlay = drive.records_with_ext(ext_id).into_owned();
+        overlay.sort_unstable();
+        let mut rebuilt = compacted.records_with_ext(ext_id).into_owned();
+        rebuilt.sort_unstable();
+        assert_eq!(
+            overlay, rebuilt,
+            "ext_id {ext_id}: overlay {overlay:?} != compacted rebuild {rebuilt:?}",
+        );
+    }
 }

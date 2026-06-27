@@ -21,7 +21,7 @@ use std::time::Instant;
 
 use super::PatchStats;
 use crate::compact::{
-    ChildrenIndex, DriveCompactIndex, ExtensionIndex, PathChange, update_path_lengths_incremental,
+    ChildrenIndex, DriveCompactIndex, PathChange, update_path_lengths_incremental,
 };
 
 /// Above this many touched records, the per-change incremental path update
@@ -75,19 +75,19 @@ pub(super) fn rebuild_derived_and_log(
         );
     }
     let paths_us = dur_us(t_paths.elapsed());
-    // Phase 2b: overlay this batch's trigrams onto the delta instead of
-    // rebuilding the ~340 ms trigram base.  `apply_trigram_delta` adds each
-    // created/renamed record's new-name trigrams and masks the tombstoned ones,
-    // folding back to a fresh base only when the delta crosses the compaction
-    // threshold (so `trigram_us` is ~0 on most applies, a full build on the
-    // occasional compaction tick).
+    // Phase 2b + 4a: overlay this batch's trigram + extension postings onto the
+    // delta instead of rebuilding the ~340 ms trigram and ~58 ms ext bases.
+    // `apply_index_delta` adds each created/renamed record's postings and masks
+    // tombstoned trigrams, folding back to fresh bases only when the delta
+    // crosses the compaction threshold (so `trigram_us` is ~0 on most applies,
+    // a full build on the occasional compaction tick). Ext is served through
+    // `records_with_ext` (base ∪ delta), so no per-apply ext rebuild.
     let t_trigram = Instant::now();
-    let compacted = drive.apply_trigram_delta(path_changes, tombstones);
+    let compacted = drive.apply_index_delta(path_changes, tombstones);
     let trigram_us = dur_us(t_trigram.elapsed());
-    // Rebuild extension inverted index so --ext queries reflect USN changes.
-    let t_ext = Instant::now();
-    drive.ext_index = Arc::new(ExtensionIndex::build(&drive.records));
-    let ext_us = dur_us(t_ext.elapsed());
+    // `ext_us` retained in the IDXDELTA-TIMING line for baseline comparison;
+    // the rebuild is gone (Phase 4a), so it now measures ~0.
+    let ext_us = 0_u64;
 
     if changes_len != 0 {
         tracing::info!(
