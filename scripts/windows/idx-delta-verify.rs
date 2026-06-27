@@ -48,9 +48,6 @@ use anyhow::{Context, Result, bail};
 /// rebuild cost (~600 ms on a multi-million-record drive) so apply ticks don't
 /// outrun the rebuild and pile up — same rationale as the USN harness.
 const APPLY_INTERVAL_MS: &str = "1500";
-/// Let the full pipeline (poll -> buffer -> apply -> rebuild -> swap) settle
-/// before measuring; generous on a busy multi-million-record volume.
-const SETTLE: Duration = Duration::from_secs(6);
 /// Settle after `--daemon stop` so the socket / PID file clear.
 const KILL_SETTLE: Duration = Duration::from_secs(2);
 /// Poll cadence while waiting for a burst's files to become search-visible.
@@ -287,6 +284,23 @@ fn poll_until_visible(
     }
 }
 
+/// Poll `search(term)` until **zero** rows match (the deleted / renamed-away
+/// file has left the index) or `max_wait` elapses. Returns
+/// `(rows_remaining, latency, timed_out)`.
+fn poll_until_absent(uffs: &Path, term: &str, max_wait: Duration) -> Result<(usize, Duration, bool)> {
+    let start = Instant::now();
+    loop {
+        let (rows, _) = search(uffs, term)?;
+        if rows == 0 {
+            return Ok((0, start.elapsed(), false));
+        }
+        if start.elapsed() >= max_wait {
+            return Ok((rows, start.elapsed(), true));
+        }
+        sleep(POLL_INTERVAL);
+    }
+}
+
 fn main() -> Result<()> {
     let uffs = uffs_bin();
 
@@ -412,15 +426,41 @@ fn main() -> Result<()> {
         );
     }
 
-    // ── Round with a rename + delete (correctness smoke, like the USN flow) ──
-    println!("\n== Mutate: rename idx_0_0.tmp -> idx_renamed.log, delete idx_0_1.tmp ==");
-    let _ = fs::rename(base.join("idx_0_0.tmp"), base.join("idx_renamed.log"));
-    let _ = fs::remove_file(base.join("idx_0_1.tmp"));
-    sleep(SETTLE);
-    let (renamed_rows, _) = search(&uffs, "idx_renamed")?;
-    let (deleted_rows, _) = search(&uffs, "idx_0_1")?;
-    println!("   search 'idx_renamed' -> {renamed_rows} (expect >=1)");
-    println!("   search 'idx_0_1'     -> {deleted_rows} (expect 0 for the deleted live file)");
+    // ── Rename + delete correctness smoke, on UNIQUE sentinel names ─────────
+    // `idxmutate*` shares no trigram with the bulk `idx_<round>_<i>` files, so
+    // each search is unambiguous (the old `idx_0_1` probe matched 111 bulk
+    // files by substring — a false signal). Poll-until-applied, not a sleep.
+    println!("\n== Mutate smoke (unique sentinels) ==");
+    let src = base.join("idxmutate_src.tmp");
+    let del = base.join("idxmutate_del.tmp");
+    fs::write(&src, b"x").context("write idxmutate_src.tmp")?;
+    fs::write(&del, b"x").context("write idxmutate_del.tmp")?;
+    let (staged, _, stage_to) =
+        poll_until_visible(&uffs, "idxmutate", 2, Duration::from_secs(20))?;
+    println!(
+        "   staged 2 sentinels; 'idxmutate' -> {staged}/2 visible{}",
+        if stage_to { "  <<< TIMED OUT" } else { "" }
+    );
+
+    fs::rename(&src, base.join("idxmutate_renamed.tmp")).context("rename sentinel")?;
+    fs::remove_file(&del).context("delete sentinel")?;
+
+    let mutate_wait = Duration::from_secs(20);
+    let (ren_rows, ren_lat, ren_to) =
+        poll_until_visible(&uffs, "idxmutate_renamed", 1, mutate_wait)?;
+    let (del_rows, del_lat, del_to) = poll_until_absent(&uffs, "idxmutate_del", mutate_wait)?;
+    let (old_rows, _, _) = poll_until_absent(&uffs, "idxmutate_src", Duration::from_secs(6))?;
+    println!(
+        "   rename : 'idxmutate_renamed' -> {ren_rows} after {:.1}s (expect >=1){}",
+        ren_lat.as_secs_f64(),
+        if ren_to { "  <<< FAIL/TIMED OUT" } else { "" }
+    );
+    println!(
+        "   delete : 'idxmutate_del'      -> {del_rows} after {:.1}s (expect 0){}",
+        del_lat.as_secs_f64(),
+        if del_to { "  <<< FAIL/TIMED OUT" } else { "" }
+    );
+    println!("   oldname: 'idxmutate_src'      -> {old_rows} (expect 0, renamed away)");
 
     // ── Stop the daemon to flush, then extract + summarise the timing ───────
     println!("\n== Stopping daemon to flush the log ==");
