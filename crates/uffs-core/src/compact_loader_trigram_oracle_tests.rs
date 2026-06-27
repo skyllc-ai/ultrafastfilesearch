@@ -12,6 +12,7 @@
 //! delta must be byte-identical to a full rebuild" — for search results, across
 //! every op.
 
+use alloc::sync::Arc;
 use std::path::PathBuf;
 
 use uffs_mft::usn::FileChange;
@@ -111,9 +112,9 @@ fn build_drive() -> DriveCompactIndex {
         letter: uffs_mft::platform::DriveLetter::T,
         records: ColumnStorage::from_vec(records),
         names: ColumnStorage::from_vec(names),
-        trigram,
-        children,
-        ext_index,
+        trigram: Arc::new(trigram),
+        children: Arc::new(children),
+        ext_index: Arc::new(ext_index),
         fold,
         ext_names: vec![Box::from("")],
         source: IndexSource::MftFile(PathBuf::from("T:")),

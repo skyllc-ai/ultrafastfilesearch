@@ -5,6 +5,7 @@
 //! column assembly, hardlink + ADS expansion, `$UpCase` case-fold resolution,
 //! and the post-build vec shrink.
 
+use alloc::sync::Arc;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -305,9 +306,9 @@ pub fn build_compact_index(
         letter: drive_letter,
         records: ColumnStorage::from_vec(records),
         names: ColumnStorage::from_vec(names),
-        trigram,
-        children,
-        ext_index,
+        trigram: Arc::new(trigram),
+        children: Arc::new(children),
+        ext_index: Arc::new(ext_index),
         fold,
         ext_names,
         source: IndexSource::MftFile(std::path::PathBuf::from(format!("{drive_letter}:"))),

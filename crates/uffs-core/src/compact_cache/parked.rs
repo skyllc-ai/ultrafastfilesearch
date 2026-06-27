@@ -458,6 +458,7 @@ pub fn load_parked_body(
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
     use std::path::PathBuf;
 
     use super::*;
@@ -508,9 +509,9 @@ mod tests {
             letter: uffs_mft::platform::DriveLetter::C,
             records: ColumnStorage::from_vec(records),
             names: ColumnStorage::from_vec(names),
-            trigram,
-            children,
-            ext_index,
+            trigram: Arc::new(trigram),
+            children: Arc::new(children),
+            ext_index: Arc::new(ext_index),
             fold,
             ext_names: vec![Box::from(""), Box::from("toml")],
             source: IndexSource::MftFile(PathBuf::from("C:")),

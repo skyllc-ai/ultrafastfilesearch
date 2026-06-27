@@ -15,6 +15,8 @@
 //! computation, and the MFT→compact builder from focused submodules
 //! (`record`, `children`, `extension`, `path_len`, `builder`, `delta`).
 
+use alloc::sync::Arc;
+
 use crate::bloom::Bloom;
 pub use crate::compact_loader::apply_usn_patch;
 // Re-export loader types and functions so callers can still use `compact::*`.
@@ -74,12 +76,21 @@ pub struct DriveCompactIndex {
     /// rationale.
     pub names: ColumnStorage<u8>,
     /// Trigram inverted index built from folded names (char-level, `$UpCase`).
-    pub trigram: TrigramIndex,
+    ///
+    /// `Arc`-shared (Phase 3): the per-apply whole-body clone the daemon takes
+    /// before patching pointer-clones this immutable base (a refcount bump)
+    /// instead of deep-copying its ~hundreds-of-MB CSR arrays. The apply path
+    /// never mutates it in place — it overlays changes on [`Self::delta`] and
+    /// only ever *replaces* the whole `Arc` at compaction.
+    pub trigram: Arc<TrigramIndex>,
     /// CSR children index: `children.get(i)` → child indices of record i.
-    pub children: ChildrenIndex,
+    /// `Arc`-shared (Phase 3) — see [`Self::trigram`]; rebuilt (Arc replaced)
+    /// each apply until Phase 4 gives it a delta overlay.
+    pub children: Arc<ChildrenIndex>,
     /// Extension inverted index: `ext_id → record indices`.
     /// Enables O(K) `--ext` queries where K = matching records, not O(N).
-    pub ext_index: ExtensionIndex,
+    /// `Arc`-shared (Phase 3) — see [`Self::trigram`].
+    pub ext_index: Arc<ExtensionIndex>,
     /// NTFS `$UpCase` case folding engine for this volume.
     pub fold: uffs_text::case_fold::CaseFold,
     /// Extension name table: `ext_names[extension_id]` → lowercase extension
@@ -262,7 +273,7 @@ impl DriveCompactIndex {
     /// gain delta overlays; today those are rebuilt every apply, so compaction
     /// only needs to refold the trigram base.
     pub(crate) fn compact_base(&mut self) {
-        self.trigram = TrigramIndex::build(&self.records, &self.names, self.fold);
+        self.trigram = Arc::new(TrigramIndex::build(&self.records, &self.names, self.fold));
         self.delta = None;
     }
 
