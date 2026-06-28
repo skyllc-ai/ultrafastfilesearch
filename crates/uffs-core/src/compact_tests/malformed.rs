@@ -13,7 +13,7 @@
 use uffs_mft::index::{IndexNameRef, MftIndex, ROOT_FRS, SizeInfo};
 
 use super::{fixture_index, push_name};
-use crate::compact::build_compact_index;
+use crate::compact::{MalformedRender, build_compact_index};
 
 // ── WI-4.4: a crooked (surrogate-named) file cannot hide from the search
 //    layer. Build the compact/search index from an MftIndex holding an
@@ -191,7 +191,7 @@ fn crooked_dir_segment_is_preserved_in_resolved_path() {
     let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
 
     // The crooked directory's lossy display: `evil` + U+FFFD + `.exe`.
-    let crooked_display = String::from_utf8_lossy(CROOKED_NAME_WTF8);
+    let crooked_display = "evil\u{FFFD}.exe"; // one U+FFFD per offending code unit (matches C++)
     assert!(
         crooked_display.contains('\u{FFFD}'),
         "fixture must render lossily (got {crooked_display:?})"
@@ -278,14 +278,59 @@ fn crooked_leaf_file_is_not_dropped_from_results() {
         &mut filters,
     );
 
-    let crooked_display = String::from_utf8_lossy(CROOKED_NAME_WTF8);
+    let crooked_display = "evil\u{FFFD}.exe"; // one U+FFFD per offending code unit (matches C++)
     let found = rows
         .iter()
         .find(|row| row.malformed)
         .expect("the crooked-leaf file must be enumerated in search results, not silently dropped");
     assert!(
-        found.path.contains(crooked_display.as_ref()),
+        found.path.contains(crooked_display),
         "its path must carry the lossy leaf name, got {:?}",
         found.path
+    );
+}
+
+#[test]
+fn malformed_name_renders_lossy_and_normalized() {
+    // `evil` + lone HIGH surrogate U+D800 + `.exe`.
+    let mut idx = fixture_index();
+    let crooked = push_name_bytes(&mut idx, CROOKED_NAME_WTF8);
+    let rec = idx.get_or_create(909.into());
+    rec.first_name.name = crooked;
+    rec.first_name.parent_frs = Into::into(ROOT_FRS);
+
+    let (drive, _, _) = build_compact_index(uffs_mft::platform::DriveLetter::C, &idx);
+    let crooked_rec = drive
+        .records
+        .iter()
+        .find(|cr| cr.name_bytes(&drive.names) == CROOKED_NAME_WTF8)
+        .expect("crooked record present");
+
+    // Default (lossy): the surrogate run collapses to a single U+FFFD.
+    assert_eq!(
+        crooked_rec.name_display_with(&drive.names, MalformedRender::Lossy),
+        "evil\u{FFFD}.exe"
+    );
+    // Normalized: the offending code unit (U+D800) becomes a greppable,
+    // reversible `<BAD:HHHH>` marker; the valid prefix/suffix are preserved.
+    assert_eq!(
+        crooked_rec.name_display_with(&drive.names, MalformedRender::Normalized),
+        "evil<BAD:D800>.exe"
+    );
+
+    // A well-formed name is byte-for-byte identical (and borrowed) under both
+    // modes — the markers never touch valid names.
+    let docs = drive
+        .records
+        .iter()
+        .find(|cr| cr.name_bytes(&drive.names) == b"Docs")
+        .expect("Docs present");
+    assert_eq!(
+        docs.name_display_with(&drive.names, MalformedRender::Lossy),
+        "Docs"
+    );
+    assert_eq!(
+        docs.name_display_with(&drive.names, MalformedRender::Normalized),
+        "Docs"
     );
 }

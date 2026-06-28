@@ -49,7 +49,7 @@ pub use delta::IndexDelta;
 pub use extension::ExtensionIndex;
 pub(crate) use path_len::{PathChange, compute_path_lengths, update_path_lengths_incremental};
 pub(crate) use record::NTFS_METAFILE_NAMES;
-pub use record::{CompactRecord, is_ntfs_metafile_name};
+pub use record::{CompactRecord, MalformedRender, is_ntfs_metafile_name};
 
 /// Touched-record count (adds + tombstones since the last compaction) above
 /// which [`DriveCompactIndex::apply_index_delta`] folds the delta back into

@@ -124,6 +124,92 @@ pub fn is_ntfs_metafile_name(name: &str) -> bool {
         .any(|reserved| name.eq_ignore_ascii_case(reserved))
 }
 
+/// How an **ill-formed** (surrogate-bearing) NTFS name renders for display.
+///
+/// Used by [`CompactRecord::name_display_with`]. Well-formed names are returned
+/// verbatim under either variant, so this only matters for the rare malformed
+/// case and never touches the well-formed hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MalformedRender {
+    /// Replace each ill-formed run with U+FFFD (`�`) — the default, matching
+    /// the reference C++ tool and ordinary file managers.
+    #[default]
+    Lossy,
+    /// Replace each offending UTF-16 code unit with a greppable, reversible
+    /// sentinel `<BAD:HHHH>` (HHHH = the code unit, e.g. an unpaired low
+    /// surrogate → `<BAD:DCFF>`). `<` and `>` are invalid in NTFS names, so the
+    /// marker can never collide with a real one; the hex is unique per distinct
+    /// bad unit (so two malformed siblings stay distinct) and lossless (the
+    /// true name is recoverable). Enabled by `--normalize-malformed`.
+    Normalized,
+}
+
+/// Render WTF-8 `bytes` one **UTF-16 code unit** at a time, replacing each
+/// offending unit (an unpaired surrogate) with a marker; well-formed runs pass
+/// through unchanged. Only called on the rare ill-formed path (the caller has
+/// already seen `from_utf8` fail).
+///
+/// Crucially this is **per code unit**, not per byte: a WTF-8 lone surrogate is
+/// the 3-byte sequence `0xED 0xA0..=0xBF 0x80..=0xBF` decoding to a single
+/// U+D800..=U+DFFF unit, so it yields ONE marker (matching the reference C++
+/// tool and ordinary file managers) rather than `from_utf8_lossy`'s three. The
+/// marker is U+FFFD (`�`) for [`MalformedRender::Lossy`] or `<BAD:HHHH>` for
+/// [`MalformedRender::Normalized`]. Any other invalid byte (not expected from a
+/// faithful NTFS name) is treated as one offending position.
+fn render_malformed(bytes: &[u8], render: MalformedRender) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_add(8));
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match core::str::from_utf8(rest) {
+            Ok(valid) => {
+                out.push_str(valid);
+                break;
+            }
+            Err(err) => {
+                let good = err.valid_up_to();
+                let (head, bad) = rest.split_at(good);
+                // `head` is valid UTF-8 by construction (`valid_up_to`).
+                out.push_str(core::str::from_utf8(head).unwrap_or(""));
+                if let [0xED, b1 @ 0xA0..=0xBF, b2 @ 0x80..=0xBF, tail @ ..] = bad {
+                    match render {
+                        MalformedRender::Lossy => out.push('\u{FFFD}'),
+                        MalformedRender::Normalized => {
+                            // Decode the WTF-8 lone surrogate back to its 16-bit
+                            // code unit (lead nibble is the fixed 0xD of 0xED),
+                            // then emit `<BAD:HHHH>`. `wrapping_sh*` + bit-ops +
+                            // `char::from_digit` are all panic-free here (values
+                            // masked to ≤ 0xF, base 16).
+                            let unit: u32 = 0xD000
+                                | (u32::from(*b1) & 0x3F).wrapping_shl(6)
+                                | (u32::from(*b2) & 0x3F);
+                            out.push_str("<BAD:");
+                            for shift in [12_u32, 8, 4, 0] {
+                                let nibble = unit.wrapping_shr(shift) & 0xF;
+                                out.push(
+                                    char::from_digit(nibble, 16)
+                                        .unwrap_or('0')
+                                        .to_ascii_uppercase(),
+                                );
+                            }
+                            out.push('>');
+                        }
+                    }
+                    rest = tail;
+                } else {
+                    let adv = err.error_len().unwrap_or(1).min(bad.len());
+                    let (_, after) = bad.split_at(adv);
+                    match render {
+                        MalformedRender::Lossy => out.push('\u{FFFD}'),
+                        MalformedRender::Normalized => out.push_str("<BAD>"),
+                    }
+                    rest = after;
+                }
+            }
+        }
+    }
+    out
+}
+
 impl CompactRecord {
     /// Directory flag bit in raw NTFS `FILE_ATTRIBUTE_DIRECTORY`.
     const DIRECTORY_BIT: u32 = 0x0010;
@@ -185,7 +271,39 @@ impl CompactRecord {
     #[inline]
     #[must_use]
     pub fn name_display<'a>(&self, names: &'a [u8]) -> alloc::borrow::Cow<'a, str> {
-        String::from_utf8_lossy(self.name_bytes(names))
+        self.name_display_with(names, MalformedRender::Lossy)
+    }
+
+    /// Whether the stored name is ill-formed UTF-16 (its WTF-8 bytes are not
+    /// valid UTF-8). Cheap; used to gate the lossy render and the malformed
+    /// flag.
+    #[inline]
+    #[must_use]
+    pub fn is_name_malformed(&self, names: &[u8]) -> bool {
+        core::str::from_utf8(self.name_bytes(names)).is_err()
+    }
+
+    /// Like [`Self::name_display`] but choosing how an ill-formed name renders:
+    /// [`MalformedRender::Lossy`] (U+FFFD) or [`MalformedRender::Normalized`]
+    /// (`<BAD:HHHH>` markers, for `--normalize-malformed`). A valid name is a
+    /// zero-cost `Cow::Borrowed` under either mode; only the rare malformed
+    /// name allocates, so the well-formed hot path is identical to
+    /// `name_display`.
+    #[inline]
+    #[must_use]
+    pub fn name_display_with<'a>(
+        &self,
+        names: &'a [u8],
+        render: MalformedRender,
+    ) -> alloc::borrow::Cow<'a, str> {
+        let bytes = self.name_bytes(names);
+        // Well-formed (the overwhelming common case) → zero-cost borrow; an
+        // ill-formed name renders one marker per offending code unit (U+FFFD or
+        // `<BAD:HHHH>`), matching the reference tool's per-unit replacement.
+        core::str::from_utf8(bytes).map_or_else(
+            |_| alloc::borrow::Cow::Owned(render_malformed(bytes, render)),
+            alloc::borrow::Cow::Borrowed,
+        )
     }
 
     /// Get the name's **raw bytes** (WTF-8) from a names blob — the lossless
