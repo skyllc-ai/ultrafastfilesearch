@@ -156,14 +156,36 @@ impl CompactRecord {
     /// Get the name from a names blob as a **lossy `&str` view**.
     ///
     /// Valid-UTF-8 names (the common case) are returned verbatim; an ill-formed
-    /// (surrogate-bearing) name stored as WTF-8 returns `""` for display. Use
-    /// [`Self::name_bytes`] for the lossless bytes that exact/substring search
-    /// matches against, so a file with an ill-formed name stays findable
-    /// (WI-4.4).
+    /// (surrogate-bearing) name stored as WTF-8 returns `""`. This is the
+    /// cheap borrow used by internal hot paths (metafile check, fold/search
+    /// keys); for anything **user-visible** prefer [`Self::name_display`],
+    /// which renders ill-formed names lossily instead of emptying them (an
+    /// empty segment collapses reconstructed paths). Use
+    /// [`Self::name_bytes`] for the lossless bytes that exact/substring
+    /// search matches against, so a file with an ill-formed name stays
+    /// findable (WI-4.4).
     #[inline]
     #[must_use]
     pub fn name<'a>(&self, names: &'a [u8]) -> &'a str {
         core::str::from_utf8(self.name_bytes(names)).unwrap_or("")
+    }
+
+    /// Get the name as a **lossy display string** for paths and the name
+    /// column.
+    ///
+    /// Valid-UTF-8 names (the overwhelming common case) are returned as a
+    /// zero-cost `Cow::Borrowed`; an ill-formed (surrogate-bearing) name is
+    /// rendered with U+FFFD (`�`) via [`String::from_utf8_lossy`] — preserving
+    /// the entry's **position** instead of collapsing it to `""`, so a file
+    /// under a malformed-named directory keeps its true path and stays visible
+    /// (WI-4.4). Only the rare malformed case allocates, so the well-formed hot
+    /// path is unaffected. Filtering malformed entries stays on the `malformed`
+    /// flag (a real folder named `�` is not the same as a corrupt one); this
+    /// accessor is purely for rendering.
+    #[inline]
+    #[must_use]
+    pub fn name_display<'a>(&self, names: &'a [u8]) -> alloc::borrow::Cow<'a, str> {
+        String::from_utf8_lossy(self.name_bytes(names))
     }
 
     /// Get the name's **raw bytes** (WTF-8) from a names blob — the lossless
