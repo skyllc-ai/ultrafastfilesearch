@@ -13,7 +13,7 @@ use super::super::filters::SearchFilters;
 use super::super::tree;
 use super::numeric_sort_key::extract_sort_key;
 use super::{HeapEntry, heap_push_capped, make_display_row, row_forensics, stack_volume_prefix};
-use crate::compact::{CompactRecord, DriveCompactIndex};
+use crate::compact::{CompactRecord, DriveCompactIndex, MalformedRender};
 
 /// Target chunk size for parallel path resolution inside
 /// [`collect_global_top_n_numeric`].
@@ -408,6 +408,7 @@ struct ResolveStats {
 fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
     drives: &[D],
     chunk: &[(u16, u32, i64)],
+    render: MalformedRender,
 ) -> ResolveStats {
     let mut local_caches: std::collections::HashMap<u16, tree::DirCache> =
         std::collections::HashMap::new();
@@ -450,6 +451,7 @@ fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
             volume_prefix,
             cache,
             mal_cache,
+            render,
         );
         resolve_fn_ns += t_resolve.elapsed().as_nanos();
         let t_build = std::time::Instant::now();
@@ -487,10 +489,11 @@ fn resolve_chunk<D: AsRef<DriveCompactIndex>>(
 fn resolve_candidates_to_rows<D: AsRef<DriveCompactIndex> + Sync>(
     drives: &[D],
     candidates: &[(u16, u32, i64)],
+    render: MalformedRender,
 ) -> ResolveStats {
     candidates
         .par_chunks(RESOLVE_CHUNK_SIZE)
-        .map(|chunk| resolve_chunk(drives, chunk))
+        .map(|chunk| resolve_chunk(drives, chunk, render))
         .reduce(
             || ResolveStats {
                 rows: Vec::new(),
@@ -681,7 +684,11 @@ pub(super) fn collect_global_top_n_numeric<D: AsRef<DriveCompactIndex> + Sync>(
     //    per-chunk cache warm.  Measured 4× speedup on 168 K candidates
     //    across 8 workers (63 ms sequential → 17 ms parallel).
     let t_path_resolve = std::time::Instant::now();
-    let stats = resolve_candidates_to_rows(drives, &sorted_candidates);
+    let stats = resolve_candidates_to_rows(
+        drives,
+        &sorted_candidates,
+        search_filters.malformed_render(),
+    );
     let path_resolve_ms = u64::try_from(t_path_resolve.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let mut rows = stats.rows;

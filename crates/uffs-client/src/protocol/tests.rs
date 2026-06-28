@@ -69,6 +69,45 @@ fn search_params_round_trip() {
     assert_eq!(parsed.response_mode, Some(SearchResponseMode::Json));
 }
 
+/// `normalize_malformed` round-trips, and an older payload that omits it
+/// deserializes as `false` (backward-compatible via `#[serde(default)]`).
+#[test]
+fn search_params_normalize_malformed_round_trip_and_default() {
+    let params = SearchParams {
+        pattern: "*".to_owned(),
+        normalize_malformed: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&params).expect("serialize");
+    let parsed: SearchParams = serde_json::from_value(json).expect("deserialize");
+    assert!(
+        parsed.normalize_malformed,
+        "the flag must survive the JSON-RPC round trip"
+    );
+
+    // A payload from an older client that never knew the field.
+    let legacy: SearchParams =
+        serde_json::from_value(serde_json::json!({ "pattern": "*" })).expect("legacy deserialize");
+    assert!(
+        !legacy.normalize_malformed,
+        "omitted field defaults off (wire backward-compat)"
+    );
+}
+
+/// The CLI surface: `--normalize-malformed` sets the param; absent → off.
+#[test]
+fn from_cli_args_normalize_malformed_flag() {
+    let on = SearchParams::from_cli_args(&["*.tmp".to_owned(), "--normalize-malformed".to_owned()])
+        .expect("parse with flag");
+    assert!(
+        on.normalize_malformed,
+        "--normalize-malformed must set the flag"
+    );
+
+    let off = SearchParams::from_cli_args(&["*.tmp".to_owned()]).expect("parse without flag");
+    assert!(!off.normalize_malformed, "absent flag defaults off");
+}
+
 /// Canonical helpers preserve legacy single-flag sort semantics.
 ///
 /// First field: ascending by default (no `--sort-desc`).

@@ -141,6 +141,9 @@ impl IndexManager {
             max_tree_allocated: ep.max_tree_allocated,
             allowed_months: &ep.allowed_months,
         });
+        // Display-only: select the malformed-name render mode for resolved
+        // paths + the name column (`--normalize-malformed`).
+        filters.normalize_malformed = ep.normalize_malformed;
 
         // Overlay canonical predicates that can be compiled into the hot
         // path (size / descendant bounds).

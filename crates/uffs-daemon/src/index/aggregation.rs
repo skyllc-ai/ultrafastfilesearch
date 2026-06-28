@@ -51,6 +51,7 @@ impl DaemonFileReader<'_> {
             drive,
             record_idx,
             &volume_prefix,
+            uffs_core::compact::MalformedRender::Lossy,
         ))
     }
 }
@@ -147,7 +148,12 @@ fn materialize_dup_members(
             let record = drive.records.get(rec_idx)?;
             let name = record.name(&drive.names).to_owned();
             let volume_prefix = format!("{}:\\", drive.letter);
-            let path = uffs_core::search::tree::resolve_path(drive, rec_idx, &volume_prefix);
+            let path = uffs_core::search::tree::resolve_path(
+                drive,
+                rec_idx,
+                &volume_prefix,
+                uffs_core::compact::MalformedRender::Lossy,
+            );
 
             let mut fields = std::collections::HashMap::new();
             fields.insert("name".to_owned(), name);

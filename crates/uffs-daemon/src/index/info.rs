@@ -105,6 +105,7 @@ impl IndexManager {
                                     drive,
                                     uffs_mft::u32_as_usize(root_idx),
                                     &volume_prefix,
+                                    uffs_core::compact::MalformedRender::Lossy,
                                 );
                                 return Some(Self::build_info_json(drive, rec, &resolved));
                             }
@@ -125,6 +126,7 @@ impl IndexManager {
                                     drive,
                                     uffs_mft::u32_as_usize(child_idx),
                                     &volume_prefix,
+                                    uffs_core::compact::MalformedRender::Lossy,
                                 );
                                 return Some(Self::build_info_json(drive, rec, &resolved));
                             }

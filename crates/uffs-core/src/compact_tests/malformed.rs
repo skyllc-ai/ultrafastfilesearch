@@ -222,7 +222,7 @@ fn crooked_dir_segment_is_preserved_in_resolved_path() {
 
     // Both resolvers must keep the child UNDER the crooked dir (not at root).
     let expected = format!("C:\\{crooked_display}\\report.txt");
-    let plain = tree::resolve_path(&drive, child_idx, "C:");
+    let plain = tree::resolve_path(&drive, child_idx, "C:", MalformedRender::Lossy);
     assert_eq!(
         plain, expected,
         "plain resolver must preserve the crooked segment"
@@ -230,6 +230,14 @@ fn crooked_dir_segment_is_preserved_in_resolved_path() {
     assert_ne!(
         plain, "C:\\report.txt",
         "regression: the crooked segment must not collapse to the parent"
+    );
+
+    // End-to-end: the `--normalize-malformed` render mode threads through the
+    // resolver, marking the bad segment inline.
+    let normalized = tree::resolve_path(&drive, child_idx, "C:", MalformedRender::Normalized);
+    assert_eq!(
+        normalized, "C:\\evil<BAD:D800>.exe\\report.txt",
+        "normalized render must surface the <BAD:HHHH> marker in the path"
     );
 
     let mut dir_cache = tree::DirCache::default();
@@ -240,6 +248,7 @@ fn crooked_dir_segment_is_preserved_in_resolved_path() {
         "C:",
         &mut dir_cache,
         &mut mal_cache,
+        MalformedRender::Lossy,
     );
     assert_eq!(
         mpath, expected,

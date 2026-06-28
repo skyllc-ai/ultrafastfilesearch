@@ -25,7 +25,7 @@ use row_resolve::indices_to_rows;
 use super::backend::{DisplayRow, FilterMode, PhaseTimings};
 use super::field::FieldId;
 use super::filters::SearchFilters;
-use crate::compact::{CompactRecord, DriveCompactIndex};
+use crate::compact::{CompactRecord, DriveCompactIndex, MalformedRender};
 use crate::search::tree;
 
 /// Whether cache profiling is enabled (`UFFS_CACHE_PROFILE` env var).
@@ -210,7 +210,12 @@ pub(crate) fn search_compact_drive_regex(
     let match_count = match_indices.len();
 
     let t_resolve = std::time::Instant::now();
-    let rows = indices_to_rows(drive, &match_indices, volume_prefix);
+    let rows = indices_to_rows(
+        drive,
+        &match_indices,
+        volume_prefix,
+        filters.malformed_render(),
+    );
     let resolve_ms = t_resolve.elapsed().as_millis();
 
     if profile {
@@ -449,7 +454,12 @@ pub(crate) fn search_compact_drive(
     }
 
     let t_resolve = std::time::Instant::now();
-    let rows = indices_to_rows(drive, &match_indices, volume_prefix);
+    let rows = indices_to_rows(
+        drive,
+        &match_indices,
+        volume_prefix,
+        filters.malformed_render(),
+    );
     let resolve_ms = t_resolve.elapsed().as_millis();
 
     if profile {
@@ -512,6 +522,7 @@ pub(crate) fn search_compact_drive_tree(
 ) -> Vec<DisplayRow> {
     let mut vp_buf = [0_u8; 4];
     let volume_prefix = stack_volume_prefix(&mut vp_buf, drive.letter);
+    let render = filters.malformed_render();
     let profile = *CACHE_PROFILE;
 
     // Resolve the extension filter for THIS drive. When an `--ext` filter is
@@ -555,6 +566,7 @@ pub(crate) fn search_compact_drive_tree(
                 volume_prefix,
                 &mut dir_cache,
                 &mut mal_cache,
+                    render,
             );
             let forensics = row_forensics(rec, &drive.names, path_malformed);
             Some(make_display_row(
@@ -634,10 +646,10 @@ pub(super) fn build_row_cached(
     drive: &DriveCompactIndex,
     rec_idx: u32,
     rec: &CompactRecord,
-    name: &str,
     volume_prefix: &str,
     dir_cache: &mut tree::DirCache,
     mal_cache: &mut tree::MalformedCache,
+    render: MalformedRender,
 ) -> DisplayRow {
     let (path, path_malformed) = tree::resolve_path_cached_with_malformed(
         drive,
@@ -645,8 +657,12 @@ pub(super) fn build_row_cached(
         volume_prefix,
         dir_cache,
         mal_cache,
+        render,
     );
     let forensics = row_forensics(rec, &drive.names, path_malformed);
+    // The leaf name is derived here (it is exactly `rec.name(...)`) so callers
+    // don't thread it in — keeps the resolve→row arg list lean.
+    let name = rec.name(&drive.names);
     make_display_row(rec_idx, drive.letter, rec, name, path, forensics)
 }
 

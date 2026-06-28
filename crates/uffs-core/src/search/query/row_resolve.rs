@@ -11,7 +11,7 @@
 use rayon::prelude::*;
 
 use super::{DisplayRow, make_display_row, row_forensics};
-use crate::compact::DriveCompactIndex;
+use crate::compact::{DriveCompactIndex, MalformedRender};
 use crate::search::tree;
 
 /// Chunk size for parallel path resolution. At ~370 ns per candidate,
@@ -33,12 +33,13 @@ pub(crate) fn indices_to_rows(
     drive: &DriveCompactIndex,
     indices: &[u32],
     volume_prefix: &str,
+    render: MalformedRender,
 ) -> Vec<DisplayRow> {
     // Parallel overhead is only worth it above a chunk's worth of candidates.
     if indices.len() < RESOLVE_CHUNK_SIZE {
-        return indices_to_rows_sequential(drive, indices, volume_prefix);
+        return indices_to_rows_sequential(drive, indices, volume_prefix, render);
     }
-    indices_to_rows_parallel(drive, indices, volume_prefix)
+    indices_to_rows_parallel(drive, indices, volume_prefix, render)
 }
 
 /// Sequential path resolution for small candidate sets (`<
@@ -47,6 +48,7 @@ fn indices_to_rows_sequential(
     drive: &DriveCompactIndex,
     indices: &[u32],
     volume_prefix: &str,
+    render: MalformedRender,
 ) -> Vec<DisplayRow> {
     let mut dir_cache = tree::dir_cache_with_capacity(256);
     let mut mal_cache = tree::malformed_cache_with_capacity(256);
@@ -64,6 +66,7 @@ fn indices_to_rows_sequential(
                 volume_prefix,
                 &mut dir_cache,
                 &mut mal_cache,
+                render,
             );
             let forensics = row_forensics(rec, &drive.names, path_malformed);
             Some(make_display_row(
@@ -89,6 +92,7 @@ fn indices_to_rows_parallel(
     drive: &DriveCompactIndex,
     indices: &[u32],
     volume_prefix: &str,
+    render: MalformedRender,
 ) -> Vec<DisplayRow> {
     indices
         .par_chunks(RESOLVE_CHUNK_SIZE)
@@ -111,6 +115,7 @@ fn indices_to_rows_parallel(
                     volume_prefix,
                     &mut dir_cache,
                     &mut mal_cache,
+                    render,
                 );
                 let forensics = row_forensics(rec, &drive.names, path_malformed);
                 local_rows.push(make_display_row(

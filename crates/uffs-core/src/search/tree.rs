@@ -10,7 +10,7 @@
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::compact::DriveCompactIndex;
+use crate::compact::{DriveCompactIndex, MalformedRender};
 
 /// Directory path cache for `resolve_path_cached`.
 ///
@@ -40,8 +40,13 @@ pub(crate) fn dir_cache_with_capacity(capacity: usize) -> DirCache {
 ///
 /// Returns path like `C:\Users\Photos\beach.jpg`.
 #[must_use]
-pub fn resolve_path(drive: &DriveCompactIndex, record_idx: usize, volume_prefix: &str) -> String {
-    resolve_path_inner(drive, record_idx, volume_prefix, None)
+pub fn resolve_path(
+    drive: &DriveCompactIndex,
+    record_idx: usize,
+    volume_prefix: &str,
+    render: MalformedRender,
+) -> String {
+    resolve_path_inner(drive, record_idx, volume_prefix, None, render)
 }
 
 /// Resolve a record's full path with directory caching.
@@ -59,8 +64,9 @@ pub fn resolve_path_cached(
     record_idx: usize,
     volume_prefix: &str,
     dir_cache: &mut DirCache,
+    render: MalformedRender,
 ) -> String {
-    resolve_path_inner(drive, record_idx, volume_prefix, Some(dir_cache))
+    resolve_path_inner(drive, record_idx, volume_prefix, Some(dir_cache), render)
 }
 
 /// Cache of "is this directory's resolved path ill-formed?", keyed by record
@@ -96,6 +102,7 @@ pub fn resolve_path_cached_with_malformed(
     volume_prefix: &str,
     dir_cache: &mut DirCache,
     mal_cache: &mut MalformedCache,
+    render: MalformedRender,
 ) -> (String, bool) {
     let mut chain: Vec<usize> = Vec::with_capacity(8);
     let mut current_idx = record_idx;
@@ -156,7 +163,7 @@ pub fn resolve_path_cached_with_malformed(
                 // `name_display()` (lossy, U+FFFD for ill-formed) is what is
                 // pushed into the displayed path; reserve for its length, which
                 // may differ from `bytes.len()`.
-                Some(1 + rec.name_display(&drive.names).len())
+                Some(1 + rec.name_display_with(&drive.names, render).len())
             }
         })
         .sum();
@@ -183,7 +190,7 @@ pub fn resolve_path_cached_with_malformed(
         // U+FFFD (`�`) rather than an empty segment, so the malformed directory
         // keeps its place in the path instead of collapsing everything beneath
         // it onto its parent.
-        let name = rec.name_display(&drive.names);
+        let name = rec.name_display_with(&drive.names, render);
 
         if !path.ends_with('\\') && !path.is_empty() {
             path.push('\\');
@@ -212,6 +219,7 @@ fn resolve_path_inner(
     record_idx: usize,
     volume_prefix: &str,
     dir_cache: Option<&mut DirCache>,
+    render: MalformedRender,
 ) -> String {
     let mut chain: Vec<usize> = Vec::with_capacity(8);
     let mut current_idx = record_idx;
@@ -266,7 +274,7 @@ fn resolve_path_inner(
             if bytes.is_empty() || bytes == b"." {
                 None
             } else {
-                Some(1 + rec.name_display(&drive.names).len())
+                Some(1 + rec.name_display_with(&drive.names, render).len())
             }
         })
         .sum();
@@ -277,7 +285,7 @@ fn resolve_path_inner(
         if let Some(rec) = drive.records.get(idx) {
             let bytes = rec.name_bytes(&drive.names);
             if !bytes.is_empty() && bytes != b"." {
-                let name = rec.name_display(&drive.names);
+                let name = rec.name_display_with(&drive.names, render);
                 if !path.ends_with('\\') && !path.is_empty() {
                     path.push('\\');
                 }
@@ -297,7 +305,7 @@ fn resolve_path_inner(
                 if bytes.is_empty() || bytes == b"." {
                     continue;
                 }
-                let name = rec.name_display(&drive.names);
+                let name = rec.name_display_with(&drive.names, render);
                 if !dir_path.ends_with('\\') && !dir_path.is_empty() {
                     dir_path.push('\\');
                 }

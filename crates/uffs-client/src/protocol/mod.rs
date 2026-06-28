@@ -428,6 +428,11 @@ pub struct SearchParams {
     /// Hide NTFS Alternate Data Streams from results.
     #[serde(default)]
     pub hide_ads: bool,
+    /// Render ill-formed (surrogate-bearing) names with greppable `<BAD:HHHH>`
+    /// markers instead of the default U+FFFD (`�`). Display-only — does not
+    /// filter results (use the malformed filter for that).
+    #[serde(default)]
+    pub normalize_malformed: bool,
 
     // ── Profiling ──────────────────────────────────────────────────
     /// Request detailed timing breakdown from the daemon.
@@ -598,6 +603,7 @@ impl Default for SearchParams {
             malformed_path: None,
             hide_system: false,
             hide_ads: false,
+            normalize_malformed: false,
             profile: false,
             aggregations: vec![],
             include_rows: true,

@@ -149,6 +149,26 @@ pub struct SearchFilters {
     /// lossless bytes), never the lossy `&str` view (which is always valid
     /// UTF-8 and would match nothing).
     pub malformed: Option<bool>,
+
+    /// Render ill-formed names with greppable `<BAD:HHHH>` markers instead of
+    /// the default U+FFFD (`�`). A display-only option (not a filter): it
+    /// selects [`crate::compact::MalformedRender`] for the resolved path + name
+    /// column so downstream tooling can spot/round-trip corrupt entries.
+    /// `false` = default lossy rendering (matches the reference C++ tool).
+    pub normalize_malformed: bool,
+}
+
+impl SearchFilters {
+    /// The [`crate::compact::MalformedRender`] mode implied by
+    /// [`Self::normalize_malformed`].
+    #[must_use]
+    pub const fn malformed_render(&self) -> crate::compact::MalformedRender {
+        if self.normalize_malformed {
+            crate::compact::MalformedRender::Normalized
+        } else {
+            crate::compact::MalformedRender::Lossy
+        }
+    }
 }
 
 /// Raw parameter inputs for constructing [`SearchFilters`].
@@ -380,6 +400,9 @@ impl SearchFilters {
             // predicate compiler (it is not a legacy positional param), so the
             // param-based constructor leaves it disabled.
             malformed: None,
+            // Display-only; the daemon sets it from the request's
+            // `normalize_malformed` flag, so it defaults off here.
+            normalize_malformed: false,
         }
     }
 

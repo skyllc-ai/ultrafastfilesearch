@@ -95,7 +95,12 @@ pub(crate) fn search_compact_drive_prefix(
     let match_count = match_indices.len();
 
     let t_resolve = std::time::Instant::now();
-    let rows = indices_to_rows(drive, &match_indices, volume_prefix);
+    let rows = indices_to_rows(
+        drive,
+        &match_indices,
+        volume_prefix,
+        filters.malformed_render(),
+    );
     let resolve_ms = t_resolve.elapsed().as_millis();
 
     if profile {

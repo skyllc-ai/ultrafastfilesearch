@@ -51,6 +51,7 @@ impl SearchParams {
                 "--dirs-only" => raw.dirs_only = true,
                 "--hide-system" => raw.hide_system = true,
                 "--hide-ads" => raw.hide_ads = true,
+                "--normalize-malformed" => raw.normalize_malformed = true,
                 // WI-4.4 forensic filters: find ill-formed (non-UTF-8) names.
                 "--malformed" => raw.malformed = Some(true),
                 "--well-formed" => raw.malformed = Some(false),
@@ -306,6 +307,7 @@ struct RawCliArgs {
     dirs_only: bool,
     hide_system: bool,
     hide_ads: bool,
+    normalize_malformed: bool,
     /// WI-4.4: `Some(true)` from `--malformed`, `Some(false)` from
     /// `--well-formed`, `None` if neither (no filter).
     malformed: Option<bool>,
@@ -719,6 +721,7 @@ impl RawCliArgs {
             // Misc
             hide_system: self.hide_system,
             hide_ads: self.hide_ads,
+            normalize_malformed: self.normalize_malformed,
             // Profiling
             profile: self.profile || self.benchmark,
             aggregations,

@@ -111,6 +111,7 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
     filter_mode: FilterMode,
     search_filters: &SearchFilters,
 ) -> Vec<DisplayRow> {
+    let render = search_filters.malformed_render();
     let mut path_results: Vec<DisplayRow> = Vec::new();
     let mut drive_order: Vec<usize> = (0..drives.len()).collect();
     drive_order.sort_unstable_by(|&idx_a, &idx_b| {
@@ -188,6 +189,7 @@ fn walk_tree_path_sorted<D: AsRef<DriveCompactIndex>>(
                 volume_prefix,
                 &mut dir_cache,
                 &mut mal_cache,
+                render,
             );
             let forensics = row_forensics(rec, &drive.names, path_malformed);
             let row = make_display_row(idx, drive.letter, rec, name, path, forensics);
@@ -238,6 +240,7 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
 ) -> Vec<DisplayRow> {
     let hide_system = search_filters.hide_system;
     let hide_ads = search_filters.hide_ads;
+    let render = search_filters.malformed_render();
 
     // ── Scan phase: collect (drive_idx, rec_idx) candidates ───────
     //
@@ -338,10 +341,10 @@ fn collect_path_via_ext_index<D: AsRef<DriveCompactIndex> + Sync>(
                     drive,
                     rec_idx,
                     rec,
-                    name,
                     volume_prefix,
                     cache,
                     mal_cache,
+                    render,
                 ));
             }
             local_rows
