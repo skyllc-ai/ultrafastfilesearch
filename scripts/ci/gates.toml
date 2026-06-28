@@ -284,6 +284,33 @@ local-vs-remote feedback loop that used to surface scope typos like
 upstream.  Bypass via `COMMIT_SUBJECT_BYPASS=1 git push`.
 """
 
+[[gate]]
+id = "commit-signatures"
+label = "Commit-signature validator"
+command = [
+  "bash",
+  "scripts/ci/check_commit_signatures.sh",
+  "range",
+  "{{COMMIT_RANGES}}",
+]
+tiers = ["pre-push"]
+gate_when = "always"
+hard = true
+tool = "bash"
+expected_runtime_secs = 1
+bucket = "bg"
+order = 31
+notes = """
+Verifies every non-merge commit in the pushed range carries a signature.
+`main` is governed by a `required_signatures` ruleset (plus a merge
+queue), so an unsigned commit passes every other local gate yet is
+rejected at the merge queue — a slow, maximally-late failure after a full
+CI round-trip.  This moves the catch left to ~1 s at push time and points
+at the `just sign-branch` self-heal.  No bypass: an unsigned commit bound
+for `main` will be rejected upstream regardless, so skipping only defers
+the same failure.
+"""
+
 # ─────────────────────────────────────────────────────────────────────
 # Rust-changed gates — fire when *.rs is touched
 # ─────────────────────────────────────────────────────────────────────

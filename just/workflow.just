@@ -100,6 +100,106 @@ go-justfile:
     printf "\033[0;34m💡 Run 'just phase2-ship' only when ready to ship\033[0m\n"
     printf "\033[0;36m⏱️  Total execution time: ${DURATION}s\033[0m\n"
 
+# ─────────────────────────────────────────────────────────────────────
+# Signed-merge flow helpers (see scripts/ci/check_commit_signatures.sh)
+# ─────────────────────────────────────────────────────────────────────
+
+# Merge a PR through main's merge queue (the queue-correct incantation).
+#
+# `main` uses a GitHub merge queue, so `gh pr merge <PR> --squash` is
+# silently rejected ("the merge strategy for main is set by the merge
+# queue") and does NOT enroll the PR.  This wrapper uses the right form —
+# `gh pr merge <PR> --auto` with NO method flag (the queue owns the
+# squash) — so the PR enters the queue and merges once its checks pass.
+merge PR:
+    @printf "\033[0;34m🔀 Enrolling PR #{{ PR }} into main's merge queue...\033[0m\n"
+    gh pr merge {{ PR }} --auto
+    @printf "\033[0;32m✅ PR #{{ PR }} queued — it merges when checks pass (watch: gh pr view {{ PR }}).\033[0m\n"
+
+# Self-heal: re-sign every commit on the current branch, then re-push.
+#
+# `main`'s ruleset requires every commit to carry a verified signature.
+# If one slipped through unsigned (e.g. committed with
+# `-c commit.gpgsign=false`), the `commit-signatures` pre-push gate blocks
+# the push.  This rebases the branch in place, re-signing each commit with
+# your configured GPG key, then force-pushes with lease.  `--amend` leaves
+# the staged set empty so the per-commit pre-commit hook no-ops; the heavy
+# gates run once on the final push.
+sign-branch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$branch" == "main" ]]; then
+        printf "\033[0;31m❌ refusing to rewrite main — run this on a feature branch.\033[0m\n" >&2
+        exit 1
+    fi
+    base=$(git merge-base origin/main HEAD)
+    n=$(git rev-list --count "$base"..HEAD)
+    printf "\033[0;34m🔏 Re-signing %s commit(s) on '%s' (base %s)...\033[0m\n" "$n" "$branch" "${base:0:10}"
+    git rebase --exec 'git commit --amend --no-edit -S' "$base"
+    printf "\033[0;34m⬆️  Force-pushing (with lease)...\033[0m\n"
+    git push --force-with-lease
+    printf "\033[0;32m✅ Branch re-signed and pushed — every commit now carries a signature.\033[0m\n"
+
+# Verify commit signing is set up so commits can land on main.
+#
+# Checks, in order: commit.gpgsign is on; a signing key is configured; GPG
+# can actually produce a signature with it; and the key is registered on
+# GitHub (so commits render as "verified").  Each is a soft check with a
+# clear fix; exits non-zero if any fails.
+doctor-signing:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    fail=0
+    ok()   { printf "  \033[0;32m✅ %s\033[0m\n" "$1"; }
+    bad()  { printf "  \033[0;31m❌ %s\033[0m\n" "$1"; fail=1; }
+    printf "\033[0;34m🩺 Commit-signing doctor\033[0m\n"
+
+    if [[ "$(git config --get commit.gpgsign || echo false)" == "true" ]]; then
+        ok "commit.gpgsign = true"
+    else
+        bad "commit.gpgsign is not true — run: git config commit.gpgsign true"
+    fi
+
+    key=$(git config --get user.signingkey || true)
+    if [[ -n "$key" ]]; then
+        ok "user.signingkey = $key"
+    else
+        bad "no user.signingkey — set it: git config user.signingkey <KEYID>"
+    fi
+
+    if printf 'test' | gpg ${key:+--local-user "$key"} --clearsign >/dev/null 2>&1; then
+        ok "GPG can sign with the configured key"
+    else
+        bad "GPG cannot sign (broken agent / locked key) — check 'gpg --list-secret-keys'"
+    fi
+
+    # GitHub-registration check is ADVISORY: listing GPG keys needs the
+    # `admin:gpg_key` token scope, which the default `gh` auth lacks (404).
+    # The authoritative proof is GitHub verifying the actual commit at push
+    # time, so a missing scope is an info note, never a hard fail.
+    info() { printf "  \033[0;36mℹ️  %s\033[0m\n" "$1"; }
+    if [[ -n "$key" ]]; then
+        # Branch on gh's exit status, not its output: on a 404 (missing
+        # scope) gh prints error JSON that would otherwise leak into the
+        # match and read as a false "key not found".
+        if keys=$(gh api user/gpg_keys --jq '.[].key_id, .[].subkeys[]?.key_id' 2>/dev/null); then
+            if printf '%s\n' "$keys" | grep -qiF "${key: -16}"; then
+                ok "signing key is registered on GitHub (commits will verify)"
+            else
+                info "configured key not found among your GitHub GPG keys — if commits show 'Unverified', add it: https://github.com/settings/keys"
+            fi
+        else
+            info "could not list GitHub GPG keys (gh token lacks admin:gpg_key scope) — skipped; GitHub still verifies signatures at push time"
+        fi
+    fi
+
+    if (( fail )); then
+        printf "\033[0;31m❌ signing setup incomplete — commits may be rejected by main's ruleset.\033[0m\n" >&2
+        exit 1
+    fi
+    printf "\033[0;32m✅ local signing is set up — commits will be signed.\033[0m\n"
+
 # Comprehensive validation (Rust optimized).
 check-all:
     @printf "\033[0;34m📋 Comprehensive Validation (RUST OPTIMIZED)\033[0m\n"
