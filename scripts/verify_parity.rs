@@ -802,7 +802,13 @@ fn run_live_drive_parity(
         // Streaming comparison — no filtering except header/footer
         println!("  Fingerprints differ; running streaming line comparison...");
         let t_diff = Instant::now();
-        let diff = compute_streaming_diff(&cpp_raw, &rust_raw);
+        let mut diff = compute_streaming_diff(&cpp_raw, &rust_raw);
+        // LIVE MODE: the C++ (warm) and Rust (cold) reads happen seconds apart
+        // on a mutating volume, so reconcile differences that are read-time
+        // skew (accessed-time, directory subtree aggregates, NTFS-volatile
+        // paths) rather than parser disagreements. Offline (frozen capture)
+        // never does this, so real parser bugs still surface.
+        let (tolerated, skew_samples) = reconcile_live_skew(&mut diff);
         let diff_elapsed = t_diff.elapsed();
 
         println!();
@@ -812,11 +818,30 @@ fn run_live_drive_parity(
         );
         println!("     Only in C++:  {}", diff.only_in_baseline.len());
         println!("     Only in Rust: {}", diff.only_in_rust.len());
+        if tolerated > 0 {
+            println!();
+            println!(
+                "  ⏱️  Tolerated {tolerated} live-read-skew diff(s) \
+                 (NTFS volatile: accessed-time / dir-aggregate / churning paths):"
+            );
+            for (path, reason) in &skew_samples {
+                println!("       {path}  [{reason}]");
+            }
+            if tolerated > skew_samples.len() {
+                println!("       … and {} more", tolerated - skew_samples.len());
+            }
+        }
 
         if diff.only_in_baseline.is_empty() {
             let extra = diff.only_in_rust.len();
             println!();
-            println!("  ✅ SUPERSET MATCH (Rust ⊇ C++)");
+            if tolerated > 0 {
+                println!(
+                    "  ✅ SUPERSET MATCH (Rust ⊇ C++) — after tolerating {tolerated} live-read-skew diff(s)"
+                );
+            } else {
+                println!("  ✅ SUPERSET MATCH (Rust ⊇ C++)");
+            }
             println!("     Extra Rust lines: {extra}");
 
             if !diff.only_in_rust.is_empty() {
@@ -3608,6 +3633,157 @@ fn verify_hardlinks_inline(golden_baseline_file: &Path, only_in_rust_data: &[Str
     }
 }
 
+
+/// CSV column indices (0-based) in the DisplayRow output:
+/// 0=path 1=name 2=parent 3=size 4=allocated 5=created 6=modified
+/// 7=accessed 8=descendant-count …
+const COL_SIZE: usize = 3;
+const COL_ACCESSED: usize = 7;
+const COL_COUNT: usize = 8;
+
+/// NTFS / OS "master" view of paths that mutate constantly, so two independent
+/// live reads of the same volume legitimately disagree there: NTFS metafiles
+/// (`$Extend`/`$UsnJrnl`/`$LogFile`/`$MFT`…), the recycle bin, VSS snapshots,
+/// paging files, AV sandboxes, and this harness's own scratch dirs.
+fn is_ntfs_volatile_path(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    const VOLATILE_SUBSTR: &[&str] = &[
+        r"\$recycle.bin\",
+        r"\system volume information\",
+        r"\$extend\",        // $UsnJrnl, $RmMetadata, $TxfLog, $Repair, …
+        r"\norton sandbox\", // Norton AV live sandbox churn
+        "idx-delta-verify",  // this script's own scratch directories
+    ];
+    if VOLATILE_SUBSTR.iter().any(|s| p.contains(s)) {
+        return true;
+    }
+    // Root-level NTFS metafiles + OS paging files (e.g. C:\$MFT, C:\pagefile.sys).
+    const VOLATILE_LEAF: &[&str] = &[
+        r"\$mft",
+        r"\$mftmirr",
+        r"\$logfile",
+        r"\$volume",
+        r"\$attrdef",
+        r"\$bitmap",
+        r"\$boot",
+        r"\$badclus",
+        r"\$secure",
+        r"\$upcase",
+        r"\$extend",
+        r"\pagefile.sys",
+        r"\hiberfil.sys",
+        r"\swapfile.sys",
+        r"\dumpstack.log.tmp",
+    ];
+    let trimmed = p.trim_end_matches('\\');
+    VOLATILE_LEAF.iter().any(|leaf| trimmed.ends_with(leaf))
+}
+
+/// Classify a same-path (baseline, rust) line pair from a LIVE run. Returns
+/// `Some(reason)` when the only differences are ones a live volume mutates
+/// between two reads — read-time skew, not a parser disagreement — and `None`
+/// when a structural field differs (a real diff).
+///
+/// Tolerated: the accessed timestamp always (directory atime bumps on
+/// traversal), and — for a directory — the subtree size/count aggregates
+/// (derived from children that may have changed in the gap between the two
+/// reads). Any path NTFS treats as volatile is tolerated wholesale.
+fn classify_live_skew(baseline: &str, rust: &str) -> Option<&'static str> {
+    let bf = split_csv_fields(baseline);
+    let rf = split_csv_fields(rust);
+    if bf.is_empty() || bf.len() != rf.len() {
+        return None;
+    }
+    let path = bf[0].trim_matches('"');
+    if is_ntfs_volatile_path(path) {
+        return Some("volatile NTFS/OS path");
+    }
+    let is_dir = path.ends_with('\\');
+    let mut accessed_only = true;
+    let mut any_diff = false;
+    for (i, (b, r)) in bf.iter().zip(rf.iter()).enumerate() {
+        if b == r {
+            continue;
+        }
+        any_diff = true;
+        if i == COL_ACCESSED {
+            continue;
+        }
+        if is_dir && (i == COL_SIZE || i == COL_COUNT) {
+            accessed_only = false; // a subtree aggregate also moved
+            continue;
+        }
+        return None; // a structural field differs — real diff
+    }
+    if !any_diff {
+        return None;
+    }
+    Some(if accessed_only {
+        "accessed-time only"
+    } else {
+        "dir aggregate + accessed-time"
+    })
+}
+
+/// Reconcile benign live-read skew in place: pair `only_in_baseline` with
+/// `only_in_rust` by path and drop pairs that are read-time skew per
+/// [`classify_live_skew`]. Returns `(tolerated_count, samples)` where `samples`
+/// is a capped `(path, reason)` list for the report. Hardlink-only paths
+/// (present on one side only) are untouched, so a genuine superset stays a
+/// superset.
+///
+/// LIVE MODE ONLY — offline reads a frozen capture, where such a diff would be
+/// a real parser bug worth surfacing (e.g. the C: / F: known issues), so the
+/// offline verdict deliberately does NOT call this.
+fn reconcile_live_skew(diff: &mut DiffResult) -> (usize, Vec<(String, &'static str)>) {
+    if diff.only_in_baseline.is_empty() || diff.only_in_rust.is_empty() {
+        return (0, Vec::new());
+    }
+    let mut rust_by_path: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, line) in diff.only_in_rust.iter().enumerate() {
+        rust_by_path.entry(extract_path(line)).or_default().push(i);
+    }
+    let mut drop_baseline = vec![false; diff.only_in_baseline.len()];
+    let mut drop_rust = vec![false; diff.only_in_rust.len()];
+    let mut samples: Vec<(String, &'static str)> = Vec::new();
+    let mut tolerated = 0_usize;
+    for (bi, bline) in diff.only_in_baseline.iter().enumerate() {
+        let path = extract_path(bline);
+        let Some(idxs) = rust_by_path.get(&path) else {
+            continue;
+        };
+        for &ri in idxs {
+            if drop_rust[ri] {
+                continue;
+            }
+            if let Some(reason) = classify_live_skew(bline, &diff.only_in_rust[ri]) {
+                drop_baseline[bi] = true;
+                drop_rust[ri] = true;
+                tolerated += 1;
+                if samples.len() < 20 {
+                    samples.push((path.clone(), reason));
+                }
+                break;
+            }
+        }
+    }
+    if tolerated == 0 {
+        return (0, Vec::new());
+    }
+    let mut bi = 0;
+    diff.only_in_baseline.retain(|_| {
+        let keep = !drop_baseline[bi];
+        bi += 1;
+        keep
+    });
+    let mut ri = 0;
+    diff.only_in_rust.retain(|_| {
+        let keep = !drop_rust[ri];
+        ri += 1;
+        keep
+    });
+    (tolerated, samples)
+}
 
 /// For lines that share the same path but differ in field values (size, timestamps,
 /// flags), shows them paired. Lines only in one side are shown separately.
