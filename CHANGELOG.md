@@ -14,6 +14,199 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — corrupt-name forensics: keep ill-formed names visible + `--normalize-malformed`
+
+NTFS allows file and directory names that are ill-formed UTF-16 (unpaired
+surrogates). UFFS now treats them as first-class:
+
+- **Corrupt names keep their place.** A directory whose name is ill-formed no
+  longer collapses out of the path: previously its children were re-parented to
+  the drive root and the directory showed up as duplicate empty-named rows. Now
+  the directory stays at its true position and its descendants resolve under it.
+- **Display matches Everything / Explorer.** A corrupt run renders as one
+  replacement char (`�`) per offending UTF-16 code unit, instead of the previous
+  one-per-byte (`���`), so output lines up with the reference tools.
+- **`--normalize-malformed`** (new flag) renders each corrupt code unit as a
+  greppable, reversible `<BAD:HHHH>` marker instead (e.g. `<BAD:DCFF>` for an
+  unpaired low surrogate). `<` / `>` cannot occur in a real NTFS name, so the
+  marker never collides; the hex keeps two corrupt siblings distinct and lets
+  downstream tooling spot, parse, or round-trip the true name. The default stays
+  the lossy `�` rendering.
+
+Filtering corrupt entries is unchanged: the `malformed` / `malformed_path`
+columns and the malformed name filter still select them; `--normalize-malformed`
+is display-only and never changes which rows match. Well-formed names pay nothing
+(the lossy/normalized render only runs for the rare corrupt name).
+
+## [0.6.15] - 2026-06-28
+
+### Added
+
+- **idxdelta** Incremental index maintenance — O(changed) USN apply (base + delta overlay) (#483)
+
+### Fixed
+
+- **usn** Coalesce a backlog of apply ticks into one body rebuild (#481)
+- **release** Pre-create the tag via refs API so GITHUB_TOKEN can publish (#478)
+
+### Performance — incremental index maintenance: live updates apply in O(changed)
+
+The resident daemon's per-poll USN-journal apply now scales with the number of
+**changed** records instead of the **total** drive size. On a live 4.3M-record
+volume the per-apply cost drops from ~1367 ms to ~200 ms (−85%): path lengths,
+the trigram / extension / children indexes, and the directory subtree all update
+incrementally, with the occasional full refold confined to a rare compaction.
+
+For everyday use this means **live search stays fresh under heavy churn**: new,
+renamed, and deleted files become searchable in well under a second (1k/10k
+files in ~0.1 s, 100k in ~0.5 s on a 4.3M-record drive, validated while the
+recycle bin was being emptied). The apply cadence is a debounce + max-wait
+(settle quickly when a burst goes quiet, but never let a busy drive starve the
+CPU), so it feels snappy without thrashing.
+
+## [0.6.14] - 2026-06-26
+
+### Added
+
+- **search** Path_excludes filter + teach the MCP keyword-OR / noise-dir exclusion (#471)
+
+### Fixed
+
+- **usn** Live journal correctness + near-live search freshness + ext-index/metadata backfill (#475)
+
+## [0.6.13] - 2026-06-20
+
+### Fixed
+
+- **search** Survive the transient I/O abort (os 995) during a parked-drive re-warm (#469)
+- **cli** Uffs --status broker section is "not applicable" off Windows (#468)
+
+## [0.6.12] - 2026-06-20
+
+### Added
+
+- **self-update** Non-elevated update skips the broker (+ zero-UAC docs) (#466)
+
+### Fixed
+
+- **cli** Non-elevated daemon management when the broker is serving (Windows) (#464)
+
+## [0.6.11] - 2026-06-19
+
+### Added
+
+- **mcp** Read-only freshness signal + honest stale-session messaging (#460)
+
+### Fixed
+
+- **client** Don't refuse the daemon when its launch path != resolved image path (#462)
+- **self-update** Stop a non-elevated repair from fabricating a broker failure (#461)
+
+## [0.6.10] - 2026-06-18
+
+### Added
+
+- **broker** Add --version/-V so the self-update probe shows its version (#458)
+
+### Fixed
+
+- **self-update** Remove '--' from manifest XML comment — the real SxS 14001 cause (#457)
+- **self-update** Minimal asInvoker manifest — stop uffs-update.exe SxS crash (os error 14001) (#456)
+
+## [0.6.9] - 2026-06-18
+
+### Fixed
+
+- **update** Embed asInvoker manifest in uffs-update.exe (Windows elevation) (#454)
+
+## [0.6.8] - 2026-06-17
+
+### Fixed
+
+- **update** Make downloaded binaries executable (self-update apply on Unix) (#452)
+
+## [0.6.7] - 2026-06-17
+
+### Added
+
+- **update** Doctor redirects to the update flow to fix update-class issues (#449)
+- **update** Reconcile a missing core binary back into a complete install (#448)
+- **update** Single source of truth for the core binary set + `uffs --update bins` (#447)
+- **brand** Add 400x136 receipt wordmark variant (#445)
+
+### Fixed
+
+- **update** Stamp journal to_version, stop relaunching stdio mcp, add repair verb (#446)
+- Correct Ko-fi sponsor handle to uffssearch (#444)
+
+## [0.6.6] - 2026-06-17
+
+### Added
+
+- **update** Bare `uffs --update` updates end-to-end (ordinary-user default) (#441)
+
+### Fixed
+
+- **update** Apply quiesce stops services with the CURRENT uffs, not a stale sibling (#440)
+
+## [0.6.5] - 2026-06-16
+
+### Fixed
+
+- **update** Self-update flow polish — Unix apply, clean errors, complete install gate, quiet output (#438)
+
+## [0.6.4] - 2026-06-16
+
+### Added
+
+- **cli** Search-first grammar (`uffs --<command>`) + full doc/code alignment (#436)
+- **winget** Auto-release the seeded PR — fully hands-off winget flow (#431)
+
+### Fixed
+
+- **update** Treat uffs-broker as Windows-only in self-update detection (#434)
+- **build** Include uffs-update in local build/install/deploy flows (#433)
+
+## [0.6.3] - 2026-06-16
+
+### Added
+
+- **winget** Auto-seed nested aliases into the komac PR (+ draft gate) (#429)
+- Native Windows service control (uffs-winsvc) — broker --status/--start/--stop, uffs status broker, sc-free updater (#428)
+- **update** Crash-proof self-update — apply resilience, doctor, per-binary release assets (#427)
+- Self-update Phases B & C — snapshot + acquire (+ DRY Authenticode) (#426)
+- **cli** Self-update Phase A — multi-anchor install detection (`uffs update`) (#425)
+
+## [0.6.2] - 2026-06-15
+
+### Fixed
+
+- **search** Scope bare & path-anchored drive patterns (C:, C:\, C:\path) (#420)
+
+## [0.6.1] - 2026-06-15
+
+### Added
+
+- **broker** Windows Service control dispatcher (FU-1) (#414)
+- **broker** Multi-instance threaded serve loop + OwnedHandle (FU-5, SBB-2) (#413)
+
+### Fixed
+
+- **broker** FILE_FLAG_FIRST_PIPE_INSTANCE only on the first instance (FU-5 fix) (#415)
+- **client** Probe the broker pipe without connecting (FU-6) (#411) (#412)
+- **client** Probe the broker pipe without connecting (FU-6) (#411)
+- **mft** Read $UpCase through the overlapped handle (FU-8) (#410)
+- **mft** Bootstrap MFT extents from FRS 0 on the non-elevated path (FU-3) (#409)
+- **mft** Open the USN journal through the broker handle (FU-2b) (#408)
+- **daemon** Back off the journal poll instead of storming on failure (FU-2a) (#407)
+- **daemon** Skip broker warm-up when the daemon is already elevated (#404)
+- **broker** Make the Access Broker work end-to-end + production follow-up playbook (#403)
+- **winget** Seeder also strips the unsupported portable Scope field (#402)
+
+### Performance
+
+- **daemon** Bound the live-drive load fan-out (large-estate safety) (#417)
+
 ### Added — Windows Access Broker: non-elevated search with no UAC prompts
 
 `uffs-broker --install` (one-time, from an elevated shell) registers a small
@@ -38,12 +231,179 @@ On the non-elevated path this reaches full parity with an elevated read:
 - **Concurrent multi-instance pipe** and a real Windows service lifecycle
   (install / auto-start on boot / graceful `sc stop` / uninstall).
 
+
 ### Performance — bounded live-drive load fan-out
 
 Loading many drives at once is now capped at roughly the CPU-core count, so a
 large estate (≈25+ drives) no longer fans out into a memory / I-O / thread
 spike during startup. Small estates (drives ≤ cores) load fully in parallel
 exactly as before — no change for typical setups.
+
+## [0.5.123] - 2026-06-13
+
+### Fixed
+
+- **winget** Generalize alias seeding so uffs-broker reaches the manifest (#399)
+
+## [0.5.122] - 2026-06-13
+
+### Added
+
+- **demo** Wave-0 launch kit - video tapes, MCP query timing, fresh-VM fixes (#397)
+- **release** Auto-dispatch binary build when a release PR merges (#396)
+
+## [0.5.121] - 2026-06-12
+
+### Added
+
+- **bench** Full benchmark suite + v0.5.120 canonical promotion (#393)
+- **release** Manual on-demand binary release trigger (Path B) (#390)
+
+### Fixed
+
+- **release** Restore the version bump inside just ship Phase 2 (#391)
+- **release** Flip release-plz to registry baseline; re-enable push trigger (#389)
+- **ci** Gate crates-io-publish on releases_created (#388)
+- **toolchain** Invalidate target/ + sccache after a nightly bump (#384)
+- **ci** Re-defer release-plz auto-trigger — cargo package bootstrap (#383)
+- **ci** Release-plz packages never-publish crates — add release=false (#382)
+- **ci** Release-plz cargo package fails — disable sccache wrapper (#380)
+
+## [0.5.120] - 2026-05-08
+
+> **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
+> reached a published GitHub Release: the `release.yml` finalize step hit
+> a server-side `pre_receive Repository rule violations found ... Cannot
+> create ref due to creations being restricted` rejection, and after the
+> partial release was deleted, the tag name became permanently locked by
+> GitHub's *immutable releases* feature (the pre-receive hook refuses any
+> future ref creation under that name even after a clean delete).  The
+> public release sequence therefore jumps `v0.5.90 → v0.5.120`; all
+> intended v0.5.91 changes are rolled forward into this release.
+
+### Fixed
+- **release-plz active-mode race with the bespoke `auto-tag-release.yml`
+  flow.**  Without `release_always = false`, the `release-plz release`
+  job ran on every push to `main` and competed with `auto-tag-release.yml`
+  to create the same `v*` tag, producing duplicate workflow runs and
+  occasional failed tag pushes during the R4 transition.  Setting
+  `release_always = false` in `release-plz.toml` gates tag creation
+  through `release-plz-*` PR merges only, so the bespoke flow remains
+  the sole tag source until R5 retires it.  See
+  `docs/architecture/release-automation-plan.md §R4` for the full
+  rationale and the deviations log entry "R4 release-job race".
+  (R4 active mode, PR #151)
+
+### Carried over from the unreleased v0.5.91
+- **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
+  (`SIGKILL (Code Signature Invalid)` / `namespace=CODESIGNING` /
+  `"Taskgated Invalid Signature"`).  `[profile.release].strip = "symbols"`
+  in `Cargo.toml` strips the Mach-O symbol table **after** the linker has
+  emitted an ad-hoc (linker-signed) `CodeDirectory`, leaving the embedded
+  hash inconsistent with the on-disk file.  macOS 26+'s hardened
+  taskgated then refuses to launch the binary.  In v0.5.72 this hit
+  `uffsmcp` and `uffsd` deterministically; `uffs` and `uffs-mft` survived
+  by binary-layout chance — a fragile guarantee that wouldn't hold on
+  the next rebuild.
+
+  Fix: add a `Re-codesign macOS binaries (post-strip)` step to
+  `release.yml` that re-stamps the ad-hoc signature with `codesign
+  --force --sign -` on every shipping `apple-darwin` binary after
+  `cargo build --release` finishes.  The step is gated on
+  `contains(matrix.target, 'apple-darwin')` so Windows / Linux artifact
+  paths are untouched.  Each re-signed binary is then verified with
+  `codesign --verify --verbose=2` so a regression here fails the
+  workflow loudly instead of shipping broken artifacts.
+
+  Workaround for users still on a v0.5.72 download:
+
+  ```bash
+  codesign --force --sign - ~/bin/uffsmcp ~/bin/uffsd
+  ```
+
+  Re-signs in place; macOS picks up the refreshed `CodeDirectory` on the
+  next exec and the binaries launch normally.
+
+  No code changes; release-only fix.  Recommended upgrade for every Mac
+  user on macOS 26+.
+
+## [0.5.119] - 2026-06-09
+
+### Fixed
+
+- **daemon** WARM guarded fast-load + HOT per-write icacls spawn removal (#373)
+
+## [0.5.118] - 2026-06-08
+
+### Added
+
+- **bench** Bench robustness — TTL fixes, interleaved HOT rounds, path-set parity checks (#369)
+
+## [0.5.117] - 2026-06-07
+
+### Added
+
+- **uffs-bench** Robust benchmark-suite orchestrator P1–P9 complete (#367)
+
+## [0.5.116] - 2026-06-05
+
+### Fixed
+
+- **mft** Rebuild no-journal cache past age ceiling (resilience) (#364)
+
+## [0.5.115] - 2026-06-05
+
+### Fixed
+
+- --malformed filter bypass (is_empty gate, DisplayRow predicate, limit leak) (#361)
+
+## [0.5.114] - 2026-06-05
+
+### Added
+
+- Malformed-name forensics — surface & prove ill-formed names (WI-4.4 follow-up) (#359)
+- **mft** Lossless filename storage — surrogate-named files can no longer hide (WI-4.4) (#358)
+
+## [0.5.111] - 2026-06-05
+
+### Fixed
+
+- **broker** Open client process once, thread handle verify→duplicate (WI-8.1) (#352)
+- **spawn** Pass daemon argv as OsString, decode Windows paths losslessly (WI-4.2) (#351)
+- **mft** Harden all 5 NTFS parsers against panic-on-malformed-bytes (WI-5.2) (#349)
+- **mft** Instrumented UTF-16 decoder (WI-4.1) + discard audit (WI-6.3) (#347)
+- **daemon** Cross-platform elevation gate + demo tape line-wrap fix (#345)
+
+### Security
+
+- **security** Handle remaining from_utf8_lossy decision/scan sites (WI-4.3 follow-up) (#348)
+- **security** Close bugs-rust-wont-catch Categories 1/2/3 + partial 4/5/6/8 (13 WIs) (#346)
+
+## [0.5.110] - 2026-06-04
+
+### Fixed
+
+- **demo** Relatable + aggregation examples in cli-demo.tape (#343)
+- **cli** Human-readable timestamps + suppress empty 'Already Hot' in daemon output (#342)
+- **winget** Preserve CRLF line endings in uffs-tui alias patcher (#334)
+
+## [0.5.109] - 2026-06-02
+
+### Added
+
+- **release** Min/normal/full bundle tiers + bundled uffs-tui demo (+ winget alias seed) (#332)
+
+## [0.5.108] - 2026-06-02
+
+### Fixed
+
+- **ci** Auto-trigger winget submission from the release pipeline (#330)
+
+## [0.5.107] - 2026-06-01
+
+### Fixed
+
+- **ci-tooling** Force cargo clean when rustc toolchain changed (#325)
 
 ### Fixed — ship pipeline: force `cargo clean` after a `rustc` toolchain bump
 
@@ -63,6 +423,16 @@ version-specific cross-crate metadata then made every build explode with
   preserved.** `--no-clean` downgrades a needed toolchain clean to a warning
   and leaves the stale fingerprint so the next run re-detects it. The clean
   policy is extracted into a pure, unit-tested `decide_clean` function.
+
+## [0.5.106] - 2026-05-31
+
+### Added
+
+- **ci** Auto-submit winget manifest on release + promote winget install (#321)
+
+### Fixed
+
+- **ci-tooling** Keep release auto-commit on release branch, not main (#322)
 
 ### Fixed — ship pipeline: release auto-commit no longer drifts local `main`
 
@@ -86,6 +456,37 @@ recover.
 - `ensure_on_release_branch` uses a plain `git switch` (not `-C`) so a
   resumed ship lands on the existing release branch that already holds
   the auto-commit rather than resetting it to a commit-less `HEAD`.
+
+## [0.5.103] - 2026-05-29
+
+### Added
+
+- **logging** Route all core binaries to shared native log dir (#315)
+- **sponsorship** Launch Open Collective + Ko-fi donation channels (#313)
+
+### Fixed
+
+- **toolchain** Correct stale rust-toolchain.toml comment drift (#316)
+
+## [0.5.102] - 2026-05-20
+
+### Fixed
+
+- **daemon** Wrap sync search file-output in block_in_place (#307)
+- **concurrency** Snapshot lock state before awaits in status RPC + MCP dispatch (#304)
+- **features** Gate 6 items on streamable-http/async + add lint-ci-no-default regression guard (Phase 8e, refs #295) (#296)
+- **uffs-core** Drop per-row format!() allocations in two search hot paths (Phase 6d) (#283)
+- **uffs-core** Drop defensive Vec<u16> clone in path-only / path-sorted top-N hot path (Phase 6c) (#282)
+- **ci** Sign cargo-vet refresh PR commits via GITHUB_TOKEN REST API (refs #272) (#275)
+- **mft** Unwrap FACILITY_WIN32 HRESULT at all four VolumeHandle Open sites (#274)
+- **ci** Move cargo-mutants to windows-latest so cfg(windows) code is reachable (refs #267) (#271)
+- **ci** Pin cargo-fuzz to glibc target so sanitizer can link (refs #267) (#270)
+- **ci** Drop MSRV verification + workspace rust-version claim (closes #267) (#269)
+
+### Security
+
+- **security** Weekly cargo-vet import refresh (#272)
+- **security** Unwrap FACILITY_WIN32 HRESULT so create_owner_only honors AlreadyExists contract (#273)
 
 ### Added — WinGet distribution: live install docs + auto-submission pipeline
 
@@ -113,118 +514,428 @@ SkyLLC.UFFS` now works.
     `GITHUB_TOKEN` cannot fork an external repo, so the workflow no-ops
     until this secret exists.
 
-### Added — Phase 8: operator-driven memory tiering (v0.6.0 staging)
+## [0.5.100] - 2026-05-17
 
-The full operator-facing memory-tiering surface — every command end-to-end
-from CLI → typed JSON-RPC client → daemon handler → `IndexManager`
-primitives → registry / cache / pin atomics.  See the
-[Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)
-for the operator-facing validation flow.
+### Fixed
 
-- **`uffs daemon hibernate [DRIVES…]`** (Phase 8-B, PR #122) — demote
-  loaded shards to `Cold` in a single write-lock batch.  Empty drive
-  list ⇒ every loaded drive.  Releases the in-memory body but keeps
-  the encrypted compact cache on disk so a subsequent search or
-  `preload` can re-warm without a full MFT re-parse.  Reports the
-  per-pre-call-tier breakdown (`hot_demoted` / `warm_demoted` /
-  `parked_demoted` / `already_cold`) so the operator audit trail
-  captures what actually changed.
+- **just** Replace Unicode in Windows PowerShell recipe strings (#260)
 
-- **`uffs daemon preload <DRIVES…> [--pin-minutes N]`** (Phase 8-C,
-  PR #122) — promote drive(s) to `Hot` and pin the tier against
-  demote for `N` minutes (default 30).  Pin contracts:
-  - Cold/Parked/Warm → Hot via single-flight body load + registry
-    rebuild.
-  - Already-Hot drives skip the rebuild entirely and atomically
-    extend the pin via `ShardEntry::pin_until`.
-  - Pinned shards survive idle-tick demote (`demote_idle_shards`)
-    and pressure-cascade demote (`cascade_demote_one_step`).
-  - Explicit `hibernate` and `forget --force` override the pin via
-    registry rebuild (the rebuilt `ShardEntry` starts at
-    `pin_until_ms = 0`).
+## [0.5.99] - 2026-05-15
 
-- **`uffs daemon forget <DRIVES…> [--force]`** (Phase 8-D, PR #123) —
-  evict drive(s) from the registry **and** delete every per-drive
-  on-disk cache artefact (encrypted compact body, USN cursor, MFT
-  index, lock file).  Three-phase orchestration:
-  1. Read-lock detect — refuse the whole request with
-     `ERR_DRIVE_BUSY` if any drive is non-`Cold` and `--force` is
-     not set, so a typo on one of five drives cannot accidentally
-     forget the other four.
-  2. Optional auto-hibernate (`--force` only) — demote every
-     non-`Cold` drive to `Cold` first via
-     `OperatorHibernate`-tagged `demote_letter_with_reason` calls,
-     clearing pins implicitly.
-  3. Per-drive evict + clean — `freed_bytes > 0` ⇒ `forgotten`,
-     idempotent re-runs land in `already_absent`.
+### Added
 
-- **`uffs daemon status_drives`** (Phase 8-E, PR #123) — per-drive
-  tier + telemetry table.  Operator-facing companion to `daemon
-  status`: surfaces tier, pin expiry, query rate (EWMA), resident
-  bytes, and last-query timestamps for every drive the registry
-  knows about — including `Cold` shards (encrypted cache on disk,
-  zero RAM) so `forget` candidates are visible without
-  cross-referencing tracing logs.  Output sorted ascending by drive
-  letter so the table is stable across re-runs.
+- **bake** Add cross-platform just bake-day recipe for daily v0.6.0 bake-period checks (#248)
+- **bench** Add --out summary CSV flag + verify v0.5.35 CLI hot-path baseline (#247)
+- **manifest-audit** Permit per-crate keywords/categories override via allow-list (invariant 3.5) + apply on 4 library crates (#243)
+- **manifest-audit** Permit per-crate readme override via allow-list (invariant 3.5) (#238)
 
-- **`ShardEntry::pin_until_ms`** atomic field (Phase 8-C) — new
-  `AtomicU64` on every shard, initialised to `0` (unpinned) by all
-  four constructors.  `is_pinned(now_ms)` predicate folds the
-  `now_ms` comparison in for the demote-side gates;
-  `pin_until_ms_value()` accessor (added in Phase 8-E) returns the
-  raw timestamp for the `status_drives` wire output.
+### Fixed
 
-- **`OperatorHibernate` `DemoteReason` variant** — surfaces in the
-  canonical `shard.transition` tracing event with
-  `reason="operator-hibernate"` so operators can grep the audit
-  trail to distinguish manual hibernation from idle-tick or
-  pressure-cascade demotes.
+- **ci** Fail-fast pre-flight + per-job permissions on release publish (#255)
+- **ci** Repair rustup proxy AFTER cache restore on macOS release builds (#254)
+- **ci** Keep release 'Show binary sizes' green on non-Windows targets (#251)
+- **ci** Repair macOS rustup proxy in release workflows + workspace-wide actionlint cleanup (#245)
 
-- **`CacheCleaner` lifecycle hook** (Phase 8-D) — new
-  `Arc<dyn CacheCleaner>` field on `LifecycleHooks`.
-  `PlatformCacheCleaner` resolves the four canonical per-drive
-  paths via `uffs_core::compact_cache` / `uffs_mft::cache` and
-  unlinks each via `std::fs::remove_file`; `CountingCacheCleaner`
-  test fake records the call sequence so registry-eviction
-  behaviour can be verified without ever touching the host's real
-  cache directory.
+### Fixed — `release-cache-warm.yml` macOS runner-image flake + workspace-wide actionlint cleanup
 
-- **`promote_letter_to_hot` registry method** (Phase 8-C) — mirrors
-  `promote_letter` but rebuilds the registry with a `Hot` shard.
-  Accepts `Cold` / `Parked` / `Warm` source states; rejects `Hot`
-  (caller extends pin via atomic store on the live `Arc`) and
-  `Unknown` / `Evicting` (controller-only).
+The `release-cache-warm.yml` workflow had a ~50 % failure rate
+on its `aarch64-apple-darwin` matrix leg over the past week.
+Every failure shared the same fingerprint: `cargo build` exited
+with `error: unexpected argument 'build' found` and a
+`rustup_init::run_rustup_inner` stack backtrace.
 
-### Added — wire format
+**Root cause.**  On `macos-latest` runner images the
+`~/.cargo/bin/cargo` proxy is occasionally a stale symlink
+pointing at `rustup-init` (the installer binary) instead of the
+proxy that forwards to the active toolchain's real cargo.
+`rustup show` succeeded because it invoked rustup directly; the
+very next step's `cargo build` hit the broken proxy and fell
+through to the installer's argument parser, which has never
+heard of `build`.  Linux + Windows runners were unaffected.
 
-- **4 new JSON-RPC methods**: `hibernate`, `preload`, `forget`,
-  `status_drives` (Phase 8-A scaffolding pre-existing on `main`).
-- **2 new application error codes**: `ERR_DRIVE_BUSY = -4` (forget
-  refused without `--force`), `ERR_NOT_IMPLEMENTED = -3` (retired in
-  Phase 8-D once every Phase 8-A stub became a real handler).
-- **6 new wire types** in `uffs-client::protocol::response_tiering`:
-  `HibernateParams` / `HibernateResponse`, `PreloadParams` /
-  `PreloadResponse`, `ForgetParams` / `ForgetResponse`,
-  `StatusDrivesParams` / `StatusDrivesResponse`,
-  `DriveTierStatus`, plus `DEFAULT_PRELOAD_PIN_MINUTES = 30`.
+**Three changes to `release-cache-warm.yml::warm`, sized to the problem:**
 
-### Added — typed RPC client surface
+- **Toolchain-install repair (also mirrored into `release.yml::build-release-binaries`).**
+  The Install-step now appends a forced
+  `rustup default "$(rustup show active-toolchain | awk '{print $1}')"`
+  after `rustup show`, which rewrites the proxy binaries in
+  `~/.cargo/bin` so the symlinks resolve to the active
+  toolchain's real cargo.  A `cargo --version` /
+  `rustc --version` smoke check at the end of the step
+  surfaces a still-broken proxy in ~1 s instead of letting
+  Swatinem/rust-cache's `cargo metadata` and a 30+ min
+  `cargo build` silently waste runner minutes before failing
+  on the same root cause.  The same repair is mirrored into
+  `release.yml` because that workflow's tag-dispatched runs
+  would hit the same broken proxy on a freshly-flaky runner
+  image — and on the production release pipeline a 30+ min
+  late failure delays the release by a full re-run cycle.
 
-- **`UffsClientSync::{hibernate, preload, forget, status_drives}`**
-  in `uffs-client::connect_sync_tiering` — typed envelope helpers.
-  Matches the existing `connect_sync` shape; sibling-module split
-  keeps both files under the 800-LOC ceiling without an exception.
+- **Single auto-retry on the cargo-build step.**  Even with the
+  proxy repair, GitHub-hosted runners have transient
+  network blips during dep download and occasional sccache
+  flakes.  A 2-attempt bash loop with a 10-s sleep between
+  attempts absorbs those without requiring maintainers to
+  manually re-run the workflow.  Release.yml is NOT given a
+  retry — it's the production critical path and we want it
+  to fail loudly so the release pipeline's
+  `notify-failure` issue-opener fires.
 
-### Added — tests
+- **`continue-on-error: true` at the warm-job level.**  The
+  workflow's own header comment already documented that
+  cache-warming is best-effort by design.  `continue-on-error`
+  makes that intent explicit to GitHub: a transient single-
+  platform runner-image flake no longer paints the workflow
+  ❌ in PR checks / branch protection.  Real regressions
+  still surface via the workflow's run history + the per-job
+  summary table.
 
-- **22 new daemon-side integration tests** covering the full pin
-  contract surface, the all-or-nothing forget refusal, the
-  auto-hibernate-then-evict path, the deterministic `status_drives`
-  sort, and per-tier `resident_bytes` calculation across the
-  Hot/Warm/Parked/Cold ladder.  Plus 4 unit tests on the
-  `delete_drive_cache_files` helper using `tempfile::TempDir` so
-  the on-disk cleanup logic is exercised without ever touching the
-  host's cache directory.
+**Adjacent actionlint cleanup, same PR.**  While auditing the
+two release workflows, every other workflow in
+`.github/workflows/` was actionlint-scanned and the
+pre-existing shellcheck warnings (all info / style level —
+none of them latent bugs) were resolved:
+
+- **`release.yml`**: 5 clusters — SC2086 (unquoted
+  `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes), SC2129
+  (individual redirects grouped with `{ ... } >> "$out"`),
+  SC2010 (`ls | grep` replaced with an explicit glob loop
+  over the shipping-set binary names), SC2035 (`sha256sum *`
+  / `shasum -a 256 *` switched to `./*` form to guard
+  against future filenames starting with `-`).
+
+- **`auto-rerun-transient.yml`**: 3 × SC2016 — false
+  positives where literal backticks inside a single-quoted
+  `printf` format string looked like command-substitution
+  markers to shellcheck.  Rewritten as `echo` with
+  backslash-escaped backticks, which is more idiomatic for
+  "print this template string" and silences the warning
+  without a per-line suppression directive.
+
+- **`cargo-vet-refresh.yml`**: 1 × SC2129 — individual
+  `echo … >> "$GITHUB_STEP_SUMMARY"` writes grouped into a
+  single `{ … } >> "$GITHUB_STEP_SUMMARY"` block.
+
+- **`dependabot-review.yml`**: 3 × SC2129 — same
+  group-redirect fix in three locations (the delta-summary
+  table, the newly-resolved-crates block, and the
+  dropped-crates block).
+
+Verification: `actionlint .github/workflows/*.yml` is now
+clean across every workflow (zero warnings, zero errors).
+All script behavior is byte-identical to before; bash test
+runs of the rewritten echo / grouped-redirect blocks produce
+the same output as the originals.
+
+
+### Verified — v0.5.35 baseline CLI hot-path bench (2026-05-15)
+
+Plan §1 goal-4 ("no regression on CLI hot path vs the v0.5.35
+baseline") verified end-to-end on the Windows 7-drive reference
+box.  Current v0.5.120 (post-Phase-8 tiered architecture) is
+**universally faster** than v0.5.35 across every benchmarked
+pattern, with the largest result set (`*.dll`, 44 529 rows)
+showing a **2.7× speedup**:
+
+```
+Drive D, 7.07 M records, 30 rounds, HOT phase, p50 / p95 wall_ms:
+
+                              v0.5.35      v0.5.120       Δ p50
+    exact      (3 rows)       20 / 23   →  18 / 19      −10 %
+    prefix     (8 732)        46 / 50   →  40 / 46      −13 %
+    ext_rare   (11)           18 / 20   →  17 / 18       −6 %
+    ext_dll    (44 529)       94 / 100  →  35 / 40      −63 %  (2.7×)
+    substring  (12 458)       50 / 54   →  43 / 47      −14 %
+```
+
+Row-count parity preserved exactly across both versions on every
+pattern (no result-set drift — the post-v0.5.35 path-resolver
+fast path + Phase 3.2 single-buffer multi-column render path
+both preserve the same filter semantics and column ordering).
+The dramatic `ext_dll` win is dominated by those two surfaces:
+both are big-N row-materialisation gains, exactly where 44 K
+paths-into-CSV land in the wall-clock budget.
+
+Capture command (run twice with `~/bin/uffs.exe` swapped between
+the two binaries via `~/bin/uffs.exe daemon kill` +
+`Remove-Item $env:LOCALAPPDATA\uffs\cache` between runs):
+
+```powershell
+rust-script scripts\windows\cross-tool-benchmark.rs `
+    --skip-cold --drives D --rounds 30 `
+    --patterns exact,prefix,ext_rare,ext_dll,substring `
+    --tools uffs `
+    --uffs-bin "$HOME\bin\uffs.exe"
+```
+
+Raw artefact: `LOG/memory output` (manual stdout paste).  The
+**`--out <path>` flag was added to the bench script in this
+release** so future captures can persist the summary table as a
+structured CSV (columns: `tool,phase,sink,drive,pattern,p50_ms,
+p95_ms,rows,bad,verdict,rounds_ok,rounds_total`) — see the
+`Added — cross-tool benchmark script: --out summary CSV flag`
+entry below.
+
+
+### Added — cross-tool benchmark script: `--out` summary CSV flag
+
+`scripts/windows/cross-tool-benchmark.rs` learned a new
+`--out <path>` flag that writes the post-run summary as a
+plain-CSV at the supplied path (creating intermediate
+directories as needed).  Columns mirror the stdout summary
+table but emit integer milliseconds and integer row counts so
+the file is trivially regress-able by `pandas` / `polars` /
+`awk`:
+
+```
+tool,phase,sink,drive,pattern,p50_ms,p95_ms,rows,bad,verdict,rounds_ok,rounds_total
+UFFS,HOT,file,D,exact,18,19,3,0,PASS,30,30
+UFFS,HOT,file,D,prefix,40,46,8732,0,PASS,30,30
+…
+```
+
+The new flag is distinct from the existing
+`<cwd>/uffs_bench_out.csv` daemon-side file (raw per-query row
+dumps, overwritten every round) and never collides with it.
+The banner block prints both paths up front so operators see
+exactly where each artefact lands.  Unknown CLI flags now warn
+on stderr (`warning: unknown flag "--foo" ignored`) instead of
+silently swallowing — caught during the 2026-05-15 v0.5.35
+baseline bench where a typo-`--out` in pre-flag-support runs
+left the operator hunting a non-existent CSV file.
+
+## [0.5.96] - 2026-05-15
+
+### Fixed
+
+- **ci-tooling** Bring scripts/ crates under workspace lints (closes #212) (#228)
+- **ci** Upgrade #209 fix to Design C — relocate notify-failure to ci-failure-notify.yml (#226)
+- **ci** Auto-close stale ci-failure issues after successful auto-rerun (#225)
+- **soak** Close Phase 6 / Phase 7 24-h gates + pin daemon log strings (#218)
+
+### Fixed — Phase 6 + Phase 7 24-h soak harness (PR #218)
+
+Two harness-side bugs surfaced by the 2026-05-09 / 2026-05-10
+24-h Windows-host soak runs.  Both are validator scrape-pattern
+bugs — the daemon's actual contracts (`min_tier` floor, peer
+demotes, USN-journal save pipeline, working-set bound, fatal-class
+log lines) were satisfied in every run; the validator was just
+hunting for the wrong things.
+
+- **Phase 6 — `scripts/dev/long-soak.rs:746` `RUST_LOG` raised to
+  `shard.ttl=trace`.**  The catch-all `below-ttl` event in
+  `crate::index::transitions::evaluate_idle_demote` is emitted at
+  TRACE — the level needed by the soak harness's
+  `parse_max_ttl_field("warm_ttl_sec")` scrape during the
+  synthetic-load window, when drive `C` is in Warm/Hot with
+  `idle_secs ≈ 0` and the DEBUG-level `idle-demote` /
+  `min-tier-clamp` arms never fire.  Cost: ~23 k extra trace
+  events over 24 h (~3.5 MB) — marginal against the existing
+  ~75 MB log volume.
+
+- **Phase 7 — `scripts/dev/long-soak.rs:1244` regex re-anchored on
+  `compact-cache save`.**  The pre-fix regex hunted for
+  `USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh`
+  — **none** of those alternatives match the daemon's actual INFO
+  message `Journal poll: triggered background compact-cache save`.
+  Retroactively closes Phase 7 for the existing 24-h log
+  (`grep -c 'compact-cache save'
+  LOG/uffs_soak/phase7-20260510-214412/daemon.log` = 11; the save
+  pipeline was healthy all along).
+
+- **Two new daemon-side regression tests** pin the literal log-
+  message strings + tracing target + level + structured fields so
+  any future rename fails CI before reaching another 24-h soak
+  gate:
+  * `crate::cache::journal_loop::tests::save_log_message::
+    compact_cache_save_log_message_pins_string_target_and_level`
+    — pins target = `uffs_daemon::cache::journal_loop`, level =
+    INFO, and the literal `compact-cache save` substring.
+  * `crate::index::tests::shard_ttl_events::
+    below_ttl_event_pins_target_level_message_and_reason` —
+    pins target = `shard.ttl`, level = TRACE, message =
+    `"Adaptive idle-demote evaluation: not yet idle past TTL"`,
+    `reason="below-ttl"`, and the four TTL fields.
+
+- **Visibility hoist** — the existing
+  `crate::index::tests::tracing_capture::{EventLog, CapturedEvent}`
+  scaffold flipped from `pub(super)` → `pub(crate)`, plus
+  `pub(crate)` on `mod tests;` in `crate::index` and
+  `mod tracing_capture;` in `crate::index::tests`, so the same
+  scaffold serves both modules' contract pins.  No production-code
+  visibility change.
+
+- **Runbook + bake-criteria updates** —
+  [`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+  §2, §3, and §6 (new §4.5b + §4.5c capture sub-sections under
+  the §6 "Reference captures" parent) now reflect the
+  post-2026-05-13 grep patterns + the 2026-05-11 capture
+  findings.
+  [`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
+  ticks Phase 7 retroactively; Phase 6 stays open pending one
+  more 24-h run with the trace-level harness fix.
+
+
+### Verified — Phase 6 24-h Windows-host soak closes end-to-end (2026-05-14/15)
+
+The last remaining v0.6.0 24-h-soak gate now closes against a
+live Windows-host capture.  `LOG/uffs_soak/phase6-20260514-122946/`
+ran for 24 h on the 7-drive reference box (2026-05-14 12:29:46Z
+→ 2026-05-15 12:29:46Z) against the post-PR-218 harness fix and
+the validator reported **9 of 9 assertions PASS** end-to-end.
+
+The §4.5b adaptive-bonus deferral (recorded in the 2026-05-11
+docs against the May 9-10 reference run, where the
+`RUST_LOG=shard.ttl=debug` filter dropped every `below-ttl`
+TRACE event carrying the bonused `warm_ttl_sec` field) now has
+direct end-to-end evidence:
+
+- **Drive C `min_tier=Warm` floor.**  0 `to=Parked` events on
+  letter=C across 24 h; **2 870** `Demote target clamped by
+  per-drive min_tier` debug events — proving the floor was
+  actively applied thousands of times, not merely coincidentally
+  not-tripped.
+- **Peer-drive demotion.**  D / E / F / G / M / S each fired
+  exactly 2 `Warm → Parked` transitions, confirming the
+  controller drives non-floor drives through the demote ladder
+  on the configured `warm_ttl_base_secs`.
+- **Adaptive TTL bonus.**  `C.max_warm_ttl = 3 786 s` vs
+  peer `max(warm_ttl_sec) = 300 s` — a **12.6× bonus** on the
+  high-rate drive, matching the `+600·log2(rate)` formula in
+  `crate::cache::policy::warm_ttl`.
+
+Memory trajectory across the 24-h window also validates the
+tiering machinery doing real work:
+
+```
+                          00h           23h         post-load
+Working Set (WS) :   6 746 800 128 →    22 888 448 →    69 238 784  (308× WS trim, 3× post-load re-page)
+Private Memory   :   8 293 457 920 → 1 791 188 992 → 1 669 558 272  (78 % real release as drives demoted)
+Virtual Memory   :  28 172 120 064 → 28 168 974 336 → 28 168 974 336 (flat — no address-space leak)
+NPM (non-paged)  :          26 736 →        26 328 →        26 328  (flat)
+```
+
+The 78 % private-memory release is materially different from
+the §4.5d ws-trace soak (where `pm_bytes` stayed within 3 % for
+24 h because the keep-warm worker held all 7 drives Warm).
+Here the controller actively demoted the 6 peer drives, which
+unloaded cold shards from memory and produced the real
+private-bytes release — exactly the intended tiering behavior
+under sustained idle.  The end-of-soak synthetic-load window
+on drive C re-paged recently-needed shards back into WS without
+re-allocating private memory (PM actually continued to fall
+slightly), confirming the page-cache vs. private-bytes split is
+healthy.
+
+No `panic` / `OutOfMemoryError` / `FATAL` log lines across the
+24-h window.  Full breakdown in
+[`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+§6 sub-section §4.5e.
+
+With this closure, **all three v0.6.0 24-h-soak gates are
+green**:
+
+| Gate | Source | Result | Closed |
+|---|---|---|---|
+| Phase 6 (`min_tier=Warm` floor + adaptive bonus) | `phase6-20260514-122946/` | 9 / 9 PASS | 2026-05-15 |
+| Phase 7 (USN-journal churn) | `phase7-20260510-214412/` | 7 / 7 PASS (regex fix) | 2026-05-13 |
+| ws-trace (Working-Set trajectory) | `wstrace-20260513-113344/` | 4 / 4 PASS | 2026-05-13 |
+
+Only the one-week `main` bake remains per
+[`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md).
+
+
+### Verified — Phase 7 + ws-trace 24-h Windows-host soaks (2026-05-13/14)
+
+Two of the three v0.6.0 24-h Windows-host soak gates close
+retroactively from existing capture data, with daemon-side
+regression tests pinning the wire-format contracts so future
+log-message renames fail CI before reaching another 24-h soak.
+
+- **Phase 7 USN-journal churn soak** —
+  `LOG/uffs_soak/phase7-20260510-214412/` retroactively closes
+  7 of 7 assertions with the PR #218 regex fix: the save
+  pipeline emitted 11 `compact-cache save` events during the
+  24-h soak; the pre-fix validator regex did not match the
+  daemon's actual INFO line.  No new soak required.
+
+- **ws-trace 24-h Working-Set trajectory** —
+  `LOG/uffs_soak/wstrace-20260513-113344/` passes 4 of 4
+  assertions: PID 50492 stable across 24 hourly samples,
+  289 / 289 keep-warm probes fired, WS ratio 0.03× (first
+  =5.37 GB, last=184 MB).  The 30× WS drop is the
+  `EmptyWorkingSet` page-trim (Phase 5 G2 wiring), **not a
+  leak**: `pm_bytes` decreased only 3 % (6.53 GB → 6.36 GB)
+  while all 7 drives held Warm and the daemon's own RESIDENT
+  accounting stayed at ~5.0 GiB across all 24 snapshots.  This
+  resolves the "vacuous pass" concern raised in the Phase 7
+  §4.5c footnote: both soaks' WS drops are the same benign
+  page-trim, not silent idle-decay.
+
+- **Doc pass landed under this entry** — new §4.5d in
+  [`memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
+  carries the full `ws_bytes`-vs-`pm_bytes` breakdown plus the
+  recommended post-v0.6.0 refinement (re-anchor the soak
+  validator on `pm_bytes`; the field is already captured in
+  every snapshot).  The matching pass criteria in
+  [`memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
+  §1.7 ticks `[x]` retroactively and carries an inline note on
+  the WS-bound semantics so future operators see the WS-vs-PM
+  nuance up front.
+
+- **Remaining v0.6.0 gate work** is the **Phase 6 24-h soak
+  re-run** (one more capture with the post-PR-218
+  `shard.ttl=trace` harness fix) plus the one-week `main` bake.
+  Phase 8 closed 2026-05-05; Phase 7 and ws-trace close
+  2026-05-13.  No new operator-surface features land on `main`
+  until v0.6.0 ships.
+
+## [0.5.95] - 2026-05-12
+
+### Added
+
+- **ci** Cargo-fuzz in Tier 2 weekly, scoped to uffs-mft (R3-07, advisory) (#184)
+- **ci** MSRV verification in Tier 2 weekly (R3-06) (#183)
+- **ci** Cargo-careful in Tier 2, scoped to unsafe-density hotspots (R3-03) (#179)
+- **ci** Cargo-semver-checks as second pre-publish guard (R3-05) (#178)
+- **ci** Cargo-mutants in Tier 2, scoped to uffs-security (R3-04, advisory) (#180)
+- **ci** Cargo-hack --each-feature in Tier 2 (R3-02) (#177)
+- **ci** Cargo-machete as a hard gate at pre-push + pr-fast (R3-01) (#174)
+
+### Fixed
+
+- **release** Surface GitHub immutability conflict in pre-flight (issue #150) (#168)
+
+### Security
+
+- **security** Mandate audits over blanket vet exemption bumps (#172)
+- **security** Replace lazy vet exemption bumps from #166 with proper delta audits (#170)
+
+## [0.5.94] - 2026-05-09
+
+### Fixed
+
+- **release-automation** Scope publishability to polars-free crates (R6 deviation row 5 — Path A) (#155)
+- **release-automation** Converge CC regexes — drop top-level `security:` (#154)
+
+## [0.5.92] - 2026-05-08
+
+### Added
+
+- **ci** Gates manifest Phase 3a — _lint_fast.sh codegen + fast-drift gate (#144)
+- **ci** Gates manifest Phase 3 — gen-workflow structural validator + workflow-drift gate (#143)
+- **ci** Gates manifest Phase 2 — gen-hooks Rust generator + auto-generated pre-push hook (#141)
+- **ci** Gates manifest Phase 1 — source of truth + drift detector (#140)
+- **ci** Flip Windows CI gate to clippy + add Linux zigbuild accelerator (W5 + L1) (#138)
+- **soak** Add ws-trace subcommand for 24h Working-Set trajectory (#137)
+- **soak** Phase 6 + Phase 7 24h Windows-host validation harness (#135)
+
+### Fixed
+
+- **release-automation** Release-plz `release_always = false` to gate tag creation through release-plz-* PRs only (#151)
+- **client** `await_ready` retries on transient errors instead of bailing (#147)
+- **daemon** Adaptive EMA integration + shard.ttl 3-threshold shape (Phase 6 soak) (#146)
+- **ci** Keep release cache warm so releases stop paying cold-build tax (#132) (#136)
 
 ### Added — Gates manifest Phase 3a: `_lint_fast.sh` codegen + `fast-drift` gate (PR #144)
 
@@ -350,6 +1061,7 @@ Verification:
   scripts/hooks/_lint_fast.sh` — both exit 0.
 - `just lint-pre-push` — full 23-gate sweep green.
 
+
 ### Added — Gates manifest Phase 3: `gen-workflow` structural validator + `workflow-drift` gate (PR #143)
 
 Phase 3 of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md).
@@ -461,6 +1173,7 @@ Verification:
 - `cargo deny check` — exit 0 (no advisories from the `serde_yml`
   pivot since the dep was never added).
 
+
 ### Added — Gates manifest Phase 2: `gen-hooks` Rust generator + auto-generated pre-push hook (PR #141)
 
 Phase 2 of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md).
@@ -534,6 +1247,7 @@ Verification:
 - `bash -n scripts/hooks/_lint_pre_push.sh` — syntax OK.
 - `actionlint .github/workflows/pr-fast.yml` — exit 0.
 
+
 ### Added — Gates manifest Phase 1: source-of-truth + drift detector (PR #140)
 
 Phase 1 of [`docs/architecture/gates-manifest-plan.md`](docs/architecture/gates-manifest-plan.md)
@@ -589,6 +1303,7 @@ Verification:
 - `shellcheck scripts/ci/check_gates_drift.sh` exit 0 (3 SC2016
   false-positive backtick warnings explicitly disabled with
   inline directives).
+
 
 ### Changed — Windows clippy CI/pre-push flip + Linux zigbuild accelerator (PR #138)
 
@@ -661,6 +1376,139 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   + `dev-flow.md` + `supply-chain-posture.md` updated for the
   post-W5 job names and the Tier 2 removal.
 
+## [0.5.90] - 2026-05-05
+
+### Added
+
+- **scripts** Enhance daemon-readiness with Phase 8 + 9 capability tests (#130)
+- **daemon** Phase 9 — wire real promotions_total counter + decompose DriveStats (#129)
+- **daemon** Phase 8-D + 8-E — forget/status_drives commands (#123)
+- **daemon** Phase 8-B + 8-C — hibernate/preload commands with tier pinning (#122)
+- **daemon** Phase 8-A — RPC scaffolding for hibernate/preload/forget/status_drives (#121)
+- **daemon** Phase 8 — surgical body-patch via apply_usn_patch_to_body (#120)
+- **daemon** Per-shard USN journal loops replace global 5-min tick (Phase 7 activation) (#118)
+
+### Fixed
+
+- **daemon/lifecycle** Disarm load-stall force-retire after initial loading completes (#116)
+
+### Added — Phase 8: operator-driven memory tiering (v0.6.0 staging)
+
+The full operator-facing memory-tiering surface — every command end-to-end
+from CLI → typed JSON-RPC client → daemon handler → `IndexManager`
+primitives → registry / cache / pin atomics.  See the
+[Windows-host runbook](docs/architecture/memory-tiering-windows-host-validation.md)
+for the operator-facing validation flow.
+
+- **`uffs daemon hibernate [DRIVES…]`** (Phase 8-B, PR #122) — demote
+  loaded shards to `Cold` in a single write-lock batch.  Empty drive
+  list ⇒ every loaded drive.  Releases the in-memory body but keeps
+  the encrypted compact cache on disk so a subsequent search or
+  `preload` can re-warm without a full MFT re-parse.  Reports the
+  per-pre-call-tier breakdown (`hot_demoted` / `warm_demoted` /
+  `parked_demoted` / `already_cold`) so the operator audit trail
+  captures what actually changed.
+
+- **`uffs daemon preload <DRIVES…> [--pin-minutes N]`** (Phase 8-C,
+  PR #122) — promote drive(s) to `Hot` and pin the tier against
+  demote for `N` minutes (default 30).  Pin contracts:
+  - Cold/Parked/Warm → Hot via single-flight body load + registry
+    rebuild.
+  - Already-Hot drives skip the rebuild entirely and atomically
+    extend the pin via `ShardEntry::pin_until`.
+  - Pinned shards survive idle-tick demote (`demote_idle_shards`)
+    and pressure-cascade demote (`cascade_demote_one_step`).
+  - Explicit `hibernate` and `forget --force` override the pin via
+    registry rebuild (the rebuilt `ShardEntry` starts at
+    `pin_until_ms = 0`).
+
+- **`uffs daemon forget <DRIVES…> [--force]`** (Phase 8-D, PR #123) —
+  evict drive(s) from the registry **and** delete every per-drive
+  on-disk cache artefact (encrypted compact body, USN cursor, MFT
+  index, lock file).  Three-phase orchestration:
+  1. Read-lock detect — refuse the whole request with
+     `ERR_DRIVE_BUSY` if any drive is non-`Cold` and `--force` is
+     not set, so a typo on one of five drives cannot accidentally
+     forget the other four.
+  2. Optional auto-hibernate (`--force` only) — demote every
+     non-`Cold` drive to `Cold` first via
+     `OperatorHibernate`-tagged `demote_letter_with_reason` calls,
+     clearing pins implicitly.
+  3. Per-drive evict + clean — `freed_bytes > 0` ⇒ `forgotten`,
+     idempotent re-runs land in `already_absent`.
+
+- **`uffs daemon status_drives`** (Phase 8-E, PR #123) — per-drive
+  tier + telemetry table.  Operator-facing companion to `daemon
+  status`: surfaces tier, pin expiry, query rate (EWMA), resident
+  bytes, and last-query timestamps for every drive the registry
+  knows about — including `Cold` shards (encrypted cache on disk,
+  zero RAM) so `forget` candidates are visible without
+  cross-referencing tracing logs.  Output sorted ascending by drive
+  letter so the table is stable across re-runs.
+
+- **`ShardEntry::pin_until_ms`** atomic field (Phase 8-C) — new
+  `AtomicU64` on every shard, initialised to `0` (unpinned) by all
+  four constructors.  `is_pinned(now_ms)` predicate folds the
+  `now_ms` comparison in for the demote-side gates;
+  `pin_until_ms_value()` accessor (added in Phase 8-E) returns the
+  raw timestamp for the `status_drives` wire output.
+
+- **`OperatorHibernate` `DemoteReason` variant** — surfaces in the
+  canonical `shard.transition` tracing event with
+  `reason="operator-hibernate"` so operators can grep the audit
+  trail to distinguish manual hibernation from idle-tick or
+  pressure-cascade demotes.
+
+- **`CacheCleaner` lifecycle hook** (Phase 8-D) — new
+  `Arc<dyn CacheCleaner>` field on `LifecycleHooks`.
+  `PlatformCacheCleaner` resolves the four canonical per-drive
+  paths via `uffs_core::compact_cache` / `uffs_mft::cache` and
+  unlinks each via `std::fs::remove_file`; `CountingCacheCleaner`
+  test fake records the call sequence so registry-eviction
+  behaviour can be verified without ever touching the host's real
+  cache directory.
+
+- **`promote_letter_to_hot` registry method** (Phase 8-C) — mirrors
+  `promote_letter` but rebuilds the registry with a `Hot` shard.
+  Accepts `Cold` / `Parked` / `Warm` source states; rejects `Hot`
+  (caller extends pin via atomic store on the live `Arc`) and
+  `Unknown` / `Evicting` (controller-only).
+
+
+### Added — wire format
+
+- **4 new JSON-RPC methods**: `hibernate`, `preload`, `forget`,
+  `status_drives` (Phase 8-A scaffolding pre-existing on `main`).
+- **2 new application error codes**: `ERR_DRIVE_BUSY = -4` (forget
+  refused without `--force`), `ERR_NOT_IMPLEMENTED = -3` (retired in
+  Phase 8-D once every Phase 8-A stub became a real handler).
+- **6 new wire types** in `uffs-client::protocol::response_tiering`:
+  `HibernateParams` / `HibernateResponse`, `PreloadParams` /
+  `PreloadResponse`, `ForgetParams` / `ForgetResponse`,
+  `StatusDrivesParams` / `StatusDrivesResponse`,
+  `DriveTierStatus`, plus `DEFAULT_PRELOAD_PIN_MINUTES = 30`.
+
+
+### Added — typed RPC client surface
+
+- **`UffsClientSync::{hibernate, preload, forget, status_drives}`**
+  in `uffs-client::connect_sync_tiering` — typed envelope helpers.
+  Matches the existing `connect_sync` shape; sibling-module split
+  keeps both files under the 800-LOC ceiling without an exception.
+
+
+### Added — tests
+
+- **22 new daemon-side integration tests** covering the full pin
+  contract surface, the all-or-nothing forget refusal, the
+  auto-hibernate-then-evict path, the deterministic `status_drives`
+  sort, and per-tier `resident_bytes` calculation across the
+  Hot/Warm/Parked/Cold ladder.  Plus 4 unit tests on the
+  `delete_drive_cache_files` helper using `tempfile::TempDir` so
+  the on-disk cleanup logic is exercised without ever touching the
+  host's cache directory.
+
+
 ### Fixed — Dependabot pipeline (PR #126)
 
 - **`dependabot.yml` cargo-ecosystem prefix** flipped from `deps` to
@@ -677,404 +1525,115 @@ L1 zigbuild) now ✅; §8 acceptance items all checked.
   into a red required check rather than the documented advisory
   warning.
 
-### Fixed — `release-cache-warm.yml` macOS runner-image flake + workspace-wide actionlint cleanup
+## [0.5.86] - 2026-05-02
 
-The `release-cache-warm.yml` workflow had a ~50 % failure rate
-on its `aarch64-apple-darwin` matrix leg over the past week.
-Every failure shared the same fingerprint: `cargo build` exited
-with `error: unexpected argument 'build' found` and a
-`rustup_init::run_rustup_inner` stack backtrace.
+### Added
 
-**Root cause.**  On `macos-latest` runner images the
-`~/.cargo/bin/cargo` proxy is occasionally a stale symlink
-pointing at `rustup-init` (the installer binary) instead of the
-proxy that forwards to the active toolchain's real cargo.
-`rustup show` succeeded because it invoked rustup directly; the
-very next step's `cargo build` hit the broken proxy and fell
-through to the installer's argument parser, which has never
-heard of `build`.  Linux + Windows runners were unaffected.
-
-**Three changes to `release-cache-warm.yml::warm`, sized to the problem:**
-
-- **Toolchain-install repair (also mirrored into `release.yml::build-release-binaries`).**
-  The Install-step now appends a forced
-  `rustup default "$(rustup show active-toolchain | awk '{print $1}')"`
-  after `rustup show`, which rewrites the proxy binaries in
-  `~/.cargo/bin` so the symlinks resolve to the active
-  toolchain's real cargo.  A `cargo --version` /
-  `rustc --version` smoke check at the end of the step
-  surfaces a still-broken proxy in ~1 s instead of letting
-  Swatinem/rust-cache's `cargo metadata` and a 30+ min
-  `cargo build` silently waste runner minutes before failing
-  on the same root cause.  The same repair is mirrored into
-  `release.yml` because that workflow's tag-dispatched runs
-  would hit the same broken proxy on a freshly-flaky runner
-  image — and on the production release pipeline a 30+ min
-  late failure delays the release by a full re-run cycle.
-
-- **Single auto-retry on the cargo-build step.**  Even with the
-  proxy repair, GitHub-hosted runners have transient
-  network blips during dep download and occasional sccache
-  flakes.  A 2-attempt bash loop with a 10-s sleep between
-  attempts absorbs those without requiring maintainers to
-  manually re-run the workflow.  Release.yml is NOT given a
-  retry — it's the production critical path and we want it
-  to fail loudly so the release pipeline's
-  `notify-failure` issue-opener fires.
-
-- **`continue-on-error: true` at the warm-job level.**  The
-  workflow's own header comment already documented that
-  cache-warming is best-effort by design.  `continue-on-error`
-  makes that intent explicit to GitHub: a transient single-
-  platform runner-image flake no longer paints the workflow
-  ❌ in PR checks / branch protection.  Real regressions
-  still surface via the workflow's run history + the per-job
-  summary table.
-
-**Adjacent actionlint cleanup, same PR.**  While auditing the
-two release workflows, every other workflow in
-`.github/workflows/` was actionlint-scanned and the
-pre-existing shellcheck warnings (all info / style level —
-none of them latent bugs) were resolved:
-
-- **`release.yml`**: 5 clusters — SC2086 (unquoted
-  `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes), SC2129
-  (individual redirects grouped with `{ ... } >> "$out"`),
-  SC2010 (`ls | grep` replaced with an explicit glob loop
-  over the shipping-set binary names), SC2035 (`sha256sum *`
-  / `shasum -a 256 *` switched to `./*` form to guard
-  against future filenames starting with `-`).
-
-- **`auto-rerun-transient.yml`**: 3 × SC2016 — false
-  positives where literal backticks inside a single-quoted
-  `printf` format string looked like command-substitution
-  markers to shellcheck.  Rewritten as `echo` with
-  backslash-escaped backticks, which is more idiomatic for
-  "print this template string" and silences the warning
-  without a per-line suppression directive.
-
-- **`cargo-vet-refresh.yml`**: 1 × SC2129 — individual
-  `echo … >> "$GITHUB_STEP_SUMMARY"` writes grouped into a
-  single `{ … } >> "$GITHUB_STEP_SUMMARY"` block.
-
-- **`dependabot-review.yml`**: 3 × SC2129 — same
-  group-redirect fix in three locations (the delta-summary
-  table, the newly-resolved-crates block, and the
-  dropped-crates block).
-
-Verification: `actionlint .github/workflows/*.yml` is now
-clean across every workflow (zero warnings, zero errors).
-All script behavior is byte-identical to before; bash test
-runs of the rewritten echo / grouped-redirect blocks produce
-the same output as the originals.
-
-### Fixed — Phase 6 + Phase 7 24-h soak harness (PR #218)
-
-Two harness-side bugs surfaced by the 2026-05-09 / 2026-05-10
-24-h Windows-host soak runs.  Both are validator scrape-pattern
-bugs — the daemon's actual contracts (`min_tier` floor, peer
-demotes, USN-journal save pipeline, working-set bound, fatal-class
-log lines) were satisfied in every run; the validator was just
-hunting for the wrong things.
-
-- **Phase 6 — `scripts/dev/long-soak.rs:746` `RUST_LOG` raised to
-  `shard.ttl=trace`.**  The catch-all `below-ttl` event in
-  `crate::index::transitions::evaluate_idle_demote` is emitted at
-  TRACE — the level needed by the soak harness's
-  `parse_max_ttl_field("warm_ttl_sec")` scrape during the
-  synthetic-load window, when drive `C` is in Warm/Hot with
-  `idle_secs ≈ 0` and the DEBUG-level `idle-demote` /
-  `min-tier-clamp` arms never fire.  Cost: ~23 k extra trace
-  events over 24 h (~3.5 MB) — marginal against the existing
-  ~75 MB log volume.
-
-- **Phase 7 — `scripts/dev/long-soak.rs:1244` regex re-anchored on
-  `compact-cache save`.**  The pre-fix regex hunted for
-  `USN refresh tick|trigger_save|threshold.*save|encrypted cache refresh`
-  — **none** of those alternatives match the daemon's actual INFO
-  message `Journal poll: triggered background compact-cache save`.
-  Retroactively closes Phase 7 for the existing 24-h log
-  (`grep -c 'compact-cache save'
-  LOG/uffs_soak/phase7-20260510-214412/daemon.log` = 11; the save
-  pipeline was healthy all along).
-
-- **Two new daemon-side regression tests** pin the literal log-
-  message strings + tracing target + level + structured fields so
-  any future rename fails CI before reaching another 24-h soak
-  gate:
-  * `crate::cache::journal_loop::tests::save_log_message::
-    compact_cache_save_log_message_pins_string_target_and_level`
-    — pins target = `uffs_daemon::cache::journal_loop`, level =
-    INFO, and the literal `compact-cache save` substring.
-  * `crate::index::tests::shard_ttl_events::
-    below_ttl_event_pins_target_level_message_and_reason` —
-    pins target = `shard.ttl`, level = TRACE, message =
-    `"Adaptive idle-demote evaluation: not yet idle past TTL"`,
-    `reason="below-ttl"`, and the four TTL fields.
-
-- **Visibility hoist** — the existing
-  `crate::index::tests::tracing_capture::{EventLog, CapturedEvent}`
-  scaffold flipped from `pub(super)` → `pub(crate)`, plus
-  `pub(crate)` on `mod tests;` in `crate::index` and
-  `mod tracing_capture;` in `crate::index::tests`, so the same
-  scaffold serves both modules' contract pins.  No production-code
-  visibility change.
-
-- **Runbook + bake-criteria updates** —
-  [`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
-  §2, §3, and §6 (new §4.5b + §4.5c capture sub-sections under
-  the §6 "Reference captures" parent) now reflect the
-  post-2026-05-13 grep patterns + the 2026-05-11 capture
-  findings.
-  [`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
-  ticks Phase 7 retroactively; Phase 6 stays open pending one
-  more 24-h run with the trace-level harness fix.
-
-### Verified — v0.5.35 baseline CLI hot-path bench (2026-05-15)
-
-Plan §1 goal-4 ("no regression on CLI hot path vs the v0.5.35
-baseline") verified end-to-end on the Windows 7-drive reference
-box.  Current v0.5.120 (post-Phase-8 tiered architecture) is
-**universally faster** than v0.5.35 across every benchmarked
-pattern, with the largest result set (`*.dll`, 44 529 rows)
-showing a **2.7× speedup**:
-
-```
-Drive D, 7.07 M records, 30 rounds, HOT phase, p50 / p95 wall_ms:
-
-                              v0.5.35      v0.5.120       Δ p50
-    exact      (3 rows)       20 / 23   →  18 / 19      −10 %
-    prefix     (8 732)        46 / 50   →  40 / 46      −13 %
-    ext_rare   (11)           18 / 20   →  17 / 18       −6 %
-    ext_dll    (44 529)       94 / 100  →  35 / 40      −63 %  (2.7×)
-    substring  (12 458)       50 / 54   →  43 / 47      −14 %
-```
-
-Row-count parity preserved exactly across both versions on every
-pattern (no result-set drift — the post-v0.5.35 path-resolver
-fast path + Phase 3.2 single-buffer multi-column render path
-both preserve the same filter semantics and column ordering).
-The dramatic `ext_dll` win is dominated by those two surfaces:
-both are big-N row-materialisation gains, exactly where 44 K
-paths-into-CSV land in the wall-clock budget.
-
-Capture command (run twice with `~/bin/uffs.exe` swapped between
-the two binaries via `~/bin/uffs.exe daemon kill` +
-`Remove-Item $env:LOCALAPPDATA\uffs\cache` between runs):
-
-```powershell
-rust-script scripts\windows\cross-tool-benchmark.rs `
-    --skip-cold --drives D --rounds 30 `
-    --patterns exact,prefix,ext_rare,ext_dll,substring `
-    --tools uffs `
-    --uffs-bin "$HOME\bin\uffs.exe"
-```
-
-Raw artefact: `LOG/memory output` (manual stdout paste).  The
-**`--out <path>` flag was added to the bench script in this
-release** so future captures can persist the summary table as a
-structured CSV (columns: `tool,phase,sink,drive,pattern,p50_ms,
-p95_ms,rows,bad,verdict,rounds_ok,rounds_total`) — see the
-`Added — cross-tool benchmark script: --out summary CSV flag`
-entry below.
-
-### Added — cross-tool benchmark script: `--out` summary CSV flag
-
-`scripts/windows/cross-tool-benchmark.rs` learned a new
-`--out <path>` flag that writes the post-run summary as a
-plain-CSV at the supplied path (creating intermediate
-directories as needed).  Columns mirror the stdout summary
-table but emit integer milliseconds and integer row counts so
-the file is trivially regress-able by `pandas` / `polars` /
-`awk`:
-
-```
-tool,phase,sink,drive,pattern,p50_ms,p95_ms,rows,bad,verdict,rounds_ok,rounds_total
-UFFS,HOT,file,D,exact,18,19,3,0,PASS,30,30
-UFFS,HOT,file,D,prefix,40,46,8732,0,PASS,30,30
-…
-```
-
-The new flag is distinct from the existing
-`<cwd>/uffs_bench_out.csv` daemon-side file (raw per-query row
-dumps, overwritten every round) and never collides with it.
-The banner block prints both paths up front so operators see
-exactly where each artefact lands.  Unknown CLI flags now warn
-on stderr (`warning: unknown flag "--foo" ignored`) instead of
-silently swallowing — caught during the 2026-05-15 v0.5.35
-baseline bench where a typo-`--out` in pre-flag-support runs
-left the operator hunting a non-existent CSV file.
-
-### Verified — Phase 6 24-h Windows-host soak closes end-to-end (2026-05-14/15)
-
-The last remaining v0.6.0 24-h-soak gate now closes against a
-live Windows-host capture.  `LOG/uffs_soak/phase6-20260514-122946/`
-ran for 24 h on the 7-drive reference box (2026-05-14 12:29:46Z
-→ 2026-05-15 12:29:46Z) against the post-PR-218 harness fix and
-the validator reported **9 of 9 assertions PASS** end-to-end.
-
-The §4.5b adaptive-bonus deferral (recorded in the 2026-05-11
-docs against the May 9-10 reference run, where the
-`RUST_LOG=shard.ttl=debug` filter dropped every `below-ttl`
-TRACE event carrying the bonused `warm_ttl_sec` field) now has
-direct end-to-end evidence:
-
-- **Drive C `min_tier=Warm` floor.**  0 `to=Parked` events on
-  letter=C across 24 h; **2 870** `Demote target clamped by
-  per-drive min_tier` debug events — proving the floor was
-  actively applied thousands of times, not merely coincidentally
-  not-tripped.
-- **Peer-drive demotion.**  D / E / F / G / M / S each fired
-  exactly 2 `Warm → Parked` transitions, confirming the
-  controller drives non-floor drives through the demote ladder
-  on the configured `warm_ttl_base_secs`.
-- **Adaptive TTL bonus.**  `C.max_warm_ttl = 3 786 s` vs
-  peer `max(warm_ttl_sec) = 300 s` — a **12.6× bonus** on the
-  high-rate drive, matching the `+600·log2(rate)` formula in
-  `crate::cache::policy::warm_ttl`.
-
-Memory trajectory across the 24-h window also validates the
-tiering machinery doing real work:
-
-```
-                          00h           23h         post-load
-Working Set (WS) :   6 746 800 128 →    22 888 448 →    69 238 784  (308× WS trim, 3× post-load re-page)
-Private Memory   :   8 293 457 920 → 1 791 188 992 → 1 669 558 272  (78 % real release as drives demoted)
-Virtual Memory   :  28 172 120 064 → 28 168 974 336 → 28 168 974 336 (flat — no address-space leak)
-NPM (non-paged)  :          26 736 →        26 328 →        26 328  (flat)
-```
-
-The 78 % private-memory release is materially different from
-the §4.5d ws-trace soak (where `pm_bytes` stayed within 3 % for
-24 h because the keep-warm worker held all 7 drives Warm).
-Here the controller actively demoted the 6 peer drives, which
-unloaded cold shards from memory and produced the real
-private-bytes release — exactly the intended tiering behavior
-under sustained idle.  The end-of-soak synthetic-load window
-on drive C re-paged recently-needed shards back into WS without
-re-allocating private memory (PM actually continued to fall
-slightly), confirming the page-cache vs. private-bytes split is
-healthy.
-
-No `panic` / `OutOfMemoryError` / `FATAL` log lines across the
-24-h window.  Full breakdown in
-[`docs/architecture/memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
-§6 sub-section §4.5e.
-
-With this closure, **all three v0.6.0 24-h-soak gates are
-green**:
-
-| Gate | Source | Result | Closed |
-|---|---|---|---|
-| Phase 6 (`min_tier=Warm` floor + adaptive bonus) | `phase6-20260514-122946/` | 9 / 9 PASS | 2026-05-15 |
-| Phase 7 (USN-journal churn) | `phase7-20260510-214412/` | 7 / 7 PASS (regex fix) | 2026-05-13 |
-| ws-trace (Working-Set trajectory) | `wstrace-20260513-113344/` | 4 / 4 PASS | 2026-05-13 |
-
-Only the one-week `main` bake remains per
-[`docs/architecture/memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md).
-
-### Verified — Phase 7 + ws-trace 24-h Windows-host soaks (2026-05-13/14)
-
-Two of the three v0.6.0 24-h Windows-host soak gates close
-retroactively from existing capture data, with daemon-side
-regression tests pinning the wire-format contracts so future
-log-message renames fail CI before reaching another 24-h soak.
-
-- **Phase 7 USN-journal churn soak** —
-  `LOG/uffs_soak/phase7-20260510-214412/` retroactively closes
-  7 of 7 assertions with the PR #218 regex fix: the save
-  pipeline emitted 11 `compact-cache save` events during the
-  24-h soak; the pre-fix validator regex did not match the
-  daemon's actual INFO line.  No new soak required.
-
-- **ws-trace 24-h Working-Set trajectory** —
-  `LOG/uffs_soak/wstrace-20260513-113344/` passes 4 of 4
-  assertions: PID 50492 stable across 24 hourly samples,
-  289 / 289 keep-warm probes fired, WS ratio 0.03× (first
-  =5.37 GB, last=184 MB).  The 30× WS drop is the
-  `EmptyWorkingSet` page-trim (Phase 5 G2 wiring), **not a
-  leak**: `pm_bytes` decreased only 3 % (6.53 GB → 6.36 GB)
-  while all 7 drives held Warm and the daemon's own RESIDENT
-  accounting stayed at ~5.0 GiB across all 24 snapshots.  This
-  resolves the "vacuous pass" concern raised in the Phase 7
-  §4.5c footnote: both soaks' WS drops are the same benign
-  page-trim, not silent idle-decay.
-
-- **Doc pass landed under this entry** — new §4.5d in
-  [`memory-tiering-windows-host-validation.md`](docs/architecture/memory-tiering-windows-host-validation.md)
-  carries the full `ws_bytes`-vs-`pm_bytes` breakdown plus the
-  recommended post-v0.6.0 refinement (re-anchor the soak
-  validator on `pm_bytes`; the field is already captured in
-  every snapshot).  The matching pass criteria in
-  [`memory-tiering-bake-criteria.md`](docs/architecture/memory-tiering-bake-criteria.md)
-  §1.7 ticks `[x]` retroactively and carries an inline note on
-  the WS-bound semantics so future operators see the WS-vs-PM
-  nuance up front.
-
-- **Remaining v0.6.0 gate work** is the **Phase 6 24-h soak
-  re-run** (one more capture with the post-PR-218
-  `shard.ttl=trace` harness fix) plus the one-week `main` bake.
-  Phase 8 closed 2026-05-05; Phase 7 and ws-trace close
-  2026-05-13.  No new operator-surface features land on `main`
-  until v0.6.0 ships.
-
-## [0.5.120] - 2026-05-08
-
-> **Note on the v0.5.91 gap.**  v0.5.91 was prepared and tagged but never
-> reached a published GitHub Release: the `release.yml` finalize step hit
-> a server-side `pre_receive Repository rule violations found ... Cannot
-> create ref due to creations being restricted` rejection, and after the
-> partial release was deleted, the tag name became permanently locked by
-> GitHub's *immutable releases* feature (the pre-receive hook refuses any
-> future ref creation under that name even after a clean delete).  The
-> public release sequence therefore jumps `v0.5.90 → v0.5.120`; all
-> intended v0.5.91 changes are rolled forward into this release.
+- **daemon** Phase 6 — adaptive TTL ladder + per-drive min_tier + shard.ttl tracing + index decomposition (#112)
 
 ### Fixed
-- **release-plz active-mode race with the bespoke `auto-tag-release.yml`
-  flow.**  Without `release_always = false`, the `release-plz release`
-  job ran on every push to `main` and competed with `auto-tag-release.yml`
-  to create the same `v*` tag, producing duplicate workflow runs and
-  occasional failed tag pushes during the R4 transition.  Setting
-  `release_always = false` in `release-plz.toml` gates tag creation
-  through `release-plz-*` PR merges only, so the bespoke flow remains
-  the sole tag source until R5 retires it.  See
-  `docs/architecture/release-automation-plan.md §R4` for the full
-  rationale and the deviations log entry "R4 release-job race".
-  (R4 active mode, PR #151)
 
-### Carried over from the unreleased v0.5.91
-- **macOS arm64 release binaries SIGKILLed at launch** under macOS 26+
-  (`SIGKILL (Code Signature Invalid)` / `namespace=CODESIGNING` /
-  `"Taskgated Invalid Signature"`).  `[profile.release].strip = "symbols"`
-  in `Cargo.toml` strips the Mach-O symbol table **after** the linker has
-  emitted an ad-hoc (linker-signed) `CodeDirectory`, leaving the embedded
-  hash inconsistent with the on-disk file.  macOS 26+'s hardened
-  taskgated then refuses to launch the binary.  In v0.5.72 this hit
-  `uffsmcp` and `uffsd` deterministically; `uffs` and `uffs-mft` survived
-  by binary-layout chance — a fragile guarantee that wouldn't hold on
-  the next rebuild.
+- **daemon** PR-f — refresh last_query_at_ms on promote to prevent demote thrash (#111)
 
-  Fix: add a `Re-codesign macOS binaries (post-strip)` step to
-  `release.yml` that re-stamps the ad-hoc signature with `codesign
-  --force --sign -` on every shipping `apple-darwin` binary after
-  `cargo build --release` finishes.  The step is gated on
-  `contains(matrix.target, 'apple-darwin')` so Windows / Linux artifact
-  paths are untouched.  Each re-signed binary is then verified with
-  `codesign --verify --verbose=2` so a regression here fails the
-  workflow loudly instead of shipping broken artifacts.
+## [0.5.85] - 2026-05-01
 
-  Workaround for users still on a v0.5.72 download:
+### Added
 
-  ```bash
-  codesign --force --sign - ~/bin/uffsmcp ~/bin/uffsd
-  ```
+- **daemon** Phase 5 — Win32 memory-pressure watcher thread (5.3 watcher landing) (#108)
 
-  Re-signs in place; macOS picks up the refreshed `CodeDirectory` on the
-  next exec and the binaries launch normally.
+### Fixed
 
-  No code changes; release-only fix.  Recommended upgrade for every Mac
-  user on macOS 26+.
+- **daemon** PR-e — single-flight promote dedup eliminates Windows 36 GB thundering-herd (#109)
+
+## [0.5.83] - 2026-04-30
+
+### Added
+
+- **daemon** Phase 5 — pressure signal + cascade demote + USN background priority (5.3, 5.6, 5.7, 5.10) (#106)
+- **daemon** Phase 5 traits + wiring — WorkingSetTrim + Prefetch (5.1, 5.2, 5.4, 5.5, 5.8, 5.9) (#104)
+- **daemon** Phase 5.11 — status RPC enumerates Parked/Cold shards with tier markers (#103)
+
+### Fixed
+
+- **core** Self-heal v0.4.23 legacy <DRIVE>_compact.uffs directories on Unix (#105)
+
+## [0.5.82] - 2026-04-28
+
+### Added
+
+- **daemon** Shorter default idle TTLs for fast dev iteration (#100)
+
+## [0.5.81] - 2026-04-28
+
+### Added
+
+- **daemon** Phase 5 — parallel re-promote + USN replay on warm load + background refresh timer (closes #93, #94, #95, #96) (#98)
+
+### Fixed
+
+- **ci** Windows release ZIP root no longer wraps in release-staging/ (#97)
+
+## [0.5.80] - 2026-04-28
+
+### Added
+
+- **core,daemon** Phase 4 — bloom + path trie (memory tiering 🎯) (#90)
+- **daemon** Phase 3 — state machine + lazy body load (memory tiering) (#89)
+
+## [0.5.79] - 2026-04-27
+
+### Added
+
+- **core** Phase 2b memory tiering — runtime mmap for compact-cache hot path (#85)
+
+### Fixed
+
+- **ci** Release-pipeline followups (#80, #83) (#84)
+
+## [0.5.78] - 2026-04-27
+
+### Added
+
+- **core** Phase 2a memory tiering — ColumnStorage<T> wrapper for compact-index columns (#81)
+- **daemon** Phase 1 memory tiering — ShardRegistry + per-drive stats (#79)
+
+### Fixed
+
+- **daemon,build** Clamp mimalloc_committed underflow on macOS + treat empty dist/ as cache miss in just use (#78)
+
+## [0.5.77] - 2026-04-27
+
+### Added
+
+- **daemon** Phase 0 memory tiering — surface RSS + mimalloc committed bytes (#76)
+
+## [0.5.76] - 2026-04-26
+
+### Fixed
+
+- **api-validation** Dot-gated extension extraction so .bash_history sorts as empty (#73)
+
+## [0.5.75] - 2026-04-26
+
+### Fixed
+
+- **daemon** Emit version on `uffsd --version` (#71)
+
+## [0.5.74] - 2026-04-26
+
+### Breaking Changes
+
+- **release-automation** R2 git-cliff template + cliff.toml at workspace root (#66)
+
+### Fixed
+
+- **mcp** Dot-gated extension extraction so .bash_history sorts as empty (#69)
+
+## [0.5.73] - 2026-04-25
+
+### Fixed
+
+- **release** Re-codesign macOS binaries after strip — v0.5.73 (#63)
 
 ## [0.5.72] - 2026-04-25
 
@@ -1924,11 +2483,62 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.71...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.15...HEAD
+[0.6.15]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.14...v0.6.15
+[0.6.14]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.13...v0.6.14
+[0.6.13]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.12...v0.6.13
+[0.6.12]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.11...v0.6.12
+[0.6.11]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.10...v0.6.11
+[0.6.10]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.9...v0.6.10
+[0.6.9]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.8...v0.6.9
+[0.6.8]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.7...v0.6.8
+[0.6.7]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.6...v0.6.7
+[0.6.6]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.5...v0.6.6
+[0.6.5]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.123...v0.6.1
+[0.5.123]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.122...v0.5.123
+[0.5.122]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.121...v0.5.122
+[0.5.121]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.120...v0.5.121
+[0.5.119]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.118...v0.5.119
+[0.5.118]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.117...v0.5.118
+[0.5.117]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.116...v0.5.117
+[0.5.116]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.115...v0.5.116
+[0.5.115]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.114...v0.5.115
+[0.5.114]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.113...v0.5.114
+[0.5.111]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.110...v0.5.111
+[0.5.110]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.109...v0.5.110
+[0.5.109]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.108...v0.5.109
+[0.5.108]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.107...v0.5.108
+[0.5.107]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.106...v0.5.107
+[0.5.106]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.105...v0.5.106
+[0.5.103]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.102...v0.5.103
+[0.5.102]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.100...v0.5.102
+[0.5.100]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.99...v0.5.100
+[0.5.99]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.96...v0.5.99
+[0.5.96]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.95...v0.5.96
+[0.5.95]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.94...v0.5.95
+[0.5.94]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.92...v0.5.94
+[0.5.92]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.90...v0.5.92
+[0.5.90]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.89...v0.5.90
+[0.5.86]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.85...v0.5.86
+[0.5.85]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.83...v0.5.85
+[0.5.83]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.82...v0.5.83
+[0.5.82]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.81...v0.5.82
+[0.5.81]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.80...v0.5.81
+[0.5.80]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.79...v0.5.80
+[0.5.79]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.78...v0.5.79
+[0.5.78]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.77...v0.5.78
+[0.5.77]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.76...v0.5.77
+[0.5.76]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.75...v0.5.76
+[0.5.75]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.74...v0.5.75
+[0.5.74]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.73...v0.5.74
+[0.5.73]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.72...v0.5.73
 [0.5.71]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.5.0...v0.5.71
 [0.5.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.2.208...v0.3.0
 [0.2.208]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.2.114...v0.2.208
 [0.2.114]: https://github.com/skyllc-ai/UltraFastFileSearch/releases/tag/v0.2.114
-

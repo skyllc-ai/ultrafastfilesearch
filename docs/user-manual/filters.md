@@ -604,8 +604,37 @@ uffs '*' --malformed --columns path,malformed,malformed_path,name_hex --format j
 
 The `malformed` / `malformed_path` columns render `0`/`1` like the attribute
 flags (`--columns ...,malformed`); `name_hex` is non-empty only for ill-formed
-names. None of these appear unless explicitly requested — default output is
+names. None of these appear unless explicitly requested. Default output is
 unchanged.
+
+### Inline corrupt-name markers (`--normalize-malformed`)
+
+`name_hex` disambiguates corrupt names in a separate column. When you instead
+want the marker **inline in the path / name**, so a plain `grep`, a CSV consumer,
+or a script can spot and parse corrupt entries by string, pass
+`--normalize-malformed`. Each ill-formed UTF-16 code unit then renders as
+`<BAD:HHHH>` (the four-hex code unit) in place of the default `�`:
+
+```bash
+# Default: one U+FFFD per corrupt code unit (matches Explorer / Everything)
+uffs '*' --malformed --columns path
+#   G:\UFFS_corrupted_names\evil�.exe
+
+# Normalized: greppable, reversible marker
+uffs '*' --malformed --normalize-malformed --columns path
+#   G:\UFFS_corrupted_names\evil<BAD:D800>.exe
+```
+
+`<` and `>` cannot appear in a real NTFS name, so the marker never collides with
+a legitimate file. The hex keeps two different corrupt names distinct (where a
+bare `�` would not) and is reversible to the true code unit. The valid parts of
+a name, including its extension, are preserved, so `bad_<surrogate>.rs` prints as
+`bad_<BAD:DCFF>.rs`. It is **display only**: it changes how corrupt names print,
+never which rows match (use `--malformed` to filter).
+
+> Corrupt-named entries also keep their true **position** in the tree. A file
+> under a crooked directory resolves at its real path (the directory is no longer
+> collapsed out of the path), so it is findable where it actually lives.
 
 ---
 

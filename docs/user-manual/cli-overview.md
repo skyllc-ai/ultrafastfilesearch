@@ -125,6 +125,10 @@ All filters are detailed in the [Filters guide](filters.md).  Summary:
 | `--max-path-length <N>` | Derived | Max full-path character count |
 | `--in-path <GLOB>` | Path | Directory path must match glob |
 | `--exclude <GLOB>` | Exclude | Exclude matching filenames |
+| `--malformed` | Forensic | Only ill-formed-UTF-16 names ([guide](filters.md#14a-malformed-name-filters-forensic)) |
+| `--well-formed` | Forensic | Only valid names (inverse of `--malformed`) |
+| `--malformed-path` | Forensic | Match when any path segment is ill-formed |
+| `--normalize-malformed` | Forensic | Display: render corrupt code units as `<BAD:HHHH>` not `�` |
 | `-n, --limit <N>` | Limit | Max results (0 = unlimited) |
 
 ---
