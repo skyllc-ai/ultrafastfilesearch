@@ -19,9 +19,13 @@ mod plan;
 mod remove;
 mod render;
 mod resolve_order;
+mod sweep;
+
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 use args::UninstallArgs;
+use plan::{PlanTarget, RemovalPlan};
 
 /// Entry point for `uffs --uninstall`. `args` is every token after the
 /// `--uninstall` command token.
@@ -55,6 +59,16 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     render::print_inventory(&inventory);
     render::print_plan(&removal_plan);
 
+    // M7 deep sweep: while the daemon is still up, ask UFFS itself for stray
+    // family files elsewhere on the indexed drives. Read-only; reported only.
+    if !parsed.no_deep_sweep {
+        let known = plan_dirs(&removal_plan);
+        let mut search = sweep::DaemonSearch;
+        if let Ok(strays) = sweep::find_strays(&mut search, &known) {
+            render::print_strays(&strays);
+        }
+    }
+
     if parsed.dry_run {
         print_dry_run_footer();
         return Ok(());
@@ -86,6 +100,20 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     let outcome = remove::execute(&removal_plan, &mut effects);
     render::print_outcome(&outcome);
     Ok(())
+}
+
+/// The directories the plan acts on, used to dedup deep-sweep hits (a stray
+/// already inside a planned dir is not a separate finding).
+fn plan_dirs(plan: &RemovalPlan) -> Vec<PathBuf> {
+    plan.items()
+        .filter_map(|item| match &item.target {
+            PlanTarget::DeleteBinaries { dir, .. }
+            | PlanTarget::DelegateWinget { dir, .. }
+            | PlanTarget::RemovePathEntry { dir } => Some(dir.clone()),
+            PlanTarget::DeleteDir { path, .. } => Some(path.clone()),
+            PlanTarget::StopProcess { .. } | PlanTarget::RemoveService { .. } => None,
+        })
+        .collect()
 }
 
 /// Prompt for confirmation before any removal. Default (empty / anything but

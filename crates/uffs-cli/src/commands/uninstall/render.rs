@@ -115,6 +115,22 @@ pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
     );
 }
 
+/// Print stray UFFS-named files the deep sweep found outside the known roots.
+/// These are listed for review only, never auto-removed.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_strays(strays: &[std::path::PathBuf]) {
+    if strays.is_empty() {
+        return;
+    }
+    println!(
+        "\nStray UFFS-named files found elsewhere (NOT removed — review and delete\n\
+         manually if they are unwanted; one may be a copy you placed yourself):"
+    );
+    for path in strays {
+        println!("  {}", path.display());
+    }
+}
+
 /// Print the outcome of a removal run: counts, any failures, and a retry hint.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
