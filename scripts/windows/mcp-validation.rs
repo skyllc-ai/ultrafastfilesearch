@@ -1316,8 +1316,18 @@ fn validate_payload(result: &Value, checks: &PayloadChecks) -> Result<()> {
                 let sort_type = sc.sort_type.as_deref().unwrap_or("string");
 
                 if sort_type == "string" || sort_type == "str" {
+                    // Fold to UPPERCASE, not lowercase: UFFS sorts string
+                    // columns (name/path/ext) with the NTFS `$UpCase` table —
+                    // the filesystem-native collation Explorer and the NTFS
+                    // index B-tree use — which folds to uppercase. The ASCII
+                    // gap 0x5B..=0x60 (`[ \ ] ^ _ \``) sits BETWEEN `Z` (0x5A)
+                    // and `a` (0x61), so a char like `_` orders AFTER letters
+                    // under uppercase folding but BEFORE them under lowercase.
+                    // Folding lowercase here mis-flagged correct UFFS output as
+                    // "not asc" (e.g. `…\cli flow.txt` vs `…\_run\baseline.txt`).
+                    // Match UFFS's collation so this check models real ordering.
                     let vals: Vec<String> = rows.iter()
-                        .map(|r| field_str(r, &sc.column).to_lowercase())
+                        .map(|r| field_str(r, &sc.column).to_uppercase())
                         .collect();
                     for w in vals.windows(2) {
                         match order {
@@ -1413,8 +1423,12 @@ fn run_mcp_custom_validator(name: &str, result: &Value) -> Result<String> {
                 let (po1, n1) = &w[1];
                 if po0.eq_ignore_ascii_case(po1) {
                     saw_tiebreaker = true;
-                    let n0_fold = n0.to_lowercase();
-                    let n1_fold = n1.to_lowercase();
+                    // UPPERCASE fold to match UFFS's NTFS `$UpCase` name
+                    // collation (same 0x5B..=0x60 gap rationale as the string
+                    // sort check above): a name like `_foo` orders AFTER
+                    // letters, so lowercase folding would mis-flag it here too.
+                    let n0_fold = n0.to_uppercase();
+                    let n1_fold = n1.to_uppercase();
                     if n0_fold > n1_fold {
                         bail!(
                             "Not asc (name tiebreaker within '{}'): '{}' > '{}'",
