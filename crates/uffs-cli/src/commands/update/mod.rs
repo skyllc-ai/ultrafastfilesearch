@@ -22,11 +22,11 @@
 
 mod acquire;
 mod apply;
-mod binaries;
+pub(crate) mod binaries;
 mod channel;
 mod doctor;
-mod model;
-mod procinfo;
+pub(crate) mod model;
+pub(crate) mod procinfo;
 mod report;
 mod self_heal;
 mod snapshot;
@@ -354,7 +354,7 @@ fn write_and_report_snapshot(report: &DetectionReport) {
 
 /// Phase A orchestration: anchors → roots → channel + versions, plus the
 /// running-process map.
-fn detect() -> DetectionReport {
+pub(crate) fn detect() -> DetectionReport {
     let mut roots: Vec<InstallRoot> = Vec::new();
     let mut running: Vec<RunningProcess> = Vec::new();
 

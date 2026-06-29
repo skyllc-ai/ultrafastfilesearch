@@ -7,11 +7,14 @@
 //! - `docs/dev/architecture/UFFS-Uninstall-Feasibility-and-Design.md`
 //! - `docs/dev/architecture/UFFS-Uninstall-Implementation-Plan.md`
 //!
-//! This is the command entry point (M0 scaffolding). The analysis, plan,
-//! consent, and removal phases land in sibling modules as the milestones
-//! progress.
+//! This is the command entry point. M1 implements the read-only **analysis**
+//! (the binary resolution table); the plan, consent, and removal phases land in
+//! sibling modules as the later milestones progress.
 
+mod analyze;
 mod args;
+mod render;
+mod resolve_order;
 
 use anyhow::Result;
 use args::UninstallArgs;
@@ -29,9 +32,15 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         print_help();
         return Ok(());
     }
-    // M1+ will branch here on `parsed` (dry-run analysis, plan, consent,
-    // removal). Until then, surface a clear scaffolding notice.
-    print_scaffold_notice();
+
+    // M1: read-only analysis. Reuse the self-update Phase-A detection, then
+    // render the resolution table (which copy a bare `uffs` actually runs).
+    let report = crate::commands::update::detect();
+    let candidates = analyze::build_candidates(&report);
+    let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
+    render::print_resolution_table(&resolved);
+
+    print_pending_removal_notice();
     Ok(())
 }
 
@@ -56,11 +65,11 @@ fn print_help() {
     );
 }
 
-/// Temporary M0 notice printed until the analysis / removal phases land.
+/// Notice printed after the analysis until the removal phases (M2+) land.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_scaffold_notice() {
+fn print_pending_removal_notice() {
     println!(
-        "uffs --uninstall is not yet wired to the removal engine (M0 scaffolding).\n\
-         Run `uffs --uninstall --help` for the planned flags."
+        "\nAnalysis is read-only. The artifact inventory, removal plan, consent,\n\
+         and the removal engine itself are not implemented yet (M2+)."
     );
 }
