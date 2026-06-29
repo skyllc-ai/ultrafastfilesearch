@@ -38,6 +38,17 @@ columns and the malformed name filter still select them; `--normalize-malformed`
 is display-only and never changes which rows match. Well-formed names pay nothing
 (the lossy/normalized render only runs for the rare corrupt name).
 
+### Fixed — ship: roll `## [Unreleased]` into a dated section on every release
+
+`just ship` now rolls the changelog's `## [Unreleased]` section into a dated
+`## [vX.Y.Z]` section as part of the release commit (right after the version
+bump), and repoints the Keep-a-Changelog footer compare-links. Previously the
+bump never touched the changelog, so `## [Unreleased]` silently accumulated
+already-shipped work and every release in between went unrecorded (the drift
+repaired in #490). The roll is a pure, unit-tested transform in
+`scripts/ci-pipeline/src/changelog.rs`; an empty `## [Unreleased]` is a clean
+no-op, so a release with no notes never creates an empty section.
+
 ## [0.6.15] - 2026-06-28
 
 ### Added

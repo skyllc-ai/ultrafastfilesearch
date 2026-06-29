@@ -46,6 +46,7 @@
 // visible (libraries get it for free via the 2024 edition's prelude).
 extern crate alloc;
 
+mod changelog;
 mod cli;
 mod context;
 mod cross_check;

@@ -30,6 +30,7 @@ use anyhow::{Context as _, Result};
 use colored::Colorize as _;
 use tokio::process::Command;
 
+use crate::changelog::roll_changelog_file;
 use crate::context::{
     PipelineContext, active_rustc_id, bytes_to_gib, dir_size_bytes, disk_free_bytes,
     get_cargo_target_dir,
@@ -533,9 +534,17 @@ pub(crate) async fn run_enhanced_phase2(
     // re-run after a mid-ship failure never double-bumps.  Default level: patch.
     if !state.version_incremented {
         bump_workspace_version("patch").context("Failed to bump workspace version")?;
-        state.version_incremented = true;
         let new_version = get_current_version().context("Failed to read bumped version")?;
         println!("🔖 Bumped workspace version → v{new_version}");
+        // Roll CHANGELOG `## [Unreleased]` into the dated `## [vX.Y.Z]` section
+        // BEFORE the commit so it lands in the same release commit (`git add .`
+        // in `git_commit` stages it).  This is what stops the changelog from
+        // drifting — every ship records its release notes (see PR #490 / the
+        // `changelog` module).  Idempotent: a resumed ship after this point is
+        // gated by `version_incremented`, and the roll itself is a no-op on an
+        // already-rolled file.
+        roll_changelog_file(&new_version).context("Failed to roll CHANGELOG [Unreleased]")?;
+        state.version_incremented = true;
         state.current_version = new_version;
         state.save()?;
     }
