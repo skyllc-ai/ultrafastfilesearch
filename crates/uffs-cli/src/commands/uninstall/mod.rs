@@ -14,10 +14,11 @@
 mod analyze;
 mod args;
 mod inventory;
+mod plan;
 mod render;
 mod resolve_order;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use args::UninstallArgs;
 
 /// Entry point for `uffs --uninstall`. `args` is every token after the
@@ -34,22 +35,45 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // M1: read-only analysis. Reuse the self-update Phase-A detection for the
-    // binary resolution table, then inventory the non-binary artifacts.
+    // M1 analysis: reuse the self-update Phase-A detection for the binary
+    // resolution table, then inventory the non-binary artifacts.
     let report = crate::commands::update::detect();
     let candidates = analyze::build_candidates(&report);
     let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
     let inventory = inventory::collect();
+    // M2: turn the analysis into an ordered removal plan (read-only).
+    let removal_plan = plan::build_plan(&report, &inventory, &parsed);
 
     if parsed.json {
-        render::print_json(&resolved, &inventory);
+        render::print_json(&resolved, &inventory, &removal_plan);
         return Ok(());
     }
 
     render::print_resolution_table(&resolved);
     render::print_inventory(&inventory);
+    render::print_plan(&removal_plan);
+
+    if parsed.dry_run {
+        print_dry_run_footer();
+        return Ok(());
+    }
+
+    // M3 elevation gate (U-30): refuse before any effect when the plan needs
+    // Administrator the current process does not have.
+    if removal_plan.requires_elevation() && !uffs_winsvc::is_elevated() {
+        render::print_elevation_refusal(&removal_plan);
+        bail!("uninstall needs Administrator for the items listed above; re-run elevated");
+    }
+
+    // M4+ : interactive consent + the removal engine land here.
     print_pending_removal_notice();
     Ok(())
+}
+
+/// Footer printed after a `--dry-run` plan.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_dry_run_footer() {
+    println!("\nDry run: nothing was removed.");
 }
 
 /// Print `uffs --uninstall` usage.
@@ -73,11 +97,12 @@ fn print_help() {
     );
 }
 
-/// Notice printed after the analysis until the removal phases (M2+) land.
+/// Notice printed on the would-remove path until the removal engine (M4+)
+/// lands.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_pending_removal_notice() {
     println!(
-        "\nAnalysis is read-only. The artifact inventory, removal plan, consent,\n\
-         and the removal engine itself are not implemented yet (M2+)."
+        "\nThe removal engine is not implemented yet (M4+); no changes were made.\n\
+         Use `uffs --uninstall --dry-run` to review the plan."
     );
 }

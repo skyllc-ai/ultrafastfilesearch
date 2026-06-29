@@ -8,6 +8,7 @@
 use serde_json::{Value, json};
 
 use super::inventory::Inventory;
+use super::plan::RemovalPlan;
 use super::resolve_order::{ResolutionState, StemResolution};
 
 /// Print the discovered-binary resolution table: for each stem, every copy in
@@ -62,17 +63,95 @@ pub(crate) fn print_inventory(inventory: &Inventory) {
     );
 }
 
-/// Emit the full analysis (binaries + artifacts + broker state) as JSON.
+/// Print the ordered removal plan (consent surface, U-21). Items are numbered
+/// across groups; ones needing Administrator are flagged.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_plan(plan: &RemovalPlan) {
+    if plan.is_empty() {
+        println!("\nNothing to remove: no UFFS install or artifacts were found.");
+        return;
+    }
+    println!("\nThe following will be PERMANENTLY removed (no recovery):");
+    let mut index: usize = 1;
+    for group in &plan.groups {
+        println!("\n {}", group.title);
+        for item in &group.items {
+            let elevated = if item.needs_elevation {
+                "  (needs Administrator)"
+            } else {
+                ""
+            };
+            println!("  [{index}] {desc}{elevated}", desc = item.description);
+            index = index.saturating_add(1);
+        }
+    }
+    println!(
+        "\nReclaims ~{} across {} item(s).",
+        human_bytes(plan.total_bytes()),
+        plan.item_count(),
+    );
+}
+
+/// Print the elevation refusal (U-30): the items that need Administrator and
+/// the re-run hint. Goes to stderr; the caller exits non-zero without any
+/// effect.
+#[expect(clippy::print_stderr, reason = "CLI user-facing error")]
+pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
+    eprintln!("\nThis uninstall includes items that require Administrator:");
+    for group in &plan.groups {
+        for item in &group.items {
+            if item.needs_elevation {
+                eprintln!("  - {}", item.description);
+            }
+        }
+    }
+    eprintln!("\nRe-run from an elevated shell:  uffs --uninstall");
+}
+
+/// Emit the full analysis (binaries + artifacts + broker state + plan) as JSON.
 #[expect(clippy::print_stdout, reason = "machine-readable CLI output")]
-pub(crate) fn print_json(resolution: &[StemResolution], inventory: &Inventory) {
-    let value = analysis_json(resolution, inventory);
+pub(crate) fn print_json(resolution: &[StemResolution], inventory: &Inventory, plan: &RemovalPlan) {
+    let value = analysis_json(resolution, inventory, plan);
     let text = serde_json::to_string_pretty(&value)
         .unwrap_or_else(|_| "{\"error\":\"serialize\"}".to_owned());
     println!("{text}");
 }
 
+/// Build the plan JSON value (pure).
+fn plan_json(plan: &RemovalPlan) -> Value {
+    let groups: Vec<Value> = plan
+        .groups
+        .iter()
+        .map(|group| {
+            let items: Vec<Value> = group
+                .items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "action": item.action.label(),
+                        "description": item.description,
+                        "needs_elevation": item.needs_elevation,
+                        "bytes": item.bytes,
+                    })
+                })
+                .collect();
+            json!({ "title": group.title, "items": items })
+        })
+        .collect();
+    json!({
+        "total_bytes": plan.total_bytes(),
+        "item_count": plan.item_count(),
+        "requires_elevation": plan.requires_elevation(),
+        "groups": groups,
+    })
+}
+
 /// Build the analysis JSON value (pure; unit-testable without IO).
-fn analysis_json(resolution: &[StemResolution], inventory: &Inventory) -> Value {
+fn analysis_json(
+    resolution: &[StemResolution],
+    inventory: &Inventory,
+    plan: &RemovalPlan,
+) -> Value {
     let binaries: Vec<Value> = resolution
         .iter()
         .map(|stem| {
@@ -112,6 +191,7 @@ fn analysis_json(resolution: &[StemResolution], inventory: &Inventory) -> Value 
         "binaries": binaries,
         "artifacts": artifacts,
         "broker_service": inventory.broker_service.label(),
+        "plan": plan_json(plan),
     })
 }
 
@@ -140,6 +220,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::super::inventory::{ArtifactDir, ArtifactKind, BrokerServiceState, Inventory};
+    use super::super::plan::RemovalPlan;
     use super::{Value, analysis_json, human_bytes};
 
     #[test]
@@ -166,9 +247,10 @@ mod tests {
             }],
             broker_service: BrokerServiceState::Absent,
         };
-        let value = analysis_json(&[], &inventory);
+        let value = analysis_json(&[], &inventory, &RemovalPlan::default());
         assert!(value.get("binaries").is_some());
         assert!(value.get("artifacts").is_some());
+        assert!(value.get("plan").is_some());
         assert_eq!(
             value.get("broker_service").and_then(Value::as_str),
             Some("absent")
