@@ -62,6 +62,11 @@ pub(crate) enum PlanTarget {
         /// The artifact-kind label (e.g. `cache`), for the description.
         label: &'static str,
     },
+    /// Remove a (provably UFFS) directory from PATH.
+    RemovePathEntry {
+        /// The PATH entry to remove.
+        dir: PathBuf,
+    },
 }
 
 impl PlanTarget {
@@ -73,6 +78,7 @@ impl PlanTarget {
             Self::DeleteBinaries { .. } => "delete-binaries",
             Self::DelegateWinget { .. } => "delegate-winget",
             Self::DeleteDir { .. } => "delete-dir",
+            Self::RemovePathEntry { .. } => "remove-path-entry",
         }
     }
 
@@ -94,6 +100,7 @@ impl PlanTarget {
                 dir.display()
             ),
             Self::DeleteDir { path, label } => format!("{label} ({})", path.display()),
+            Self::RemovePathEntry { dir } => format!("PATH entry {}", dir.display()),
         }
     }
 }
@@ -167,11 +174,13 @@ impl RemovalPlan {
     }
 }
 
-/// Build the ordered removal plan from the analysis + flags.
+/// Build the ordered removal plan from the analysis + flags. `path_entries` is
+/// the live PATH (used to offer removal of entries that point at a UFFS root).
 pub(crate) fn build_plan(
     report: &DetectionReport,
     inventory: &Inventory,
     args: &UninstallArgs,
+    path_entries: &[PathBuf],
 ) -> RemovalPlan {
     let mut groups: Vec<PlanGroup> = Vec::new();
 
@@ -231,7 +240,46 @@ pub(crate) fn build_plan(
         .collect();
     push_group(&mut groups, "Data / cache / config", dirs, args.scope);
 
+    // 5. PATH entries that point at a removed unmanaged/dev root — provably UFFS
+    // (the exact dir we just deleted), so safe to drop. WinGet roots are managed
+    // by winget; never touched here. Skipped under --no-path.
+    if !args.no_path {
+        let path_items: Vec<PlanItem> = report
+            .roots
+            .iter()
+            .filter(|root| !root.binaries.is_empty() && !matches!(root.channel, Channel::WinGet))
+            .filter(|root| {
+                path_entries
+                    .iter()
+                    .any(|entry| paths_equal_ignore_case(entry, &root.dir))
+            })
+            .map(|root| {
+                let machine = matches!(root.scope, Scope::Machine);
+                PlanItem {
+                    target: PlanTarget::RemovePathEntry {
+                        dir: root.dir.clone(),
+                    },
+                    needs_elevation: machine,
+                    scope: if machine {
+                        ItemScope::Machine
+                    } else {
+                        ItemScope::User
+                    },
+                    bytes: 0,
+                }
+            })
+            .collect();
+        push_group(&mut groups, "PATH", path_items, args.scope);
+    }
+
     RemovalPlan { groups }
+}
+
+/// Case-insensitive path equality (Windows file systems + PATH entries vary in
+/// case; a redundant exact match is what we require before touching PATH).
+fn paths_equal_ignore_case(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
 }
 
 /// Build the per-root binary plan item, or `None` for an empty root.
@@ -368,13 +416,18 @@ mod tests {
         plan.items().any(|item| predicate(&item.target))
     }
 
+    /// Build a plan with no PATH entries (PATH has its own dedicated test).
+    fn built(report: &DetectionReport, inventory: &Inventory, args: &UninstallArgs) -> RemovalPlan {
+        build_plan(report, inventory, args, &[])
+    }
+
     #[test]
     fn winget_root_is_delegated_not_deleted() {
         let report = DetectionReport {
             roots: vec![root(Channel::WinGet, Scope::User, r"C:\winget\uffs")],
             running: Vec::new(),
         };
-        let plan = build_plan(
+        let plan = built(
             &report,
             &inventory(BrokerServiceState::Absent, 1024),
             &UninstallArgs::default(),
@@ -399,7 +452,7 @@ mod tests {
             )],
             running: Vec::new(),
         };
-        let plan = build_plan(
+        let plan = built(
             &report,
             &inventory(BrokerServiceState::Absent, 1024),
             &UninstallArgs::default(),
@@ -413,7 +466,7 @@ mod tests {
             roots: Vec::new(),
             running: Vec::new(),
         };
-        let plan = build_plan(
+        let plan = built(
             &report,
             &inventory(BrokerServiceState::Installed, 1024),
             &UninstallArgs::default(),
@@ -433,12 +486,12 @@ mod tests {
             running: Vec::new(),
         };
         let inv = inventory(BrokerServiceState::Absent, 4096);
-        let with_config = build_plan(&report, &inv, &UninstallArgs::default());
+        let with_config = built(&report, &inv, &UninstallArgs::default());
         let keep = UninstallArgs {
             keep_config: true,
             ..UninstallArgs::default()
         };
-        let without_config = build_plan(&report, &inv, &keep);
+        let without_config = built(&report, &inv, &keep);
         assert!(with_config.total_bytes() > without_config.total_bytes());
     }
 
@@ -452,7 +505,7 @@ mod tests {
             scope: UninstallScope::User,
             ..UninstallArgs::default()
         };
-        let plan = build_plan(
+        let plan = built(
             &report,
             &inventory(BrokerServiceState::Installed, 1024),
             &user_only,
@@ -476,7 +529,7 @@ mod tests {
                 version: None,
             }],
         };
-        let plan = build_plan(
+        let plan = built(
             &report,
             &inventory(BrokerServiceState::Absent, 1024),
             &UninstallArgs::default(),
@@ -484,6 +537,39 @@ mod tests {
         assert!(has_target(&plan, |target| matches!(
             target,
             PlanTarget::StopProcess { .. }
+        )));
+    }
+
+    #[test]
+    fn path_entry_matching_a_removed_root_is_offered_and_respects_no_path() {
+        let report = DetectionReport {
+            roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
+            running: Vec::new(),
+        };
+        let inv = inventory(BrokerServiceState::Absent, 1024);
+        // Case-insensitive match of a PATH entry to the removed root → offered.
+        let on_path = [PathBuf::from(r"c:\users\me\bin")];
+        let offered = build_plan(&report, &inv, &UninstallArgs::default(), &on_path);
+        assert!(has_target(&offered, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
+        )));
+        // --no-path suppresses the PATH group entirely.
+        let no_path = UninstallArgs {
+            no_path: true,
+            ..UninstallArgs::default()
+        };
+        let suppressed = build_plan(&report, &inv, &no_path, &on_path);
+        assert!(!has_target(&suppressed, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
+        )));
+        // A PATH entry that does not match any root is never touched.
+        let unrelated = [PathBuf::from(r"C:\unrelated")];
+        let untouched = build_plan(&report, &inv, &UninstallArgs::default(), &unrelated);
+        assert!(!has_target(&untouched, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
         )));
     }
 

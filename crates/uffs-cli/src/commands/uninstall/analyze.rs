@@ -60,3 +60,9 @@ pub(crate) fn search_dirs() -> Vec<PathBuf> {
     }
     dirs
 }
+
+/// The directories on the current `PATH`, in order. Used to offer removal of a
+/// PATH entry that points at a UFFS root.
+pub(crate) fn path_entries() -> Vec<PathBuf> {
+    std::env::var_os("PATH").map_or_else(Vec::new, |path| std::env::split_paths(&path).collect())
+}

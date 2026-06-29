@@ -44,7 +44,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
     let inventory = inventory::collect();
     // M2: turn the analysis into an ordered removal plan (read-only).
-    let removal_plan = plan::build_plan(&report, &inventory, &parsed);
+    let removal_plan = plan::build_plan(&report, &inventory, &parsed, &analyze::path_entries());
 
     if parsed.json {
         render::print_json(&resolved, &inventory, &removal_plan);

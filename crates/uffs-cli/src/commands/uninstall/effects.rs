@@ -52,6 +52,45 @@ impl Effects for SystemEffects {
     fn remove_dir(&mut self, path: &Path) -> Result<()> {
         remove_dir_if_present(path).with_context(|| format!("removing {}", path.display()))
     }
+
+    fn remove_path_entry(&mut self, dir: &Path) -> Result<()> {
+        remove_path_entry_impl(dir)
+    }
+}
+
+/// Windows: remove `dir` from the persisted user + machine PATH (the registry),
+/// each guarded so a write (and thus elevation) only happens when that scope
+/// actually contains the entry. `[Environment]::SetEnvironmentVariable`
+/// broadcasts `WM_SETTINGCHANGE` so open shells pick up the change.
+#[cfg(windows)]
+fn remove_path_entry_impl(dir: &Path) -> Result<()> {
+    let dir_str = dir.display().to_string();
+    let escaped = dir_str.replace('\'', "''");
+    let script = format!(
+        "$d='{escaped}'; foreach($t in 'User','Machine'){{ \
+         $p=[Environment]::GetEnvironmentVariable('Path',$t); \
+         if($p){{ $new=($p -split ';' | Where-Object {{ $_ -and ($_ -ne $d) }}) -join ';'; \
+         if($new -ne $p){{ [Environment]::SetEnvironmentVariable('Path',$new,$t) }} }} }}"
+    );
+    run_quiet(
+        Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]),
+        &format!("removing {dir_str} from PATH"),
+    )
+}
+
+/// Unix: the shell owns PATH (rc files), so editing it automatically is unsafe.
+/// Write a manual-cleanup hint to stderr instead (genuinely fallible, so no
+/// `unnecessary_wraps`).
+#[cfg(not(windows))]
+fn remove_path_entry_impl(dir: &Path) -> Result<()> {
+    use std::io::Write as _;
+
+    writeln!(
+        std::io::stderr(),
+        "  note: remove {} from your shell PATH manually (e.g. ~/.profile or ~/.zshrc)",
+        dir.display()
+    )
+    .context("writing PATH cleanup hint")
 }
 
 /// The on-disk file name for a binary stem (`uffsd` -> `uffsd.exe` on Windows).

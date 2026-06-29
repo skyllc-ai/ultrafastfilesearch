@@ -31,6 +31,9 @@ pub(crate) trait Effects {
     fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()>;
     /// Recursively delete a directory (absent is a no-op).
     fn remove_dir(&mut self, path: &Path) -> Result<()>;
+    /// Remove `dir` from the user's PATH (Windows: the registry; Unix: print a
+    /// manual hint, since the shell owns PATH).
+    fn remove_path_entry(&mut self, dir: &Path) -> Result<()>;
 }
 
 /// Per-item outcome.
@@ -102,6 +105,7 @@ fn dispatch(target: &PlanTarget, effects: &mut dyn Effects) -> Result<()> {
             package_id, scope, ..
         } => effects.delegate_winget(package_id, *scope),
         PlanTarget::DeleteDir { path, .. } => effects.remove_dir(path),
+        PlanTarget::RemovePathEntry { dir } => effects.remove_path_entry(dir),
     }
 }
 
@@ -156,6 +160,11 @@ mod tests {
             }
             Ok(())
         }
+        fn remove_path_entry(&mut self, dir: &Path) -> Result<()> {
+            self.calls
+                .push(format!("remove_path_entry:{}", dir.display()));
+            Ok(())
+        }
     }
 
     fn full_plan() -> crate::commands::uninstall::plan::RemovalPlan {
@@ -187,7 +196,7 @@ mod tests {
             }],
             broker_service: BrokerServiceState::Absent,
         };
-        build_plan(&report, &inventory, &UninstallArgs::default())
+        build_plan(&report, &inventory, &UninstallArgs::default(), &[])
     }
 
     #[test]
