@@ -32,6 +32,8 @@ pub(crate) enum Command {
     Mcp,
     /// `--update [action]`.
     Update,
+    /// `--uninstall [flags]`.
+    Uninstall,
     /// `--status`.
     Status,
 }
@@ -47,6 +49,7 @@ impl Command {
             "--daemon" => Self::Daemon,
             "--mcp" => Self::Mcp,
             "--update" => Self::Update,
+            "--uninstall" => Self::Uninstall,
             "--status" => Self::Status,
             _ => return None,
         })
@@ -64,6 +67,7 @@ const COMMAND_TOKENS: &[&str] = &[
     "--daemon",
     "--mcp",
     "--update",
+    "--uninstall",
     "--status",
 ];
 
@@ -104,6 +108,7 @@ pub(crate) fn dispatch_command(command: Command, args: &[String]) -> Result<()> 
         Command::Daemon => crate::run_daemon(args),
         Command::Mcp => commands::mcp_mgmt::mcp_from_args(args),
         Command::Update => commands::update::run_update(args),
+        Command::Uninstall => commands::uninstall::run_uninstall(args),
         Command::Status => {
             run_status(args);
             Ok(())
@@ -127,6 +132,7 @@ mod tests {
     #[test]
     fn command_tokens_resolve() {
         assert_eq!(Command::from_token("--update"), Some(Command::Update));
+        assert_eq!(Command::from_token("--uninstall"), Some(Command::Uninstall));
         assert_eq!(Command::from_token("--daemon"), Some(Command::Daemon));
         assert_eq!(Command::from_token("--mcp"), Some(Command::Mcp));
         assert_eq!(Command::from_token("--stats"), Some(Command::Stats));

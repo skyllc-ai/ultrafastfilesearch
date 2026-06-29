@@ -33,6 +33,9 @@ pub mod search;
 pub mod stats;
 /// Combined `uffs --status` command.
 pub(crate) mod system_status;
+/// `uffs --uninstall` — full UFFS removal (see
+/// `docs/dev/architecture/UFFS-Uninstall-Implementation-Plan.md`).
+pub(crate) mod uninstall;
 /// `uffs --update` — self-update detection (Phase A of the self-update design).
 pub(crate) mod update;
 
