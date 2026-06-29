@@ -13,6 +13,7 @@
 
 mod analyze;
 mod args;
+mod inventory;
 mod render;
 mod resolve_order;
 
@@ -33,13 +34,20 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // M1: read-only analysis. Reuse the self-update Phase-A detection, then
-    // render the resolution table (which copy a bare `uffs` actually runs).
+    // M1: read-only analysis. Reuse the self-update Phase-A detection for the
+    // binary resolution table, then inventory the non-binary artifacts.
     let report = crate::commands::update::detect();
     let candidates = analyze::build_candidates(&report);
     let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
-    render::print_resolution_table(&resolved);
+    let inventory = inventory::collect();
 
+    if parsed.json {
+        render::print_json(&resolved, &inventory);
+        return Ok(());
+    }
+
+    render::print_resolution_table(&resolved);
+    render::print_inventory(&inventory);
     print_pending_removal_notice();
     Ok(())
 }
