@@ -131,6 +131,32 @@ pub(crate) fn print_strays(strays: &[std::path::PathBuf]) {
     }
 }
 
+/// Warn that the running self-binary could not be scheduled for deletion.
+#[expect(clippy::print_stderr, reason = "CLI user-facing error")]
+pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {
+    eprintln!(
+        "\nCould not schedule deletion of the running uffs binary ({error:#}).\n\
+         Delete it manually once this process has exited."
+    );
+}
+
+/// Print the post-removal verification: clean, or the locations that survived.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_verification(remaining: &[std::path::PathBuf]) {
+    if remaining.is_empty() {
+        println!("\nVerified: all targeted UFFS locations are gone.");
+        return;
+    }
+    println!(
+        "\nVerification: {} location(s) still present (a reboot may be pending, or \
+         elevation/sudo is needed):",
+        remaining.len()
+    );
+    for path in remaining {
+        println!("  {}", path.display());
+    }
+}
+
 /// Print the outcome of a removal run: counts, any failures, and a retry hint.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_outcome(outcome: &RemovalOutcome) {

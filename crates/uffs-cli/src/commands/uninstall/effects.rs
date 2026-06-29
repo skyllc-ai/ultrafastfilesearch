@@ -9,7 +9,7 @@
 //! service removal, and `winget` delegation shell out (`kill`/`taskkill`,
 //! `sc`, `winget`) rather than via `libc`, so this crate stays `unsafe`-free.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
@@ -91,6 +91,44 @@ fn remove_path_entry_impl(dir: &Path) -> Result<()> {
         dir.display()
     )
     .context("writing PATH cleanup hint")
+}
+
+/// Delete the running self-binaries (`uffs.exe` + `uffs-update.exe`) that
+/// cannot delete themselves in place.
+///
+/// Windows: a process cannot delete its own running image, so spawn a detached
+/// `cmd` that waits for this process to exit, then deletes each path (the
+/// classic self-delete; no FFI needed). Unix: a running binary can be unlinked
+/// directly, so just remove them.
+#[cfg(windows)]
+pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let deletes: String = paths
+        .iter()
+        .map(|path| format!("del /f /q \"{}\" & ", path.display()))
+        .collect();
+    // `ping` is a portable ~2s sleep; by then this process has exited and the
+    // images are unlocked.
+    let script = format!("ping 127.0.0.1 -n 3 >nul & {deletes}rem self-delete");
+    Command::new("cmd")
+        .args(["/c", &script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("scheduling self-delete")?;
+    Ok(())
+}
+
+/// Unix variant (see the Windows declaration): a running binary can be unlinked
+/// directly, so remove each now.
+#[cfg(not(windows))]
+pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        remove_file_if_present(path).with_context(|| format!("removing {}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// The on-disk file name for a binary stem (`uffsd` -> `uffsd.exe` on Windows).

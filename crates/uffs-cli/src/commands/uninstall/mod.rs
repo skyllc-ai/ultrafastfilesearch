@@ -20,6 +20,7 @@ mod remove;
 mod render;
 mod resolve_order;
 mod sweep;
+mod verify;
 
 use std::path::PathBuf;
 
@@ -99,7 +100,45 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     let mut effects = effects::SystemEffects::new();
     let outcome = remove::execute(&removal_plan, &mut effects);
     render::print_outcome(&outcome);
+
+    // M8 self-delete (U-80): the running uffs.exe (+ uffs-update.exe) cannot
+    // delete themselves in place; schedule a deferred delete. If even scheduling
+    // fails, say so rather than hiding it.
+    let self_paths = self_binaries();
+    if let Err(err) = effects::schedule_self_delete(&self_paths) {
+        render::print_self_delete_warning(&err);
+    }
+
+    // M8 verify (U-81): confirm the targeted locations are gone, excluding the
+    // reboot-deferred self-binaries handled above.
+    let to_check: Vec<PathBuf> = plan_dirs(&removal_plan)
+        .into_iter()
+        .filter(|dir| {
+            !self_paths
+                .iter()
+                .any(|self_path| self_path.starts_with(dir))
+        })
+        .collect();
+    render::print_verification(&verify::still_present(&to_check));
     Ok(())
+}
+
+/// The running self-binaries that cannot be deleted in place: the current
+/// `uffs` executable and its sibling `uffs-update`.
+fn self_binaries() -> Vec<PathBuf> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let mut paths = vec![exe.clone()];
+    if let Some(dir) = exe.parent() {
+        let updater = if cfg!(windows) {
+            "uffs-update.exe"
+        } else {
+            "uffs-update"
+        };
+        paths.push(dir.join(updater));
+    }
+    paths
 }
 
 /// The directories the plan acts on, used to dedup deep-sweep hits (a stray
