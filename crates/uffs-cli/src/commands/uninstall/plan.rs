@@ -13,7 +13,7 @@
 //! truth that both the renderer (description / `--json`) and the executor
 //! (M4 `remove`) consume, so what is shown is exactly what is removed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::args::{UninstallArgs, UninstallScope};
 use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
@@ -239,8 +239,8 @@ fn binary_item(root: &InstallRoot) -> Option<PlanItem> {
     if root.binaries.is_empty() {
         return None;
     }
-    let machine = matches!(root.scope, Scope::Machine);
-    let scope = if machine {
+    let needs_elevation = binaries_need_escalation(root.scope, &root.dir);
+    let item_scope = if needs_elevation {
         ItemScope::Machine
     } else {
         ItemScope::User
@@ -258,10 +258,35 @@ fn binary_item(root: &InstallRoot) -> Option<PlanItem> {
     };
     Some(PlanItem {
         target,
-        needs_elevation: machine,
-        scope,
+        needs_elevation,
+        scope: item_scope,
         bytes: 0,
     })
+}
+
+/// Whether removing the UFFS binaries in `dir` (of install `scope`) needs
+/// privilege escalation the current user may not have.
+///
+/// Windows: machine-scope roots (`%PROGRAMFILES%`) need Administrator; the
+/// classified scope already captures this.
+#[cfg(windows)]
+fn binaries_need_escalation(scope: Scope, _dir: &Path) -> bool {
+    matches!(scope, Scope::Machine)
+}
+
+/// Unix variant (see the Windows declaration): probe `dir` with a POSIX
+/// `access(W_OK)` check — a user-owned root (`~/bin`, `~/.cargo/bin`, a dev
+/// build) is removable without `sudo`, while a root-owned one
+/// (`/usr/local/bin`) is flagged before the executor tries.
+#[cfg(unix)]
+fn binaries_need_escalation(_scope: Scope, dir: &Path) -> bool {
+    !uffs_mft::platform::dir_user_writable(dir)
+}
+
+/// Fallback for non-Windows, non-Unix targets: never require escalation.
+#[cfg(not(any(windows, unix)))]
+fn binaries_need_escalation(_scope: Scope, _dir: &Path) -> bool {
+    false
 }
 
 /// Apply the `--scope` filter and append the group only if it has items left.
@@ -460,5 +485,39 @@ mod tests {
             target,
             PlanTarget::StopProcess { .. }
         )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_user_writable_root_skips_escalation_root_owned_flags_it() {
+        use std::path::Path;
+
+        use super::binaries_need_escalation;
+        // The temp dir is user-writable → removable without sudo.
+        assert!(!binaries_need_escalation(
+            Scope::Unknown,
+            &std::env::temp_dir()
+        ));
+        // A non-existent / unwritable path → flagged for escalation.
+        assert!(binaries_need_escalation(
+            Scope::Unknown,
+            Path::new("/nonexistent/uffs-escalation-probe")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_escalation_follows_machine_scope() {
+        use std::path::Path;
+
+        use super::binaries_need_escalation;
+        assert!(binaries_need_escalation(
+            Scope::Machine,
+            Path::new(r"C:\Program Files\uffs")
+        ));
+        assert!(!binaries_need_escalation(
+            Scope::User,
+            Path::new(r"C:\Users\me\bin")
+        ));
     }
 }

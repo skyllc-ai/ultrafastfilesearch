@@ -108,7 +108,10 @@ pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
             }
         }
     }
-    eprintln!("\nRe-run from an elevated shell:  uffs --uninstall");
+    eprintln!(
+        "\nRe-run with elevated privileges (sudo on Linux/macOS, an elevated \
+         shell on Windows):\n  uffs --uninstall"
+    );
 }
 
 /// Emit the full analysis (binaries + artifacts + broker state + plan) as JSON.

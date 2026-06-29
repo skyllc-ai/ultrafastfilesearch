@@ -59,8 +59,10 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     }
 
     // M3 elevation gate (U-30): refuse before any effect when the plan needs
-    // Administrator the current process does not have.
-    if removal_plan.requires_elevation() && !uffs_winsvc::is_elevated() {
+    // privilege the current process lacks. `uffs_mft::platform::is_elevated` is
+    // cross-platform (Windows token check; Unix effective-uid 0), unlike the
+    // Windows-only `uffs_winsvc::is_elevated`.
+    if removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
         render::print_elevation_refusal(&removal_plan);
         bail!("uninstall needs Administrator for the items listed above; re-run elevated");
     }

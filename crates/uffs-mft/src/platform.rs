@@ -60,6 +60,10 @@ pub use system::DriveType;
 // caller against the running daemon's owner (its PID-file uid).
 #[cfg(unix)]
 pub use system::current_euid;
+// Unix: POSIX W_OK writability probe — lets `uffs --uninstall` flag a
+// root-owned binary root before it tries to delete it.
+#[cfg(unix)]
+pub use system::dir_user_writable;
 // Elevation check — available on all platforms (Windows: UAC token check;
 // Unix: geteuid() == 0).  Both the daemon CLI gate and uffs-daemon use this.
 pub use system::is_elevated;
