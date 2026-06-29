@@ -131,6 +131,21 @@ pub(crate) fn print_strays(strays: &[std::path::PathBuf]) {
     }
 }
 
+/// Note that a prior uninstall was interrupted and this run completes it.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_resumed_note() {
+    println!(
+        "A previous uninstall did not finish. Removal is idempotent, so this run \
+         will complete it.\n"
+    );
+}
+
+/// Warn that the in-progress journal marker could not be written/cleared.
+#[expect(clippy::print_stderr, reason = "CLI user-facing error")]
+pub(crate) fn print_journal_warning(error: &anyhow::Error) {
+    eprintln!("note: uninstall progress marker could not be updated ({error:#}).");
+}
+
 /// Warn that the running self-binary could not be scheduled for deletion.
 #[expect(clippy::print_stderr, reason = "CLI user-facing error")]
 pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {

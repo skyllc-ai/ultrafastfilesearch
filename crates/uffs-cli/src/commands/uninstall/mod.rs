@@ -15,6 +15,7 @@ mod analyze;
 mod args;
 mod effects;
 mod inventory;
+mod journal;
 mod plan;
 mod remove;
 mod render;
@@ -40,6 +41,12 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     if parsed.help {
         print_help();
         return Ok(());
+    }
+
+    // M9 crash-awareness: if a prior uninstall was interrupted, say so. Because
+    // removal is idempotent, this (re-)run simply completes it.
+    if journal::was_interrupted() {
+        render::print_resumed_note();
     }
 
     // M1 analysis: reuse the self-update Phase-A detection for the binary
@@ -95,6 +102,13 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    // M9: mark the run in progress (survives the lifecycle-dir deletion) so an
+    // interruption is detectable next launch. Best-effort: a failed marker write
+    // must not block the uninstall, but we surface it honestly.
+    if let Err(err) = journal::begin() {
+        render::print_journal_warning(&err);
+    }
+
     // M4 execute (U-40..42): run the ordered plan against the live effects sink,
     // best-effort. The outcome reports what was removed and what failed.
     let mut effects = effects::SystemEffects::new();
@@ -120,6 +134,11 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         })
         .collect();
     render::print_verification(&verify::still_present(&to_check));
+
+    // M9: clear the in-progress marker now the run finished.
+    if let Err(err) = journal::finish() {
+        render::print_journal_warning(&err);
+    }
     Ok(())
 }
 
