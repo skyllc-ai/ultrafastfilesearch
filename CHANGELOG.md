@@ -14,6 +14,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `uffs --uninstall`: guided, complete removal of UFFS
+
+A single command removes UFFS and all of its data from the machine, as carefully
+as `uffs --update`. It analyzes the install (every binary shown in OS-resolution
+order, with the `ACTIVE` copy flagged), inventories every artifact with sizes
+(data, cache, legacy cache, config, the Windows broker service), runs a deep
+sweep that uses UFFS's own search to find stray `uffs*` files elsewhere (listed
+for review, never auto-removed), prints an itemized removal plan, and only
+removes after explicit consent (or `--yes`).
+
+- **Elevation-aware, and frugal about it.** It refuses up front (before any
+  effect) when a removal needs privilege the run lacks. On macOS/Linux a normal
+  user install needs **no `sudo`** (a real `access(W_OK)` check decides per
+  root); only a root-owned location or the Windows broker service / machine
+  install requires elevation.
+- **Channel-aware.** WinGet roots are delegated to `winget uninstall`, never
+  hand-deleted. Manual and dev-build installs are removed directly.
+- **Safe + idempotent.** `--dry-run` reviews without changing anything;
+  removal is best-effort (a locked/permission-denied item is reported, the rest
+  proceed) and idempotent (re-run to finish an interrupted one). Flags:
+  `--keep-config`, `--no-deep-sweep`, `--no-path`, `--scope`, `--json`. The
+  running binary self-deletes on exit; a post-removal step verifies the result.
+  See [docs/user-manual/uninstall.md](docs/user-manual/uninstall.md).
+
 ### Added — corrupt-name forensics: keep ill-formed names visible + `--normalize-malformed`
 
 NTFS allows file and directory names that are ill-formed UTF-16 (unpaired

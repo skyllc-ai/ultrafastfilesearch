@@ -247,3 +247,37 @@ fn winget_uninstall(package_id: &str, scope: Scope) -> Result<()> {
     }
     run_quiet(&mut command, &format!("winget uninstall {package_id}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Effects as _, SystemEffects, exe_file_name};
+
+    /// Exercise the live deletion path on throwaway temp files (U-112): real
+    /// `SystemEffects`, real files, no UFFS install touched.
+    #[test]
+    fn delete_binaries_and_dir_remove_real_files_idempotently() {
+        let base = std::env::temp_dir().join(format!(
+            "uffs-uninstall-effects-{}-{}",
+            std::process::id(),
+            "u112"
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let stems = vec!["uffs".to_owned(), "uffsd".to_owned()];
+        for stem in &stems {
+            std::fs::write(base.join(exe_file_name(stem)), b"binary").unwrap();
+        }
+
+        let mut effects = SystemEffects::new();
+        // Deletes the named binaries...
+        effects.delete_binaries(&base, &stems).unwrap();
+        assert!(!base.join(exe_file_name("uffs")).exists());
+        assert!(!base.join(exe_file_name("uffsd")).exists());
+        // ...and is idempotent on already-absent files.
+        effects.delete_binaries(&base, &stems).unwrap();
+
+        // remove_dir clears the tree, idempotently.
+        effects.remove_dir(&base).unwrap();
+        assert!(!base.exists());
+        effects.remove_dir(&base).unwrap();
+    }
+}
