@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::inventory::Inventory;
 use super::plan::RemovalPlan;
+use super::remove::{ItemStatus, RemovalOutcome};
 use super::resolve_order::{ResolutionState, StemResolution};
 
 /// Print the discovered-binary resolution table: for each stem, every copy in
@@ -112,6 +113,27 @@ pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
         "\nRe-run with elevated privileges (sudo on Linux/macOS, an elevated \
          shell on Windows):\n  uffs --uninstall"
     );
+}
+
+/// Print the outcome of a removal run: counts, any failures, and a retry hint.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
+    println!(
+        "\nRemoval finished: {} removed, {} failed.",
+        outcome.done_count(),
+        outcome.failed_count(),
+    );
+    for (description, status) in &outcome.results {
+        if let ItemStatus::Failed(error) = status {
+            println!("  FAILED  {description}  ({error})");
+        }
+    }
+    if !outcome.all_done() {
+        println!(
+            "\nSome items could not be removed. Retry with elevated privileges \
+             (sudo on Linux/macOS, an elevated shell on Windows)."
+        );
+    }
 }
 
 /// Emit the full analysis (binaries + artifacts + broker state + plan) as JSON.

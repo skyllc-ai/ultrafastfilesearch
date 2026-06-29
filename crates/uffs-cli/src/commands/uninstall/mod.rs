@@ -13,12 +13,14 @@
 
 mod analyze;
 mod args;
+mod effects;
 mod inventory;
 mod plan;
+mod remove;
 mod render;
 mod resolve_order;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use args::UninstallArgs;
 
 /// Entry point for `uffs --uninstall`. `args` is every token after the
@@ -67,15 +69,55 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         bail!("uninstall needs Administrator for the items listed above; re-run elevated");
     }
 
-    // M4+ : interactive consent + the removal engine land here.
-    print_pending_removal_notice();
+    if removal_plan.is_empty() {
+        return Ok(());
+    }
+
+    // M4 consent (U-21): unless --yes, require explicit confirmation (default No)
+    // before any destructive effect.
+    if !parsed.assume_yes && !confirm_removal()? {
+        print_aborted();
+        return Ok(());
+    }
+
+    // M4 execute (U-40..42): run the ordered plan against the live effects sink,
+    // best-effort. The outcome reports what was removed and what failed.
+    let mut effects = effects::SystemEffects::new();
+    let outcome = remove::execute(&removal_plan, &mut effects);
+    render::print_outcome(&outcome);
     Ok(())
+}
+
+/// Prompt for confirmation before any removal. Default (empty / anything but
+/// `y`/`yes`) is **No**.
+#[expect(clippy::print_stdout, reason = "interactive CLI prompt")]
+fn confirm_removal() -> Result<bool> {
+    use std::io::Write as _;
+
+    print!("\nProceed with removal? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .context("flushing the confirmation prompt")?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("reading confirmation")?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Footer printed after a `--dry-run` plan.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 fn print_dry_run_footer() {
     println!("\nDry run: nothing was removed.");
+}
+
+/// Message printed when the user declines the confirmation.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+fn print_aborted() {
+    println!("Aborted. Nothing was removed.");
 }
 
 /// Print `uffs --uninstall` usage.
@@ -96,15 +138,5 @@ fn print_help() {
          \x20 --scope <s>       Restrict to user | machine | all (default: all)\n\
          \x20 --json            Emit the analysis + plan as JSON\n\
          \x20 --help, -h        Show this help"
-    );
-}
-
-/// Notice printed on the would-remove path until the removal engine (M4+)
-/// lands.
-#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-fn print_pending_removal_notice() {
-    println!(
-        "\nThe removal engine is not implemented yet (M4+); no changes were made.\n\
-         Use `uffs --uninstall --dry-run` to review the plan."
     );
 }
