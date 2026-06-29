@@ -154,13 +154,19 @@ jobs:
 
       - name: Enable auto-merge via gh CLI
         # Only call `gh pr merge --auto` when the gate is green.
-        # `--squash` matches the repo's preferred merge style; flip to
-        # --rebase or --merge if the repo convention changes.
+        #
+        # NO method flag: `main` uses a merge queue, which OWNS the merge
+        # strategy. Passing `--squash`/`--rebase`/`--merge` here is silently
+        # rejected ("the merge strategy for main is set by the merge queue") and
+        # leaves auto-merge armed but NOT enrolled in the queue, so the PR sits
+        # CLEAN-but-stuck (cf. #494). `--auto` alone lets the queue own the
+        # squash and enrolls correctly. This step also fires on `synchronize`,
+        # so it now re-arms (self-heals enrollment) after an Update-branch.
         if: steps.gate.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           echo "Enabling auto-merge on $PR_URL"
-          gh pr merge --auto --squash "$PR_URL"
+          gh pr merge --auto "$PR_URL"
           echo "::notice::Auto-merge enabled \u2014 will merge when all required checks pass and reviews (if any) are satisfied."
