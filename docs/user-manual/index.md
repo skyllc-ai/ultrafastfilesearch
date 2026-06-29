@@ -73,6 +73,7 @@ Start here and follow the arrows.  Each page builds on the previous one.
 |------|---------------|
 | [Installation](installation.md) | Build from source, platform requirements, PATH setup |
 | [Updating](updating.md) | Self-update: `uffs --update`, version pinning/rollback, doctor & repair |
+| [Uninstalling](uninstall.md) | Full removal: `uffs --uninstall`, dry-run, elevation, WinGet delegation |
 | [Getting Started](getting-started.md) | First search, understanding output, 5-minute tutorial |
 
 ### Core Usage

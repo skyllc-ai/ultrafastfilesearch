@@ -1,0 +1,609 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2025-2026 SKY, LLC.
+
+//! Removal-plan construction for `uffs --uninstall` (task U-20 of
+//! `docs/dev/architecture/UFFS-Uninstall-Implementation-Plan.md`).
+//!
+//! Pure: turns the analysis ([`DetectionReport`] + [`Inventory`]) into an
+//! ordered, itemized [`RemovalPlan`], honoring `--keep-config` / `--scope`.
+//! No IO, fully unit-tested. `WinGet` roots become a `winget uninstall`
+//! delegation, never a hand-delete (design §7).
+//!
+//! Each [`PlanItem`] carries a structured [`PlanTarget`] — the single source of
+//! truth that both the renderer (description / `--json`) and the executor
+//! (M4 `remove`) consume, so what is shown is exactly what is removed.
+
+use std::path::{Path, PathBuf};
+
+use super::args::{UninstallArgs, UninstallScope};
+use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
+use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
+
+/// The `WinGet` package id UFFS publishes under.
+pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
+
+/// The concrete target of a plan item: everything the executor needs, and
+/// everything the renderer describes. Group ordering (in [`build_plan`]) plus
+/// this discriminant define the safe removal order.
+#[derive(Debug, Clone)]
+pub(crate) enum PlanTarget {
+    /// Stop a running UFFS process (daemon / MCP gateway).
+    StopProcess {
+        /// Component label (e.g. `daemon`).
+        component: String,
+        /// OS process id.
+        pid: u32,
+    },
+    /// Stop + delete the broker Windows service.
+    RemoveService {
+        /// Service name (`UffsAccessBroker`).
+        service: String,
+    },
+    /// Delete the UFFS binaries in an unmanaged / dev-build root.
+    DeleteBinaries {
+        /// The root directory.
+        dir: PathBuf,
+        /// The binary stems present in the root (no `.exe` suffix).
+        stems: Vec<String>,
+    },
+    /// Delegate a `WinGet`-managed root to `winget uninstall`.
+    DelegateWinget {
+        /// The package id to uninstall.
+        package_id: String,
+        /// The root's install scope (user / machine).
+        scope: Scope,
+        /// The root directory (for the description).
+        dir: PathBuf,
+    },
+    /// Recursively delete a data / cache / config directory.
+    DeleteDir {
+        /// The directory to remove.
+        path: PathBuf,
+        /// The artifact-kind label (e.g. `cache`), for the description.
+        label: &'static str,
+    },
+    /// Remove a (provably UFFS) directory from PATH.
+    RemovePathEntry {
+        /// The PATH entry to remove.
+        dir: PathBuf,
+    },
+}
+
+impl PlanTarget {
+    /// Short verb label (used in `--json`).
+    pub(crate) const fn action_label(&self) -> &'static str {
+        match *self {
+            Self::StopProcess { .. } => "stop-process",
+            Self::RemoveService { .. } => "remove-service",
+            Self::DeleteBinaries { .. } => "delete-binaries",
+            Self::DelegateWinget { .. } => "delegate-winget",
+            Self::DeleteDir { .. } => "delete-dir",
+            Self::RemovePathEntry { .. } => "remove-path-entry",
+        }
+    }
+
+    /// Human, one-line description of the target.
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::StopProcess { component, pid } => format!("{component} (pid {pid})"),
+            Self::RemoveService { service } => format!("Stop + delete service {service}"),
+            Self::DeleteBinaries { dir, stems } => {
+                format!("{} binaries in {}", stems.len(), dir.display())
+            }
+            Self::DelegateWinget {
+                package_id,
+                scope,
+                dir,
+            } => format!(
+                "winget uninstall {package_id}  ({} root: {})",
+                scope.label(),
+                dir.display()
+            ),
+            Self::DeleteDir { path, label } => format!("{label} ({})", path.display()),
+            Self::RemovePathEntry { dir } => format!("PATH entry {}", dir.display()),
+        }
+    }
+}
+
+/// Coarse scope of a plan item, for `--scope` filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItemScope {
+    /// A per-user artifact (`%LOCALAPPDATA%`, a user-scope root).
+    User,
+    /// A machine-wide artifact (the service, a `%PROGRAMFILES%` root).
+    Machine,
+    /// Scope-agnostic (a running process).
+    Any,
+}
+
+/// One unit of removal work.
+#[derive(Debug, Clone)]
+pub(crate) struct PlanItem {
+    /// What to remove (structured; drives both render and execute).
+    pub(crate) target: PlanTarget,
+    /// Whether performing it requires Administrator.
+    pub(crate) needs_elevation: bool,
+    /// Coarse scope, for `--scope` filtering.
+    pub(crate) scope: ItemScope,
+    /// Bytes this item reclaims (0 for non-filesystem actions).
+    pub(crate) bytes: u64,
+}
+
+/// A named, ordered group of plan items (Services, Processes, ...).
+#[derive(Debug, Clone)]
+pub(crate) struct PlanGroup {
+    /// Group heading.
+    pub(crate) title: &'static str,
+    /// Items in the group.
+    pub(crate) items: Vec<PlanItem>,
+}
+
+/// The full ordered removal plan.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RemovalPlan {
+    /// Groups in safe removal order.
+    pub(crate) groups: Vec<PlanGroup>,
+}
+
+impl RemovalPlan {
+    /// Iterate every item across all groups, in order.
+    pub(crate) fn items(&self) -> impl Iterator<Item = &PlanItem> {
+        self.groups.iter().flat_map(|group| &group.items)
+    }
+
+    /// Total bytes the plan would reclaim.
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.items()
+            .map(|item| item.bytes)
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Whether any item requires Administrator.
+    pub(crate) fn requires_elevation(&self) -> bool {
+        self.items().any(|item| item.needs_elevation)
+    }
+
+    /// Number of items across all groups.
+    pub(crate) fn item_count(&self) -> usize {
+        self.groups.iter().map(|group| group.items.len()).sum()
+    }
+
+    /// True when there is nothing to remove.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.item_count() == 0
+    }
+}
+
+/// Build the ordered removal plan from the analysis + flags. `path_entries` is
+/// the live PATH (used to offer removal of entries that point at a UFFS root).
+pub(crate) fn build_plan(
+    report: &DetectionReport,
+    inventory: &Inventory,
+    args: &UninstallArgs,
+    path_entries: &[PathBuf],
+) -> RemovalPlan {
+    let mut groups: Vec<PlanGroup> = Vec::new();
+
+    // 1. Services (the broker, elevated) — removed first conceptually.
+    if inventory.broker_service == BrokerServiceState::Installed {
+        let item = PlanItem {
+            target: PlanTarget::RemoveService {
+                service: uffs_broker_protocol::SERVICE_NAME.to_owned(),
+            },
+            needs_elevation: true,
+            scope: ItemScope::Machine,
+            bytes: 0,
+        };
+        push_group(&mut groups, "Services", vec![item], args.scope);
+    }
+
+    // 2. Processes (stopped before their binaries are deleted).
+    let processes: Vec<PlanItem> = report
+        .running
+        .iter()
+        .map(|process| PlanItem {
+            target: PlanTarget::StopProcess {
+                component: process.component.label().to_owned(),
+                pid: process.pid,
+            },
+            needs_elevation: false,
+            scope: ItemScope::Any,
+            bytes: 0,
+        })
+        .collect();
+    push_group(
+        &mut groups,
+        "Processes (stopped first)",
+        processes,
+        args.scope,
+    );
+
+    // 3. Binaries — per root: unmanaged/dev delete, winget delegate.
+    let binaries: Vec<PlanItem> = report.roots.iter().filter_map(binary_item).collect();
+    push_group(&mut groups, "Binaries", binaries, args.scope);
+
+    // 4. Data / cache / config dirs that exist (skip config under --keep-config).
+    let dirs: Vec<PlanItem> = inventory
+        .dirs
+        .iter()
+        .filter(|dir| dir.exists)
+        .filter(|dir| !(args.keep_config && dir.kind == ArtifactKind::Config))
+        .map(|dir| PlanItem {
+            target: PlanTarget::DeleteDir {
+                path: dir.path.clone(),
+                label: dir.kind.label(),
+            },
+            needs_elevation: false,
+            scope: ItemScope::User,
+            bytes: dir.size_bytes,
+        })
+        .collect();
+    push_group(&mut groups, "Data / cache / config", dirs, args.scope);
+
+    // 5. PATH entries that point at a removed unmanaged/dev root — provably UFFS
+    // (the exact dir we just deleted), so safe to drop. WinGet roots are managed
+    // by winget; never touched here. Skipped under --no-path.
+    if !args.no_path {
+        let path_items: Vec<PlanItem> = report
+            .roots
+            .iter()
+            .filter(|root| !root.binaries.is_empty() && !matches!(root.channel, Channel::WinGet))
+            .filter(|root| {
+                path_entries
+                    .iter()
+                    .any(|entry| paths_equal_ignore_case(entry, &root.dir))
+            })
+            .map(|root| {
+                let machine = matches!(root.scope, Scope::Machine);
+                PlanItem {
+                    target: PlanTarget::RemovePathEntry {
+                        dir: root.dir.clone(),
+                    },
+                    needs_elevation: machine,
+                    scope: if machine {
+                        ItemScope::Machine
+                    } else {
+                        ItemScope::User
+                    },
+                    bytes: 0,
+                }
+            })
+            .collect();
+        push_group(&mut groups, "PATH", path_items, args.scope);
+    }
+
+    RemovalPlan { groups }
+}
+
+/// Case-insensitive path equality (Windows file systems + PATH entries vary in
+/// case; a redundant exact match is what we require before touching PATH).
+fn paths_equal_ignore_case(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+/// Build the per-root binary plan item, or `None` for an empty root.
+fn binary_item(root: &InstallRoot) -> Option<PlanItem> {
+    if root.binaries.is_empty() {
+        return None;
+    }
+    let needs_elevation = binaries_need_escalation(root.scope, &root.dir);
+    let item_scope = if needs_elevation {
+        ItemScope::Machine
+    } else {
+        ItemScope::User
+    };
+    let target = match root.channel {
+        Channel::WinGet => PlanTarget::DelegateWinget {
+            package_id: WINGET_PACKAGE_ID.to_owned(),
+            scope: root.scope,
+            dir: root.dir.clone(),
+        },
+        Channel::Unmanaged | Channel::DevBuild | Channel::Unknown => PlanTarget::DeleteBinaries {
+            dir: root.dir.clone(),
+            stems: root.binaries.iter().map(|bin| bin.name.clone()).collect(),
+        },
+    };
+    Some(PlanItem {
+        target,
+        needs_elevation,
+        scope: item_scope,
+        bytes: 0,
+    })
+}
+
+/// Whether removing the UFFS binaries in `dir` (of install `scope`) needs
+/// privilege escalation the current user may not have.
+///
+/// Windows: machine-scope roots (`%PROGRAMFILES%`) need Administrator; the
+/// classified scope already captures this.
+#[cfg(windows)]
+const fn binaries_need_escalation(scope: Scope, _dir: &Path) -> bool {
+    matches!(scope, Scope::Machine)
+}
+
+/// Unix variant (see the Windows declaration): probe `dir` with a POSIX
+/// `access(W_OK)` check — a user-owned root (`~/bin`, `~/.cargo/bin`, a dev
+/// build) is removable without `sudo`, while a root-owned one
+/// (`/usr/local/bin`) is flagged before the executor tries.
+#[cfg(unix)]
+fn binaries_need_escalation(_scope: Scope, dir: &Path) -> bool {
+    !uffs_mft::platform::dir_user_writable(dir)
+}
+
+/// Fallback for non-Windows, non-Unix targets: never require escalation.
+#[cfg(not(any(windows, unix)))]
+fn binaries_need_escalation(_scope: Scope, _dir: &Path) -> bool {
+    false
+}
+
+/// Apply the `--scope` filter and append the group only if it has items left.
+fn push_group(
+    groups: &mut Vec<PlanGroup>,
+    title: &'static str,
+    items: Vec<PlanItem>,
+    scope: UninstallScope,
+) {
+    let kept: Vec<PlanItem> = items
+        .into_iter()
+        .filter(|item| scope_admits(scope, item.scope))
+        .collect();
+    if !kept.is_empty() {
+        groups.push(PlanGroup { title, items: kept });
+    }
+}
+
+/// Whether a `--scope` request admits an item of the given scope.
+const fn scope_admits(requested: UninstallScope, item: ItemScope) -> bool {
+    match (requested, item) {
+        (UninstallScope::All, _)
+        | (_, ItemScope::Any)
+        | (UninstallScope::User, ItemScope::User)
+        | (UninstallScope::Machine, ItemScope::Machine) => true,
+        (UninstallScope::User, ItemScope::Machine) | (UninstallScope::Machine, ItemScope::User) => {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{PlanTarget, RemovalPlan, build_plan};
+    use crate::commands::uninstall::args::{UninstallArgs, UninstallScope};
+    use crate::commands::uninstall::inventory::{
+        ArtifactDir, ArtifactKind, BrokerServiceState, Inventory,
+    };
+    use crate::commands::update::model::{
+        BinaryInfo, Channel, Component, DetectionReport, InstallRoot, RunningProcess, Scope,
+    };
+
+    fn root(channel: Channel, scope: Scope, dir: &str) -> InstallRoot {
+        InstallRoot {
+            dir: PathBuf::from(dir),
+            channel,
+            scope,
+            anchored_by: Vec::new(),
+            binaries: vec![BinaryInfo {
+                name: "uffs".to_owned(),
+                version: Some("0.6.16".to_owned()),
+            }],
+        }
+    }
+
+    fn inventory(broker: BrokerServiceState, config_size: u64) -> Inventory {
+        Inventory {
+            dirs: vec![
+                ArtifactDir {
+                    kind: ArtifactKind::Cache,
+                    path: PathBuf::from("/x/cache"),
+                    exists: true,
+                    size_bytes: 2048,
+                },
+                ArtifactDir {
+                    kind: ArtifactKind::Config,
+                    path: PathBuf::from("/x/config"),
+                    exists: true,
+                    size_bytes: config_size,
+                },
+            ],
+            broker_service: broker,
+        }
+    }
+
+    fn has_target(plan: &RemovalPlan, predicate: impl Fn(&PlanTarget) -> bool) -> bool {
+        plan.items().any(|item| predicate(&item.target))
+    }
+
+    /// Build a plan with no PATH entries (PATH has its own dedicated test).
+    fn built(report: &DetectionReport, inventory: &Inventory, args: &UninstallArgs) -> RemovalPlan {
+        build_plan(report, inventory, args, &[])
+    }
+
+    #[test]
+    fn winget_root_is_delegated_not_deleted() {
+        let report = DetectionReport {
+            roots: vec![root(Channel::WinGet, Scope::User, r"C:\winget\uffs")],
+            running: Vec::new(),
+        };
+        let plan = built(
+            &report,
+            &inventory(BrokerServiceState::Absent, 1024),
+            &UninstallArgs::default(),
+        );
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::DelegateWinget { .. }
+        )));
+        assert!(!has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::DeleteBinaries { .. }
+        )));
+    }
+
+    #[test]
+    fn machine_root_needs_elevation() {
+        let report = DetectionReport {
+            roots: vec![root(
+                Channel::Unmanaged,
+                Scope::Machine,
+                r"C:\Program Files\uffs",
+            )],
+            running: Vec::new(),
+        };
+        let plan = built(
+            &report,
+            &inventory(BrokerServiceState::Absent, 1024),
+            &UninstallArgs::default(),
+        );
+        assert!(plan.requires_elevation());
+    }
+
+    #[test]
+    fn service_present_requires_elevation_and_is_first() {
+        let report = DetectionReport {
+            roots: Vec::new(),
+            running: Vec::new(),
+        };
+        let plan = built(
+            &report,
+            &inventory(BrokerServiceState::Installed, 1024),
+            &UninstallArgs::default(),
+        );
+        assert!(plan.requires_elevation());
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::RemoveService { .. }
+        )));
+        assert_eq!(plan.groups.first().expect("a group").title, "Services");
+    }
+
+    #[test]
+    fn keep_config_drops_the_config_dir() {
+        let report = DetectionReport {
+            roots: Vec::new(),
+            running: Vec::new(),
+        };
+        let inv = inventory(BrokerServiceState::Absent, 4096);
+        let with_config = built(&report, &inv, &UninstallArgs::default());
+        let keep = UninstallArgs {
+            keep_config: true,
+            ..UninstallArgs::default()
+        };
+        let without_config = built(&report, &inv, &keep);
+        assert!(with_config.total_bytes() > without_config.total_bytes());
+    }
+
+    #[test]
+    fn scope_user_excludes_the_machine_service() {
+        let report = DetectionReport {
+            roots: Vec::new(),
+            running: Vec::new(),
+        };
+        let user_only = UninstallArgs {
+            scope: UninstallScope::User,
+            ..UninstallArgs::default()
+        };
+        let plan = built(
+            &report,
+            &inventory(BrokerServiceState::Installed, 1024),
+            &user_only,
+        );
+        assert!(!has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::RemoveService { .. }
+        )));
+        assert!(!plan.requires_elevation());
+    }
+
+    #[test]
+    fn running_process_becomes_a_stop_item() {
+        let report = DetectionReport {
+            roots: Vec::new(),
+            running: vec![RunningProcess {
+                component: Component::Daemon,
+                pid: 4242,
+                image_path: None,
+                command_line: None,
+                version: None,
+            }],
+        };
+        let plan = built(
+            &report,
+            &inventory(BrokerServiceState::Absent, 1024),
+            &UninstallArgs::default(),
+        );
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::StopProcess { .. }
+        )));
+    }
+
+    #[test]
+    fn path_entry_matching_a_removed_root_is_offered_and_respects_no_path() {
+        let report = DetectionReport {
+            roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
+            running: Vec::new(),
+        };
+        let inv = inventory(BrokerServiceState::Absent, 1024);
+        // Case-insensitive match of a PATH entry to the removed root → offered.
+        let on_path = [PathBuf::from(r"c:\users\me\bin")];
+        let offered = build_plan(&report, &inv, &UninstallArgs::default(), &on_path);
+        assert!(has_target(&offered, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
+        )));
+        // --no-path suppresses the PATH group entirely.
+        let no_path = UninstallArgs {
+            no_path: true,
+            ..UninstallArgs::default()
+        };
+        let suppressed = build_plan(&report, &inv, &no_path, &on_path);
+        assert!(!has_target(&suppressed, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
+        )));
+        // A PATH entry that does not match any root is never touched.
+        let unrelated = [PathBuf::from(r"C:\unrelated")];
+        let untouched = build_plan(&report, &inv, &UninstallArgs::default(), &unrelated);
+        assert!(!has_target(&untouched, |target| matches!(
+            target,
+            PlanTarget::RemovePathEntry { .. }
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_user_writable_root_skips_escalation_root_owned_flags_it() {
+        use std::path::Path;
+
+        use super::binaries_need_escalation;
+        // The temp dir is user-writable → removable without sudo.
+        assert!(!binaries_need_escalation(
+            Scope::Unknown,
+            &std::env::temp_dir()
+        ));
+        // A non-existent / unwritable path → flagged for escalation.
+        assert!(binaries_need_escalation(
+            Scope::Unknown,
+            Path::new("/nonexistent/uffs-escalation-probe")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_escalation_follows_machine_scope() {
+        use std::path::Path;
+
+        use super::binaries_need_escalation;
+        assert!(binaries_need_escalation(
+            Scope::Machine,
+            Path::new(r"C:\Program Files\uffs")
+        ));
+        assert!(!binaries_need_escalation(
+            Scope::User,
+            Path::new(r"C:\Users\me\bin")
+        ));
+    }
+}

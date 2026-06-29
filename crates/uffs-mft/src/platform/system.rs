@@ -138,6 +138,31 @@ pub fn current_euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// Unix: whether the calling user can create or remove entries inside `dir`,
+/// via a POSIX `access(2)` `W_OK` probe.
+///
+/// Used by `uffs --uninstall` to decide whether a binary root is removable
+/// without `sudo` before it tries: a user-owned root (`~/bin`, `~/.cargo/bin`,
+/// a dev build) is writable; a root-owned one (`/usr/local/bin`) is not. A
+/// missing or unreadable `dir` returns `false` (conservative: flag escalation).
+#[cfg(unix)]
+#[must_use]
+#[expect(
+    unsafe_code,
+    reason = "FFI: POSIX access() — the libc binding is unsafe"
+)]
+pub fn dir_user_writable(dir: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let Ok(c_dir) = alloc::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c_dir` is a valid NUL-terminated C string that outlives the
+    // call; `access()` only reads through the pointer and returns 0 when the
+    // directory is writable by the caller.
+    unsafe { libc::access(c_dir.as_ptr(), libc::W_OK) == 0 }
+}
+
 /// Returns the path to the volume root (e.g., "C:\").
 #[cfg(windows)]
 #[must_use]
