@@ -318,7 +318,7 @@ fn binary_item(root: &InstallRoot) -> Option<PlanItem> {
 /// Windows: machine-scope roots (`%PROGRAMFILES%`) need Administrator; the
 /// classified scope already captures this.
 #[cfg(windows)]
-fn binaries_need_escalation(scope: Scope, _dir: &Path) -> bool {
+const fn binaries_need_escalation(scope: Scope, _dir: &Path) -> bool {
     matches!(scope, Scope::Machine)
 }
 

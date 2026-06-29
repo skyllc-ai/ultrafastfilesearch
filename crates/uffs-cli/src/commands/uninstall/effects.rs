@@ -105,13 +105,16 @@ pub(crate) fn schedule_self_delete(paths: &[PathBuf]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let deletes: String = paths
+    let deletes: Vec<String> = paths
         .iter()
-        .map(|path| format!("del /f /q \"{}\" & ", path.display()))
+        .map(|path| format!("del /f /q \"{}\"", path.display()))
         .collect();
     // `ping` is a portable ~2s sleep; by then this process has exited and the
     // images are unlocked.
-    let script = format!("ping 127.0.0.1 -n 3 >nul & {deletes}rem self-delete");
+    let script = format!(
+        "ping 127.0.0.1 -n 3 >nul & {} & rem self-delete",
+        deletes.join(" & ")
+    );
     Command::new("cmd")
         .args(["/c", &script])
         .stdout(Stdio::null())
@@ -210,8 +213,11 @@ fn stop_command(pid_str: &str) -> Command {
 /// service exists, so the plan never produces this item).
 #[cfg(windows)]
 fn remove_windows_service(service: &str) -> Result<()> {
-    // Best-effort stop first (ignore "already stopped"), then delete.
-    let _ = uffs_winsvc::stop(service);
+    // Best-effort stop first; an already-stopped service is fine to delete, so
+    // proceed whether or not the stop succeeded.
+    match uffs_winsvc::stop(service) {
+        Ok(()) | Err(_) => {}
+    }
     run_quiet(
         Command::new("sc").args(["delete", service]),
         &format!("sc delete {service}"),
