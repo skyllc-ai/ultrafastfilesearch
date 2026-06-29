@@ -8,36 +8,92 @@
 //! ordered, itemized [`RemovalPlan`], honoring `--keep-config` / `--scope`.
 //! No IO, fully unit-tested. `WinGet` roots become a `winget uninstall`
 //! delegation, never a hand-delete (design §7).
+//!
+//! Each [`PlanItem`] carries a structured [`PlanTarget`] — the single source of
+//! truth that both the renderer (description / `--json`) and the executor
+//! (M4 `remove`) consume, so what is shown is exactly what is removed.
+
+use std::path::PathBuf;
 
 use super::args::{UninstallArgs, UninstallScope};
 use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
 use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
 
-/// What a plan item does to its target. Ordering of the variants mirrors the
-/// safe removal order (stop before delete; self-delete is handled later).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Action {
-    /// Stop a running process (daemon / MCP gateway).
-    StopProcess,
+/// The `WinGet` package id UFFS publishes under.
+pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
+
+/// The concrete target of a plan item: everything the executor needs, and
+/// everything the renderer describes. Group ordering (in [`build_plan`]) plus
+/// this discriminant define the safe removal order.
+#[derive(Debug, Clone)]
+pub(crate) enum PlanTarget {
+    /// Stop a running UFFS process (daemon / MCP gateway).
+    StopProcess {
+        /// Component label (e.g. `daemon`).
+        component: String,
+        /// OS process id.
+        pid: u32,
+    },
     /// Stop + delete the broker Windows service.
-    RemoveService,
-    /// Delete UFFS binaries in an unmanaged / dev-build root.
-    DeleteBinaries,
-    /// Hand the root to `winget uninstall` (never hand-deleted).
-    DelegateWinget,
+    RemoveService {
+        /// Service name (`UffsAccessBroker`).
+        service: String,
+    },
+    /// Delete the UFFS binaries in an unmanaged / dev-build root.
+    DeleteBinaries {
+        /// The root directory.
+        dir: PathBuf,
+        /// The binary stems present in the root (no `.exe` suffix).
+        stems: Vec<String>,
+    },
+    /// Delegate a `WinGet`-managed root to `winget uninstall`.
+    DelegateWinget {
+        /// The package id to uninstall.
+        package_id: String,
+        /// The root's install scope (user / machine).
+        scope: Scope,
+        /// The root directory (for the description).
+        dir: PathBuf,
+    },
     /// Recursively delete a data / cache / config directory.
-    DeleteDir,
+    DeleteDir {
+        /// The directory to remove.
+        path: PathBuf,
+        /// The artifact-kind label (e.g. `cache`), for the description.
+        label: &'static str,
+    },
 }
 
-impl Action {
+impl PlanTarget {
     /// Short verb label (used in `--json`).
-    pub(crate) const fn label(self) -> &'static str {
+    pub(crate) const fn action_label(&self) -> &'static str {
+        match *self {
+            Self::StopProcess { .. } => "stop-process",
+            Self::RemoveService { .. } => "remove-service",
+            Self::DeleteBinaries { .. } => "delete-binaries",
+            Self::DelegateWinget { .. } => "delegate-winget",
+            Self::DeleteDir { .. } => "delete-dir",
+        }
+    }
+
+    /// Human, one-line description of the target.
+    pub(crate) fn describe(&self) -> String {
         match self {
-            Self::StopProcess => "stop-process",
-            Self::RemoveService => "remove-service",
-            Self::DeleteBinaries => "delete-binaries",
-            Self::DelegateWinget => "delegate-winget",
-            Self::DeleteDir => "delete-dir",
+            Self::StopProcess { component, pid } => format!("{component} (pid {pid})"),
+            Self::RemoveService { service } => format!("Stop + delete service {service}"),
+            Self::DeleteBinaries { dir, stems } => {
+                format!("{} binaries in {}", stems.len(), dir.display())
+            }
+            Self::DelegateWinget {
+                package_id,
+                scope,
+                dir,
+            } => format!(
+                "winget uninstall {package_id}  ({} root: {})",
+                scope.label(),
+                dir.display()
+            ),
+            Self::DeleteDir { path, label } => format!("{label} ({})", path.display()),
         }
     }
 }
@@ -56,10 +112,8 @@ pub(crate) enum ItemScope {
 /// One unit of removal work.
 #[derive(Debug, Clone)]
 pub(crate) struct PlanItem {
-    /// What this item does.
-    pub(crate) action: Action,
-    /// Human description of the target.
-    pub(crate) description: String,
+    /// What to remove (structured; drives both render and execute).
+    pub(crate) target: PlanTarget,
     /// Whether performing it requires Administrator.
     pub(crate) needs_elevation: bool,
     /// Coarse scope, for `--scope` filtering.
@@ -85,8 +139,8 @@ pub(crate) struct RemovalPlan {
 }
 
 impl RemovalPlan {
-    /// Iterate every item across all groups.
-    fn items(&self) -> impl Iterator<Item = &PlanItem> {
+    /// Iterate every item across all groups, in order.
+    pub(crate) fn items(&self) -> impl Iterator<Item = &PlanItem> {
         self.groups.iter().flat_map(|group| &group.items)
     }
 
@@ -124,11 +178,9 @@ pub(crate) fn build_plan(
     // 1. Services (the broker, elevated) — removed first conceptually.
     if inventory.broker_service == BrokerServiceState::Installed {
         let item = PlanItem {
-            action: Action::RemoveService,
-            description: format!(
-                "Stop + delete service {}",
-                uffs_broker_protocol::SERVICE_NAME
-            ),
+            target: PlanTarget::RemoveService {
+                service: uffs_broker_protocol::SERVICE_NAME.to_owned(),
+            },
             needs_elevation: true,
             scope: ItemScope::Machine,
             bytes: 0,
@@ -141,8 +193,10 @@ pub(crate) fn build_plan(
         .running
         .iter()
         .map(|process| PlanItem {
-            action: Action::StopProcess,
-            description: format!("{} (pid {})", process.component.label(), process.pid),
+            target: PlanTarget::StopProcess {
+                component: process.component.label().to_owned(),
+                pid: process.pid,
+            },
             needs_elevation: false,
             scope: ItemScope::Any,
             bytes: 0,
@@ -166,8 +220,10 @@ pub(crate) fn build_plan(
         .filter(|dir| dir.exists)
         .filter(|dir| !(args.keep_config && dir.kind == ArtifactKind::Config))
         .map(|dir| PlanItem {
-            action: Action::DeleteDir,
-            description: format!("{} ({})", dir.kind.label(), dir.path.display()),
+            target: PlanTarget::DeleteDir {
+                path: dir.path.clone(),
+                label: dir.kind.label(),
+            },
             needs_elevation: false,
             scope: ItemScope::User,
             bytes: dir.size_bytes,
@@ -189,23 +245,23 @@ fn binary_item(root: &InstallRoot) -> Option<PlanItem> {
     } else {
         ItemScope::User
     };
-    let item = match root.channel {
-        Channel::WinGet => PlanItem {
-            action: Action::DelegateWinget,
-            description: format!("winget uninstall SkyLLC.UFFS  ({})", root.dir.display()),
-            needs_elevation: machine,
-            scope,
-            bytes: 0,
+    let target = match root.channel {
+        Channel::WinGet => PlanTarget::DelegateWinget {
+            package_id: WINGET_PACKAGE_ID.to_owned(),
+            scope: root.scope,
+            dir: root.dir.clone(),
         },
-        Channel::Unmanaged | Channel::DevBuild | Channel::Unknown => PlanItem {
-            action: Action::DeleteBinaries,
-            description: format!("{} binaries in {}", root.binaries.len(), root.dir.display()),
-            needs_elevation: machine,
-            scope,
-            bytes: 0,
+        Channel::Unmanaged | Channel::DevBuild | Channel::Unknown => PlanTarget::DeleteBinaries {
+            dir: root.dir.clone(),
+            stems: root.binaries.iter().map(|bin| bin.name.clone()).collect(),
         },
     };
-    Some(item)
+    Some(PlanItem {
+        target,
+        needs_elevation: machine,
+        scope,
+        bytes: 0,
+    })
 }
 
 /// Apply the `--scope` filter and append the group only if it has items left.
@@ -241,7 +297,7 @@ const fn scope_admits(requested: UninstallScope, item: ItemScope) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Action, RemovalPlan, build_plan};
+    use super::{PlanTarget, RemovalPlan, build_plan};
     use crate::commands::uninstall::args::{UninstallArgs, UninstallScope};
     use crate::commands::uninstall::inventory::{
         ArtifactDir, ArtifactKind, BrokerServiceState, Inventory,
@@ -283,11 +339,8 @@ mod tests {
         }
     }
 
-    fn find_action(plan: &RemovalPlan, action: Action) -> bool {
-        plan.groups
-            .iter()
-            .flat_map(|group| &group.items)
-            .any(|item| item.action == action)
+    fn has_target(plan: &RemovalPlan, predicate: impl Fn(&PlanTarget) -> bool) -> bool {
+        plan.items().any(|item| predicate(&item.target))
     }
 
     #[test]
@@ -301,8 +354,14 @@ mod tests {
             &inventory(BrokerServiceState::Absent, 1024),
             &UninstallArgs::default(),
         );
-        assert!(find_action(&plan, Action::DelegateWinget));
-        assert!(!find_action(&plan, Action::DeleteBinaries));
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::DelegateWinget { .. }
+        )));
+        assert!(!has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::DeleteBinaries { .. }
+        )));
     }
 
     #[test]
@@ -335,7 +394,10 @@ mod tests {
             &UninstallArgs::default(),
         );
         assert!(plan.requires_elevation());
-        assert!(find_action(&plan, Action::RemoveService));
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::RemoveService { .. }
+        )));
         assert_eq!(plan.groups.first().expect("a group").title, "Services");
     }
 
@@ -370,7 +432,10 @@ mod tests {
             &inventory(BrokerServiceState::Installed, 1024),
             &user_only,
         );
-        assert!(!find_action(&plan, Action::RemoveService));
+        assert!(!has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::RemoveService { .. }
+        )));
         assert!(!plan.requires_elevation());
     }
 
@@ -391,6 +456,9 @@ mod tests {
             &inventory(BrokerServiceState::Absent, 1024),
             &UninstallArgs::default(),
         );
-        assert!(find_action(&plan, Action::StopProcess));
+        assert!(has_target(&plan, |target| matches!(
+            target,
+            PlanTarget::StopProcess { .. }
+        )));
     }
 }

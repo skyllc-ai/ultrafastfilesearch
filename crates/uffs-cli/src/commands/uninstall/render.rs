@@ -81,7 +81,10 @@ pub(crate) fn print_plan(plan: &RemovalPlan) {
             } else {
                 ""
             };
-            println!("  [{index}] {desc}{elevated}", desc = item.description);
+            println!(
+                "  [{index}] {desc}{elevated}",
+                desc = item.target.describe()
+            );
             index = index.saturating_add(1);
         }
     }
@@ -101,7 +104,7 @@ pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
     for group in &plan.groups {
         for item in &group.items {
             if item.needs_elevation {
-                eprintln!("  - {}", item.description);
+                eprintln!("  - {}", item.target.describe());
             }
         }
     }
@@ -128,8 +131,8 @@ fn plan_json(plan: &RemovalPlan) -> Value {
                 .iter()
                 .map(|item| {
                     json!({
-                        "action": item.action.label(),
-                        "description": item.description,
+                        "action": item.target.action_label(),
+                        "description": item.target.describe(),
                         "needs_elevation": item.needs_elevation,
                         "bytes": item.bytes,
                     })
