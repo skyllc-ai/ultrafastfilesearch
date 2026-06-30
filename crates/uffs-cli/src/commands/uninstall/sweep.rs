@@ -52,13 +52,63 @@ pub(crate) struct StrayHit {
 pub(crate) fn version_strays(paths: Vec<PathBuf>) -> Vec<StrayHit> {
     paths
         .into_iter()
-        .map(|path| {
+        .filter_map(|path| {
+            // The legacy C++ `uffs.exe` is a Windows GUI app — a different
+            // product, not our console CLI. Drop it: running it with
+            // `--version` pops a window and is slow, and it is not ours to list.
+            if is_legacy_gui_uffs(&path) {
+                return None;
+            }
             let version = is_probeable_binary(&path)
                 .then(|| crate::commands::update::binaries::probe_version(&path))
                 .flatten();
-            StrayHit { path, version }
+            Some(StrayHit { path, version })
         })
         .collect()
+}
+
+/// `IMAGE_SUBSYSTEM_WINDOWS_GUI` — a windowed app with no console.
+const IMAGE_SUBSYSTEM_WINDOWS_GUI: u16 = 2;
+
+/// Whether `path` is the legacy C++ `uffs.exe`: named `uffs.exe` *and* built as
+/// a Windows **GUI**-subsystem binary (our Rust CLI is a console app). Only
+/// `uffs.exe` collides with the predecessor product — the other family names
+/// are Rust-only, so they are never GUI-filtered.
+fn is_legacy_gui_uffs(path: &Path) -> bool {
+    let is_uffs_exe = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("uffs.exe"));
+    is_uffs_exe && pe_subsystem(path) == Some(IMAGE_SUBSYSTEM_WINDOWS_GUI)
+}
+
+/// Read a PE image's Optional-Header `Subsystem` field (2 = GUI, 3 = console)
+/// without running it — only the headers are read. `None` on any read/parse
+/// failure or a non-PE file. The `Subsystem` field sits at offset 68 of the
+/// Optional Header in both PE32 and PE32+.
+fn pe_subsystem(path: &Path) -> Option<u16> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut dos = [0_u8; 64];
+    file.read_exact(&mut dos).ok()?;
+    if &dos[0..2] != b"MZ" {
+        return None;
+    }
+    // `e_lfanew` (offset to the PE header) lives at 0x3C in the DOS header.
+    let pe_off = u64::from(u32::from_le_bytes([dos[60], dos[61], dos[62], dos[63]]));
+    let mut sig = [0_u8; 4];
+    file.seek(SeekFrom::Start(pe_off)).ok()?;
+    file.read_exact(&mut sig).ok()?;
+    if &sig != b"PE\0\0" {
+        return None;
+    }
+    // Optional Header starts after the 4-byte signature + 20-byte COFF header;
+    // `Subsystem` is at +68 within it.
+    file.seek(SeekFrom::Start(pe_off + 4 + 20 + 68)).ok()?;
+    let mut subsystem = [0_u8; 2];
+    file.read_exact(&mut subsystem).ok()?;
+    Some(u16::from_le_bytes(subsystem))
 }
 
 /// Whether `path` names an executable we can run `--version` on, rather than a
