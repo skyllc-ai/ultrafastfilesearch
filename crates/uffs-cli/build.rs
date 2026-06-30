@@ -99,6 +99,13 @@ fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=../../assets/brand/icons/uffs.ico");
 
+    // Stamp the short git commit (+ `-dirty`) into `UFFS_GIT_SHA` so
+    // `uffs --version` can tie a running binary back to the exact build —
+    // closing the "ran a stale binary" trap. The daemon already does this in its
+    // startup log; the CLI surfaced no commit, so a rebuilt-but-not-deployed
+    // uffs.exe was indistinguishable from the old one.
+    emit_git_sha();
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
@@ -130,4 +137,34 @@ fn main() {
         res.compile()
             .expect("winresource: failed to embed icon + manifest");
     }
+}
+
+/// Emit `UFFS_GIT_SHA` = the short `HEAD` commit, with a `-dirty` suffix when
+/// the working tree has uncommitted changes (so a hand-tweaked local build is
+/// never mistaken for the clean commit). Best-effort: `unknown` when git is
+/// absent. Mirrors `uffs-daemon`'s build stamp; `../../.git/HEAD` is watched so
+/// the stamp tracks the checked-out commit.
+fn emit_git_sha() {
+    use std::process::Command;
+
+    let sha = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|raw| raw.trim().to_owned())
+        .filter(|trimmed| !trimmed.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .is_some_and(|out| !out.stdout.is_empty());
+
+    let stamp = if dirty { format!("{sha}-dirty") } else { sha };
+    println!("cargo:rustc-env=UFFS_GIT_SHA={stamp}");
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
 }

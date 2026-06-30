@@ -518,10 +518,18 @@ pub(crate) fn print_help() {
     print!("{HELP}");
 }
 
-/// Print version and exit.
+/// Print version and exit. Includes the build's short git commit (stamped by
+/// `build.rs` into `UFFS_GIT_SHA`, with `-dirty` for an uncommitted tree) so a
+/// running binary can be tied to the exact source it was built from — match it
+/// against `git rev-parse --short HEAD` to confirm you are not on a stale
+/// build.
 #[expect(clippy::print_stdout, reason = "intentional version output")]
 pub(crate) fn print_version() {
-    println!("uffs {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "uffs {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("UFFS_GIT_SHA").unwrap_or("unknown")
+    );
 }
 
 // ── Subcommand help texts ─────────────────────────────────────────────
