@@ -19,8 +19,11 @@ use uffs_client::connect_sync::UffsClientSync;
 use uffs_mft::platform::{DriveLetter, detect_ntfs_drives};
 
 /// How long to wait for newly-requested drives to finish loading before the
-/// sweep runs. A best-effort cap — a slow HDD index may still be in flight.
-const INDEX_WAIT: core::time::Duration = core::time::Duration::from_secs(120);
+/// sweep runs. Generous because a cold multi-drive index is genuinely slow
+/// (millions of records per volume); the previous 120 s cap expired mid-load on
+/// a 7-drive system (~2.5 min), so the sweep searched a not-yet-ready index and
+/// missed the still-loading drive.
+const INDEX_WAIT: core::time::Duration = core::time::Duration::from_secs(600);
 
 /// Ensure the daemon covers every NTFS drive before the deep sweep, offering to
 /// start it and index the missing drives. `confirm` prompts the user (returns
@@ -90,17 +93,32 @@ const POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(50
 /// deadline, after which the sweep proceeds with whatever is loaded.
 fn wait_until_loaded(client: &mut UffsClientSync, wanted: &[DriveLetter]) {
     let deadline = std::time::Instant::now() + INDEX_WAIT;
+    let mut last_ready = usize::MAX;
     loop {
-        let all_loaded = client.status_drives().is_ok_and(|resp| {
-            wanted.iter().all(|drive| {
-                resp.drives
-                    .iter()
-                    .any(|row| row.letter == *drive && matches!(row.tier.as_str(), "hot" | "warm"))
-            })
+        let ready = client.status_drives().map_or(0, |resp| {
+            wanted
+                .iter()
+                .filter(|drive| {
+                    resp.drives.iter().any(|row| {
+                        row.letter == **drive && matches!(row.tier.as_str(), "hot" | "warm")
+                    })
+                })
+                .count()
         });
-        if all_loaded || std::time::Instant::now() >= deadline {
+        // Progress feedback so a multi-minute index never looks like a hang.
+        if ready != last_ready {
+            print_index_progress(ready, wanted.len());
+            last_ready = ready;
+        }
+        if ready == wanted.len() || std::time::Instant::now() >= deadline {
             return;
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Print drive-index progress for [`wait_until_loaded`].
+#[expect(clippy::print_stdout, reason = "CLI progress output")]
+fn print_index_progress(ready: usize, total: usize) {
+    println!("  indexing for the sweep: {ready}/{total} drives ready...");
 }
