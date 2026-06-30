@@ -262,6 +262,11 @@ pub fn parse_pid_file(path: &std::path::Path) -> Option<(u32, u64, u64, String)>
 }
 
 /// Find the `uffs` CLI executable.
+///
+/// The `$PATH` fallback carries the `.exe` extension on Windows so a bare
+/// `uffs` can never be resolved to a legacy `uffs.com` via PATHEXT (`.COM`
+/// precedes `.EXE`) if this path is ever handed to a shell / registry entry /
+/// logged command rather than spawned directly.
 #[must_use]
 pub fn find_uffs_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -277,7 +282,7 @@ pub fn find_uffs_exe() -> PathBuf {
             }
         }
     }
-    PathBuf::from("uffs")
+    PathBuf::from(if cfg!(windows) { "uffs.exe" } else { "uffs" })
 }
 
 /// Find the `uffsd` daemon executable.
@@ -285,7 +290,9 @@ pub fn find_uffs_exe() -> PathBuf {
 /// Search order:
 /// 1. If the current binary is already `uffsd`, return it.
 /// 2. Look for `uffsd` / `uffsd.exe` next to the current binary.
-/// 3. Fall back to bare `uffsd` (rely on `$PATH`).
+/// 3. Fall back to the platform binary name `uffsd.exe` / `uffsd` on `$PATH` —
+///    always `.exe`-qualified on Windows so a bare `uffsd` can never resolve to
+///    a legacy `.com` via PATHEXT if handed to a shell.
 #[must_use]
 pub(crate) fn find_daemon_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -301,7 +308,7 @@ pub(crate) fn find_daemon_exe() -> PathBuf {
             }
         }
     }
-    PathBuf::from("uffsd")
+    PathBuf::from(if cfg!(windows) { "uffsd.exe" } else { "uffsd" })
 }
 
 #[cfg(test)]
