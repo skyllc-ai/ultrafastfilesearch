@@ -61,22 +61,32 @@ pub(crate) fn ensure_drive_coverage(confirm: &mut dyn FnMut(&str) -> Result<bool
     if missing.is_empty() {
         return Ok(());
     }
+    let count = missing.len();
     let list = missing
         .iter()
         .map(|drive| format!("{drive}:"))
         .collect::<Vec<_>>()
         .join(", ");
     let prompt = format!(
-        "\nThe deep sweep searches every indexed drive. Not yet indexed: {list}.\n\
-         Indexing builds the on-disk index cache for those drives (uses disk +\n\
-         memory, and persists even under --dry-run). Index {list} now for a\n\
-         complete sweep? [y/N] "
+        "\nThe deep sweep needs all {count} drives indexed first ({list}). This builds\n\
+         an on-disk index cache (uses disk + memory, and is kept even on a dry run)\n\
+         and can take a few minutes. Index them now? [y/N] "
     );
-    if confirm(&prompt)? && client.load_drive_letters(&missing, false).is_ok() {
-        // Wait for the freshly-requested drives to become searchable — poll for
-        // readiness rather than a blind fixed wait, so the sweep never searches a
-        // still-parked shard (and returns as soon as they are loaded).
+    if confirm(&prompt)? {
+        // Fire the (blocking) load on a *background* connection so this thread can
+        // poll `status_drives` for live progress while the daemon works through
+        // the drives. The load RPC can exceed the client timeout on a big
+        // multi-drive index — but the poll, not the RPC return, decides when the
+        // drives are searchable, so a background timeout is harmless.
+        let to_load = missing.clone();
+        let loader = std::thread::spawn(move || {
+            if let Ok(mut background) = UffsClientSync::connect_raw() {
+                // Best-effort: the poll below is the source of truth for "ready".
+                let _outcome = background.load_drive_letters(&to_load, false);
+            }
+        });
         wait_until_loaded(&mut client, &missing);
+        let _joined = loader.join();
     }
     Ok(())
 }
