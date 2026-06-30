@@ -229,18 +229,21 @@ pub(crate) fn build_plan(
         push_group(&mut groups, "Services", vec![item], args.scope);
     }
 
-    // 2. Processes (stopped before their binaries are deleted).
+    // 2. Processes (stopped before their binaries are deleted). The broker is a
+    // LocalSystem **service** — `taskkill` can't stop it (returns exit 128, and
+    // the SCM would just restart it), so it is never a StopProcess item; the
+    // RemoveService item above stops + deletes it via `sc`. The daemon / MCP are
+    // ordinary user-owned processes, so a plain stop applies and needs no admin.
     let processes: Vec<PlanItem> = report
         .running
         .iter()
+        .filter(|process| !matches!(process.component, Component::Broker))
         .map(|process| PlanItem {
             target: PlanTarget::StopProcess {
                 component: process.component.label().to_owned(),
                 pid: process.pid,
             },
-            // The broker runs as LocalSystem (the Windows service), so stopping
-            // it needs Administrator; the daemon / MCP are user-owned and do not.
-            needs_elevation: matches!(process.component, Component::Broker),
+            needs_elevation: false,
             scope: ItemScope::Any,
             bytes: 0,
         })
@@ -629,8 +632,9 @@ mod tests {
                 },
             ],
         };
-        // Broker service installed -> an admin-only RemoveService item, plus the
-        // broker process stop is admin-only; the daemon stop is not.
+        // Broker service installed -> an admin-only RemoveService item. The
+        // broker *process* is filtered out (it's a service, stopped via sc, not
+        // taskkill); only the user-owned daemon stop remains, needing no admin.
         let mut plan = built(
             &report,
             &inventory(BrokerServiceState::Installed, 1024),
