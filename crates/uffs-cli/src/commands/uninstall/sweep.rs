@@ -15,19 +15,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-/// Family-file name patterns the sweep searches for.
-const STRAY_PATTERNS: &[&str] = &[
-    "uffs.exe",
-    "uffsd.exe",
-    "uffsmcp.exe",
-    "uffs-broker.exe",
-    "uffs-update.exe",
-    "uffs-mft.exe",
-    "uffs-tui*.exe",
-    "uffs-gui*.exe",
-    "*_compact.uffs",
-    "*_usn.cursor",
-];
+/// UFFS cache/cursor data-file patterns the sweep searches for. The executable
+/// patterns are derived from the shared family set (see [`family_stems`]).
+const CACHE_PATTERNS: &[&str] = &["*_compact.uffs", "*_usn.cursor"];
+
+/// Every UFFS family executable stem — the core managed set plus the
+/// retired/optional/dev-tooling names. Single source of truth shared with the
+/// install-dir sweep ([`super::analyze::EXTRA_BINARY_STEMS`]) so adding a
+/// binary in one place updates both the install-dir removal and the deep sweep.
+fn family_stems() -> impl Iterator<Item = &'static str> {
+    crate::commands::update::binaries::KNOWN_BINARIES
+        .iter()
+        .copied()
+        .chain(super::analyze::EXTRA_BINARY_STEMS.iter().copied())
+}
 
 /// A search backend, injected so the dedup logic is testable without a daemon.
 pub(crate) trait Search {
@@ -124,8 +125,10 @@ fn is_probeable_binary(path: &Path) -> bool {
 /// a directory the plan handles. Sorted + de-duplicated.
 pub(crate) fn find_strays(search: &mut dyn Search, known_dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut strays: Vec<PathBuf> = Vec::new();
-    for pattern in STRAY_PATTERNS {
-        for hit in search.find(pattern)? {
+    let exe_patterns = family_stems().map(|stem| format!("{stem}.exe"));
+    let patterns = exe_patterns.chain(CACHE_PATTERNS.iter().map(|pattern| (*pattern).to_owned()));
+    for pattern in patterns {
+        for hit in search.find(&pattern)? {
             if is_family_artifact(&hit) && !is_under_any(&hit, known_dirs) {
                 strays.push(hit);
             }
@@ -162,19 +165,8 @@ fn is_family_artifact(path: &Path) -> bool {
     let Some(stem) = lower.strip_suffix(".exe") else {
         return false;
     };
-    FAMILY_EXE_STEMS.contains(&stem) || stem.starts_with("uffs-tui") || stem.starts_with("uffs-gui")
+    family_stems().any(|family| family.eq_ignore_ascii_case(stem))
 }
-
-/// Exact `*.exe` family stems the deep sweep removes; the optional `uffs-tui*`
-/// / `uffs-gui*` members are matched by prefix in [`is_family_artifact`].
-const FAMILY_EXE_STEMS: &[&str] = &[
-    "uffs",
-    "uffsd",
-    "uffsmcp",
-    "uffs-broker",
-    "uffs-update",
-    "uffs-mft",
-];
 
 /// Whether `path` is `dir` or lives beneath it (case-insensitive, separator
 /// aware so `/opt/uffs` does not spuriously match `/opt/uffs-other`).
@@ -274,7 +266,10 @@ mod tests {
         assert!(is_family_artifact(Path::new(r"C:\x\uffs.exe")));
         assert!(is_family_artifact(Path::new(r"C:\x\uffsd.exe")));
         assert!(is_family_artifact(Path::new(r"C:\x\uffs-broker.exe")));
-        assert!(is_family_artifact(Path::new(r"C:\x\uffs-tui-x86.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\uffs-tui.exe")));
+        // Dev/diagnostic tooling is part of the family set now.
+        assert!(is_family_artifact(Path::new(r"C:\x\dump-mft-records.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\uffs-ci-pipeline.exe")));
         assert!(is_family_artifact(Path::new(r"C:\x\drive_c_compact.uffs")));
         assert!(is_family_artifact(Path::new(r"C:\x\journal_usn.cursor")));
         // Noise the daemon's substring search also returns — must be dropped.

@@ -13,11 +13,13 @@ use std::path::{Path, PathBuf};
 use super::resolve_order::Candidate;
 use crate::commands::update::model::{BinaryInfo, Channel, DetectionReport, InstallRoot};
 
-/// Binary stems UFFS used in the past (retired names) or for optional members
-/// (the TUI/GUI that moved to the products repo). None are in the current
-/// `KNOWN_BINARIES`, but they linger in an install root from an old build, so
-/// uninstall sweeps any that exist (idempotent — absent ones are skipped).
+/// Binary stems beyond the core `KNOWN_BINARIES` that an install root may hold:
+/// retired names, optional members, and the workspace dev/diagnostic tooling.
+/// None are managed by `--update`, but a from-source / `cargo install` build
+/// drops them next to the core set, so uninstall sweeps any that exist
+/// (idempotent — absent ones are skipped).
 pub(crate) const EXTRA_BINARY_STEMS: &[&str] = &[
+    // Retired / optional names.
     "uffs-tui",      // optional member (moved to uffs-products)
     "uffs-gui",      // optional member (moved to uffs-products)
     "uffs-daemon",   // retired -> uffsd
@@ -26,6 +28,22 @@ pub(crate) const EXTRA_BINARY_STEMS: &[&str] = &[
     "uffs_tui",      // ancient underscore naming
     "uffs_gui",      // ancient underscore naming
     "uffs_mft",      // ancient underscore naming
+    // Dev / diagnostic / tooling binaries (workspace bin targets).
+    "uffs-bench",
+    "uffs-ci-pipeline",
+    "analyze-diff",
+    "analyze-mft-parents",
+    "compare-raw-mft",
+    "compare-scan-parity",
+    "cross-check-mft-reference",
+    "dump-mft-extents",
+    "dump-mft-records",
+    "inspect-mft-record-flow",
+    "scan-mft-magic",
+    "verify-iocp-capture",
+    "manifest-audit",
+    "gen-hooks",
+    "gen-workflow",
 ];
 
 /// Add any [`EXTRA_BINARY_STEMS`] that actually exist in an unmanaged /
