@@ -14,6 +14,18 @@ use super::resolve_order::{ResolutionState, StemResolution};
 #[cfg(windows)]
 use super::sweep::StrayHit;
 
+/// Print the running build's version + git commit at the top of an uninstall
+/// run, so a dry-run or live log is unambiguously tied to the exact binary that
+/// produced it (the same stamp `uffs --version` shows).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_run_header() {
+    println!(
+        "uffs {} ({}) — uninstall\n",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("UFFS_GIT_SHA").unwrap_or("unknown")
+    );
+}
+
 /// Print the discovered-binary resolution table: for each stem, every copy in
 /// OS search order, with the one a bare command runs flagged ACTIVE.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]

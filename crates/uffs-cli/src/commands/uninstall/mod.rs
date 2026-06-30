@@ -77,6 +77,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    render::print_run_header();
     render::print_resolution_table(&resolved);
     render::print_inventory(&inventory);
     render::print_plan(&removal_plan);
