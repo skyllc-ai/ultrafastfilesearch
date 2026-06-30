@@ -76,7 +76,7 @@ pub(crate) fn find_strays(search: &mut dyn Search, known_dirs: &[PathBuf]) -> Re
     let mut strays: Vec<PathBuf> = Vec::new();
     for pattern in STRAY_PATTERNS {
         for hit in search.find(pattern)? {
-            if !is_under_any(&hit, known_dirs) {
+            if is_family_artifact(&hit) && !is_under_any(&hit, known_dirs) {
                 strays.push(hit);
             }
         }
@@ -85,6 +85,46 @@ pub(crate) fn find_strays(search: &mut dyn Search, known_dirs: &[PathBuf]) -> Re
     strays.dedup();
     Ok(strays)
 }
+
+/// Whether `path`'s file name is *exactly* a UFFS family executable or cache
+/// file we would actually remove — not a derived artifact that merely contains
+/// a family name as a substring.
+///
+/// The daemon search matches `uffs.exe` as a *contains* query, so a raw sweep
+/// also returns prefetch traces (`UFFS.EXE-1234.pf`), localized resources
+/// (`uffs.exe.mui`), checksums (`uffs.exe.sha256`), build recipes
+/// (`uffs.exe.recipe`), and NTFS alternate-data-stream entries
+/// (`uffs.exe:com.dropbox.attrs`). None of those are ours to delete; this keeps
+/// only an exact `*.exe` family binary or a `*_compact.uffs` / `*_usn.cursor`
+/// cache file.
+fn is_family_artifact(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|raw| raw.to_str()) else {
+        return false;
+    };
+    // An alternate-data-stream entry (`file:stream`) is never a real file.
+    if name.contains(':') {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with("_compact.uffs") || lower.ends_with("_usn.cursor") {
+        return true;
+    }
+    let Some(stem) = lower.strip_suffix(".exe") else {
+        return false;
+    };
+    FAMILY_EXE_STEMS.contains(&stem) || stem.starts_with("uffs-tui") || stem.starts_with("uffs-gui")
+}
+
+/// Exact `*.exe` family stems the deep sweep removes; the optional `uffs-tui*`
+/// / `uffs-gui*` members are matched by prefix in [`is_family_artifact`].
+const FAMILY_EXE_STEMS: &[&str] = &[
+    "uffs",
+    "uffsd",
+    "uffsmcp",
+    "uffs-broker",
+    "uffs-update",
+    "uffs-mft",
+];
 
 /// Whether `path` is `dir` or lives beneath it (case-insensitive, separator
 /// aware so `/opt/uffs` does not spuriously match `/opt/uffs-other`).
@@ -172,11 +212,34 @@ fn blob_lines_to_paths(blob: &str) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use anyhow::Result;
 
-    use super::{Search, blob_lines_to_paths, find_strays, version_strays};
+    use super::{Search, blob_lines_to_paths, find_strays, is_family_artifact, version_strays};
+
+    #[test]
+    fn family_artifact_filter_keeps_binaries_drops_noise() {
+        // Real removable family files.
+        assert!(is_family_artifact(Path::new(r"C:\x\uffs.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\uffsd.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\uffs-broker.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\uffs-tui-x86.exe")));
+        assert!(is_family_artifact(Path::new(r"C:\x\drive_c_compact.uffs")));
+        assert!(is_family_artifact(Path::new(r"C:\x\journal_usn.cursor")));
+        // Noise the daemon's substring search also returns — must be dropped.
+        assert!(!is_family_artifact(Path::new(
+            r"C:\Windows\Prefetch\UFFS.EXE-1867467A.pf"
+        )));
+        assert!(!is_family_artifact(Path::new(r"C:\x\uffs.exe.mui")));
+        assert!(!is_family_artifact(Path::new(r"C:\x\uffs.exe.sha256")));
+        assert!(!is_family_artifact(Path::new(r"C:\x\uffs.exe.recipe")));
+        assert!(!is_family_artifact(Path::new(
+            r"C:\x\uffs.exe:com.dropbox.attrs"
+        )));
+        // A foreign exe that merely contains "uffs.exe" as a substring.
+        assert!(!is_family_artifact(Path::new(r"C:\x\notuffs.exe")));
+    }
 
     /// Returns the same hits for every pattern (the dedup must collapse them).
     struct FakeSearch(Vec<PathBuf>);
