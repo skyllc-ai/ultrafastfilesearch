@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 use super::args::{UninstallArgs, UninstallScope};
 use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
+#[cfg(windows)]
+use super::sweep::StrayHit;
 use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
 
 /// The `WinGet` package id UFFS publishes under.
@@ -67,6 +69,16 @@ pub(crate) enum PlanTarget {
         /// The PATH entry to remove.
         dir: PathBuf,
     },
+    /// Delete a single stray UFFS file the deep sweep found outside the known
+    /// roots. Confirmed separately from the main plan. Windows-only (the deep
+    /// sweep does not run off Windows).
+    #[cfg(windows)]
+    DeleteFile {
+        /// Absolute path of the stray file.
+        path: PathBuf,
+        /// Parsed `--version` if it is a probeable binary (display only).
+        version: Option<String>,
+    },
 }
 
 impl PlanTarget {
@@ -79,6 +91,8 @@ impl PlanTarget {
             Self::DelegateWinget { .. } => "delegate-winget",
             Self::DeleteDir { .. } => "delete-dir",
             Self::RemovePathEntry { .. } => "remove-path-entry",
+            #[cfg(windows)]
+            Self::DeleteFile { .. } => "delete-file",
         }
     }
 
@@ -101,6 +115,11 @@ impl PlanTarget {
             ),
             Self::DeleteDir { path, label } => format!("{label} ({})", path.display()),
             Self::RemovePathEntry { dir } => format!("PATH entry {}", dir.display()),
+            #[cfg(windows)]
+            Self::DeleteFile { path, version } => version.as_ref().map_or_else(
+                || path.display().to_string(),
+                |ver| format!("{} (v{ver})", path.display()),
+            ),
         }
     }
 }
@@ -174,13 +193,16 @@ impl RemovalPlan {
     }
 }
 
-/// Build the ordered removal plan from the analysis + flags. `path_entries` is
-/// the live PATH (used to offer removal of entries that point at a UFFS root).
+/// Build the ordered removal plan from the analysis + flags.
+/// `removable_path_dirs` is the already-vetted set of PATH directories safe to
+/// drop — dedicated UFFS roots only (see
+/// [`super::analyze::removable_path_dirs`]). A shared bin dir is never in it,
+/// so PATH cleanup never touches the user's general toolchain location.
 pub(crate) fn build_plan(
     report: &DetectionReport,
     inventory: &Inventory,
     args: &UninstallArgs,
-    path_entries: &[PathBuf],
+    removable_path_dirs: &[PathBuf],
 ) -> RemovalPlan {
     let mut groups: Vec<PlanGroup> = Vec::new();
 
@@ -240,18 +262,19 @@ pub(crate) fn build_plan(
         .collect();
     push_group(&mut groups, "Data / cache / config", dirs, args.scope);
 
-    // 5. PATH entries that point at a removed unmanaged/dev root — provably UFFS
-    // (the exact dir we just deleted), so safe to drop. WinGet roots are managed
-    // by winget; never touched here. Skipped under --no-path.
+    // 5. PATH entries that point at a removed unmanaged/dev root that is
+    // *dedicated* to UFFS (only uffs* files) — provably ours, so safe to drop. A
+    // shared bin dir (~/bin, ~/.local/bin) is filtered out upstream and never
+    // appears here. WinGet roots are managed by winget. Skipped under --no-path.
     if !args.no_path {
         let path_items: Vec<PlanItem> = report
             .roots
             .iter()
             .filter(|root| !root.binaries.is_empty() && !matches!(root.channel, Channel::WinGet))
             .filter(|root| {
-                path_entries
+                removable_path_dirs
                     .iter()
-                    .any(|entry| paths_equal_ignore_case(entry, &root.dir))
+                    .any(|dir| paths_equal_ignore_case(dir, &root.dir))
             })
             .map(|root| {
                 let machine = matches!(root.scope, Scope::Machine);
@@ -273,6 +296,37 @@ pub(crate) fn build_plan(
     }
 
     RemovalPlan { groups }
+}
+
+/// Build a one-group plan for the stray files the deep sweep found outside the
+/// known roots. Presented + confirmed **separately** from the main plan (a copy
+/// the user placed themselves might be among them). Each item is a best-effort
+/// single-file delete; none require elevation up front — a protected location
+/// simply fails best-effort and is reported. Windows-only (the deep sweep does
+/// not run off Windows).
+#[cfg(windows)]
+pub(crate) fn build_stray_plan(strays: &[StrayHit]) -> RemovalPlan {
+    if strays.is_empty() {
+        return RemovalPlan::default();
+    }
+    let items: Vec<PlanItem> = strays
+        .iter()
+        .map(|stray| PlanItem {
+            target: PlanTarget::DeleteFile {
+                path: stray.path.clone(),
+                version: stray.version.clone(),
+            },
+            needs_elevation: false,
+            scope: ItemScope::Any,
+            bytes: 0,
+        })
+        .collect();
+    RemovalPlan {
+        groups: vec![PlanGroup {
+            title: "Found elsewhere (deep sweep)",
+            items,
+        }],
+    }
 }
 
 /// Case-insensitive path equality (Windows file systems + PATH entries vary in
@@ -370,6 +424,8 @@ const fn scope_admits(requested: UninstallScope, item: ItemScope) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    #[cfg(windows)]
+    use super::build_stray_plan;
     use super::{PlanTarget, RemovalPlan, build_plan};
     use crate::commands::uninstall::args::{UninstallArgs, UninstallScope};
     use crate::commands::uninstall::inventory::{
@@ -541,13 +597,44 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn stray_plan_is_one_group_of_unprivileged_delete_file_items() {
+        use crate::commands::uninstall::sweep::StrayHit;
+
+        assert!(build_stray_plan(&[]).is_empty(), "no strays -> empty plan");
+        let strays = vec![
+            StrayHit {
+                path: PathBuf::from("/home/me/Downloads/uffs"),
+                version: Some("0.5.0".to_owned()),
+            },
+            StrayHit {
+                path: PathBuf::from("/tmp/x_compact.uffs"),
+                version: None,
+            },
+        ];
+        let plan = build_stray_plan(&strays);
+        assert_eq!(plan.item_count(), 2);
+        assert!(
+            plan.items()
+                .all(|item| matches!(item.target, PlanTarget::DeleteFile { .. })),
+            "every stray item is a DeleteFile"
+        );
+        assert!(
+            !plan.requires_elevation(),
+            "strays never require up-front elevation (best-effort on failure)"
+        );
+    }
+
+    #[test]
     fn path_entry_matching_a_removed_root_is_offered_and_respects_no_path() {
         let report = DetectionReport {
             roots: vec![root(Channel::Unmanaged, Scope::User, r"C:\Users\me\bin")],
             running: Vec::new(),
         };
         let inv = inventory(BrokerServiceState::Absent, 1024);
-        // Case-insensitive match of a PATH entry to the removed root → offered.
+        // The 4th arg is the already-vetted removable-dir set; a case-insensitive
+        // match to the removed root → offered. (Exclusivity vetting is tested in
+        // analyze::removable_path_dirs; here we exercise build_plan's emission.)
         let on_path = [PathBuf::from(r"c:\users\me\bin")];
         let offered = build_plan(&report, &inv, &UninstallArgs::default(), &on_path);
         assert!(has_target(&offered, |target| matches!(

@@ -27,6 +27,10 @@ pub(crate) trait Effects {
     fn remove_service(&mut self, service: &str) -> Result<()>;
     /// Delete the named binary stems inside `dir` (absent ones are a no-op).
     fn delete_binaries(&mut self, dir: &Path, stems: &[String]) -> Result<()>;
+    /// Delete one stray file by absolute path (absent is a no-op). Used for the
+    /// Windows deep-sweep hits found outside the known roots.
+    #[cfg(windows)]
+    fn delete_file(&mut self, path: &Path) -> Result<()>;
     /// Hand a `WinGet`-managed root to `winget uninstall`.
     fn delegate_winget(&mut self, package_id: &str, scope: Scope) -> Result<()>;
     /// Recursively delete a directory (absent is a no-op).
@@ -101,6 +105,8 @@ fn dispatch(target: &PlanTarget, effects: &mut dyn Effects) -> Result<()> {
         PlanTarget::StopProcess { component, pid } => effects.stop_process(component, *pid),
         PlanTarget::RemoveService { service } => effects.remove_service(service),
         PlanTarget::DeleteBinaries { dir, stems } => effects.delete_binaries(dir, stems),
+        #[cfg(windows)]
+        PlanTarget::DeleteFile { path, .. } => effects.delete_file(path),
         PlanTarget::DelegateWinget {
             package_id, scope, ..
         } => effects.delegate_winget(package_id, *scope),
@@ -146,6 +152,11 @@ mod tests {
         fn delete_binaries(&mut self, dir: &Path, stems: &[String]) -> Result<()> {
             self.calls
                 .push(format!("delete_binaries:{}:{}", dir.display(), stems.len()));
+            Ok(())
+        }
+        #[cfg(windows)]
+        fn delete_file(&mut self, path: &Path) -> Result<()> {
+            self.calls.push(format!("delete_file:{}", path.display()));
             Ok(())
         }
         fn delegate_winget(&mut self, package_id: &str, _scope: Scope) -> Result<()> {

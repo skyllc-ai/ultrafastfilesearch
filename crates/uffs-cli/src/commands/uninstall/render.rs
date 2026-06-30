@@ -11,6 +11,8 @@ use super::inventory::Inventory;
 use super::plan::RemovalPlan;
 use super::remove::{ItemStatus, RemovalOutcome};
 use super::resolve_order::{ResolutionState, StemResolution};
+#[cfg(windows)]
+use super::sweep::StrayHit;
 
 /// Print the discovered-binary resolution table: for each stem, every copy in
 /// OS search order, with the one a bare command runs flagged ACTIVE.
@@ -115,20 +117,31 @@ pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
     );
 }
 
-/// Print stray UFFS-named files the deep sweep found outside the known roots.
-/// These are listed for review only, never auto-removed.
+/// Print stray UFFS files the deep sweep found outside the known roots, with
+/// versions. These are removed only under a separate second confirmation (a
+/// copy the user placed themselves might be among them). Windows-only.
+#[cfg(windows)]
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
-pub(crate) fn print_strays(strays: &[std::path::PathBuf]) {
+pub(crate) fn print_strays(strays: &[StrayHit]) {
     if strays.is_empty() {
         return;
     }
     println!(
-        "\nStray UFFS-named files found elsewhere (NOT removed — review and delete\n\
-         manually if they are unwanted; one may be a copy you placed yourself):"
+        "\nAlso found elsewhere (deep sweep), outside the standard install locations.\n\
+         These are removed only if you confirm a separate prompt below (one may be a\n\
+         copy you placed yourself):"
     );
-    for path in strays {
-        println!("  {}", path.display());
+    for stray in strays {
+        let version = stray.version.as_deref().unwrap_or("-");
+        println!("  {version:<9}  {}", stray.path.display());
     }
+}
+
+/// Note that the user declined to remove the deep-sweep strays. Windows-only.
+#[cfg(windows)]
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_strays_kept() {
+    println!("Left the file(s) found elsewhere in place.");
 }
 
 /// Note that a prior uninstall was interrupted and this run completes it.

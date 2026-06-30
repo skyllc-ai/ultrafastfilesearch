@@ -23,7 +23,7 @@
 mod acquire;
 mod apply;
 pub(crate) mod binaries;
-mod channel;
+pub(crate) mod channel;
 mod doctor;
 pub(crate) mod model;
 pub(crate) mod procinfo;

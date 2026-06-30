@@ -13,6 +13,8 @@
 
 mod analyze;
 mod args;
+#[cfg(windows)]
+mod coverage;
 mod effects;
 mod inventory;
 mod journal;
@@ -20,6 +22,9 @@ mod plan;
 mod remove;
 mod render;
 mod resolve_order;
+/// Deep-sweep for stray copies on the live drives — Windows-only (off Windows
+/// UFFS indexes offline captures, not the live filesystem).
+#[cfg(windows)]
 mod sweep;
 mod verify;
 
@@ -50,13 +55,22 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     }
 
     // M1 analysis: reuse the self-update Phase-A detection for the binary
-    // resolution table, then inventory the non-binary artifacts.
-    let report = crate::commands::update::detect();
+    // resolution table, then sweep in any retired/optional binary names that
+    // linger from old installs, then inventory the non-binary artifacts.
+    let mut report = crate::commands::update::detect();
+    // Scan PATH + the standard bin dirs for copies that are neither running nor
+    // the invoking exe (which-style, stat-only — no filesystem walk), then sweep
+    // in any retired/optional binary names that linger from old installs.
+    analyze::augment_with_path_locations(&mut report);
+    analyze::augment_with_extra_binaries(&mut report);
     let candidates = analyze::build_candidates(&report);
     let resolved = resolve_order::group_and_resolve(&candidates, &analyze::search_dirs());
     let inventory = inventory::collect();
-    // M2: turn the analysis into an ordered removal plan (read-only).
-    let removal_plan = plan::build_plan(&report, &inventory, &parsed, &analyze::path_entries());
+    // M2: turn the analysis into an ordered removal plan (read-only). Only PATH
+    // entries pointing at a *dedicated* UFFS dir are offered for removal — a
+    // shared bin dir (~/bin, ~/.local/bin) we never created is left alone.
+    let removable_path = analyze::removable_path_dirs(&report, &analyze::path_entries());
+    let removal_plan = plan::build_plan(&report, &inventory, &parsed, &removable_path);
 
     if parsed.json {
         render::print_json(&resolved, &inventory, &removal_plan);
@@ -67,15 +81,13 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     render::print_inventory(&inventory);
     render::print_plan(&removal_plan);
 
-    // M7 deep sweep: while the daemon is still up, ask UFFS itself for stray
-    // family files elsewhere on the indexed drives. Read-only; reported only.
-    if !parsed.no_deep_sweep {
-        let known = plan_dirs(&removal_plan);
-        let mut search = sweep::DaemonSearch;
-        if let Ok(strays) = sweep::find_strays(&mut search, &known) {
-            render::print_strays(&strays);
-        }
-    }
+    // M7 deep sweep: ask UFFS itself for stray family files elsewhere on the
+    // live drives, version them, and build a separate plan removed only under
+    // its own confirmation (one may be a copy the user placed themselves). This
+    // is Windows-only — off Windows UFFS indexes offline captures, not the live
+    // filesystem, so PATH/standard-location copies (already folded into the main
+    // plan above) are all we can find.
+    let stray_plan = platform_stray_plan(&parsed, &removal_plan);
 
     if parsed.dry_run {
         print_dry_run_footer();
@@ -91,13 +103,16 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         bail!("uninstall needs Administrator for the items listed above; re-run elevated");
     }
 
-    if removal_plan.is_empty() {
+    // Nothing to remove at all: no install in the standard locations, and the
+    // deep sweep found no strays.
+    if removal_plan.is_empty() && stray_plan.is_empty() {
         return Ok(());
     }
 
     // M4 consent (U-21): unless --yes, require explicit confirmation (default No)
-    // before any destructive effect.
-    if !parsed.assume_yes && !confirm_removal()? {
+    // before any destructive effect. Declining aborts the whole uninstall.
+    if !removal_plan.is_empty() && !parsed.assume_yes && !confirm("\nProceed with removal? [y/N] ")?
+    {
         print_aborted();
         return Ok(());
     }
@@ -112,8 +127,29 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // M4 execute (U-40..42): run the ordered plan against the live effects sink,
     // best-effort. The outcome reports what was removed and what failed.
     let mut effects = effects::SystemEffects::new();
-    let outcome = remove::execute(&removal_plan, &mut effects);
-    render::print_outcome(&outcome);
+    if !removal_plan.is_empty() {
+        let outcome = remove::execute(&removal_plan, &mut effects);
+        render::print_outcome(&outcome);
+    }
+
+    // Strays found outside the standard locations get a SEPARATE confirmation
+    // (one may be a copy the user placed themselves), then are removed
+    // best-effort. `--yes` covers both prompts. Windows-only — see
+    // `platform_stray_plan`; off Windows `stray_plan` is always empty.
+    #[cfg(windows)]
+    if !stray_plan.is_empty() {
+        let approved = parsed.assume_yes
+            || confirm(&format!(
+                "\nAlso remove the {} file(s) found elsewhere (listed above)? [y/N] ",
+                stray_plan.item_count()
+            ))?;
+        if approved {
+            let stray_outcome = remove::execute(&stray_plan, &mut effects);
+            render::print_outcome(&stray_outcome);
+        } else {
+            render::print_strays_kept();
+        }
+    }
 
     // M8 self-delete (U-80): the running uffs.exe (+ uffs-update.exe) cannot
     // delete themselves in place; schedule a deferred delete. If even scheduling
@@ -169,18 +205,56 @@ fn plan_dirs(plan: &RemovalPlan) -> Vec<PathBuf> {
             | PlanTarget::DelegateWinget { dir, .. }
             | PlanTarget::RemovePathEntry { dir } => Some(dir.clone()),
             PlanTarget::DeleteDir { path, .. } => Some(path.clone()),
+            #[cfg(windows)]
+            PlanTarget::DeleteFile { .. } => None,
             PlanTarget::StopProcess { .. } | PlanTarget::RemoveService { .. } => None,
         })
         .collect()
 }
 
-/// Prompt for confirmation before any removal. Default (empty / anything but
-/// `y`/`yes`) is **No**.
+/// Build the deep-sweep stray plan for the current platform.
+///
+/// Windows: ensure the daemon covers every NTFS drive (offering to start it /
+/// index the missing drives), then ask UFFS for stray copies outside the known
+/// roots and present them for a separate confirmation. The coverage offer runs
+/// under `--dry-run` too — starting the daemon and indexing drives are
+/// non-destructive, and a dry run should preview the *complete* picture; only
+/// the deletions themselves are withheld (the caller returns before executing).
+#[cfg(windows)]
+fn platform_stray_plan(parsed: &UninstallArgs, removal_plan: &RemovalPlan) -> RemovalPlan {
+    if parsed.no_deep_sweep {
+        return RemovalPlan::default();
+    }
+    // Ensuring coverage may start the daemon / index drives — non-destructive,
+    // so it runs even under --dry-run to make the preview accurate.
+    if let Err(err) = coverage::ensure_drive_coverage(&mut |prompt| confirm(prompt)) {
+        render::print_journal_warning(&err);
+    }
+    let known = plan_dirs(removal_plan);
+    let mut search = sweep::DaemonSearch;
+    let strays = sweep::version_strays(sweep::find_strays(&mut search, &known).unwrap_or_default());
+    render::print_strays(&strays);
+    plan::build_stray_plan(&strays)
+}
+
+/// Build the deep-sweep stray plan for the current platform.
+///
+/// Off Windows the daemon indexes offline captures, not the live filesystem, so
+/// it cannot find local stray binaries; PATH/standard-location copies are
+/// already folded into the main plan, leaving no separate stray phase.
+#[cfg(not(windows))]
+fn platform_stray_plan(_parsed: &UninstallArgs, _removal_plan: &RemovalPlan) -> RemovalPlan {
+    RemovalPlan::default()
+}
+
+/// Prompt for a yes/no confirmation. Default (empty / anything but `y`/`yes`)
+/// is **No**. `prompt` is written verbatim (caller includes any leading
+/// newline).
 #[expect(clippy::print_stdout, reason = "interactive CLI prompt")]
-fn confirm_removal() -> Result<bool> {
+fn confirm(prompt: &str) -> Result<bool> {
     use std::io::Write as _;
 
-    print!("\nProceed with removal? [y/N] ");
+    print!("{prompt}");
     std::io::stdout()
         .flush()
         .context("flushing the confirmation prompt")?;

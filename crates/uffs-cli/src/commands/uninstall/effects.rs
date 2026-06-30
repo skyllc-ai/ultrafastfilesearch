@@ -49,6 +49,11 @@ impl Effects for SystemEffects {
         winget_uninstall(package_id, scope)
     }
 
+    #[cfg(windows)]
+    fn delete_file(&mut self, path: &Path) -> Result<()> {
+        remove_file_if_present(path).with_context(|| format!("removing {}", path.display()))
+    }
+
     fn remove_dir(&mut self, path: &Path) -> Result<()> {
         remove_dir_if_present(path).with_context(|| format!("removing {}", path.display()))
     }
@@ -80,14 +85,16 @@ fn remove_path_entry_impl(dir: &Path) -> Result<()> {
 
 /// Unix: the shell owns PATH (rc files), so editing it automatically is unsafe.
 /// Write a manual-cleanup hint to stderr instead (genuinely fallible, so no
-/// `unnecessary_wraps`).
+/// `unnecessary_wraps`). Only reached for a dir we vetted as UFFS-dedicated, so
+/// removing its PATH line is safe — a shared bin dir never gets here.
 #[cfg(not(windows))]
 fn remove_path_entry_impl(dir: &Path) -> Result<()> {
     use std::io::Write as _;
 
     writeln!(
         std::io::stderr(),
-        "  note: remove {} from your shell PATH manually (e.g. ~/.profile or ~/.zshrc)",
+        "  note: {} was a UFFS-only directory; if you added it to your shell PATH \
+         (~/.profile or ~/.zshrc), you can remove that line now",
         dir.display()
     )
     .context("writing PATH cleanup hint")

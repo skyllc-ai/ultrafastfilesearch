@@ -3,8 +3,9 @@
 
 //! Deep sweep for `uffs --uninstall` (task U-70/U-71): use UFFS's own search to
 //! find stray family files anywhere on the indexed drives, beyond the known
-//! install roots. Strays are **reported for review, never auto-removed** — a
-//! `uffs.exe` under `Downloads` might be the user's own copy (design §8).
+//! install roots. Strays are versioned and removed only under a **separate,
+//! explicit second confirmation** (a `uffs.exe` under `Downloads` might be the
+//! user's own copy, so they never ride the main plan's single yes — design §8).
 //!
 //! The dedup logic is pure + unit-tested against a fake [`Search`]; the live
 //! backend ([`DaemonSearch`]) is best-effort (no daemon ⇒ no hits, never a
@@ -33,6 +34,41 @@ const STRAY_PATTERNS: &[&str] = &[
 pub(crate) trait Search {
     /// Absolute paths matching `pattern` (best-effort; empty on any failure).
     fn find(&mut self, pattern: &str) -> Result<Vec<PathBuf>>;
+}
+
+/// A stray family file found outside the known install roots, with its parsed
+/// `--version` for binaries (data files like caches carry `None`).
+#[derive(Debug, Clone)]
+pub(crate) struct StrayHit {
+    /// Absolute path of the stray file.
+    pub(crate) path: PathBuf,
+    /// Parsed `--version`, or `None` for a data file or an unreadable version.
+    pub(crate) version: Option<String>,
+}
+
+/// Attach a version to each stray: probe `--version` on the executable hits and
+/// leave UFFS data files (`*_compact.uffs`, `*_usn.cursor`) unversioned. No
+/// daemon needed — each binary is run directly (the same probe the standard
+/// detection uses).
+pub(crate) fn version_strays(paths: Vec<PathBuf>) -> Vec<StrayHit> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let version = is_probeable_binary(&path)
+                .then(|| crate::commands::update::binaries::probe_version(&path))
+                .flatten();
+            StrayHit { path, version }
+        })
+        .collect()
+}
+
+/// Whether `path` names an executable we can run `--version` on, rather than a
+/// UFFS data file (`*.uffs` cache / `*.cursor`) that has no version.
+fn is_probeable_binary(path: &Path) -> bool {
+    !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("uffs") || ext.eq_ignore_ascii_case("cursor"))
 }
 
 /// Find stray family files across every pattern, dropping any hit already under
@@ -119,7 +155,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{Search, extract_paths, find_strays};
+    use super::{Search, extract_paths, find_strays, version_strays};
 
     /// Returns the same hits for every pattern (the dedup must collapse them).
     struct FakeSearch(Vec<PathBuf>);
@@ -153,6 +189,22 @@ mod tests {
         let known = [PathBuf::from("/opt/uffs")];
         let strays = find_strays(&mut search, &known).unwrap();
         assert_eq!(strays.len(), 1, "sibling dir must not be filtered");
+    }
+
+    #[test]
+    fn data_files_are_not_probed_for_a_version() {
+        // Cache/cursor data files have no version and must not be executed; a
+        // (nonexistent) binary path probes to None rather than panicking.
+        let strays = version_strays(vec![
+            PathBuf::from("/x/drive_c_compact.uffs"),
+            PathBuf::from("/x/journal_usn.cursor"),
+            PathBuf::from("/x/definitely-not-here/uffs"),
+        ]);
+        assert_eq!(strays.len(), 3);
+        assert!(
+            strays.iter().all(|stray| stray.version.is_none()),
+            "data files (and an absent binary) carry no version"
+        );
     }
 
     #[test]
