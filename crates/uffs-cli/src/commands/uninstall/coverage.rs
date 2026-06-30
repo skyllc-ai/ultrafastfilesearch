@@ -14,7 +14,6 @@
 
 #![cfg(windows)]
 
-use anyhow::Result;
 use uffs_client::connect_sync::UffsClientSync;
 use uffs_mft::platform::{DriveLetter, detect_ntfs_drives};
 
@@ -25,24 +24,21 @@ use uffs_mft::platform::{DriveLetter, detect_ntfs_drives};
 /// missed the still-loading drive.
 const INDEX_WAIT: core::time::Duration = core::time::Duration::from_secs(600);
 
-/// Ensure the daemon covers every NTFS drive before the deep sweep, offering to
-/// start it and index the missing drives. `confirm` prompts the user (returns
-/// their yes/no). Returns `Ok(())` whether or not coverage was completed — the
-/// caller sweeps regardless.
+/// Ensure the daemon covers every NTFS drive before the deep sweep: connect
+/// (auto-starting the daemon if needed) and index any drives not yet loaded.
 ///
-/// # Errors
-///
-/// Propagates only a failure of the `confirm` callback itself; daemon/RPC
-/// failures are swallowed (best-effort coverage).
-pub(crate) fn ensure_drive_coverage(confirm: &mut dyn FnMut(&str) -> Result<bool>) -> Result<()> {
+/// Indexing is a non-elevated, non-destructive read the sweep requires, so it
+/// **always runs — no prompt**. Best-effort: a missing daemon or RPC failure
+/// just means the sweep covers whatever is already indexed.
+pub(crate) fn ensure_drive_coverage() {
     let all = detect_ntfs_drives();
     if all.is_empty() {
-        return Ok(());
+        return;
     }
     // `connect()` auto-starts the daemon if it is not already running.
     let Ok(mut client) = UffsClientSync::connect() else {
         // Could not reach or start a daemon: nothing to cover, sweep as-is.
-        return Ok(());
+        return;
     };
     let indexed: Vec<DriveLetter> = client
         .drives()
@@ -59,36 +55,29 @@ pub(crate) fn ensure_drive_coverage(confirm: &mut dyn FnMut(&str) -> Result<bool
         .filter(|drive| !indexed.contains(drive))
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return;
     }
-    let count = missing.len();
-    let list = missing
-        .iter()
-        .map(|drive| format!("{drive}:"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let prompt = format!(
-        "\nThe deep sweep needs all {count} drives indexed first ({list}). This builds\n\
-         an on-disk index cache (uses disk + memory, and is kept even on a dry run)\n\
-         and can take a few minutes. Index them now? [y/N] "
-    );
-    if confirm(&prompt)? {
-        // Fire the (blocking) load on a *background* connection so this thread can
-        // poll `status_drives` for live progress while the daemon works through
-        // the drives. The load RPC can exceed the client timeout on a big
-        // multi-drive index — but the poll, not the RPC return, decides when the
-        // drives are searchable, so a background timeout is harmless.
-        let to_load = missing.clone();
-        let loader = std::thread::spawn(move || {
-            if let Ok(mut background) = UffsClientSync::connect_raw() {
-                // Best-effort: the poll below is the source of truth for "ready".
-                let _outcome = background.load_drive_letters(&to_load, false);
-            }
-        });
-        wait_until_loaded(&mut client, &missing);
-        let _joined = loader.join();
-    }
-    Ok(())
+    print_index_intro(missing.len());
+    // Fire the (blocking) load on a *background* connection so this thread can
+    // poll `status_drives` for live progress while the daemon works through the
+    // drives. The load RPC can exceed the client timeout on a big multi-drive
+    // index — but the poll, not the RPC return, decides when the drives are
+    // searchable, so a background timeout is harmless.
+    let to_load = missing.clone();
+    let loader = std::thread::spawn(move || {
+        if let Ok(mut background) = UffsClientSync::connect_raw() {
+            // Best-effort: the poll below is the source of truth for "ready".
+            let _outcome = background.load_drive_letters(&to_load, false);
+        }
+    });
+    wait_until_loaded(&mut client, &missing);
+    let _joined = loader.join();
+}
+
+/// Intro line printed before the per-drive index progress.
+#[expect(clippy::print_stdout, reason = "CLI progress output")]
+fn print_index_intro(count: usize) {
+    println!("\nIndexing {count} drive(s) for the deep sweep (this can take a few minutes):");
 }
 
 /// Poll interval while waiting for requested drives to finish loading.

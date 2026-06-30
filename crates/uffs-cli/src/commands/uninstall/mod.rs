@@ -232,11 +232,10 @@ fn platform_stray_plan(parsed: &UninstallArgs, removal_plan: &RemovalPlan) -> Re
     if parsed.no_deep_sweep {
         return RemovalPlan::default();
     }
-    // Ensuring coverage may start the daemon / index drives — non-destructive,
-    // so it runs even under --dry-run to make the preview accurate.
-    if let Err(err) = coverage::ensure_drive_coverage(&mut |prompt| confirm(prompt)) {
-        render::print_journal_warning(&err);
-    }
+    // Indexing every drive is a non-elevated, non-destructive read the sweep
+    // needs, so it always runs (no prompt) — including under --dry-run, to make
+    // the preview accurate.
+    coverage::ensure_drive_coverage();
     let known = plan_dirs(removal_plan);
     let mut search = sweep::DaemonSearch;
     let strays = sweep::version_strays(sweep::find_strays(&mut search, &known).unwrap_or_default());
