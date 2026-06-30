@@ -70,8 +70,37 @@ pub(crate) fn ensure_drive_coverage(confirm: &mut dyn FnMut(&str) -> Result<bool
          complete sweep? [y/N] "
     );
     if confirm(&prompt)? && client.load_drive_letters(&missing, false).is_ok() {
-        // Give the freshly-requested drives a chance to load before we search.
-        let _ready = client.await_ready(INDEX_WAIT);
+        // Wait for the freshly-requested drives to become searchable — poll for
+        // readiness rather than a blind fixed wait, so the sweep never searches a
+        // still-parked shard (and returns as soon as they are loaded).
+        wait_until_loaded(&mut client, &missing);
     }
     Ok(())
+}
+
+/// Poll interval while waiting for requested drives to finish loading.
+const POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(500);
+
+/// Poll `status_drives` until every drive in `wanted` reports a loaded
+/// (searchable) shard — tier `hot` or `warm` — or [`INDEX_WAIT`] elapses.
+///
+/// A freshly `load_drive_letters`-requested shard starts parked/cold and only
+/// becomes searchable once its body is resident; searching before then is what
+/// returned zero strays. Best-effort: any RPC error just keeps polling to the
+/// deadline, after which the sweep proceeds with whatever is loaded.
+fn wait_until_loaded(client: &mut UffsClientSync, wanted: &[DriveLetter]) {
+    let deadline = std::time::Instant::now() + INDEX_WAIT;
+    loop {
+        let all_loaded = client.status_drives().is_ok_and(|resp| {
+            wanted.iter().all(|drive| {
+                resp.drives
+                    .iter()
+                    .any(|row| row.letter == *drive && matches!(row.tier.as_str(), "hot" | "warm"))
+            })
+        });
+        if all_loaded || std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
