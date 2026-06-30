@@ -258,7 +258,23 @@ fn platform_stray_plan(parsed: &UninstallArgs, removal_plan: &RemovalPlan) -> Re
     coverage::ensure_drive_coverage();
     let known = plan_dirs(removal_plan);
     let mut search = sweep::DaemonSearch;
-    let strays = sweep::version_strays(sweep::find_strays(&mut search, &known).unwrap_or_default());
+
+    let find_started = std::time::Instant::now();
+    let candidates = sweep::find_strays(&mut search, &known).unwrap_or_default();
+    sweep::dbg_line(&format!(
+        "found {} candidate file(s) in {:.2?} (after filtering)",
+        candidates.len(),
+        find_started.elapsed()
+    ));
+
+    let probe_started = std::time::Instant::now();
+    let strays = sweep::version_strays(&candidates);
+    sweep::dbg_line(&format!(
+        "versioned {} stray(s) in {:.2?}",
+        strays.len(),
+        probe_started.elapsed()
+    ));
+
     render::print_strays(&strays);
     plan::build_stray_plan(&strays)
 }

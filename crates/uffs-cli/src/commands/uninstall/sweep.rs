@@ -11,9 +11,20 @@
 //! backend ([`DaemonSearch`]) is best-effort (no daemon ⇒ no hits, never a
 //! hard failure).
 
+use core::time::Duration;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::Result;
+
+/// TEMPORARY uninstall deep-sweep diagnostics. Prints a `[sweep]` line to
+/// stdout so we can see candidate counts / phase timings during the Windows
+/// rollout. Remove once the sweep is signed off.
+#[expect(clippy::print_stdout, reason = "temporary deep-sweep diagnostics")]
+pub(crate) fn dbg_line(msg: &str) {
+    println!("  [sweep] {msg}");
+}
 
 /// UFFS cache/cursor data-file patterns the sweep searches for. The executable
 /// patterns are derived from the shared family set (see [`family_stems`]).
@@ -46,26 +57,136 @@ pub(crate) struct StrayHit {
     pub(crate) version: Option<String>,
 }
 
+/// Hard cap on a single `--version` probe. A stray that hangs (waits on stdin,
+/// starts a service, is a half-written build artifact) must never stall the
+/// whole sweep — it just goes unversioned. A healthy console binary returns in
+/// well under this.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Attach a version to each stray: probe `--version` on the executable hits and
 /// leave UFFS data files (`*_compact.uffs`, `*_usn.cursor`) unversioned. No
-/// daemon needed — each binary is run directly (the same probe the standard
-/// detection uses).
-pub(crate) fn version_strays(paths: Vec<PathBuf>) -> Vec<StrayHit> {
-    paths
-        .into_iter()
-        .filter_map(|path| {
-            // The legacy C++ `uffs.exe` is a Windows GUI app — a different
-            // product, not our console CLI. Drop it: running it with
-            // `--version` pops a window and is slow, and it is not ours to list.
-            if is_legacy_gui_uffs(&path) {
-                return None;
+/// daemon needed — each binary is run directly.
+///
+/// Probes run **in parallel** (a small scoped-thread pool) with a **per-probe
+/// timeout** — a dev box can hold hundreds of family `*.exe` under `target/`,
+/// and probing them one at a time (or letting one hang) is what made the sweep
+/// take minutes.
+pub(crate) fn version_strays(paths: &[PathBuf]) -> Vec<StrayHit> {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    // Probes are subprocess spawns (I/O bound), so a small fixed pool of workers
+    // pulling from a shared cursor beats sequential (minutes on a dev box with
+    // hundreds of `target/` binaries) without spawning one thread per path.
+    let worker_count = std::thread::available_parallelism()
+        .map_or(4, core::num::NonZeroUsize::get)
+        .min(paths.len());
+    let next = AtomicUsize::new(0);
+    let timed_out = AtomicUsize::new(0);
+
+    let mut strays: Vec<StrayHit> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..worker_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut local: Vec<StrayHit> = Vec::new();
+                    loop {
+                        let idx = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = paths.get(idx) else { break };
+                        // The legacy C++ `uffs.exe` is a Windows GUI app — a
+                        // different product, not our console CLI. Drop it:
+                        // probing it pops a window, is slow, and it is not ours.
+                        if is_legacy_gui_uffs(path) {
+                            continue;
+                        }
+                        let version = if is_probeable_binary(path) {
+                            match probe_version_bounded(path) {
+                                ProbeOutcome::Version(version) => Some(version),
+                                ProbeOutcome::TimedOut => {
+                                    timed_out.fetch_add(1, Ordering::Relaxed);
+                                    None
+                                }
+                                ProbeOutcome::None => None,
+                            }
+                        } else {
+                            None
+                        };
+                        local.push(StrayHit {
+                            path: path.clone(),
+                            version,
+                        });
+                    }
+                    local
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap_or_default())
+            .collect()
+    });
+    // Worker order is non-deterministic; restore the sorted order for output.
+    strays.sort_by(|left, right| left.path.cmp(&right.path));
+    let timed_out_count = timed_out.load(Ordering::Relaxed);
+    if timed_out_count > 0 {
+        dbg_line(&format!(
+            "{timed_out_count} probe(s) hit the {PROBE_TIMEOUT:?} timeout and were left unversioned"
+        ));
+    }
+    strays
+}
+
+/// The result of a bounded `--version` probe.
+enum ProbeOutcome {
+    /// A version string was parsed from the binary's output.
+    Version(String),
+    /// The binary did not exit within [`PROBE_TIMEOUT`] and was killed.
+    TimedOut,
+    /// The binary ran but produced no parseable version (or failed to spawn).
+    None,
+}
+
+/// Probe `path --version` with a hard timeout, killing a process that overruns.
+/// `--version` output is tiny, so reading it after exit cannot deadlock on a
+/// full pipe. `stdin` is nulled so a binary that reads stdin can't block.
+fn probe_version_bounded(path: &Path) -> ProbeOutcome {
+    use std::process::Stdio;
+
+    let Ok(mut child) = std::process::Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return ProbeOutcome::None;
+    };
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _kill = child.kill();
+                    let _wait = child.wait();
+                    return ProbeOutcome::TimedOut;
+                }
+                std::thread::sleep(Duration::from_millis(25));
             }
-            let version = is_probeable_binary(&path)
-                .then(|| crate::commands::update::binaries::probe_version(&path))
-                .flatten();
-            Some(StrayHit { path, version })
-        })
-        .collect()
+            Err(_) => return ProbeOutcome::None,
+        }
+    }
+    let Ok(output) = child.wait_with_output() else {
+        return ProbeOutcome::None;
+    };
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.trim().is_empty() {
+        // Some tools print `--version` to stderr; fall back to it.
+        text = String::from_utf8_lossy(&output.stderr).into_owned();
+    }
+    crate::commands::update::binaries::parse_version(&text)
+        .map_or(ProbeOutcome::None, ProbeOutcome::Version)
 }
 
 /// `IMAGE_SUBSYSTEM_WINDOWS_GUI` — a windowed app with no console.
@@ -128,10 +249,19 @@ pub(crate) fn find_strays(search: &mut dyn Search, known_dirs: &[PathBuf]) -> Re
     let exe_patterns = family_stems().map(|stem| format!("{stem}.exe"));
     let patterns = exe_patterns.chain(CACHE_PATTERNS.iter().map(|pattern| (*pattern).to_owned()));
     for pattern in patterns {
-        for hit in search.find(&pattern)? {
+        let hits = search.find(&pattern)?;
+        let raw = hits.len();
+        let mut kept = 0_usize;
+        for hit in hits {
             if is_family_artifact(&hit) && !is_under_any(&hit, known_dirs) {
+                kept += 1;
                 strays.push(hit);
             }
+        }
+        if raw > 0 {
+            dbg_line(&format!(
+                "pattern {pattern:<22} raw={raw:<5} kept={kept} (after exact-name + known-dir filter)"
+            ));
         }
     }
     strays.sort();
@@ -194,14 +324,31 @@ impl Search for DaemonSearch {
         // multi-column CSV blob (which has no JSON `path` field — the original
         // bug, where a real multi-hit Windows sweep returned a blob and the
         // JSON `"path"`-key walk found nothing).
-        let args = vec![
+        //
+        // `--name-only` anchors the match to the **filename**: a bare `uffs.exe`
+        // token is a full-path substring match, so it also returns files merely
+        // living under a path that contains "uffs.exe" (e.g. an `…\uffs.exe.bak\`
+        // dir). We only ever want files actually named like a family binary.
+        let mut args = vec![
             pattern.to_owned(),
             "--files-only".to_owned(),
+            "--name-only".to_owned(),
             "--columns".to_owned(),
             "path".to_owned(),
             "--limit".to_owned(),
             "5000".to_owned(),
         ];
+        // For a concrete `stem.exe` pattern (no glob), pin the extension too so
+        // the daemon drops `uffs.exe.mui` / prefetch `.pf` / ADS noise *before*
+        // shipping rows back — measured 158 -> 46 hits for `uffs.exe` on a dev
+        // box. Glob cache patterns (`*_compact.uffs`) already pin their own
+        // extension, so they are left as-is.
+        if !pattern.contains('*')
+            && let Some(ext) = Path::new(pattern).extension().and_then(OsStr::to_str)
+        {
+            args.push("--ext".to_owned());
+            args.push(ext.to_owned());
+        }
         let Ok(response) = client.search_cli(&args) else {
             return Ok(Vec::new());
         };
@@ -324,7 +471,7 @@ mod tests {
     fn data_files_are_not_probed_for_a_version() {
         // Cache/cursor data files have no version and must not be executed; a
         // (nonexistent) binary path probes to None rather than panicking.
-        let strays = version_strays(vec![
+        let strays = version_strays(&[
             PathBuf::from("/x/drive_c_compact.uffs"),
             PathBuf::from("/x/journal_usn.cursor"),
             PathBuf::from("/x/definitely-not-here/uffs"),
