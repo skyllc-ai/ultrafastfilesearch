@@ -175,6 +175,16 @@ pub(crate) fn print_journal_warning(error: &anyhow::Error) {
     eprintln!("note: uninstall progress marker could not be updated ({error:#}).");
 }
 
+/// Note that the running self-binaries are deferred to a post-exit delete
+/// (the OS locks a running image, so they can't be removed in place).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_self_delete_scheduled(paths: &[std::path::PathBuf]) {
+    println!("\nThe running UFFS binary is removed after this process exits:");
+    for path in paths {
+        println!("  {}", path.display());
+    }
+}
+
 /// Warn that the running self-binary could not be scheduled for deletion.
 #[expect(clippy::print_stderr, reason = "CLI user-facing error")]
 pub(crate) fn print_self_delete_warning(error: &anyhow::Error) {
@@ -215,9 +225,18 @@ pub(crate) fn print_outcome(outcome: &RemovalOutcome) {
         }
     }
     if !outcome.all_done() {
+        // Elevation only exists on Windows (the broker is a LocalSystem service);
+        // every non-Windows uninstall runs entirely in user-land, so a failure
+        // there is a file in use, never a privilege problem — no sudo hint.
+        #[cfg(windows)]
         println!(
-            "\nSome items could not be removed. Retry with elevated privileges \
-             (sudo on Linux/macOS, an elevated shell on Windows)."
+            "\nSome items could not be removed — e.g. the broker, a LocalSystem service. \
+             Re-run `uffs --uninstall` from an elevated (Administrator) terminal."
+        );
+        #[cfg(not(windows))]
+        println!(
+            "\nSome items could not be removed (a file may be in use). Close anything \
+             using them and re-run."
         );
     }
 }

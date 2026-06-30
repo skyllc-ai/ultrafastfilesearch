@@ -116,8 +116,19 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // M4 consent (U-21): unless --yes, require explicit confirmation (default No)
-    // before any destructive effect. Declining aborts the whole uninstall.
+    // Gather every decision UP FRONT, then execute once — never ask after
+    // removal has started. The broker keep/skip was decided at the elevation
+    // gate above. On Windows, decide the deep-sweep strays here too (a separate
+    // opt-in: a copy you placed yourself may be among them).
+    #[cfg(windows)]
+    let remove_strays = !stray_plan.is_empty()
+        && (parsed.assume_yes
+            || confirm(&format!(
+                "\nAlso remove the {} file(s) found elsewhere (listed above)? [y/N] ",
+                stray_plan.item_count()
+            ))?);
+
+    // M4 consent (U-21): the final go. Declining aborts the whole uninstall.
     if !removal_plan.is_empty() && !parsed.assume_yes && !confirm("\nProceed with removal? [y/N] ")?
     {
         print_aborted();
@@ -131,39 +142,38 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         render::print_journal_warning(&err);
     }
 
-    // M4 execute (U-40..42): run the ordered plan against the live effects sink,
-    // best-effort. The outcome reports what was removed and what failed.
-    let mut effects = effects::SystemEffects::new();
+    // The running uffs.exe (+ uffs-update.exe) are locked by the OS, so the
+    // executor must SKIP them in place — deleting them directly is the "access
+    // denied" the user hits — and a deferred [`schedule_self_delete`] removes
+    // them after this process exits.
+    let self_paths = self_binaries();
+
+    // M4 execute (U-40..42): run the plan(s) once against the live effects sink,
+    // accumulating a single outcome so the summary + retry hint print once.
+    let mut effects = effects::SystemEffects::new(self_paths.clone());
+    let mut outcome = remove::RemovalOutcome::default();
     if !removal_plan.is_empty() {
-        let outcome = remove::execute(&removal_plan, &mut effects);
+        outcome.absorb(remove::execute(&removal_plan, &mut effects));
+    }
+    #[cfg(windows)]
+    if remove_strays {
+        outcome.absorb(remove::execute(&stray_plan, &mut effects));
+    }
+    if !outcome.is_empty() {
         render::print_outcome(&outcome);
     }
-
-    // Strays found outside the standard locations get a SEPARATE confirmation
-    // (one may be a copy the user placed themselves), then are removed
-    // best-effort. `--yes` covers both prompts. Windows-only — see
-    // `platform_stray_plan`; off Windows `stray_plan` is always empty.
     #[cfg(windows)]
-    if !stray_plan.is_empty() {
-        let approved = parsed.assume_yes
-            || confirm(&format!(
-                "\nAlso remove the {} file(s) found elsewhere (listed above)? [y/N] ",
-                stray_plan.item_count()
-            ))?;
-        if approved {
-            let stray_outcome = remove::execute(&stray_plan, &mut effects);
-            render::print_outcome(&stray_outcome);
-        } else {
-            render::print_strays_kept();
-        }
+    if !stray_plan.is_empty() && !remove_strays {
+        render::print_strays_kept();
     }
 
-    // M8 self-delete (U-80): the running uffs.exe (+ uffs-update.exe) cannot
-    // delete themselves in place; schedule a deferred delete. If even scheduling
-    // fails, say so rather than hiding it.
-    let self_paths = self_binaries();
-    if let Err(err) = effects::schedule_self_delete(&self_paths) {
-        render::print_self_delete_warning(&err);
+    // M8 self-delete (U-80): finish the deferred delete of the running
+    // self-binaries the executor skipped. If even scheduling fails, say so.
+    if !self_paths.is_empty() {
+        render::print_self_delete_scheduled(&self_paths);
+        if let Err(err) = effects::schedule_self_delete(&self_paths) {
+            render::print_self_delete_warning(&err);
+        }
     }
 
     // M8 verify (U-81): confirm the targeted locations are gone, excluding the
@@ -188,9 +198,12 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
 /// The running self-binaries that cannot be deleted in place: the current
 /// `uffs` executable and its sibling `uffs-update`.
 fn self_binaries() -> Vec<PathBuf> {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(raw_exe) = std::env::current_exe() else {
         return Vec::new();
     };
+    // Match the verbatim-stripped form the plan carries, so the executor's
+    // self-skip and the verify exclusion compare equal.
+    let exe = crate::commands::update::strip_verbatim_prefix(raw_exe);
     let mut paths = vec![exe.clone()];
     if let Some(dir) = exe.parent() {
         let updater = if cfg!(windows) {

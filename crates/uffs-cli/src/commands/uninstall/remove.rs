@@ -62,6 +62,18 @@ impl RemovalOutcome {
         self.results.push((description, status));
     }
 
+    /// Fold another outcome's results into this one, so the main plan and the
+    /// stray removal report as a single combined outcome (one summary line, one
+    /// retry hint) rather than two.
+    pub(crate) fn absorb(&mut self, other: Self) {
+        self.results.extend(other.results);
+    }
+
+    /// Whether nothing was executed (no items recorded).
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
     /// Number of items that completed.
     pub(crate) fn done_count(&self) -> usize {
         self.results

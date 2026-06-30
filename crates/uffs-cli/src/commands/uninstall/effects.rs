@@ -17,13 +17,29 @@ use anyhow::{Context as _, Result, bail};
 use super::remove::Effects;
 use crate::commands::update::model::Scope;
 
-/// The production effects implementation. Zero-sized; holds no state.
-pub(crate) struct SystemEffects;
+/// The production effects implementation. Carries the running self-binaries so
+/// they can be skipped in place — the OS locks a running image, so deleting it
+/// directly fails; [`schedule_self_delete`] removes them after this process
+/// exits instead.
+pub(crate) struct SystemEffects {
+    /// Absolute paths of the running self-binaries to skip in-place deletes.
+    self_paths: Vec<PathBuf>,
+}
 
 impl SystemEffects {
-    /// Construct the live effects sink.
-    pub(crate) const fn new() -> Self {
-        Self
+    /// Construct the live effects sink, told which running self-binaries to
+    /// skip in-place (they are deferred to [`schedule_self_delete`]).
+    pub(crate) const fn new(self_paths: Vec<PathBuf>) -> Self {
+        Self { self_paths }
+    }
+
+    /// Whether `path` is one of the running self-binaries (case-insensitive,
+    /// matching the verbatim-stripped form the plan carries).
+    fn is_self(&self, path: &Path) -> bool {
+        let target = path.to_string_lossy();
+        self.self_paths
+            .iter()
+            .any(|self_path| self_path.to_string_lossy().eq_ignore_ascii_case(&target))
     }
 }
 
@@ -39,6 +55,10 @@ impl Effects for SystemEffects {
     fn delete_binaries(&mut self, dir: &Path, stems: &[String]) -> Result<()> {
         for stem in stems {
             let path = dir.join(exe_file_name(stem));
+            // A running self-binary can't be deleted in place — defer it.
+            if self.is_self(&path) {
+                continue;
+            }
             remove_file_if_present(&path)
                 .with_context(|| format!("removing {}", path.display()))?;
         }
@@ -51,6 +71,10 @@ impl Effects for SystemEffects {
 
     #[cfg(windows)]
     fn delete_file(&mut self, path: &Path) -> Result<()> {
+        // A running self-binary can't be deleted in place — defer it.
+        if self.is_self(path) {
+            return Ok(());
+        }
         remove_file_if_present(path).with_context(|| format!("removing {}", path.display()))
     }
 
@@ -280,11 +304,16 @@ mod tests {
             std::fs::write(base.join(exe_file_name(stem)), b"binary").unwrap();
         }
 
-        let mut effects = SystemEffects::new();
-        // Deletes the named binaries...
+        // The second stem is treated as the running self-binary — it must be
+        // skipped (left for the deferred self-delete), not removed in place.
+        let self_path = base.join(exe_file_name("uffsd"));
+        let mut effects = SystemEffects::new(vec![self_path.clone()]);
         effects.delete_binaries(&base, &stems).unwrap();
-        assert!(!base.join(exe_file_name("uffs")).exists());
-        assert!(!base.join(exe_file_name("uffsd")).exists());
+        assert!(
+            !base.join(exe_file_name("uffs")).exists(),
+            "non-self binary removed"
+        );
+        assert!(self_path.exists(), "running self-binary skipped (deferred)");
         // ...and is idempotent on already-absent files.
         effects.delete_binaries(&base, &stems).unwrap();
 
