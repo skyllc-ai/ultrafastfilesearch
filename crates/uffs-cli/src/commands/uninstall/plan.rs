@@ -19,7 +19,7 @@ use super::args::{UninstallArgs, UninstallScope};
 use super::inventory::{ArtifactKind, BrokerServiceState, Inventory};
 #[cfg(windows)]
 use super::sweep::StrayHit;
-use crate::commands::update::model::{Channel, DetectionReport, InstallRoot, Scope};
+use crate::commands::update::model::{Channel, Component, DetectionReport, InstallRoot, Scope};
 
 /// The `WinGet` package id UFFS publishes under.
 pub(crate) const WINGET_PACKAGE_ID: &str = "SkyLLC.UFFS";
@@ -182,6 +182,16 @@ impl RemovalPlan {
         self.items().any(|item| item.needs_elevation)
     }
 
+    /// Drop every item that needs Administrator (the broker service + its
+    /// process), removing any group left empty. Lets a non-elevated run remove
+    /// everything it *can* and leave the broker for an elevated re-run.
+    pub(crate) fn drop_elevation_required(&mut self) {
+        for group in &mut self.groups {
+            group.items.retain(|item| !item.needs_elevation);
+        }
+        self.groups.retain(|group| !group.items.is_empty());
+    }
+
     /// Number of items across all groups.
     pub(crate) fn item_count(&self) -> usize {
         self.groups.iter().map(|group| group.items.len()).sum()
@@ -228,7 +238,9 @@ pub(crate) fn build_plan(
                 component: process.component.label().to_owned(),
                 pid: process.pid,
             },
-            needs_elevation: false,
+            // The broker runs as LocalSystem (the Windows service), so stopping
+            // it needs Administrator; the daemon / MCP are user-owned and do not.
+            needs_elevation: matches!(process.component, Component::Broker),
             scope: ItemScope::Any,
             bytes: 0,
         })
@@ -594,6 +606,61 @@ mod tests {
             target,
             PlanTarget::StopProcess { .. }
         )));
+    }
+
+    #[test]
+    fn drop_elevation_required_removes_broker_keeps_the_rest() {
+        let report = DetectionReport {
+            roots: Vec::new(),
+            running: vec![
+                RunningProcess {
+                    component: Component::Broker,
+                    pid: 11,
+                    image_path: None,
+                    command_line: None,
+                    version: None,
+                },
+                RunningProcess {
+                    component: Component::Daemon,
+                    pid: 22,
+                    image_path: None,
+                    command_line: None,
+                    version: None,
+                },
+            ],
+        };
+        // Broker service installed -> an admin-only RemoveService item, plus the
+        // broker process stop is admin-only; the daemon stop is not.
+        let mut plan = built(
+            &report,
+            &inventory(BrokerServiceState::Installed, 1024),
+            &UninstallArgs::default(),
+        );
+        assert!(
+            plan.requires_elevation(),
+            "broker service + process need admin"
+        );
+
+        plan.drop_elevation_required();
+        assert!(!plan.requires_elevation(), "admin-only items were dropped");
+        assert!(
+            !has_target(&plan, |target| matches!(
+                target,
+                PlanTarget::RemoveService { .. }
+            )),
+            "the broker service item is gone"
+        );
+        let stop_pids: Vec<u32> = plan
+            .items()
+            .filter_map(|item| {
+                if let PlanTarget::StopProcess { pid, .. } = &item.target {
+                    Some(*pid)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(stop_pids, vec![22], "only the daemon stop survives");
     }
 
     #[test]

@@ -43,7 +43,7 @@ pub(crate) fn print_resolution_table(stems: &[StemResolution]) {
                 ResolutionState::Shadowed if copy.on_search_path => "shadowed",
                 ResolutionState::Shadowed => "off-path",
             };
-            let version = copy.version.as_deref().unwrap_or("-");
+            let version = copy.version.as_deref().unwrap_or("legacy");
             println!(
                 "  {state:<8}  {version:<9}  {channel:<9}  {scope:<7}  {dir}",
                 channel = copy.channel.label(),
@@ -110,22 +110,26 @@ pub(crate) fn print_plan(plan: &RemovalPlan) {
     );
 }
 
-/// Print the elevation refusal (U-30): the items that need Administrator and
-/// the re-run hint. Goes to stderr; the caller exits non-zero without any
-/// effect.
-#[expect(clippy::print_stderr, reason = "CLI user-facing error")]
-pub(crate) fn print_elevation_refusal(plan: &RemovalPlan) {
-    eprintln!("\nThis uninstall includes items that require Administrator:");
+/// List the admin-only items (the broker service + its process) before the
+/// non-elevated keep-or-elevate choice (U-30).
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_elevation_required(plan: &RemovalPlan) {
+    println!("\nThese items need Administrator (the broker runs as LocalSystem):");
     for group in &plan.groups {
         for item in &group.items {
             if item.needs_elevation {
-                eprintln!("  - {}", item.target.describe());
+                println!("  - {}", item.target.describe());
             }
         }
     }
-    eprintln!(
-        "\nRe-run with elevated privileges (sudo on Linux/macOS, an elevated \
-         shell on Windows):\n  uffs --uninstall"
+}
+
+/// Note printed when the user keeps the broker and continues non-elevated.
+#[expect(clippy::print_stdout, reason = "CLI user-facing output")]
+pub(crate) fn print_broker_kept() {
+    println!(
+        "Leaving the broker installed. Re-run `uffs --uninstall` from an elevated \
+         terminal to remove it."
     );
 }
 
@@ -141,10 +145,10 @@ pub(crate) fn print_strays(strays: &[StrayHit]) {
     println!(
         "\nAlso found elsewhere (deep sweep), outside the standard install locations.\n\
          These are removed only if you confirm a separate prompt below (one may be a\n\
-         copy you placed yourself):"
+         copy you placed yourself):\n"
     );
     for stray in strays {
-        let version = stray.version.as_deref().unwrap_or("-");
+        let version = stray.version.as_deref().unwrap_or("legacy");
         println!("  {version:<9}  {}", stray.path.display());
     }
 }

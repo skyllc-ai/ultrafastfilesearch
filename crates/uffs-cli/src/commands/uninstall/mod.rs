@@ -70,7 +70,7 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     // entries pointing at a *dedicated* UFFS dir are offered for removal — a
     // shared bin dir (~/bin, ~/.local/bin) we never created is left alone.
     let removable_path = analyze::removable_path_dirs(&report, &analyze::path_entries());
-    let removal_plan = plan::build_plan(&report, &inventory, &parsed, &removable_path);
+    let mut removal_plan = plan::build_plan(&report, &inventory, &parsed, &removable_path);
 
     if parsed.json {
         render::print_json(&resolved, &inventory, &removal_plan);
@@ -95,13 +95,19 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // M3 elevation gate (U-30): refuse before any effect when the plan needs
-    // privilege the current process lacks. `uffs_mft::platform::is_elevated` is
-    // cross-platform (Windows token check; Unix effective-uid 0), unlike the
-    // Windows-only `uffs_winsvc::is_elevated`.
+    // M3 elevation gate (U-30): the broker (its LocalSystem service + process)
+    // is the only admin-only part. Rather than refuse the whole uninstall when
+    // not elevated, offer to skip those and remove everything else now — or
+    // abort to re-run elevated. `uffs_mft::platform::is_elevated` is
+    // cross-platform (Windows token check; Unix effective-uid 0).
     if removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
-        render::print_elevation_refusal(&removal_plan);
-        bail!("uninstall needs Administrator for the items listed above; re-run elevated");
+        render::print_elevation_required(&removal_plan);
+        if confirm("\nSkip those (leave the broker installed) and continue? [y/N] ")? {
+            removal_plan.drop_elevation_required();
+            render::print_broker_kept();
+        } else {
+            bail!("re-run `uffs --uninstall` from an elevated terminal to remove the broker too");
+        }
     }
 
     // Nothing to remove at all: no install in the standard locations, and the
