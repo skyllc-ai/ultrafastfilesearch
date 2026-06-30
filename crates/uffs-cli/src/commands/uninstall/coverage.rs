@@ -65,7 +65,9 @@ pub(crate) fn ensure_drive_coverage(confirm: &mut dyn FnMut(&str) -> Result<bool
         .join(", ");
     let prompt = format!(
         "\nThe deep sweep searches every indexed drive. Not yet indexed: {list}.\n\
-         Index {list} now for a complete sweep? [y/N] "
+         Indexing builds the on-disk index cache for those drives (uses disk +\n\
+         memory, and persists even under --dry-run). Index {list} now for a\n\
+         complete sweep? [y/N] "
     );
     if confirm(&prompt)? && client.load_drive_letters(&missing, false).is_ok() {
         // Give the freshly-requested drives a chance to load before we search.
