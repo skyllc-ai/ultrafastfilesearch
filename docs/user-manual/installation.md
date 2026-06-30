@@ -1,9 +1,26 @@
 # Installation
 
-On Windows, the fastest path is [WinGet](https://learn.microsoft.com/windows/package-manager/)
-(§1).  Pre-built binaries for all platforms are also available from
-[GitHub Releases](https://github.com/skyllc-ai/UltraFastFileSearch/releases) (§2).
-Most users do not need to build from source.
+**Fastest path per platform:**
+
+```bash
+# macOS / Linux — one-line installer (no sudo, installs to ~/.local/bin)
+curl -fsSL https://raw.githubusercontent.com/skyllc-ai/UltraFastFileSearch/main/install.sh | bash
+```
+
+```powershell
+# Windows
+winget install SkyLLC.UFFS
+```
+
+The macOS/Linux installer downloads the prebuilt binaries for your platform from
+the matching [GitHub Release](https://github.com/skyllc-ai/UltraFastFileSearch/releases),
+**verifies each against the release `SHA256SUMS`**, and installs them to
+`~/.local/bin`. Pin a version with `UFFS_VERSION=v0.6.17`, or change the target
+with `UFFS_INSTALL_DIR=~/bin`. Remove everything later with `uffs --uninstall`.
+
+Pre-built binaries for all platforms are also available directly from
+[GitHub Releases](https://github.com/skyllc-ai/UltraFastFileSearch/releases) (§2),
+and you can always build from source (§5). Most users do not need to.
 
 > **See also:** [Getting Started](getting-started.md) ·
 > [CLI Overview](cli-overview.md) · [Daemon](daemon.md) ·

@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — one-line macOS/Linux installer (`install.sh`)
+
+`curl -fsSL https://raw.githubusercontent.com/skyllc-ai/UltraFastFileSearch/main/install.sh | bash`
+installs UFFS on macOS/Linux with no sudo and no build toolchain: it detects the
+platform, downloads the prebuilt binaries from the matching GitHub release,
+**verifies each against the release `SHA256SUMS`**, and drops them in
+`~/.local/bin`. Pin with `UFFS_VERSION`, retarget with `UFFS_INSTALL_DIR`. It is
+the posix counterpart to `winget install SkyLLC.UFFS` on Windows, and the
+symmetric companion to `uffs --uninstall`. PATH is never edited automatically
+(the shell owns it); the script prints the one line to add if the dir is not on
+PATH.
+
 ## [0.6.17] - 2026-06-29
 
 ### Added — `uffs --uninstall`: guided, complete removal of UFFS
