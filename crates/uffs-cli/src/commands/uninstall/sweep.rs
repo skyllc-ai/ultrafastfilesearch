@@ -14,7 +14,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use serde_json::Value;
 
 /// Family-file name patterns the sweep searches for.
 const STRAY_PATTERNS: &[&str] = &[
@@ -108,45 +107,67 @@ impl Search for DaemonSearch {
         let Ok(mut client) = uffs_client::connect_sync::UffsClientSync::connect_raw() else {
             return Ok(Vec::new());
         };
+        // `--columns path` forces single-column output so the daemon's path /
+        // CSV blob fast paths yield clean one-path-per-line text rather than a
+        // multi-column CSV blob (which has no JSON `path` field — the original
+        // bug, where a real multi-hit Windows sweep returned a blob and the
+        // JSON `"path"`-key walk found nothing).
         let args = vec![
             pattern.to_owned(),
             "--files-only".to_owned(),
+            "--columns".to_owned(),
+            "path".to_owned(),
             "--limit".to_owned(),
-            "1000".to_owned(),
+            "5000".to_owned(),
         ];
-        let Ok(value) = client.search_cli_raw(&args) else {
+        let Ok(response) = client.search_cli(&args) else {
             return Ok(Vec::new());
         };
-        Ok(extract_paths(&value))
+        Ok(payload_paths(response.payload))
     }
 }
 
-/// Pull every `"path"` string out of a search-result JSON value (defensive: the
-/// shape varies, so walk it recursively).
-fn extract_paths(value: &Value) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    collect_paths(value, &mut out);
-    out
+/// Decode every payload variant the daemon may return into result paths. A
+/// search response arrives as inline rows, a memory-mapped rows file, an inline
+/// pre-formatted blob, or a memory-mapped blob — the daemon picks by size +
+/// output shape — so reading only one shape (the old JSON `"path"` walk, which
+/// saw just the inline-rows case) silently dropped every blob/shmem result.
+fn payload_paths(payload: uffs_client::protocol::response::SearchPayload) -> Vec<PathBuf> {
+    use uffs_client::protocol::response::SearchPayload as Payload;
+    match payload {
+        Payload::InlineRows(rows) => rows
+            .into_iter()
+            .map(|row| PathBuf::from(row.path))
+            .collect(),
+        Payload::ShmemRows { path, .. } => {
+            uffs_client::shmem::read_search_results(Path::new(&path))
+                .map(|resp| payload_paths(resp.payload))
+                .unwrap_or_default()
+        }
+        Payload::InlineBlob(blob) => blob_lines_to_paths(&blob),
+        Payload::ShmemBlob(path) => {
+            let mut buf: Vec<u8> = Vec::new();
+            if uffs_client::shmem::stream_paths_blob_into(Path::new(&path), &mut buf).is_ok() {
+                blob_lines_to_paths(&String::from_utf8_lossy(&buf))
+            } else {
+                Vec::new()
+            }
+        }
+        Payload::Empty => Vec::new(),
+    }
 }
 
-/// Recursive helper for [`extract_paths`].
-fn collect_paths(value: &Value, out: &mut Vec<PathBuf>) {
-    match value {
-        Value::Object(map) => {
-            if let Some(Value::String(path)) = map.get("path") {
-                out.push(PathBuf::from(path));
-            }
-            for child in map.values() {
-                collect_paths(child, out);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_paths(item, out);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
+/// Parse a single-column (`--columns path`) text blob into paths: one per
+/// non-empty line, dropping a leading `path`/`Path` header line and any
+/// surrounding CSV quotes.
+fn blob_lines_to_paths(blob: &str) -> Vec<PathBuf> {
+    blob.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_matches('"'))
+        .filter(|line| !line.eq_ignore_ascii_case("path"))
+        .map(PathBuf::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -155,7 +176,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{Search, extract_paths, find_strays, version_strays};
+    use super::{Search, blob_lines_to_paths, find_strays, version_strays};
 
     /// Returns the same hits for every pattern (the dedup must collapse them).
     struct FakeSearch(Vec<PathBuf>);
@@ -208,11 +229,17 @@ mod tests {
     }
 
     #[test]
-    fn extracts_path_fields_recursively() {
-        let value = serde_json::json!({
-            "rows": [{ "path": "/a/uffs.exe" }, { "name": "x", "path": "/b/uffsd.exe" }],
-        });
-        let paths = extract_paths(&value);
-        assert_eq!(paths.len(), 2);
+    fn blob_lines_drop_header_and_quotes() {
+        // A single-column (`--columns path`) CSV blob: header line, quoted
+        // Windows paths, a blank trailing line.
+        let blob = "\"Path\"\r\n\"C:\\Users\\me\\bin\\uffs.exe\"\r\n\"D:\\tools\\uffsd.exe\"\r\n";
+        let paths = blob_lines_to_paths(blob);
+        assert_eq!(paths, vec![
+            PathBuf::from(r"C:\Users\me\bin\uffs.exe"),
+            PathBuf::from(r"D:\tools\uffsd.exe"),
+        ]);
+        // A bare path-per-line blob (no header, no quotes) also works.
+        let plain = "/opt/uffs/uffs\n/home/me/Downloads/uffs\n";
+        assert_eq!(blob_lines_to_paths(plain).len(), 2);
     }
 }
