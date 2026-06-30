@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-06-29
+
 ### Added — one-line macOS/Linux installer (`install.sh`)
 
 `curl -fsSL https://raw.githubusercontent.com/skyllc-ai/UltraFastFileSearch/main/install.sh | bash`
@@ -2532,7 +2534,8 @@ thin clients over a unified `uffsd` process.
 ### Fixed
 - Various MFT parsing edge cases
 
-[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.17...HEAD
+[Unreleased]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.18...HEAD
+[0.6.18]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.15...v0.6.17
 [0.6.15]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.14...v0.6.15
 [0.6.14]: https://github.com/skyllc-ai/UltraFastFileSearch/compare/v0.6.13...v0.6.14
