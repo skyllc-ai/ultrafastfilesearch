@@ -82,6 +82,28 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     render::print_inventory(&inventory);
     render::print_plan(&removal_plan);
 
+    // M3 elevation (U-30): the broker (its LocalSystem service) is the only
+    // admin-only part. Decide it UP FRONT — *before* the slow deep sweep — so a
+    // non-elevated run is told immediately and isn't left to discover it at the
+    // end. An elevated run skips this and removes everything. Dry-run only
+    // previews (the plan already marks the broker "needs Administrator").
+    // `uffs_mft::platform::is_elevated` is cross-platform (Windows token check;
+    // Unix effective-uid 0).
+    if !parsed.dry_run && removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
+        render::print_elevation_required(&removal_plan);
+        if confirm(
+            "\nRemoving these needs Administrator. Continue now and uninstall everything\n\
+             ELSE, leaving them? (answering No aborts so you can re-run elevated) [y/N] ",
+        )? {
+            removal_plan.drop_elevation_required();
+            render::print_broker_kept();
+        } else {
+            bail!(
+                "aborted — re-run `uffs --uninstall` from an elevated (Administrator) terminal to remove everything"
+            );
+        }
+    }
+
     // M7 deep sweep: ask UFFS itself for stray family files elsewhere on the
     // live drives, version them, and build a separate plan removed only under
     // its own confirmation (one may be a copy the user placed themselves). This
@@ -93,21 +115,6 @@ pub(crate) fn run_uninstall(args: &[String]) -> Result<()> {
     if parsed.dry_run {
         print_dry_run_footer();
         return Ok(());
-    }
-
-    // M3 elevation gate (U-30): the broker (its LocalSystem service + process)
-    // is the only admin-only part. Rather than refuse the whole uninstall when
-    // not elevated, offer to skip those and remove everything else now — or
-    // abort to re-run elevated. `uffs_mft::platform::is_elevated` is
-    // cross-platform (Windows token check; Unix effective-uid 0).
-    if removal_plan.requires_elevation() && !uffs_mft::platform::is_elevated() {
-        render::print_elevation_required(&removal_plan);
-        if confirm("\nSkip those (leave the broker installed) and continue? [y/N] ")? {
-            removal_plan.drop_elevation_required();
-            render::print_broker_kept();
-        } else {
-            bail!("re-run `uffs --uninstall` from an elevated terminal to remove the broker too");
-        }
     }
 
     // Nothing to remove at all: no install in the standard locations, and the
