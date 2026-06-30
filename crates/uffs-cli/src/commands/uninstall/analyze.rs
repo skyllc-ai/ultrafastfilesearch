@@ -77,7 +77,9 @@ pub(crate) fn augment_with_path_locations(report: &mut DetectionReport) {
 fn add_roots_for_dirs(report: &mut DetectionReport, dirs: &[PathBuf]) {
     let mut seen: Vec<PathBuf> = report.roots.iter().map(|root| root.dir.clone()).collect();
     for dir in dirs {
-        let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        let key = crate::commands::update::strip_verbatim_prefix(
+            std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()),
+        );
         if seen.iter().any(|existing| existing == &key) {
             continue;
         }
@@ -148,7 +150,9 @@ pub(crate) fn search_dirs() -> Vec<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
-        dirs.push(parent.to_path_buf());
+        dirs.push(crate::commands::update::strip_verbatim_prefix(
+            parent.to_path_buf(),
+        ));
     }
     #[cfg(windows)]
     {

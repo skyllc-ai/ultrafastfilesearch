@@ -385,10 +385,34 @@ pub(crate) fn detect() -> DetectionReport {
 
 /// Directory of the currently-running `uffs` executable.
 fn current_exe_dir() -> Option<PathBuf> {
-    std::env::current_exe()
+    let parent = std::env::current_exe()
         .ok()?
         .parent()
-        .map(Path::to_path_buf)
+        .map(Path::to_path_buf)?;
+    Some(strip_verbatim_prefix(parent))
+}
+
+/// Strip the Windows `\\?\` verbatim prefix from a (typically canonicalized)
+/// path so it matches plain `PATH` entries and displays cleanly
+/// (`\\?\C:\x` -> `C:\x`, `\\?\UNC\srv\sh` -> `\\srv\sh`). No-op off Windows
+/// and on already-plain paths. `std::fs::canonicalize` on Windows always
+/// returns the verbatim form, which otherwise never matches a bare `C:\…` PATH
+/// entry — the cause of the resolution table mislabeling the active copy
+/// `off-path`.
+pub(crate) fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    // Runs on every platform: a non-Windows path never carries a `\\?\` prefix,
+    // so [`strip_verbatim_str`] returns `None` and the path is left untouched.
+    let stripped = path.to_str().and_then(strip_verbatim_str);
+    stripped.map_or(path, PathBuf::from)
+}
+
+/// Pure verbatim-prefix strip for [`strip_verbatim_prefix`], split out so it is
+/// testable on every platform. Returns `None` when `text` has no `\\?\` prefix.
+fn strip_verbatim_str(text: &str) -> Option<String> {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    text.strip_prefix(r"\\?\").map(ToOwned::to_owned)
 }
 
 /// Resolve the running daemon's pid — PID file first, then a name scan.
@@ -400,7 +424,7 @@ fn daemon_pid() -> Option<u32> {
 /// Insert `dir` as an install root (deduplicated by canonical path) and
 /// record that `anchor` surfaced it.
 fn upsert_root(roots: &mut Vec<InstallRoot>, dir: PathBuf, anchor: Anchor) {
-    let key = std::fs::canonicalize(&dir).unwrap_or(dir);
+    let key = strip_verbatim_prefix(std::fs::canonicalize(&dir).unwrap_or(dir));
     if let Some(existing) = roots.iter_mut().find(|root| root.dir == key) {
         existing.note_anchor(anchor);
         return;
@@ -549,7 +573,22 @@ fn print_phase_a_footer() {
 #[cfg(test)]
 mod tests {
     use super::model::{Anchor, InstallRoot};
-    use super::{normalize_tag, upsert_root};
+    use super::{normalize_tag, strip_verbatim_str, upsert_root};
+
+    #[test]
+    fn strip_verbatim_str_handles_drive_unc_and_plain() {
+        assert_eq!(
+            strip_verbatim_str(r"\\?\C:\Users\rnio\bin").as_deref(),
+            Some(r"C:\Users\rnio\bin")
+        );
+        assert_eq!(
+            strip_verbatim_str(r"\\?\UNC\server\share\bin").as_deref(),
+            Some(r"\\server\share\bin")
+        );
+        // A plain path has no verbatim prefix -> None (left untouched upstream).
+        assert_eq!(strip_verbatim_str(r"C:\Users\rnio\bin"), None);
+        assert_eq!(strip_verbatim_str("/usr/local/bin"), None);
+    }
 
     #[test]
     fn normalize_tag_strips_leading_v_only() {
