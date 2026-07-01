@@ -13,6 +13,7 @@ use super::remove::{ItemStatus, RemovalOutcome};
 use super::resolve_order::{ResolutionState, StemResolution};
 #[cfg(windows)]
 use super::sweep::StrayHit;
+use crate::commands::update::model::{Channel, Scope};
 
 /// Print the running build's version + git commit at the top of an uninstall
 /// run, so a dry-run or live log is unambiguously tied to the exact binary that
@@ -26,31 +27,106 @@ pub(crate) fn print_run_header() {
     );
 }
 
-/// Print the discovered-binary resolution table: for each stem, every copy in
-/// OS search order, with the one a bare command runs flagged ACTIVE.
+/// One flattened row of the resolution table (one per discovered copy), so each
+/// binary is a single line rather than a stem header plus an indented row.
+struct ResolutionRow {
+    /// Binary name (`uffs`, `uffs-mft`, …).
+    binary: String,
+    /// On-disk version, or `legacy` when it could not be read.
+    version: String,
+    /// PATH-resolution standing: `runs` / `shadowed` / `off PATH`.
+    status: &'static str,
+    /// Where the copy came from (`hand-placed`, `winget (user)`, `dev build`,
+    /// …).
+    source: String,
+    /// The directory the copy lives in.
+    location: String,
+}
+
+/// Plain-language PATH-resolution standing of a copy: the one a bare command
+/// runs (`runs`), a copy on PATH that another shadows (`shadowed`), or a copy
+/// not on PATH at all (`off PATH`).
+const fn status_label(state: ResolutionState, on_search_path: bool) -> &'static str {
+    match (state, on_search_path) {
+        (ResolutionState::Active, _) => "runs",
+        (ResolutionState::Shadowed, true) => "shadowed",
+        (ResolutionState::Shadowed, false) => "off PATH",
+    }
+}
+
+/// Human "source" label: how the copy got there. Install scope (user/machine)
+/// only means something for a `winget` install, so it is folded in there and
+/// omitted from the hand-placed / dev-build cases (which is why the old table
+/// showed a bare `-`).
+fn source_label(channel: Channel, scope: Scope) -> String {
+    match channel {
+        Channel::WinGet => match scope {
+            Scope::User => "winget (user)".to_owned(),
+            Scope::Machine => "winget (machine)".to_owned(),
+            Scope::Unknown => "winget".to_owned(),
+        },
+        Channel::Unmanaged => "hand-placed".to_owned(),
+        Channel::DevBuild => "dev build".to_owned(),
+        Channel::Unknown => "unknown".to_owned(),
+    }
+}
+
+/// Print the discovered-binary resolution table: one aligned row per copy, with
+/// a header and a STATUS legend. `runs` is the copy a bare command executes.
 #[expect(clippy::print_stdout, reason = "CLI user-facing output")]
 pub(crate) fn print_resolution_table(stems: &[StemResolution]) {
     if stems.is_empty() {
         println!("No UFFS binaries found in any install root or on PATH.");
         return;
     }
-    println!("Discovered UFFS binaries (the copy a bare command runs is ACTIVE):\n");
-    for stem in stems {
-        println!("{}:", stem.stem);
-        for copy in &stem.copies {
-            let state = match copy.state {
-                ResolutionState::Active => "ACTIVE",
-                ResolutionState::Shadowed if copy.on_search_path => "shadowed",
-                ResolutionState::Shadowed => "off-path",
-            };
-            let version = copy.version.as_deref().unwrap_or("legacy");
-            println!(
-                "  {state:<8}  {version:<9}  {channel:<9}  {scope:<7}  {dir}",
-                channel = copy.channel.label(),
-                scope = copy.scope.label(),
-                dir = copy.dir.display(),
-            );
-        }
+    let rows: Vec<ResolutionRow> = stems
+        .iter()
+        .flat_map(|stem| {
+            stem.copies.iter().map(move |copy| ResolutionRow {
+                binary: stem.stem.clone(),
+                version: copy.version.clone().unwrap_or_else(|| "legacy".to_owned()),
+                status: status_label(copy.state, copy.on_search_path),
+                source: source_label(copy.channel, copy.scope),
+                location: copy.dir.display().to_string(),
+            })
+        })
+        .collect();
+
+    // Size each fixed column to the widest of its header and its cells so the
+    // table stays aligned; LOCATION is last and free-width.
+    let width = |header: &str, cell: fn(&ResolutionRow) -> usize| {
+        rows.iter()
+            .map(cell)
+            .chain(core::iter::once(header.len()))
+            .max()
+            .unwrap_or(0)
+    };
+    let w_bin = width("BINARY", |row| row.binary.len());
+    let w_ver = width("VERSION", |row| row.version.len());
+    let w_status = width("STATUS", |row| row.status.len());
+    let w_source = width("SOURCE", |row| row.source.len());
+
+    println!(
+        "Discovered UFFS binaries. STATUS: 'runs' = the copy a bare command executes \
+         (first on PATH); 'shadowed' = on PATH but another runs first; 'off PATH' = \
+         present but not on PATH.\n"
+    );
+    // One printer for the header and every row, so the columns share widths and
+    // there are no bare format literals.
+    let print_row = |binary: &str, version: &str, status: &str, source: &str, location: &str| {
+        println!(
+            "  {binary:<w_bin$}  {version:<w_ver$}  {status:<w_status$}  {source:<w_source$}  {location}"
+        );
+    };
+    print_row("BINARY", "VERSION", "STATUS", "SOURCE", "LOCATION");
+    for row in &rows {
+        print_row(
+            &row.binary,
+            &row.version,
+            row.status,
+            &row.source,
+            &row.location,
+        );
     }
 }
 
